@@ -24,7 +24,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { tool } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
+import { emitFileEvent, emitBatchFileEvents, FILE_EVENT_SOURCES } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
 import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
@@ -462,6 +462,15 @@ export interface ToolContext {
   userId: string;
   sessionId?: string;
   scopePath: string;  // VFS scope path relative to workspace root (e.g., "workspace/sessions/001")
+  /**
+   * Originating UI surface for this request, forwarded from the
+   * `X-UI-Source` request header (Phase B). Read by `emitFileEvent` callers
+   * to tag the `source` field so run.log entries can be filtered by UI
+   * surface. See `bing/web/lib/http/ui-source-header-server.ts` for the
+   * server-side reader. Optional — empty string when the client didn't
+   * forward a tag.
+   */
+  uiSource?: string;
 }
 
 // Request-scoped context storage using AsyncLocalStorage.
@@ -700,7 +709,7 @@ export const writeFileTool = (tool as any)({
     path: scopedPath,
     type: existed ? 'update' : 'create',
     content,
-    source: 'mcp-tool',
+    source: FILE_EVENT_SOURCES.MCP_TOOL,
   });
 
   // Sync file change to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
@@ -961,7 +970,7 @@ export const applyDiffTool = (tool as any)({
       type: 'update',
       content: newContent,
       previousContent: currentFile.content,
-      source: 'mcp-tool-diff-sar',
+      source: FILE_EVENT_SOURCES.MCP_TOOL_DIFF_SAR,
       metadata: { diff, appliedCount, failedSearches },
     });
 
@@ -1056,7 +1065,7 @@ export const applyDiffTool = (tool as any)({
     type: 'update',
     content: newContent,
     previousContent: currentFile.content,
-    source: 'mcp-tool-diff',
+    source: FILE_EVENT_SOURCES.MCP_TOOL_DIFF,
     metadata: { diff },
   });
 
@@ -1794,7 +1803,7 @@ export const batchWriteTool = (tool as any)({
     userId: context.userId,
     sessionId: context.sessionId,
     files: filesWithContent,
-    source: 'mcp-tool',
+    source: FILE_EVENT_SOURCES.MCP_TOOL,
   });
 
   // Sync batch file changes to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
@@ -1908,7 +1917,7 @@ export const deleteFileTool = (tool as any)({
     sessionId: context.sessionId,
     path: scopedPath,
     type: 'delete',
-    source: 'mcp-tool',
+    source: FILE_EVENT_SOURCES.MCP_TOOL,
   });
 
   // Record file delete for workspace replay (Gap #8)

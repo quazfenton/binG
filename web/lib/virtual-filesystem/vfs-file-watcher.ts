@@ -10,6 +10,11 @@
 import { EventEmitter } from 'node:events';
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
+import { createLogger } from '@/lib/utils/logger';
+
+// The logger is client-safe (guarded with typeof window === 'undefined'),
+// so this module can be imported by client components if ever needed.
+const logger = createLogger('VFSFileWatcher');
 
 /**
  * File event types
@@ -166,7 +171,7 @@ export class VFSFileWatcher extends EventEmitter {
         }
       }
     } catch (error: any) {
-      console.error('[VFSFileWatcher] Failed to take snapshot:', error.message);
+      logger.error('Failed to take snapshot', { ownerId: this.ownerId, error: error.message });
     }
   }
 
@@ -214,12 +219,15 @@ export class VFSFileWatcher extends EventEmitter {
         }
       }
     } catch (error: any) {
-      console.error('[VFSFileWatcher] Failed to check for changes:', error.message);
+      logger.error('Failed to check for changes', { ownerId: this.ownerId, error: error.message });
     }
   }
 
   /**
-   * Emit file event with debouncing
+   * Emit file event with debouncing.
+   * Logs every emission with the standardized `vfs-file-watcher` source tag
+   * so downstream run.log entries can be filtered by origin (workspace-panel,
+   * terminal-panel, code-preview-panel, vfs-internal, etc.).
    */
   private emitFileEvent(
     type: FileEventType,
@@ -248,6 +256,15 @@ export class VFSFileWatcher extends EventEmitter {
       this.emit('change', event);
       this.emit(type, event);
       this.debounceTimers.delete(path);
+
+      // Log after emit so listeners that throw don't suppress the audit trail.
+      logger.debug('VFS change detected', {
+        source: 'vfs-file-watcher',
+        type,
+        path,
+        contentLength: content?.length,
+        previousContentLength: previousContent?.length,
+      });
     }, debounceMs);
 
     this.debounceTimers.set(path, timer);

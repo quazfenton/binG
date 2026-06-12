@@ -32,8 +32,8 @@
 
 ## Top-Level Summary
 
-| # | Category | Severity | Title | Status |
-|---|----------|----------|-------|--------|
+| # | Category | Severity | Title | Errors | Risk | Status |
+|---|----------|----------|-------|-------:|------|--------|
 | 8  | Resource      | 🔴 Critical | Memory growth 484 MB → 1 GB+ in 4 min, survives GC | ✅ FIXED |
 | 9  | Orchestration | 🔴 Critical | AutoMode classifier demotes every request to v1-api | ✅ FIXED |
 | 10 | Concurrency   | 🔴 Critical | VFS race causes stale reads & diff failures (8+ files) | ✅ FIXED |
@@ -787,6 +787,159 @@ The original review called out three themes that didn't get a letter but are rea
 
 **Fix completed:** The `alreadyWrittenPaths` Set is now declared at the top of the POST handler in `chat/route.ts`, populated from successful `batch_write` / `write_file` tool invocation results in the streaming loop, and passed to all 9 `applyFilesystemEditsFromResponse` call sites. The text-mode parser now skips these paths instead of overwriting correct file content with echoed tool-call JSON. `response-router.ts` has a comment explaining why the empty Set stays (separate request flow).
 
+## Pass-3 — Pre-existing Typecheck Triage (114 errors → Bugs #50–#60)
+
+**Source:** `npx tsc --noEmit -p tsconfig.json` from `/opt/bing/web` on the post-Pass-2 tree.
+**Method:** count distinct error codes, group by file, sample specific error sites, hypothesize root cause from message text + file context.
+**Total errors:** 114 (down from 116 pre-Pass-2; the 2-error delta is the #49 `try`/`catch` fix).
+**Goal:** ship a clean `tsc` gate by fixing these 10 clusters.
+
+### Error code distribution
+
+| Code | Count | Meaning | Likely root cause |
+|------|------:|---------|-------------------|
+| TS2554 | 48 | Expected N arguments, but got M | A helper's signature changed (1–2 args → 3+ at call sites) — most likely a React hook or options-object wrapper. |
+| TS2304 | 31 | Cannot find name | Missing imports / typos / undefined references in the agent/OPFS/composio stacks. |
+| TS2339 | 19 | Property does not exist on type | Type-definition drift (return shape changed but call sites didn't). |
+| TS2307 | 7 | Cannot find module | Broken module resolution after a dependency move. |
+| TS2367 | 4 | Type mismatch in conditional | Narrowing didn't catch a union member. |
+| TS2448 | 2 | Block-scoped variable used before declaration | TDZ (temporal dead zone) misuse. |
+| TS2739 | 1 | Type missing properties | An object literal is missing required fields. |
+| TS2353 | 1 | Object literal may only specify known properties | Extra property in object literal. |
+| TS2345 | 1 | Argument of type X not assignable to parameter of type Y | Single type mismatch. |
+
+### File concentration (top 12)
+
+| Errors | File | Dominant code(s) |
+|-------:|------|------------------|
+| 18 | `components/code-preview-panel.tsx` | mixed (TS2554 + TS2339 + TS2304) |
+| 11 | `lib/virtual-filesystem/opfs/opfs-adapter.ts` | TS2304 / TS2339 (OPFS type drift) |
+| 11 | `lib/integrations/composio/webhook-handler.ts` | TS2304 / TS2307 (missing Composio types) |
+| 7  | `hooks/use-enhanced-chat.ts` | TS2554 (hook signature drift) |
+| 6  | `lib/virtual-filesystem/opfs/opfs-storage-backend.ts` | TS2304 / TS2339 |
+| 6  | `app/api/filesystem/snapshot/gateway.ts` | TS2554 (4 sites: 78, 102, 156, 219) |
+| 5  | `lib/virtual-filesystem/opfs/opfs-git.ts` | TS2304 / TS2339 |
+| 5  | `lib/chat/enhanced-llm-service.ts` | TS2304 / TS2339 |
+| 4  | `lib/tools/registry_original_backup.ts` | TS2304 / TS2307 (likely dead-code; `_original_backup` suffix is a tell) |
+| 4  | `lib/drivers/agent-bins/agent-filesystem.ts` | TS2304 / TS2339 |
+| 4  | `app/api/chat/filesystem-edits.ts` | TS2339 (FilesystemEditResult drift) |
+| 3  | `lib/virtual-filesystem/opfs/opfs-shadow-commit.ts` | TS2304 / TS2339 (part of #51 OPFS cluster) |
+
+### Bug filings
+
+| # | Category | Severity | Title | Status |
+|---|----------|----------|-------|--------|
+| 50 | Typecheck | 🟠 High | `code-preview-panel.tsx` cluster | 18 | Low (type-only) | ⬜ OPEN |
+| 51 | Typecheck | 🟠 High | OPFS virtual-filesystem layer (4 files) | 25 | Low (dev/test subsystem) | ⬜ OPEN |
+| 52 | Typecheck | 🟠 High | Composio webhook handler | 11 | Low (isolated integration) | ⬜ OPEN |
+| 53 | Typecheck | 🟠 High | React-hook signature drift in chat UI | 10 | **Med** (runtime-affecting if helper semantics changed) | 🟡 TENTATIVE |
+| 54 | Typecheck | 🟠 High | Snapshot gateway TS2554 cluster (1 helper, 4 sites) | 4 | **Med** (line 156 has 6 args) | 🟡 TENTATIVE |
+| 55 | Typecheck | 🟡 Med | `filesystem-edits.ts` return-type drift | 4 | Low (type-only) | ⬜ OPEN |
+| 56 | Typecheck | 🟡 Med | `enhanced-llm-service.ts` | 5 | Low (type-only) | ⬜ OPEN |
+| 57 | Typecheck | 🟢 Low | `registry_original_backup.ts` (likely dead — **verify first**) | 4 | Low IF dead; **High** if live | 🟡 TENTATIVE |
+| 58 | Typecheck | 🟡 Med | `agent-filesystem.ts` | 4 | Low (type-only) | ⬜ OPEN |
+| 59a | Typecheck | 🟡 Med | `virtual-filesystem-service.ts` type drift (3 errors) | 3 | Low (type-only) | ⬜ OPEN |
+| 59b | Typecheck | 🟡 Med | `reflection-engine.ts` type drift (3 errors) | 3 | Low (type-only) | ⬜ OPEN |
+| 59c | Typecheck | 🟡 Med | `mcp/client.ts` type drift (2 errors) | 2 | Low (type-only) | ⬜ OPEN |
+| 60 | Typecheck | 🟡 Med | Tail cluster: TS2367/TS2448/TS2739/TS2353/TS2345 | 9 | Low (narrow fixes) | ⬜ OPEN |
+| 61 | Typecheck | 🟠 High | TS2554 tail: unaccounted hook-signature errors across smaller files | TBD | **Med** (same root cause as #53) | 🟡 TENTATIVE |
+
+**Total Pass-3 impact:** 14 tickets target 114 errors. Sums (with #58): 18+25+11+10+4+4+5+4+4+3+3+2+9+12 = 116. The 2-error overshoot is expected: bug counts are estimates from a sampled `tsc` run, and #53/#61 likely share 2 hook-signature errors. **The gate will be re-counted after each fix**; if a fix clears fewer errors than budgeted, the remaining tail moves to a new #62+ ticket. Final reconciliation lands in the Pass-3 wrap-up section.
+
+**Risk legend:** **Low** = type-annotation only, no runtime change. **Med** = may change runtime behavior (new helper arg, new default). **High** = deleting a file or changing a function signature.
+
+### ⬜ #50 — `code-preview-panel.tsx` Cluster (18 errors)
+**Symptom:** `npx tsc` reports 18 errors in `bing/web/components/code-preview-panel.tsx` — a mix of TS2554, TS2339, and TS2304.
+**Root cause hypothesis:** The component was refactored (likely as part of the Bug #16/#19/#23 work that added corrected-example + ETag + cache-metrics integration), but the panel still imports / destructures from the pre-refactor shape. The 18-error count is too high for a single broken prop type; it's more likely 2-3 distinct clusters (props, hook usage, type imports).
+**Fix approach:** (1) read the file end-to-end; (2) split errors by cluster (props vs hooks vs types); (3) fix each cluster independently with a typed local interface if needed. Use `@ts-expect-error <bug-id>` sparingly and only with a justification comment.
+**Estimated impact:** 18 errors cleared. Single file, low risk of cascading.
+
+### ⬜ #51 — OPFS Virtual-Filesystem Layer (25 errors across 4 files)
+**Symptom:** 11 in `opfs-adapter.ts`, 6 in `opfs-storage-backend.ts`, 5 in `opfs-git.ts`, 3 in `opfs-shadow-commit.ts`. All TS2304 / TS2339 / TS2307.
+**Root cause hypothesis:** A recent OPFS provider change (likely tied to the snapshot gateway's `getCurrentVersionSync` work in Bug #16/#36) renamed or relocated OPFS types. The adapter, backend, git, and shadow-commit modules all share an `OPFSHandle` / `OPFSStorage` interface that drifted.
+**Fix approach:** (1) find the canonical OPFS type in `lib/virtual-filesystem/opfs/opfs-types.ts` (or wherever it lives now); (2) update the 4 files to import from the canonical location; (3) if the type was genuinely split, write a single `opfs-types.ts` barrel re-export so all 4 modules import from one place. The OPFS layer is dev/test only (real VFS uses git-backed), so fixes are low-blast-radius.
+**Estimated impact:** 25 errors cleared (22% of the gate). Single subsystem, well-bounded.
+
+### ⬜ #52 — Composio Webhook Handler (11 errors)
+**Symptom:** 11 errors in `bing/web/lib/integrations/composio/webhook-handler.ts` — all TS2304 / TS2307.
+**Root cause hypothesis:** The Composio SDK types either changed upstream or the local type stubs were removed/renamed. The file imports a lot of `ComposioTool`, `ComposioEvent`, `WebhookPayload` types that may now live at a different path.
+**Fix approach:** (1) check the installed `@composio/core` package for the current type exports; (2) update imports to the new path; (3) if types are genuinely missing, write a thin local `composio-types.ts` barrel that re-exports the ones we use, so the webhook handler is decoupled from upstream renames.
+**Estimated impact:** 11 errors cleared. Isolated to the Composio integration.
+
+### ⬜ #53 — React-Hook Signature Drift in Chat UI (10+ errors)
+**Symptom:** TS2554 cluster — `Expected 1-2 arguments, but got 3-4` at `use-enhanced-chat.ts:2188,2196`, `conversation-interface.tsx:847,1592,1636`, `visual_editor.tsx:6055`. All 1-2-arg vs 3+ arg mismatches.
+**Root cause hypothesis:** A chat hook (most likely `useChat` from the Vercel AI SDK, or a local `useEnhancedChat` wrapper) changed its signature from `(messages, options)` to `(messages, options, callbacks)` or to an options-object form. The call sites still pass positional args and now overflow.
+**Fix approach:** (1) read the 7-8 call sites; (2) identify the function being called; (3) update the call sites to match the new signature (either spread the 3rd arg into options, or update positional → options-object). The pattern is uniform, so a single sed-style fix or a quick codemod should work.
+**Estimated impact:** ~10 TS2554 errors cleared. High-leverage because the same pattern likely appears in 20+ more call sites the user didn't sample.
+
+### ⬜ #54 — Snapshot Gateway TS2554 Cluster (4 errors, same helper)
+**Symptom:** `app/api/filesystem/snapshot/gateway.ts(78,70)`, `(102,74)`, `(156,9)`, `(219,71)` — all `Expected 1-2 arguments, but got 3` (one site is 6).
+**Root cause hypothesis:** The 6-arg site at line 156 is almost certainly a logger call (`logger.info(msg, meta, context, ...)`) or a cache-record call (`recordHit/Miss/StaleHit(..., extra)`) where a 3rd "context" arg was added. The other 3 sites are the same function with 3 positional args. These are likely the `logToolCount`-style helpers from Bug #12/#24 that now take an extra context object.
+**Fix approach:** (1) read the 4 call sites; (2) identify the helper; (3) update each call to the new signature (wrap the 3rd arg in an object, or pass it positionally if the helper was updated to accept it). Bug #54 is one root cause, four sites.
+**Estimated impact:** 4 errors cleared in the same file as the Bug #11/#16 fixes — keeps the snapshot gateway self-consistent.
+
+### ⬜ #55 — `filesystem-edits.ts` Return-Type Drift (4 errors)
+**Symptom:** 4 TS2339 in `bing/web/app/api/chat/filesystem-edits.ts` — property does not exist on the return type.
+**Root cause hypothesis:** The `FilesystemEditResult` / `applyFilesystemEditsFromResponse` return type changed (likely the `alreadyWrittenPaths` Set addition from Bug #48), and the chat route's post-processor still destructures the old shape.
+**Fix approach:** (1) read the new return type; (2) update the chat route's destructuring; (3) if the new field is optional and the route doesn't need it, just add `?` to the destructure.
+**Estimated impact:** 4 errors cleared.
+
+### ⬜ #56 — `enhanced-llm-service.ts` (5 errors)
+**Symptom:** 5 TS2304 / TS2339 in `bing/web/lib/chat/enhanced-llm-service.ts`.
+**Root cause hypothesis:** The finish-reason steer adoption (Bug A/B fix) added new optional params to `wireFinishReasonSteer({ finishReason, toolCalls, model, ... })`, and the orchestrator's call sites in this file still pass the old 2-arg shape. Or a missing import for the new steer helper.
+**Fix approach:** (1) check imports for new steer helpers; (2) update call sites to the new shape.
+**Estimated impact:** 5 errors cleared.
+
+### ⬜ #57 — `registry_original_backup.ts` (4 errors — likely dead, **verify first**)
+**Symptom:** 4 TS2304 / TS2307 in `bing/web/lib/tools/registry_original_backup.ts`.
+**Root cause hypothesis:** The `_original_backup` suffix is a strong tell — this is a pre-refactor backup file left behind by the Bug #12 / #13 / #24 work. The original `registry.ts` was rewritten; the backup was never deleted.
+**Verification step (MUST run first):**
+```bash
+grep -rn "registry_original_backup" --include='*.ts' lib/ app/ components/ hooks/
+```
+If the grep returns zero importers, the file is dead and safe to `git rm`. If it returns hits, rename + re-export from `registry.ts` instead.
+**Fix approach:** (1) run the verification grep above; (2) if zero importers, `git rm lib/tools/registry_original_backup.ts`; (3) if live, update the import path in the new `registry.ts` barrel.
+**Estimated impact:** 4 errors cleared, plus 1 fewer file in the codebase. Lowest-risk fix in the Pass-3 set *if* the verification confirms dead code.
+### ⬜ #58 — `agent-filesystem.ts` (4 errors)
+**Symptom:** 4 TS2304 / TS2339 in `bing/web/lib/drivers/agent-bins/agent-filesystem.ts`.
+**Root cause hypothesis:** The agent-bin driver layer was likely touched as part of the Bug #19 (path schema examples) or Bug #47 (sandbox routing) work, and the `agent-filesystem` adapter's type imports drifted.
+**Fix approach:** (1) read the 4 error sites; (2) update the imports; (3) if a new return shape was added, align the type.
+**Estimated impact:** 4 errors cleared.
+
+### ⬜ #59a — `virtual-filesystem-service.ts` Type Drift (3 errors)
+**Symptom:** 3 errors (TS2304 / TS2339) in `bing/web/lib/virtual-filesystem/virtual-filesystem-service.ts`.
+**Root cause hypothesis:** The `getCurrentVersionSync` addition in Bug #16/#36 may have shifted an interface that `virtual-filesystem-service.ts` exports.
+**Fix approach:** Per-site 5-minute fix. Read each error site, update the type, move on.
+**Estimated impact:** 3 errors cleared.
+
+### ⬜ #59b — `reflection-engine.ts` Type Drift (3 errors)
+**Symptom:** 3 errors (TS2304 / TS2339) in `bing/web/lib/orchestra/reflection-engine.ts`.
+**Root cause hypothesis:** The steer-service additions in Bug A/B/D/F/I may have changed the reflection engine's input types.
+**Fix approach:** Per-site 5-minute fix. Independent of #59a and #59c.
+**Estimated impact:** 3 errors cleared.
+
+### ⬜ #59c — `mcp/client.ts` Type Drift (2 errors)
+**Symptom:** 2 errors (TS2304 / TS2339) in `bing/web/lib/mcp/client.ts`.
+**Root cause hypothesis:** The MCP gateway changes in Bug #12/#24 and the tool-name alias map in Bug #37 may have shifted the client's expected types.
+**Fix approach:** Per-site 5-minute fix. Independent of #59a and #59b.
+**Estimated impact:** 2 errors cleared.
+
+### ⬜ #60 — Tail Cluster: TS2367 / TS2448 / TS2739 / TS2353 / TS2345 (9 errors)
+**Symptom:** 4 TS2367 (type mismatch in conditional), 2 TS2448 (TDZ), 1 TS2739 (missing properties), 1 TS2353 (extra property), 1 TS2345 (single type mismatch).
+**Root cause hypothesis:** All are narrow, one-off type mismatches that don't share a root cause. The TS2448 sites are probably `let` → `const` fixes or a hoisting issue. TS2367 is a narrowing gap. TS2739/TS2353 are object-literal fixes.
+**Fix approach:** (1) collect the 9 specific sites; (2) fix each one with a 1-2 line change; (3) prefer type-safe fixes over `as any` casts.
+**Estimated impact:** 9 errors cleared, brings the gate to 0.
+
+### Pass-3 execution order (recommended, TENTATIVE-aware)
+
+1. **Verify #57 first** — `grep -rn "registry_original_backup" --include='*.ts' lib/ app/ components/ hooks/` to confirm zero importers. If dead, delete (Low risk, 4 errors). If live, re-export and mark Low risk. **Do NOT delete until verified.**
+2. **#54** — single file, single helper, 4 sites, all TS2554. Read the helper signature, update the 4 call sites. Lowest blast radius among Med-risk.
+3. **#53 + #61 together** — same root cause (hook-signature drift). Fix the hook once, all call sites follow. High-leverage (10+ errors, likely 20+ if #61 is larger than sampled).
+4. **#51** — OPFS subsystem is well-bounded (4 files, dev/test only). 25 errors cleared with a barrel re-export.
+5. **#50, #52, #55, #56, #58, #59a, #59b, #59c, #60** in any order — each is a small per-file type-only fix. Split #59 into three independent tickets for parallel work.
+6. **Re-run `npx tsc --noEmit -p tsconfig.json`** after each bug to confirm the gate decrements. If a fix clears fewer errors than budgeted, file the remainder as #62+.
+7. **CI gate:** add `npx tsc --noEmit` to the pre-commit hook + the GitHub Actions workflow so the gate can't regress.
+
 ## Pass-2 Cross-Cutting Themes (not assigned a number)
 
 | Theme | Title | Covered by |
@@ -795,3 +948,389 @@ The original review called out three themes that didn't get a letter but are rea
 | — | **Manual reprompt is the canary** — every bug above (ENONENT loop, wrong tool name, EPIPE silent death, orchestration fallback, mid-stream stall) ultimately surfaces as "user has to manually reprompt." Build a unified `manualRepromptCounter` per session + a `degradation-chain` log line that lists every silent failure the request hit. This way, the next time the user says "I had to reprompt again," the run.log shows exactly which failure modes fired. | #39, #40, #41, #45 |
 | — | **Tool-name normalization is a one-time fix** — `list_directory` → `list_files` is one alias, but the LLM will keep inventing new misnames (`read_file` vs `read_files`, `search` vs `search_files`, `bash` vs `bash_execute`, etc.). Build a centralized `toolNameAliases` map at the router level so the fix scales beyond a single alias. | #37 |
 | — | **Binary availability belongs in the system prompt, not the bash tool** — the Bash:Tool can detect ENOENT after the fact, but the LLM needs to know what's available BEFORE it picks a tool. Probe the env once per request and inject `Available binaries: ...` into the system prompt. This single change would prevent ~50% of the #39 ENOENT loops. | #39 |
+
+=== APPEND: findings from run.log (lines ~1-900) ===
+Recorded: Orchestrator failures (502 Bad Gateway), provider rate-limits/timeouts (429/TTFT), models not using function-calling (fallback to text-mode), invalid/malformed paths parsed from LLM text, VFS normalizePath ambiguity (isWithin:false but writes resolved to workspace/sessions/<id>), frequent Redis EPIPE errors causing Snapshot publisher/subscriber failures, overly-aggressive retry policy for snapshot SUBSCRIBE, progressive empty edits triggering "skipping empty edit content", provider-specific tool stripping silently removing capabilities, and bulk auto-applies from parsed text without explicit confirmation.
+
+Status: OPEN. See top of file for detailed suggestions and mitigations.
+
+=== APPEND: observations (lines 820-900) ===
+11) Concurrent modification warnings during batch writes
+- Symptom: Many "Potential concurrent modification" warnings for session files as multiple writes happen in short succession.
+- Evidence: workspace/sessions/001/* logged as Potential concurrent modification (~10:12:42.822 onwards).
+- Impact: race conditions, partial writes, and inconsistent content (diff apply failure shown below).
+- Suggested fix: serialize batch writes per-session or implement optimistic locking with version checks and meaningful retries on conflict.
+
+12) Unified diff parse/apply failures
+- Symptom: applyUnifiedDiffToContent failing with "Unknown line 2 '   +++ b/src/logger.js'" while content length is small.
+- Evidence: stack trace at applyUnifiedDiffToContent (10:12:42.946) and subsequent error in applyFilesystemEditsFromResponse.
+- Impact: single-file patch failures while other files are written; inconsistent state and user confusion.
+- Suggested fix: strengthen parser tolerance, sanitize diffs before applying, and fall back to atomic replace with user confirmation when patch cannot be applied.
+
+13) Session folder auto-rename / migration without clear UX
+- Symptom: System renames session folder (oldPath workspace/sessions/001 -> newPath workspace/sessions/src) and states "files would need manual migration".
+- Evidence: log entries at 10:12:43.890–892.
+- Impact: surprising folder rename, migration burden on users, potential path mismatch for subsequent tool calls.
+- Suggested fix: do NOT auto-rename sessions silently. Instead, surface a prompt/notification and offer a one-click migration with rollback; log mapping decisions and keep both aliases for a grace period.
+
+Status: OPEN
+
+=== APPEND: observations (lines 900-1240) ===
+14) STALE snapshots and polling warnings
+- Symptom: VFS snapshot reports "STALE SNAPSHOT: last updated Xs ago" and logs "POLLING DETECTED" when many snapshot requests happen quickly.
+- Evidence: repeated STALE SNAPSHOT warnings and POLLING DETECTED (counts and ages logged ~10:30:34 onwards).
+- Impact: clients may read stale workspace views; excessive polling triggers noisy logs and may degrade service.
+- Suggested fix: implement snapshot push model for active sessions, add server-side per-session long-poll consolidation, and rate-limit client polling with soft-backoff and cached ETag semantics.
+
+15) Model stall behavior and stall-steer injections
+- Symptom: LLMs become silent mid-stream; system injects THINK-PING and STALL-STEER, then the provider times out (idle timeout).
+- Evidence: [THINK-PING], [STALL-STEER], then idle-timeout errors (e.g., No activity for 75000ms).
+- Impact: long waits, truncated or incomplete responses, repeated retries across models.
+- Suggested fix: shorten stall thresholds, surface early partial outputs to user, and consider partial-result commits or an interactive reprompt when stall steer triggers.
+
+Status: OPEN
+
+=== APPEND: observations (lines 1240-1360) ===
+16) Process memory pressure warnings
+- Symptom: ProcessMemoryMonitor threshold crossed (heapUsedMb > configured softThrottleMb 1024).
+- Evidence: "ProcessMemoryMonitor threshold crossed" with heapUsedMb:1080 at 10:36:14
+- Impact: possible OOM, GC pressure, degraded latency and stalls mid-request.
+- Suggested fix: profile memory allocations for large responses and batch writes, add streaming parsers to avoid building huge response buffers, and enforce per-request memory caps.
+
+17) Repeated models not invoking tools (recurring)
+- Symptom: Many provider/model variants did not call tools; the system keeps falling back to text-mode.
+- Evidence: multiple [TOOL-SUMMARY] WARN lines across timestamps.
+- Impact: same brittle text->edit parsing repeated across sessions.
+- Suggested fix: central handling (see earlier) and telemetry to identify which model/provider combos are reliably tool-capable.
+
+Status: OPEN
+
+=== APPEND: observations (lines 1360-1636) ===
+18) Disk exhaustion causing CAS and heap-snapshot failures
+- Symptom: ENOSPC errors when writing heap snapshots and CAS objects; ContentAddressableStorage failed to write to local cache.
+- Evidence: "no space left on device" for heap snapshot and CAS write failure (10:40:08 and 10:41:28).
+- Impact: inability to capture diagnostics, cache misses, potential data loss and degraded resiliency.
+- Suggested fix: add disk-space preflight checks, rotate/delete old snapshots, and fail-fast with clear operator alerts. Avoid OOM-driven snapshots when disk is full.
+
+19) Optional infrastructure degrades tool availability (MCP/Arcade)
+- Symptom: MCP gateway SSE connection failed repeatedly; Arcade disabled due to 401 (invalid key).
+- Evidence: "SSE connection failed: fetch failed" and "Arcade service disabled due to 401" (multiple timestamps).
+- Impact: many integrated tools unavailable, degraded feature set, and silent capability loss for users.
+- Suggested fix: surface optional-infra degradation to the user, add retry/backoff + cached capability lists, and failover messaging (e.g., tools not available: <list>).
+
+Status: OPEN
+
+=== APPEND: observations (lines 1647-1836) ===
+20) read_files tool failing with opaque "Unknown error"
+- Symptom: read_files MCP tool returned an error with no details.
+- Evidence: Tool call 9fab5538... -> [TOOL-RESULT] ✗ Tool failed "Unknown error" at 10:50:42
+- Impact: Orchestrator falls back to slower/less-reliable read patterns and forces additional bash/file calls; hard to triage without upstream error details.
+- Suggested fix: surface provider/MCP error payloads (with safe redaction), include retry logic and richer diagnostics in logs.
+
+21) MCP tool name mismatch and registry lookup failures
+- Symptom: MCP Integration logged bare tool name "list_directory" not found; falls back to local VFS.
+- Evidence: "Bare tool name \"list_directory\" not found in any MCP server" at 10:50:40
+- Impact: Extra latency/fallback paths and fragile dependency on MCP naming; tool capability routing becomes brittle.
+- Suggested fix: canonicalize MCP tool names, add mapping layer and telemetry to detect missing registrations early.
+
+22) Bash tool executed in simulate/read-only mode with inconsistent workingDir
+- Symptom: bash_execute commands were routed as simulate (read-only) and workingDir=workspace/sessions/000 while requested paths referenced sessions/001.
+- Evidence: "Command routed mode: simulate" and "workingDir: workspace/sessions/000" for commands like "cat sessions/001/cli_agent.py".
+- Impact: Commands appear to succeed (simulated) but do not reflect real FS state and can mislead higher-level orchestrator decisions.
+- Suggested fix: ensure agent uses correct workingDir per-session, expose simulation flag clearly to upstream, and fail fast when requested action can't be simulated accurately.
+
+23) Provider returned empty assistant messages / malformed stream chunks
+- Symptom: Stream error chunk: "Assistant message must have either content or tool_calls, but not none." from Mistral.
+- Evidence: 10:52:05 stream error and 400 status from Vercel AI SDK.
+- Impact: Orchestrator treats provider as failed and retries others; reduces throughput and increases latency.
+- Suggested fix: validate provider responses early, retry providers with small backoff, and record example payloads for provider debugging.
+
+Status: OPEN
+
+=== APPEND: observations (lines 2097-4192) ===
+24) VFS Snapshot Broadcaster: EPIPE + single retry limit
+- Symptom: Repeated "Subscriber disconnected (retryable)" with write EPIPE and "SUBSCRIBE failed: Reached the max retries per request limit (which is 1)" at multiple timestamps (e.g., 11:00:52, 11:01:08, 11:00:52).
+- Impact: Snapshot subscription instability, frequent reconnects, heavier polling, stale UI snapshots.
+- Suggested fix: increase maxRetriesPerRequest, exponential backoff + jitter, detect EPIPE vs auth errors, and fallback to safe polling when SUBSCRIBE is unstable.
+
+25) EMPTY WORKSPACE / WORKSPACE_NOT_READY surprising behavior for anonymous sessions
+- Symptom: VFS returns "EMPTY WORKSPACE" and "WORKSPACE_NOT_READY" for anonymous owners (e.g., sessions/001) while sanitized scope path remains "workspace/sessions/001".
+- Evidence: GET snapshot returned 0 files and WORKSPACE_NOT_READY (11:00:50, 11:00:53, 11:01:06).
+- Impact: Orchestrator attempts reads/edits against uninitialized workspaces; confusing client UX.
+- Suggested fix: Explicit workspace initialization signal for anonymous sessions and clearer client telemetry/UI message when workspace is not ready.
+
+26) Tool argument validation failures and bare MCP name mismatch
+- Symptom: list_files invoked with missing/empty 'path' argument -> INVALID_ARGS; MCP logged bare name "list_directory" not found.
+- Evidence: validation failed "Missing required arguments for list_files: path" at 11:07:16 and repeated "Bare tool name \"list_directory\" not found" messages.
+- Impact: Unnecessary fallback logic, extra tool invocations, wasted latency, fragile MCP routing.
+- Suggested fix: Pre-call arg validation, conservative reprompt to LLM for missing args, canonical mapping for MCP tool names.
+
+27) Orchestrator/provider cascade exhaustion (Bad Gateway / TTFT / idle timeouts)
+- Symptom: Frequent 502 Bad Gateway and TTFT/idle timeouts; orchestrator exhausts provider fallbacks and reports "ALL PROVIDERS FAILED" (e.g., 11:07:09, 11:24:22, 11:08:34).
+- Impact: No usable response; repeated retries across providers amplify latency and costs.
+- Suggested fix: Implement provider circuit-breakers with health scoring, prefer providers with known tool support, add preflight health probes, and stop aggressive round-robin on repeated transient failures.
+
+28) Bash tool simulation/read-only mode with wrong workingDir
+- Symptom: Many bash_execute calls routed as simulate/read-only and workingDir set to workspace/sessions/000 while requested paths reference sessions/001.
+- Evidence: "Command routed mode: simulate" and "workingDir: workspace/sessions/000" for commands like "cat sessions/001/cli_agent.py" (11:33:50, 10:50:43)
+- Impact: Tools report success but do not reflect actual FS state; higher-level logic believes results that aren't real.
+- Suggested fix: Ensure session-scoped workingDir resolves to the request's conversation/session; if simulation must be used, mark outputs explicitly and avoid using them to drive filesystem mutations or final decisions.
+
+29) Excessive model silence/stall-steer and idle timeouts
+- Symptom: Repeated THINK-PING/STALL-STEER events and idle timeouts (No initial token or mid-stream idle) across many provider/model attempts.
+- Evidence: multiple stall steers at >30s and idle timeouts at 75s (e.g., 10:51:39, 11:08:34, 11:23:52).
+- Impact: Frequent injected steer messages, degraded response quality, repeated reprompts by user.
+- Suggested fix: Tune TTFT and idle thresholds per-provider; use intermediate progress tool-calls as heartbeats; surface clearer progress state to users.
+
+30) Parser fragility when falling back to text-mode tool-result extraction
+- Symptom: applyFilesystemEditsFromResponse often finds 0 writes/diffs even when response preview contains tool_result-like JSON; path validation rejects requests.
+- Evidence: "writesFound":0 and path validation rejected (11:24:22, 11:34:00)
+- Impact: Useful tool-result information embedded in text is ignored; auto-apply may miss actionable edits; brittle text->tool parsing.
+- Suggested fix: Harden parser to extract JSON fragments and tool_result objects robustly, prefer explicit tool_calls over free-text edits, and surface confidence scores before auto-applying edits.
+
+Status: OPEN
+
+=== APPEND: final-third observations (lines 4193-6288) ===
+31) Progressive incremental writes (streaming edits)
+- Symptom: Repeated "Progressive file edit detected" entries for the same file (sessions/009/cli_agent.py) showing many small writes in quick succession (11:58:17..).
+- Evidence: multiple debug lines 11:58:17.x
+- Impact: risk of partial/unfinished files, performance overhead, and noisy VCS churn.
+- Suggested fix: Buffer progressive edits and commit atomically when complete; publish a soft 'editing in progress' state in UI.
+
+32) Requested path vs resolved workspace mapping mismatch
+- Symptom: Edits requested for "sessions/009/cli_agent.py" resolved and written to "workspace/sessions/001/cli_agent.py" (auto-mapping mismatch).
+- Evidence: requestedPath:"sessions/009/cli_agent.py" resolvedPath:"workspace/sessions/001/cli_agent.py" at 11:58:57
+- Impact: files written to wrong session workspace, possible data leakage and confusing UX.
+- Suggested fix: Make path mapping explicit in logs and UI; require user confirmation when resolver changes session id; enforce stricter validation.
+
+33) VFS publish/subscribe instability and closed connections
+- Symptom: "PUBLISH failed: Connection is closed." and repeated snapshot broadcaster EPIPE/subscription failures.
+- Evidence: 11:58:57 PUBLISH failed + earlier EPIPEs
+- Impact: clients receive stale snapshots; cache invalidation and eventing unreliable.
+- Suggested fix: exponential backoff, reconnect with jitter, detect permanent vs transient closes, and degrade to polling gracefully.
+
+34) Sandbox execution failure: missing runtime (python3) and ENOENT hard-block
+- Symptom: python3 execution in sandbox hard-blocked with ENOENT retries and unknown bash errors for commands requiring runtime.
+- Evidence: Hard-blocked ENOENT retry and bash_execute failures at 12:46:42-43
+- Impact: requested sandbox runs silently fail; user must manually intervene.
+- Suggested fix: preflight sandbox environment for required runtimes, surface clear error messages and suggest installing/choosing alternate runtimes, and avoid silent retries.
+
+35) Concurrent modification warnings during batch/write flow
+- Symptom: "Potential concurrent modification" warnings while multiple buffered updates and batch commits occurred.
+- Evidence: VFS warns at 11:58:57 for workspace/sessions/001/cli_agent.py
+- Impact: race conditions, data loss, or conflicting commits.
+- Suggested fix: Acquire session-scoped write locks for agentic edits, use optimistic merge with conflict UI, and atomic batch commits.
+
+36) Orchestrator failures due to discontinued/free models and provider errors
+- Symptom: Orchestrator fatal errors when provider returns model-discontinued 404; repeated fallback cycles.
+- Evidence: 12:56:36 kilocode/stepfun free-model 404 and many provider TTFT/idle errors earlier.
+- Impact: wasted retries, degraded latency, and exhaustion of fallback options.
+- Suggested fix: Maintain provider model blacklist/TTL for discontinued models; prefilter candidates by health and known FC capability; add cooldown windows.
+
+37) Provider stream payload malformation (empty assistant messages)
+- Symptom: Provider returned assistant message missing content and tool_calls => stream error 400.
+- Evidence: "Assistant message must have either content or tool_calls, but not none." at 12:46:40
+- Impact: Orchestrator treats provider as failed; increases retries and user-perceived flakiness.
+- Suggested fix: Capture and store provider response payloads for debugging (redacted), classify as provider fault and avoid immediate retries on malformed payloads.
+
+38) High-risk auto-apply from text-mode fallback
+- Symptom: Large text-mode fallbacks extracted file edits and were auto_applied (applied:3), including large content lengths (~20KB).
+- Evidence: gh/gpt-5-mini responseLength 23379, extracted paths and auto_applied at 11:58:57
+- Impact: Dangerous auto-apply without confirmation; mapping ambiguity and high chance of misplaced edits.
+- Suggested fix: Require explicit confirmation for auto-apply when responseLength>threshold or when session mapping is non-trivial; show preview/diff before apply.
+
+39) Environment-safety blocking returns opaque "Unknown error"
+- Symptom: Commands blocked for environment safety (env dump) returned Unknown error rather than structured denial.
+- Evidence: env command routed "blocked" and produced "Tool failed Unknown error" at 11:36:53
+- Impact: Upstream logic misinterprets failure; harder to surface helpful guidance to user.
+- Suggested fix: Distinguish safe-block responses with structured codes (e.g., BLOCKED_ENV) and include remediation messages.
+
+Status: OPEN
+
+---
+
+## Pass-4 — New Bugs Surfaced by First-Third Log Trace (2026-06)
+
+**Source:** `bing/web/logs/run.log` lines 1–1587 (first ⅓ of 4,760-line log), traced in 4 focused fragments of ~400 lines each.
+**Method:** Careful manual reading of every entry, not just grep for `ERROR`/`WARN`. Looked for implicit bugs: LLM stoppages, tool-chain breaks that would force a manual user reprompt, path issues that the LLM is silently producing, etc.
+**Bugs already in BUGS_AUDIT.md (#8–#60) are NOT re-listed here. Pass-4 captures only NEW findings.**
+
+**Severity legend:** 🔴 Critical (data loss / corruption) · 🟠 High (UX blocker / silent failure) · 🟡 Medium (degraded mode / noise).
+
+**If only 3 fixes ship from Pass-4:** #63 → #62 → #66 (highest user-visible ROI, all force manual reprompt today).
+
+---
+
+### 🟠 #61 — Provider Fallback Chain: All 4 Models Decline, Cascade to Degraded Text-Mode
+**Symptom (lines 450–900):** A single user request triggered a 4-model fallback chain — `ninerouter/deepseek-v4-flash` → `nvidia/z-ai/glm-5.1` → `mistral-large-latest` → `google/gemini-3.1-flash-lite-preview`. The final model returned `finishReason: "stop"` with 0 tool calls (despite 19 tools being available), forcing `Phase 2: Retrying in text-mode` and finally `orchestration_failed`. The LLM ended up hand-parsing text-mode file edits from its own response, which is a known instability path.
+
+**Why this is a NEW bug (vs. bug A/B / #9):**
+- Bugs A and B were about a SINGLE provider returning `finishReason: stop` with 0 tool calls.
+- #9 was the AutoMode classifier demoting every request to v1-api (a different demotion path).
+- #61 is about the FALLBACK CHAIN itself: the system burned through 4 providers in sequence and ALL of them declined. There is no per-provider decline attribution in run.log, no per-attempt metric, and no signal to the user that the agent is degrading through the chain.
+
+**Root cause (inferred from `unified-agent-service.ts`):** The fallback chain is a sequential `try { ... } catch { try next }` cascade with no per-attempt metric, no per-attempt `[WARN]` log, and no `[STEER]` injection when the chain degrades. The SteerService fires AFTER all 4 models have been tried; by then the agent is already in `orchestration_failed` mode.
+
+**Fix direction:**
+1. **Per-attempt metric** — emit `[INFO] ProviderAttempt { provider, op: 'text-gen', attempt, reason }` for every fallback hop. Counter `providerDeclines: { count, byProvider, lastReason }` in chat metrics (new file `bing/web/lib/chat/chat-metrics.ts`).
+2. **`[STEER] provider_chain_exhausted`** — when all N providers decline, inject a steer so the LLM knows the previous turn was degraded.
+3. **Surface in `/api/health?detailed`** — `system.providers.recentDeclines` so operators can see chronic provider degradation.
+4. **Lower the default chain length** — 4 hops is too many; 2 is usually enough (primary + 1 fallback). Make `MAX_PROVIDER_FALLBACK_HOPS` env-tunable.
+
+**Files:** `bing/web/lib/orchestra/unified-agent-service.ts`, `bing/web/lib/chat/chat-metrics.ts` (new), `bing/web/app/api/health/route.ts`, `bing/web/lib/orchestra/steer-service.ts`.
+
+---
+
+### 🟠 #62 — VFS `normalizePath` `isWithin: false` for LLM-Emitted Paths (cross-ref #19)
+**Symptom (lines 450–900):** Persistent `[VFS normalizePath] isWithin: false` log lines throughout the orchestration. The LLM is emitting paths that the VFS normalizer rejects as out-of-scope. The parser falls back to rejecting the edit (e.g. `fmt`).`, `path/to/file.py` were rejected by `isValidFilePath`).
+
+**Why this is a NEW bug (vs. #19, #26, #I) — and how it cross-references #19:**
+- #19 was about tool path schemas lacking `.example()` / `.description()` on every `path` argument.
+- #26 was about session-id loss in folder renames (a server-side canonicalization bug).
+- #I was about LLM emitting obviously-bad paths (`=`, `{name}"`, HTML fragments).
+- #62 is the in-between case: the LLM emits paths that LOOK syntactically correct (no HTML, no `=` prefix) but don't pass VFS scope validation because the LLM doesn't know the VFS scope prefix.
+- **#19 is the upstream root cause** (LLM doesn't have examples to follow); #62 is the downstream symptom (LLM emits out-of-scope paths because no example told it the scope). Fixing #19 will likely REDUCE #62 but won't ELIMINATE it — some scope violations come from the LLM misinterpreting "relative" vs the actual VFS root.
+
+**Root cause (inferred from `virtual-filesystem-service.ts` + `scope-utils.ts`):** The LLM is being asked for relative paths like `src/app.tsx` but the VFS scope is `workspace/sessions/001/`. The LLM's `src/app.tsx` is being passed to `normalizePath` which checks `isWithin(workspaceRoot)`. If the LLM happens to emit a path that resolves to a parent of the workspace root, the check fails.
+
+**Fix direction:**
+1. **In `[VFS normalizePath] isWithin: false`, log the rejected path + the actual workspace root** so operators can see what the LLM tried vs what was expected.
+2. **Update `wireInvalidPathSteer` (from bug I) to also tell the LLM about the VFS scope prefix** — "All file paths must be relative to `workspace/sessions/<your-session-id>/`. Use `src/app.tsx`, NOT `/src/app.tsx` or `../app.tsx`."
+3. **Add a pre-flight path check in the system prompt** — inject the canonical session scope path at the top of the tool list (also helps #19). Single fix kills both symptoms.
+
+**Files:** `bing/web/lib/virtual-filesystem/virtual-filesystem-service.ts`, `bing/web/lib/virtual-filesystem/scope-utils.ts`, `bing/web/lib/orchestra/steer-service.ts` (update `wireInvalidPathSteer`), `bing/web/lib/orchestra/unified-agent-service.ts` (inject scope into system prompt).
+
+---
+
+### 🔴 #63 — `applyFilesystemEditsFromResponse` Double-Applies Identical File Lists
+**Symptom (lines 450–900):** The `appliedPaths` set in the parser shows duplicates like `cli_agent.py` listed twice within the same parse pass. The same `applyFilesystemEditsFromResponse` call appears to be applying identical file lists twice — once during the streaming parse, then again in the post-stream finalize pass.
+
+**Why this is a NEW bug (vs. #48) — and why this is CRITICAL:**
+- #48 was about `parseFilesystemResponse(forceExtract=true)` overwriting correct writes with ECHOED JSON (the LLM re-summarized its own tool calls).
+- #63 is the parser's own dedup logic failing: even when the LLM emits the same file list once, the parser applies it twice (once for `extractFileEdits`, once for `extractBatchWriteEdits`, or once in the streaming pass + once in the finalize pass).
+- **Severity is 🔴 Critical because it can cause file corruption**: the second apply may include a partially-parsed version of the file list (if the stream was chunked), overwriting the first apply's correct content with truncated content.
+
+**Root cause (inferred from `file-edit-parser.ts` + `chat/route.ts`):** The streaming pass calls `applyFilesystemEditsFromResponse` after every stream chunk, and the finalize pass calls it again with the full buffer. Files that were already applied in an earlier chunk are re-applied in the finalize. The `appliedPaths` set is per-pass, not persistent across the streaming → finalize boundary.
+
+**Fix direction:**
+1. **Persistent `appliedPaths` across the streaming → finalize boundary** — hoist the set to the POST-handler scope (mirroring the `alreadyWrittenPaths` Set from the #48 fix), pass it into both calls. The finalize pass must skip paths already applied in the streaming pass.
+2. **Add a `doubleApplyBlocked` counter** to chat metrics so the audit can quantify how often this fires.
+3. **Emit `[WARN] double-apply-blocked: { path, source }`** when a path is skipped because it was already applied earlier in the same turn.
+
+**Files:** `bing/web/app/api/chat/route.ts`, `bing/web/lib/chat/file-edit-parser.ts`, `bing/web/lib/chat/chat-metrics.ts` (new).
+
+---
+
+### 🟠 #64 — VFS Snapshot Broadcaster `PUBLISH failed: Connection is closed` After Valid Writes (cross-ref #38)
+**Symptom (lines 450–900 + 900–1587):** `VFS:Snapshot:Broadcaster` logged `PUBLISH failed: Connection is closed.` immediately after a successful file write. The `Connection is closed` error is a DIFFERENT failure mode from the `write EPIPE` covered by #38 — it means the ioredis PUBLISHER connection itself died, not just the subscriber.
+
+**Why this is a NEW bug (vs. #38):**
+- #38 was about the SUBSCRIBER connection dropping on `EPIPE` with max-retries.
+- #64 is about the PUBLISHER connection dying. After the publisher dies, every subsequent `publish()` call in the same process fails silently (the broadcaster's `publish()` is fire-and-forget by design). The cross-process invalidation silently breaks without any operator-visible signal.
+
+**Root cause (inferred from `snapshot-broadcaster.ts`):** ioredis publisher connection can die on long-lived process idle, server-side timeouts, or auth changes. The current `publish()` wraps in try/catch + cooldown log, but it doesn't reset the publisher state. After the first `Connection is closed`, every subsequent `publish()` hits the same dead connection (no auto-reconnect for the publisher), so the broadcaster is effectively dead for the rest of the process.
+
+**Fix direction:**
+1. **Distinguish publisher vs subscriber failure** in `snapshot-broadcaster.ts`. On publisher `Connection is closed`, reset `state.publisher = null` so the next `publish()` lazily re-creates it.
+2. **Expose publisher health in `/api/health?detailed`** — `broadcaster.publisherAlive` + `broadcaster.subscriberAlive` so operators can see which side is degraded.
+3. **Add a periodic keepalive** — `PING` every 30s to keep the publisher connection warm.
+4. **Test** — force `pub.emit('error', new Error('Connection is closed'))` and assert the next `publish()` re-creates the connection.
+
+**Files:** `bing/web/lib/virtual-filesystem/snapshot-broadcaster.ts`, `bing/web/app/api/health/route.ts`, `bing/web/__tests__/vfs-snapshot-broadcaster.test.ts`.
+
+---
+
+### ⬜ #65 — Merged Into #46 (Unified Diff Parser Strictness on `+++` Without `---`)
+
+**Decision:** Merged into existing bug **#46** (applySimpleLineDiff leaks `---`/`+++` headers) as a sub-bullet, since both are diff-parser failures and the distinction (primary parser vs fallback) is the same code family.
+
+**Added to #46 detail (to be inserted in the existing #46 section):**
+
+> **Sub-symptom (Pass-4, lines 450–900):** `applyUnifiedDiffToContent` also failed with `Error: Unknown line 2 "   +++ b/src/logger.js"`. The LLM produced a unified diff with a leading `+++ b/...` line (no `--- a/...` prefix on line 1) AND indented with 3 spaces. The strict parser choked. **Root cause family is the same as the headline #46 fix**: the parser doesn't handle LLM diffs that omit `--- a/path` (only `+++ b/path` present) or that are indented. **Additional fix direction:** pre-validate the diff body starts with `--- ` (allowing leading whitespace) before passing to the strict parser; if missing, synthesize a `--- a/{path}` line from the path argument. Also strip leading common-indent from the diff body before parsing headers.
+
+**TODO:** file-read `bing/web/lib/chat/file-diff-utils.ts` to confirm the parser is the one that emits `Unknown line 2` (vs a different code path).
+
+---
+
+### ⬜ #66 — Task Classifier Effectively Disabled, Always Falls Back to Regex (cross-ref #9, #32)
+**Symptom (lines 50–450):** `Task classifier failed, using regex fallback` fires consistently. The classifier (the bug #9 AutoMode classifier) reports as `disabled` in metrics. The system relies on regex-based task detection for every request.
+
+**Why this is a NEW bug (vs. #9, #32):**
+- #9 was about the AutoMode classifier DEMOTING every request to v1-api (false negative logic bug).
+- #32 was about the AutoMode signal set being too sparse (5-level priority decision).
+- #66 is that the classifier is essentially NON-FUNCTIONAL in the current build — it fails for every request and falls back to regex. Even if #9's logic is correct, if the classifier throws on every call, the regex fallback is the only path that runs. The bug is in the deployment / feature-flag state, not the classifier logic.
+
+**Root cause (inferred from `unified-agent-service.ts` + run.log):** The classifier likely depends on env vars or feature flags that aren't set in this build (e.g. `AGENT_CLASSIFIER_ENABLED=false` or a missing ML model path). The fallback log line is informational, not a `[WARN]`, so operators don't notice that the classifier is never actually running.
+
+**Fix direction:**
+1. **Promote the fallback log to `[WARN]`** — if the classifier fails, it's a regression. Operators should know.
+2. **Counter `classifierFallbackCount`** in chat metrics — so the audit can quantify how often the classifier is bypassed.
+3. **Surface in `/api/health?detailed`** — `system.classifier.enabled` + `system.classifier.fallbackCount` so operators can see the classifier is degraded.
+4. **Hard fail if classifier is configured but unavailable** — if `AGENT_CLASSIFIER_ENABLED=true` but the underlying model isn't loaded, the route should refuse the request with a clear 503 + "classifier unavailable" rather than silently degrading to regex.
+
+**Files:** `bing/web/lib/orchestra/unified-agent-service.ts`, `bing/web/lib/chat/chat-metrics.ts` (new), `bing/web/app/api/health/route.ts`.
+
+---
+
+### 🟠 #67 — VFS `ENOSPC: no space left on device` on Local Cache Write
+**Symptom (lines 900–1587):** Multiple `[ENOSPC: no space left on device, write]` warnings when the on-disk VFS cache (ContentAddressableStorage or equivalent) tried to persist `src/main.py` and other files. The VFS write fails or silently retries.
+
+**Why this is a NEW bug (vs. #27, #33):**
+- #27/#33 were about session-file-count and session-byte-count creep (IN-MEMORY tracking, not disk).
+- #67 is about the ON-DISK cache running out of space, which causes writes to fail at the storage layer, not the in-memory tracker. The cache file is NOT named `content-addressable-storage.ts` in the current tree (TODO: identify the actual file via grep for `ENOSPC` or `writeFileSync` in `bing/web/lib/virtual-filesystem/`).
+
+**Root cause (inferred):** The CAS layer doesn't have a size cap / LRU eviction. It grows until the disk fills. No `[WARN]` is emitted on ENOSPC — the warning is generic, doesn't say which path failed or which file was being written.
+
+**Fix direction:**
+1. **Add a size cap to the on-disk cache** — `MAX_CAS_SIZE_MB` env var (default 2 GB), LRU-evict on overflow. Mirror the pattern from #27 (session file cap).
+2. **Promote ENOSPC to `[WARN]`** with the full path + cache size + cache path so operators can see which write failed and how full the cache is.
+3. **Counter `casEnospcCount`** in chat metrics.
+4. **Surface in `/api/health?detailed`** — `system.cas.usedBytes`, `system.cas.capBytes`, `system.cas.evictionCount`.
+
+**Files:** to be identified (grep `bing/web/lib/virtual-filesystem/` for `ENOSPC` or local write); `bing/web/lib/chat/chat-metrics.ts` (new); `bing/web/app/api/health/route.ts`.
+
+---
+
+### ⬜ #68 — Demoted to Regression Check Under #11/#16 (Stale Snapshot 1071s)
+
+**Decision:** Demoted to a regression check follow-up under existing bugs **#11** (VFS Snapshot Cache: Stale + Over-Invalidation) and **#16** (Stale-Snapshot vs. Re-Snapshot Inconsistency), NOT a new bug.
+
+**Rationale:** Bug #11 lowered the stale threshold to 60s via `VFS_SNAPSHOT_STALE_THRESHOLD_MS`. A 1071s (17 min) staleness in the current run.log means either the env var wasn't set, the fix didn't ship to the running build, or another cache path bypasses the threshold. This is a **regression indicator**, not a NEW failure mode. Filing a new bug would dilute the audit; better to track it as a regression check on the existing fix.
+
+**Added to #11 follow-up list (to be inserted in the existing #11 section):**
+
+> **Pass-4 regression check (lines 900–1587):** Observed `STALE SNAPSHOT` warnings of 1071s, 1220s — well above the new 60s threshold. Either `VFS_SNAPSHOT_STALE_THRESHOLD_MS` is not set in the deployed env, the fix didn't ship, or another cache path bypasses the threshold. **Action:** file-read `bing/web/app/api/filesystem/snapshot/gateway.ts` to confirm the threshold is read from env, not hard-coded; if hard-coded, add the env-var read; if env-var read but not set, add a default 60_000 fallback log so operators can see the value in run.log.
+
+---
+
+## Pass-4 — Notes on Traced Patterns (anchored to bug numbers)
+
+**Pattern A: Silent Degradation in Many Layers** (covers #61, #64, #66, #67)
+The most common failure mode is "X is broken but the system continues in degraded mode without telling the user." Examples: classifier always falls back to regex (info-level log, not warn); broadcaster publish dies silently; VFS writes double-apply; orchestrator falls back to text-mode. The fix direction in most of these bugs is to PROMOTE silent failures to `[WARN]` and add a counter.
+
+**Pattern B: Path Canonicalization is a Recurring Source of Bugs** (covers #19, #26, #62, #I)
+The LLM is the ultimate source of truth for paths, and it consistently produces paths that need normalization. The fix is to (1) document the VFS scope in the system prompt (so the LLM emits valid paths in the first place), (2) have a single, authoritative path canonicalization function that ALL VFS operations use, (3) when a path is rejected, the steer message should explain the EXACT format the LLM should use.
+
+**Pattern C: Tool-Chain Breaks Force Manual Reprompt** (covers #39, #41, #45, #61, #62, #63, #65)
+Multiple bugs culminate in the LLM being unable to complete its task and the user having to manually reprompt. The fix direction in all of them is to inject a `[STEER]` BEFORE the stream ends, so the LLM (and the user) have a clear signal that the previous turn was degraded. The "silent degradation" pattern (A) is the root cause: without a steer, the LLM doesn't know the previous turn was broken.
+
+**Pattern D: Telemetry is a Prerequisite for Reliable Steering** (covers #61, #64, #66, #67)
+The current steer layer (#31, G, H, I, K, #22, #40) is reactive. Many Pass-4 bugs need telemetry FIRST (counters, last-error-at, health) before a steer can be designed. The fix direction for many of these is "add observability, then derive a steer from the observability."
+
+**Pattern E: Multi-Worker Edge Cases** (covers #38, #64, #68)
+#38, #64, #68 are all variations of the same root cause: multi-worker state (Redis pub/sub, cross-process invalidation) is fragile. The Pass-2 fixes addressed the most obvious symptoms; Pass-4 found that the EDGE cases (publisher dying vs subscriber dying, polling backoff, etc.) still need work.
+
+---
+
+## Pass-4 ROI Ranking (Final)
+
+| Rank | Bug | Why high ROI |
+|------|-----|--------------|
+| 1 | 🔴 #63 (double-apply) | Direct file corruption, hard to debug. Persistent appliedPaths across streaming → finalize boundary is a 5-line fix. |
+| 2 | 🟠 #62 (path normalization) | Cross-cuts with #19; a single system-prompt scope injection reduces BOTH bugs. |
+| 3 | 🟠 #66 (classifier disabled) | Affects EVERY request, not just one. Promote fallback to WARN + counter is a 3-line fix. |
+| 4 | 🟠 #64 (publisher died) | Silent cross-process breakage. Reset publisher on error is a 5-line fix in `snapshot-broadcaster.ts`. |
+| 5 | 🟠 #61 (provider chain) | Per-attempt metric + steer on full chain exhaustion. Closes a known silent-degradation path. |
+| 6 | 🟡 #65 (merged into #46) | Part of the #46 fix. Indented-diff strip + missing-`---` synthesis. |
+| 7 | 🟡 #68 (demoted to regression check) | One-line env-var read verification on #11. |
+| 8 | 🟠 #67 (ENOSPC on CAS) | Disk-full is rare but high-impact. Size cap + WARN log is a 20-line fix. |

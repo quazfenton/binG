@@ -427,7 +427,11 @@ export async function executeBashCommand(
         // Pushed into executeBashCommand itself (not just the LLM tool) so ALL
         // bash entry points — direct callers, executeBashViaEvent, etc. —
         // benefit from the "blocked only while broken" recovery.
-        if (exitCode === 0) {
+        // Guard: require BOTH `result.success` AND `exitCode === 0` to avoid
+        // over-resetting on signal kills (where spawn's exitCode may be 0 even
+        // though the process was killed) or on partial-failure states. Mirrors
+        // the LLM tool's postExecution check and the sandbox routing check.
+        if (result.success && exitCode === 0) {
           const baseCmd = extractBaseCommand(command);
           if (baseCmd) resetMissingBinaryRetry(baseCmd);
         }
@@ -655,9 +659,14 @@ async function trySandboxRoute(
       command,
       workingDir,
     };
-    // Bug #39: clear the hard-block retry counter for this binary on success
+    // Bug #39: clear the hard-block retry counter for this binary on success.
+    // Guard: require BOTH `result.success` AND `result.exitCode === 0` — the
+    // CRIT-1 review note above warns that some sandbox providers return
+    // `{ success: true, exitCode: 1 }` for soft-fail states. A bare
+    // `result.success` check would over-reset and let a persistently-broken
+    // sandbox binary slip through the hard-block. Matches the other 2 sites.
     const baseCmd = extractBaseCommand(command);
-    if (result.success && baseCmd) {
+    if (result.success && result.exitCode === 0 && baseCmd) {
       resetMissingBinaryRetry(baseCmd);
     }
     return { routed: true, sandboxId: session.sandboxId, result };

@@ -137,6 +137,52 @@ export function onFileEvent(callback: FileEventCallback): () => void {
 export type FileEventType = 'create' | 'update' | 'delete';
 
 /**
+ * Standardized source tags for file events.
+ *
+ * When a file event is emitted, the `source` field identifies the originating
+ * UI surface or server-side system. Use one of these constants where possible
+ * so run.log entries can be filtered with a single string match:
+ *
+ *   `rg '"source":"workspace-panel"' run.log`
+ *   `rg '"source":"terminal-panel"' run.log`
+ *   `rg '"source":"code-preview-panel"' run.log`
+ *
+ * UI surface tags:
+ *   - `workspace-panel` — user actions in the workspace file-tree panel
+ *     (paste, rename, move, delete, create, upload).
+ *   - `terminal-panel` — file changes triggered by terminal commands
+ *     (PTY/bash, sandbox-shell, file-watchers spawned by terminals).
+ *   - `code-preview-panel` — preview-related file changes
+ *     (scaffolded files, generated assets, preview hot-reload syncs).
+ *
+ * Server-side subsystem tags (kept for back-compat):
+ *   - `mcp-tool`           — VFS MCP tools (write_file, batch_write, apply_diff, delete_file)
+ *   - `mcp-tool-diff`      — apply_diff tool with standard unified diff
+ *   - `mcp-tool-diff-sar`  — apply_diff tool with search-and-replace format (<<<<< SEARCH / >>>>> REPLACE)
+ *   - `mcp-tool:<toolName>` — specific MCP tool (e.g. `mcp-tool:write_file`)
+ *   - `desktop-vfs`        — Tauri desktop VFS sync writes
+ *   - `desktop-vfs-directory` — Tauri desktop VFS directory creation
+ *   - `vfs-file-watcher`   — internal polling watcher (debounced create/update/delete)
+ *   - `diff`               — diff-apply event (enhanced-diff-viewer)
+ *   - `file-events`        — generic / default (caller didn't specify)
+ */
+export const FILE_EVENT_SOURCES = {
+  WORKSPACE_PANEL: 'workspace-panel',
+  TERMINAL_PANEL: 'terminal-panel',
+  CODE_PREVIEW_PANEL: 'code-preview-panel',
+  MCP_TOOL: 'mcp-tool',
+  MCP_TOOL_DIFF: 'mcp-tool-diff',
+  MCP_TOOL_DIFF_SAR: 'mcp-tool-diff-sar',
+  DESKTOP_VFS: 'desktop-vfs',
+  DESKTOP_VFS_DIRECTORY: 'desktop-vfs-directory',
+  VFS_FILE_WATCHER: 'vfs-file-watcher',
+  DIFF: 'diff',
+  FILE_EVENTS: 'file-events',
+} as const;
+
+export type FileEventSource = typeof FILE_EVENT_SOURCES[keyof typeof FILE_EVENT_SOURCES] | string;
+
+/**
  * File event options
  */
 export interface EmitFileEventOptions {
@@ -152,8 +198,12 @@ export interface EmitFileEventOptions {
   content?: string;
   /** Previous content (for update/delete) */
   previousContent?: string;
-  /** Source of the event (e.g., 'mcp-tool', 'desktop-fs', 'vfs') */
-  source?: string;
+  /**
+   * Source of the event. Prefer the constants in {@link FILE_EVENT_SOURCES}
+   * (e.g. `workspace-panel`, `terminal-panel`, `code-preview-panel`) so
+   * run.log entries can be filtered by originating UI surface.
+   */
+  source?: FileEventSource;
   /** Additional metadata */
   metadata?: Record<string, any>;
 }
@@ -216,7 +266,18 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
     };
 
     emitFilesystemUpdated(eventDetail);
-    logger.debug('Filesystem event emitted', { path, type, source });
+
+    // Log the source prominently so run.log can be filtered by originating
+    // UI surface (workspace-panel vs terminal-panel vs code-preview-panel).
+    logger.info('File event emitted', {
+      source,
+      origin: classifyFileEventSource(source),
+      path,
+      type,
+      sessionId,
+      hasContent: content !== undefined,
+      contentLength: content?.length,
+    });
 
     // 2. Track session files for smart-context
     // Include path in a format that matches the FILE_PATTERN regex in session-file-tracker.ts
@@ -227,7 +288,7 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
         role: 'system' as const,
         content: `Completed ${type} operation on ${path}`, // path will be extracted by regex
       };
-      
+
       // Track the file reference in session
       await trackSessionFiles(sessionId, [syntheticMessage]);
       logger.debug('Session file tracked', { sessionId, path, type });
@@ -353,6 +414,33 @@ export function emitEventFromToolResult(
 
 
   }
+}
+
+/**
+ * Classify a file-event source into a coarse origin bucket for log filtering.
+ * Buckets: `ui` (workspace-panel, terminal-panel, code-preview-panel),
+ * `mcp` (mcp-tool*), `desktop` (desktop-vfs*), `internal` (vfs-file-watcher, diff, file-events),
+ * or `other` for unrecognised sources.
+ */
+function classifyFileEventSource(source: string | undefined): 'ui' | 'mcp' | 'desktop' | 'internal' | 'other' {
+  if (!source) return 'other';
+  if (
+    source === FILE_EVENT_SOURCES.WORKSPACE_PANEL ||
+    source === FILE_EVENT_SOURCES.TERMINAL_PANEL ||
+    source === FILE_EVENT_SOURCES.CODE_PREVIEW_PANEL
+  ) {
+    return 'ui';
+  }
+  if (source.startsWith('mcp-tool')) return 'mcp';
+  if (source.startsWith('desktop-vfs')) return 'desktop';
+  if (
+    source === FILE_EVENT_SOURCES.VFS_FILE_WATCHER ||
+    source === FILE_EVENT_SOURCES.DIFF ||
+    source === FILE_EVENT_SOURCES.FILE_EVENTS
+  ) {
+    return 'internal';
+  }
+  return 'other';
 }
 
 export default {

@@ -233,10 +233,14 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
     return currentContent;
   }
 
-  // Bug #46 defense-in-depth: reject if any result line starts with
+  // Bug #46 defense-in-depth: reject if ANY result line starts with
   // `--- ` or `+++ ` — indicates a diff-header leak that would corrupt
   // the file. These should have been skipped in the main loop above.
-  if (/^(--- |\+\+\+ )/.test(result)) {
+  // NOTE: must use the `m` (multiline) flag so the check applies to
+  // every line, not just the first. Without `m`, a header that leaked
+  // into a later line (e.g. after a correctly-stripped `+` line whose
+  // content happened to start with `--- `) would slip through.
+  if (/^(--- |\+\+\+ )/m.test(result)) {
     return null;
   }
 

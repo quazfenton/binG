@@ -25,6 +25,7 @@ import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@
 import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance, requestShellCompletion } from '@/lib/terminal/desktop-pty-provider';
 import { createWebLocalPty, isWebLocalPtyAvailable, type WebLocalPtyInstance } from '@/lib/terminal/web-local-pty';
 import { isDesktopMode, getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
+import { UI_SOURCE } from '@/lib/http/ui-source-header';
 
 const logger = createLogger('TerminalPanel');
 
@@ -1113,6 +1114,7 @@ export default function TerminalPanel({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-UI-Source': UI_SOURCE.TERMINAL_PANEL,
           ...getAuthHeaders(),
         },
         credentials: 'include',
@@ -1246,6 +1248,7 @@ export default function TerminalPanel({
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            'X-UI-Source': UI_SOURCE.TERMINAL_PANEL,
             ...getAuthHeaders(),
           },
           credentials: 'include',

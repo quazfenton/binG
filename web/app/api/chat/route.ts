@@ -9,6 +9,7 @@ import { generateSecureId } from '@/lib/utils/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
 import { setMetricsLogger } from '@/lib/memory';
+import { setUISource, readUISourceHeader } from '@/lib/http/ui-source-header-server';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -271,7 +272,13 @@ const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
 export async function POST(request: NextRequest) {
-  
+  // Phase B: stash the X-UI-Source header value on the AsyncLocalStorage
+  // scope so any downstream `emitFileEvent()` call in this request can
+  // read it via `getUISourceFromContext()`. Non-invasive (no function
+  // wrapper) — chat route is 5,800 lines and a `withUISourceScope` wrap
+  // would require re-indenting the entire body.
+  setUISource(readUISourceHeader(request));
+
   // Bug #48: shared Set of paths already written by structured tool calls
   // (batch_write, write_file) in this turn. Populated in the tool invocation
   // result handler (see streaming loop). Passed to all applyFilesystemEditsFromResponse
@@ -369,8 +376,8 @@ export async function POST(request: NextRequest) {
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
-    console.log('[ROUTE] Raw body keys:', Object.keys(rawBody));
-    console.log('[ROUTE] Parsed result:', parseResult.success ? 'success' : parseResult.error?.message);
+    chatLogger.debug('[ROUTE] Raw body keys:', Object.keys(rawBody));
+    chatLogger.debug('[ROUTE] Parsed result:', parseResult.success ? 'success' : parseResult.error?.message);
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
       chatLogger.error('Schema validation failed', { requestId }, {
@@ -870,7 +877,7 @@ export async function POST(request: NextRequest) {
     // V2 Agent Mode: route to OpenCode/Nullclaw workflow
     // Use task classifier result instead of redundant regex detection
     const isCodeRequestAuto = classification.isCodeRequest;
-    console.log('[ROUTE] agentMode from request:', agentMode);
+    chatLogger.debug('[ROUTE] agentMode from request:', agentMode);
     const wantsV2 =
       agentMode === 'v2' ||
       (agentMode === 'auto' && (
@@ -1500,7 +1507,7 @@ const config: UnifiedAgentConfig = {
                 const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
 
                 // DEBUG LOGGING: Session naming detection
-                console.debug('[SessionNaming] Session folder detection', {
+                chatLogger.debug('[SessionNaming] Session folder detection', {
                   detectedFolder,
                   resolvedConversationId,
                   isSequentialSession,
@@ -1814,11 +1821,11 @@ const config: UnifiedAgentConfig = {
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
       // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
-      console.log('[ROUTE-DEBUG] About to call processUnifiedAgentRequest, AGENT_EXECUTION_ENGINE:', AGENT_EXECUTION_ENGINE);
-      console.log('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call:', enableFilesystemEdits);
+      chatLogger.debug('[ROUTE-DEBUG] About to call processUnifiedAgentRequest, AGENT_EXECUTION_ENGINE:', AGENT_EXECUTION_ENGINE);
+      chatLogger.debug('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call:', enableFilesystemEdits);
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
         const result = await processUnifiedAgentRequest(config);
-        console.log('[ROUTE-DEBUG] processUnifiedAgentRequest returned, result.success:', result.success, 'hasResponse:', !!result.response);
+        chatLogger.debug('[ROUTE-DEBUG] processUnifiedAgentRequest returned', { resultSuccess: result.success, hasResponse: !!result.response });
 
         // GUARANTEED debug field — always appears if this code path is reached
         const debugInfo = {
@@ -1828,14 +1835,14 @@ const config: UnifiedAgentConfig = {
           hasResponse: !!result.response,
           responseLength: result.response?.length || 0,
         };
-        console.log('[ROUTE-DEBUG] debugInfo:', JSON.stringify(debugInfo));
+        chatLogger.debug('[ROUTE-DEBUG] debugInfo:', JSON.stringify(debugInfo));
 
         // FIX: Extract and apply file edits from the LLM response text.
         // The LLM may output code blocks, diffs, or write_file instructions
         // that need to be parsed and written to the VFS.
         // This bridges the gap between v1-api chat mode and actual file creation.
         let appliedEdits = null;
-        console.log('[FILE-EDIT-DEBUG] enableFilesystemEdits:', enableFilesystemEdits, 'result.success:', result.success, 'response length:', result.response?.length);
+        chatLogger.debug('[FILE-EDIT-DEBUG] before apply', { enableFilesystemEdits, resultSuccess: result.success, responseLength: result.response?.length });
         // Bug #48: pre-populate the shared alreadyWrittenPaths Set from v1 result
         // sources (result.fileEdits, result.steps, _writtenPaths) so site 1833
         // shares state with the other 8 call sites. This block runs only in the
@@ -1865,7 +1872,7 @@ const config: UnifiedAgentConfig = {
 
         if (result.success && result.response && enableFilesystemEdits) {
           try {
-            console.log('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview:', result.response.slice(0, 200));
+            chatLogger.debug('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview:', result.response.slice(0, 200));
             appliedEdits = await applyFilesystemEditsFromResponse({
               ownerId: filesystemOwnerId,
               conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
@@ -1883,7 +1890,7 @@ const config: UnifiedAgentConfig = {
               alreadyWrittenPaths,
             });
 
-            console.log('[FILE-EDIT-DEBUG] appliedEdits:', JSON.stringify({
+            chatLogger.debug('[FILE-EDIT-DEBUG] appliedEdits:', JSON.stringify({
               writes: appliedEdits?.writes?.length,
               patches: appliedEdits?.patches?.length,
               applied: appliedEdits?.applied?.length,
@@ -1920,10 +1927,10 @@ const config: UnifiedAgentConfig = {
               requestId,
               error: parseError.message,
             });
-            console.log('[FILE-EDIT-DEBUG] Error:', parseError.message, parseError.stack?.slice(0, 500));
+            chatLogger.debug('[FILE-EDIT-DEBUG] Error', { errorMessage: parseError.message, stack: parseError.stack?.slice(0, 500) });
           }
         } else {
-          console.log('[FILE-EDIT-DEBUG] SKIPPED: enableFilesystemEdits=', enableFilesystemEdits, 'success=', result.success, 'hasResponse=', !!result.response);
+          chatLogger.debug('[FILE-EDIT-DEBUG] SKIPPED', { enableFilesystemEdits, success: result.success, hasResponse: !!result.response });
         }
 
         return NextResponse.json({
@@ -4719,7 +4726,7 @@ async function buildWorkspaceSessionContext(
         contextPack.bundle,
       ].filter(Boolean).join('\n');
     } catch (error: unknown) {
-      console.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
+      chatLogger.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
       // Fall through to enhanced context with key file contents
     }
   }
@@ -4862,7 +4869,7 @@ async function buildHybridWorkspaceContext(
     }
 
     // Log token usage for monitoring
-    console.debug('[Chat] Hybrid workspace context built', {
+    chatLogger.debug('[Chat] Hybrid workspace context built', {
       source: result.source,
       symbolCount: result.symbolCount,
       filesIncluded: result.filesIncluded,
@@ -4889,7 +4896,7 @@ async function buildHybridWorkspaceContext(
     const errorMsg = err instanceof Error ? err.message : String(err);
     const errorStack = err instanceof Error ? err.stack : undefined;
     
-    console.error('[Chat] ❌ Hybrid retrieval failed, using existing context', {
+    chatLogger.error('[Chat] ❌ Hybrid retrieval failed, using existing context', {
       error: errorMsg,
       stack: errorStack?.split('\n').slice(0, 3).join('\n'),
       ownerId,
@@ -5132,71 +5139,71 @@ async function storeConversationInMem0(
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
   if (!path) {
-    console.debug('[validateExtractedPath] Rejected: empty path', { raw });
+    chatLogger.debug('[validateExtractedPath] Rejected: empty path', { raw });
     return null;
   }
   if (path.length > 300) {
-    console.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
+    chatLogger.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
     return null;
   }
   if (PATH_CONTROL_CHARS_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_HEREDOC_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_UNSAFE_CHARS_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_BAD_START_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_TOO_MANY_DOTS_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_TRAVERSAL_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_COMMAND_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
     return null;
   }
   // Reject paths that look like CSS classes, Vue directives, or code snippets
   if (PATH_LOOKS_LIKE_CODE_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
     return null;
   }
   // Reject paths with colons (CSS classes like hover:scale-105)
   if (PATH_HAS_COLON_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
     return null;
   }
   // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
   // This catches "workspace/sessions/002/0.3s" where "0.3s" is invalid
   if (PATH_CSS_VALUE_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
     return null;
   }  // CSS values like "/0.3s"
   if (PATH_SCSS_VAR_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
     return null;
   }  // SCSS variables like "/$var"
   // Must have a valid file extension or be a directory name
   // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
   if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
     return null;
   }
 
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
   if (!isValidFilePath(path, isFolder)) {
-    console.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
+    chatLogger.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
     return null;
   }
 
@@ -5221,7 +5228,7 @@ function extractFolderCreateTags(content: string): string[] {
     // Validate folder path the same way we validate file paths
     const validPath = validateExtractedPath(rawPath)
     if (!validPath) {
-      console.warn('[applyFilesystemEdits] Rejected invalid folder_create path:', rawPath.substring(0, 80))
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder_create path:', rawPath.substring(0, 80))
       continue
     }
     folders.push(validPath)
@@ -5276,7 +5283,7 @@ function resolveScopedPath(input: {
   const resolvedPath = resolveScopeUtil(normalizedRelative, input.scopePath);
 
   // DEBUG LOGGING: Trace path resolution to debug session folder issues
-  console.debug('[resolveScopedPath] Path resolution', {
+  chatLogger.debug('[resolveScopedPath] Path resolution', {
     rawPath,
     scopePath: input.scopePath,
     normalizedRelative,
@@ -5421,7 +5428,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(edit.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid path: ${edit.path.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
       return false;
     }
     edit.path = validPath;
@@ -5434,7 +5441,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid diff path: ${op.path.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
       return false;
     }
     op.path = validPath;
@@ -5444,7 +5451,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid apply_diff path: ${op.path.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
       return false;
     }
     op.path = validPath;
@@ -5456,7 +5463,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(p);
     if (!validPath) {
       invalidPathErrors.push(`Invalid delete path: ${p.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
       return null;
     }
     return validPath;
@@ -5467,7 +5474,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(folderPath, true); // isFolder = true
     if (!validPath) {
       invalidPathErrors.push(`Invalid folder path: ${folderPath.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
       return null;
     }
     return validPath;
@@ -5478,7 +5485,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(requestedPath);
     if (!validPath) {
       invalidPathErrors.push(`Invalid requested read path: ${requestedPath.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid requested read path:', requestedPath.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid requested read path:', requestedPath.substring(0, 80));
       return null;
     }
     return validPath;
@@ -5576,7 +5583,7 @@ async function applyFilesystemEditsFromResponse(input: {
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
         
         // DEBUG LOGGING: Track where files are actually being written
-        console.info('[VFS Write] File written to VFS', {
+        chatLogger.info('[VFS Write] File written to VFS', {
           ownerId: input.ownerId,
           requestedPath: edit.path,
           resolvedPath: targetPath,
@@ -5661,7 +5668,7 @@ async function applyFilesystemEditsFromResponse(input: {
         const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
         if (patchedContent === null) {
           // DEBUG: Log why diff application failed
-          console.error('[DIFF-APPLY] Failed to apply diff', {
+          chatLogger.error('[DIFF-APPLY] Failed to apply diff', {
             targetPath,
             diffLength: diffOperation.diff.length,
             diffPreview: diffOperation.diff.slice(0, 200),
@@ -5675,7 +5682,7 @@ async function applyFilesystemEditsFromResponse(input: {
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
 
         // DEBUG: Log successful diff application
-        console.info('[DIFF-APPLY] Successfully applied diff', {
+        chatLogger.info('[DIFF-APPLY] Successfully applied diff', {
           targetPath,
           originalLength: currentContent.length,
           patchedLength: patchedContent.length,
@@ -5750,7 +5757,7 @@ async function applyFilesystemEditsFromResponse(input: {
         if (!existedBefore) {
           // Allow apply_diff to create new files - use the replace content as the new file content
           // This is useful when the LLM uses apply_diff syntax but the file doesn't exist yet
-          console.log(`[apply_diff] File ${targetPath} does not exist, creating new file with replace content`);
+          chatLogger.debug(`[apply_diff] File ${targetPath} does not exist, creating new file with replace content`);
           const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, diffOp.replace);
 
           result.applied.push({
@@ -6007,7 +6014,7 @@ async function applyFilesystemEditsFromResponse(input: {
         }
       } catch (commitError) {
         // Non-fatal: edits were applied even if commit fails
-        console.error('[Chat] Auto-commit failed:', commitError);
+        chatLogger.error('[Chat] Auto-commit failed:', commitError);
       }
     }
   }
@@ -6085,7 +6092,7 @@ export async function GET(request: NextRequest) {
         timestamp: Date.now(),
       });
     } catch (error) {
-      console.error("Chat API warmup error:", error);
+      chatLogger.error("Chat API warmup error:", error);
       return NextResponse.json(
         { success: false, error: "Warmup failed" },
         { status: 500 }

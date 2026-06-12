@@ -1290,7 +1290,7 @@ export async function* streamWithVercelAI(
         // Logs the stall event AND calls recordDegradation so the per-stream
         // stall counter is surfaced in run.log. Without a real consumer, a
         // 5-min silent stream looks identical to a 1-sec success in run.log.
-        console.warn('[streaming] mid-stream stall detected (>30s without chunks)', {
+        chatLogger.warn('[streaming] mid-stream stall detected (>30s without chunks)', {
           totalChunks,
           elapsedMs: Date.now() - firstChunkAt,
         });

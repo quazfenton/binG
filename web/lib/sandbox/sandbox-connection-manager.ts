@@ -272,10 +272,13 @@ export class SandboxConnectionManager {
       const sessionState = this.state
       const { sessionId, sandboxId } = sessionState
 
-      // Guard: skip PTY fallback if we don't have a session
+      // Guard: skip PTY fallback if we don't have a session.
+      // This usually means the initial session creation (POST /api/sandbox/terminal)
+      // failed — include the underlying error so users know why.
       if (!sessionId || !sandboxId) {
-        logger.warn('[Terminal] No session/sandbox ID for PTY fallback, skipping')
-        this.handleConnectionError(new Error('No session available for terminal connection'))
+        const rootCause = sseError?.message || 'Unknown error during session creation'
+        logger.warn('[Terminal] No session/sandbox ID for PTY fallback, skipping', { rootCause })
+        this.handleConnectionError(new Error(`Failed to create sandbox session: ${rootCause}`))
         return
       }
 

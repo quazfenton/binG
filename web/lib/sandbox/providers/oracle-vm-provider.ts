@@ -23,6 +23,9 @@ import { join, dirname } from 'node:path';
 import { mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import type { ToolResult, PreviewInfo } from '../types';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Sandbox:OracleVM');
 import type {
   SandboxProvider,
   SandboxHandle,
@@ -178,18 +181,18 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
       client.on('ready', () => {
         this.sshConnection = client;
-        console.log(`[OracleVM] SSH connection established to ${this.config.host}`);
+        logger.debug(`[OracleVM] SSH connection established to ${this.config.host}`);
         resolve(client);
       });
 
       client.on('error', (err: any) => {
-        console.error(`[OracleVM] SSH connection error: ${err.message}`);
+        logger.error(`[OracleVM] SSH connection error: ${err.message}`);
         this.sshConnection = null;
         reject(err);
       });
 
       client.on('close', () => {
-        console.log(`[OracleVM] SSH connection closed`);
+        logger.debug(`[OracleVM] SSH connection closed`);
         this.sshConnection = null;
       });
 
@@ -352,7 +355,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         });
       });
     } catch (error: any) {
-      console.error(`[OracleVM] Upload failed: ${error.message}`);
+      logger.error(`[OracleVM] Upload failed: ${error.message}`);
       throw error;
     }
   }
@@ -381,7 +384,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         });
       });
     } catch (error: any) {
-      console.error(`[OracleVM] Download failed: ${error.message}`);
+      logger.error(`[OracleVM] Download failed: ${error.message}`);
       throw error;
     }
   }
@@ -457,7 +460,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
     if (this.sshConnection) {
       this.sshConnection.end();
       this.sshConnection = null;
-      console.log(`[OracleVM] Connection closed for sandbox ${this.sandboxId}`);
+      logger.debug(`[OracleVM] Connection closed for sandbox ${this.sandboxId}`);
     }
   }
 }
@@ -491,7 +494,7 @@ export class OracleVMProvider implements SandboxProvider {
       commandTimeout: COMMAND_TIMEOUT,
     };
 
-    console.log(
+    logger.debug(
       `[OracleVM] Initialized - Host: ${host}, User: ${username}, Workspace: ${workspace}`
     );
   }
@@ -517,7 +520,7 @@ export class OracleVMProvider implements SandboxProvider {
       return { healthy: true, latency };
     } catch (error: any) {
       const latency = Date.now() - startTime;
-      console.error('[OracleVM] Health check failed:', error.message);
+      logger.error('[OracleVM] Health check failed:', error.message);
       return { 
         healthy: false, 
         latency, 
@@ -540,7 +543,7 @@ export class OracleVMProvider implements SandboxProvider {
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     const sandboxId = `oracle-vm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     
-    console.log(
+    logger.debug(
       `[OracleVM] Creating sandbox - ID: ${sandboxId}, Language: ${config.language || 'default'}`
     );
 
@@ -554,7 +557,7 @@ export class OracleVMProvider implements SandboxProvider {
     try {
       await handle.executeCommand(`mkdir -p "${this.config.workspace}"`);
     } catch (error: any) {
-      console.warn(`[OracleVM] Failed to initialize workspace: ${error.message}`);
+      logger.warn(`[OracleVM] Failed to initialize workspace: ${error.message}`);
     }
 
     this.sandboxes.set(sandboxId, handle);
@@ -576,7 +579,7 @@ export class OracleVMProvider implements SandboxProvider {
     if (handle) {
       await handle.close();
       this.sandboxes.delete(sandboxId);
-      console.log(`[OracleVM] Closed sandbox ${sandboxId}`);
+      logger.debug(`[OracleVM] Closed sandbox ${sandboxId}`);
     }
   }
 
@@ -585,11 +588,11 @@ export class OracleVMProvider implements SandboxProvider {
    */
   async cleanup(): Promise<void> {
     const closePromises = Array.from(this.sandboxes.values()).map(handle =>
-      handle.close().catch(err => console.error('[OracleVM] Cleanup error:', err))
+      handle.close().catch(err => logger.error('[OracleVM] Cleanup error:', err))
     );
     
     await Promise.all(closePromises);
     this.sandboxes.clear();
-    console.log('[OracleVM] All sandboxes cleaned up');
+    logger.debug('[OracleVM] All sandboxes cleaned up');
   }
 }

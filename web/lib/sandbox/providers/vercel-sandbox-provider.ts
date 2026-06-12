@@ -36,6 +36,8 @@ import type {
   PtyConnectOptions,
 } from './sandbox-provider'
 import { SandboxSecurityManager } from '../security-manager'
+import { createLogger } from '@/lib/utils/logger';
+const logger = createLogger('Sandbox:VercelProvider');
 
 const WORKSPACE_DIR = '/vercel/sandbox/workspace'
 const MAX_COMMAND_TIMEOUT = 300000 // 5 minutes (Vercel default)
@@ -111,7 +113,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     this.teamId = process.env.VERCEL_TEAM_ID?.trim()
 
     if (!this.token && !this.isRunningOnVercel()) {
-      console.warn('[VercelSandbox] VERCEL_SANDBOX_TOKEN or VERCEL_TOKEN not set. Vercel Sandbox will not be available.')
+      logger.warn('[VercelSandbox] VERCEL_SANDBOX_TOKEN or VERCEL_TOKEN not set. Vercel Sandbox will not be available.')
     }
   }
 
@@ -144,7 +146,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       }
     } catch (error: any) {
       const latency = Date.now() - startTime
-      console.error('[VercelSandbox] Health check failed:', error.message)
+      logger.error('[VercelSandbox] Health check failed:', error.message)
       return { 
         healthy: false, 
         latency, 
@@ -162,7 +164,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       return this.sdkModule
     } catch (error: any) {
       const message = '@vercel/sandbox not installed. Run: npm install @vercel/sandbox'
-      console.error('[VercelSandbox]', message)
+      logger.error('[VercelSandbox]', message)
       throw new Error(message)
     }
   }
@@ -224,7 +226,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     try {
       await sandbox.mkDir(WORKSPACE_DIR)
     } catch (error) {
-      console.warn('[VercelSandbox] Failed to create workspace directory:', error)
+      logger.warn('[VercelSandbox] Failed to create workspace directory:', error)
     }
 
     return new VercelSandboxHandle(sandbox, this)
@@ -243,13 +245,13 @@ export class VercelSandboxProvider implements SandboxProvider {
     try {
       const sandbox = await this.getSandbox(sandboxId)
       await (sandbox as any).stop()
-      console.log(`[VercelSandbox] Destroyed sandbox ${sandboxId}`)
+      logger.debug(`[VercelSandbox] Destroyed sandbox ${sandboxId}`)
     } catch (error: any) {
       if (error.message?.includes('not found') || error.message?.includes('404')) {
-        console.log(`[VercelSandbox] Sandbox ${sandboxId} already destroyed`)
+        logger.debug(`[VercelSandbox] Sandbox ${sandboxId} already destroyed`)
         return
       }
-      console.error(`[VercelSandbox] Failed to destroy sandbox ${sandboxId}:`, error.message)
+      logger.error(`[VercelSandbox] Failed to destroy sandbox ${sandboxId}:`, error.message)
       throw error
     }
   }
@@ -437,7 +439,7 @@ class VercelSandboxHandle implements SandboxHandle {
     try {
       await this.sandbox.stop({ blocking: true })
     } catch (error: any) {
-      console.warn('[VercelSandbox] Failed to stop sandbox:', error.message)
+      logger.warn('[VercelSandbox] Failed to stop sandbox:', error.message)
     }
   }
 
@@ -445,7 +447,7 @@ class VercelSandboxHandle implements SandboxHandle {
     try {
       await this.sandbox.extendTimeout(duration)
     } catch (error: any) {
-      console.warn('[VercelSandbox] Failed to extend timeout:', error.message)
+      logger.warn('[VercelSandbox] Failed to extend timeout:', error.message)
     }
   }
 

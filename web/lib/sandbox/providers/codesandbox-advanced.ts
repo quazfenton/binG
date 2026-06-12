@@ -18,6 +18,8 @@ import { randomUUID } from 'crypto'
 import { resolve } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
 import type { SandboxHandle } from './sandbox-provider'
+import { createLogger } from '@/lib/utils/logger';
+const logger = createLogger('Sandbox:CodeSandboxAdvanced');
 
 /**
  * Execution event types for recording and replay
@@ -191,7 +193,7 @@ export class CodeSandboxSnapshotManager {
         }
       }
     } catch (error) {
-      console.warn('[CodeSandboxSnapshot] Failed to list directory:', error)
+      logger.warn('[CodeSandboxSnapshot] Failed to list directory:', error)
     }
 
     const hash = await this.computeHash(fileMap)
@@ -203,7 +205,7 @@ export class CodeSandboxSnapshotManager {
     }
 
     this.snapshots.set(snapshotId, snapshot)
-    console.log(`[CodeSandboxSnapshot] Created snapshot ${snapshotId} with ${Object.keys(fileMap).length} files`)
+    logger.debug(`[CodeSandboxSnapshot] Created snapshot ${snapshotId} with ${Object.keys(fileMap).length} files`)
     return snapshot
   }
 
@@ -266,7 +268,7 @@ export class CodeSandboxSnapshotManager {
     for (const [path, content] of Object.entries(snapshot.files)) {
       await handle.writeFile(path, content)
     }
-    console.log(`[CodeSandboxSnapshot] Rolled back to snapshot from ${new Date(snapshot.timestamp).toISOString()}`)
+    logger.debug(`[CodeSandboxSnapshot] Rolled back to snapshot from ${new Date(snapshot.timestamp).toISOString()}`)
   }
 
   getSnapshot(id: string): FileSnapshot | undefined {
@@ -346,9 +348,9 @@ export class CodeSandboxIdleManager {
         if (this.onSuspend) {
           try {
             await this.onSuspend(sandboxId)
-            console.log(`[CodeSandboxIdleManager] Suspended idle sandbox: ${sandboxId}`)
+            logger.debug(`[CodeSandboxIdleManager] Suspended idle sandbox: ${sandboxId}`)
           } catch (error) {
-            console.error(`[CodeSandboxIdleManager] Failed to suspend ${sandboxId}:`, error)
+            logger.error(`[CodeSandboxIdleManager] Failed to suspend ${sandboxId}:`, error)
           }
         }
       }
@@ -389,7 +391,7 @@ export class CodeSandboxResourceScaler {
     for (const policy of this.policies) {
       if (policy.commandPattern.test(command)) {
         if (policy.memory > this.currentResources.memory || policy.cpu > this.currentResources.cpu) {
-          console.log(`[CodeSandboxResourceScaler] Scaling up for command: ${command.slice(0, 50)}`)
+          logger.debug(`[CodeSandboxResourceScaler] Scaling up for command: ${command.slice(0, 50)}`)
           await this.scale(policy.memory, policy.cpu)
         }
         return { memory: policy.memory, cpu: policy.cpu }
@@ -400,17 +402,17 @@ export class CodeSandboxResourceScaler {
 
   async scale(memory: number, cpu: number): Promise<void> {
     if (!this.sandbox) {
-      console.warn('[CodeSandboxResourceScaler] No sandbox configured')
+      logger.warn('[CodeSandboxResourceScaler] No sandbox configured')
       return
     }
 
     try {
       // Note: CodeSandbox SDK may not have direct scale API
       // This would use the updateTier method if available
-      console.log(`[CodeSandboxResourceScaler] Requesting scale: memory=${memory}MB, cpu=${cpu}`)
+      logger.debug(`[CodeSandboxResourceScaler] Requesting scale: memory=${memory}MB, cpu=${cpu}`)
       this.currentResources = { memory, cpu }
     } catch (error) {
-      console.warn('[CodeSandboxResourceScaler] Scale not available:', error)
+      logger.warn('[CodeSandboxResourceScaler] Scale not available:', error)
     }
   }
 
@@ -458,7 +460,7 @@ export class CodeSandboxPortManager {
   async waitForPort(port: number, timeoutMs = 60000): Promise<string | null> {
     const handle = this.handle
     if (!handle) {
-      console.warn('[CodeSandboxPortManager] No handle set')
+      logger.warn('[CodeSandboxPortManager] No handle set')
       return null
     }
     
@@ -479,7 +481,7 @@ export class CodeSandboxPortManager {
       
       return previewInfo.url
     } catch (error) {
-      console.warn('[CodeSandboxPortManager] waitForPort failed:', error)
+      logger.warn('[CodeSandboxPortManager] waitForPort failed:', error)
       return null
     }
   }
@@ -725,13 +727,13 @@ export class CodeSandboxAdvancedIntegration {
    */
   async waitForPort(port: number, timeoutMs?: number): Promise<string | null> {
     if (!this.handle || !('waitForPort' in this.handle)) {
-      console.warn('[CodeSandboxAdvanced] waitForPort not available')
+      logger.warn('[CodeSandboxAdvanced] waitForPort not available')
       return null
     }
     try {
       return await (this.handle as any).waitForPort(port, timeoutMs)
     } catch (error) {
-      console.warn('[CodeSandboxAdvanced] waitForPort failed:', error)
+      logger.warn('[CodeSandboxAdvanced] waitForPort failed:', error)
       return null
     }
   }

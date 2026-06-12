@@ -8,6 +8,8 @@ import type {
 } from '../providers/sandbox-provider'
 import * as path from 'node:path';
 import { ensureMicrosandboxDaemonRunning } from './microsandbox-daemon';
+import { createLogger } from '@/lib/utils/logger';
+const logger = createLogger('Sandbox:MicrosandboxProvider');
 
 const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 100
@@ -26,7 +28,7 @@ setInterval(() => {
   const now = Date.now()
   for (const [id, instance] of sandboxInstances.entries()) {
     if (now - instance.lastActive > INSTANCE_TTL_MS) {
-      console.log(`[Microsandbox] Cleaning up stale instance: ${id}`)
+      logger.debug(`[Microsandbox] Cleaning up stale instance: ${id}`)
       instance.sandbox.stop().catch(console.error)
       sandboxInstances.delete(id)
     }
@@ -38,7 +40,7 @@ export class MicrosandboxProvider implements SandboxProvider {
 
   constructor() {
     // Microsandbox daemon is auto-started by provider when needed.
-    console.log('[Microsandbox] Provider initialized')
+    logger.debug('[Microsandbox] Provider initialized')
   }
 
   /**
@@ -51,7 +53,7 @@ export class MicrosandboxProvider implements SandboxProvider {
    */
   async createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle> {
     try {
-      console.log(`[Microsandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}`)
+      logger.debug(`[Microsandbox] Creating sandbox - User: ${config.labels?.userId || 'unknown'}, Language: ${config.language || 'default'}`)
       
       await ensureMicrosandboxDaemonRunning()
       const { NodeSandbox } = require('microsandbox')
@@ -67,7 +69,7 @@ export class MicrosandboxProvider implements SandboxProvider {
           }
         }
         if (oldestId) {
-          console.log(`[Microsandbox] Evicting oldest instance: ${oldestId}`)
+          logger.debug(`[Microsandbox] Evicting oldest instance: ${oldestId}`)
           sandboxInstances.get(oldestId)?.sandbox.stop().catch(console.error)
           sandboxInstances.delete(oldestId)
         }
@@ -88,13 +90,13 @@ export class MicrosandboxProvider implements SandboxProvider {
         lastActive: now,
       })
 
-      console.log(`[Microsandbox] ✓ Created sandbox ${sandboxId}`)
+      logger.debug(`[Microsandbox] ✓ Created sandbox ${sandboxId}`)
 
       const handle = new MicrosandboxSandboxHandle(sb)
       return handle
     } catch (error: any) {
-      console.error(`[Microsandbox] ✗ Failed to create sandbox:`, error.message)
-      console.error(`[Microsandbox] Error details:`, {
+      logger.error(`[Microsandbox] ✗ Failed to create sandbox:`, error.message)
+      logger.error(`[Microsandbox] Error details:`, {
         name: error.name,
         message: error.message,
       })
@@ -102,7 +104,7 @@ export class MicrosandboxProvider implements SandboxProvider {
       // SECURITY: NEVER allow local fallback in production
       // Local fallback executes commands on host system without isolation
       if (process.env.NODE_ENV === 'production') {
-        console.error('[Microsandbox] Production error - daemon unavailable:', error.message)
+        logger.error('[Microsandbox] Production error - daemon unavailable:', error.message)
         throw new Error(
           `Microsandbox daemon unavailable in production. ` +
           `This is a critical security requirement. ` +
@@ -114,7 +116,7 @@ export class MicrosandboxProvider implements SandboxProvider {
       const allowLocalFallback = process.env.MICROSANDBOX_ALLOW_LOCAL_FALLBACK !== 'false'
       if (allowLocalFallback) {
         const localId = `local-${Date.now()}`
-        console.warn(`
+        logger.warn(`
 ╔═══════════════════════════════════════════════════════════════════════════════╗
 ║  ⚠️  SECURITY WARNING: Using local fallback sandbox (NO ISOLATION)            ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -132,7 +134,7 @@ export class MicrosandboxProvider implements SandboxProvider {
         return new LocalSandboxHandle(localId)
       }
       
-      console.error('[Microsandbox] Failed to create sandbox:', error.message)
+      logger.error('[Microsandbox] Failed to create sandbox:', error.message)
       throw new Error(
         `${error.message}. Start microsandbox with: msb server start --dev`,
       )
@@ -174,7 +176,7 @@ export class MicrosandboxProvider implements SandboxProvider {
           // something exotic (path traversal, etc.).
           const safeSandboxId = sandboxId.replace(/[^A-Za-z0-9_.-]/g, '_').slice(0, 128)
           if (safeSandboxId !== sandboxId) {
-            console.warn(`[Microsandbox] Sanitised sandbox id ${sandboxId} → ${safeSandboxId}`)
+            logger.warn(`[Microsandbox] Sanitised sandbox id ${sandboxId} → ${safeSandboxId}`)
           }
           const localRoot =
             process.env.LOCAL_SANDBOX_DIR ||
@@ -186,9 +188,9 @@ export class MicrosandboxProvider implements SandboxProvider {
             throw new Error(`Refusing to delete path outside sandbox root: ${workspacePath}`)
           }
           await fs.rm(workspacePath, { recursive: true, force: true })
-          console.log(`[Microsandbox] Cleaned up local sandbox: ${sandboxId}`)
+          logger.debug(`[Microsandbox] Cleaned up local sandbox: ${sandboxId}`)
         } catch (error: any) {
-          console.warn(`[Microsandbox] Failed to cleanup local sandbox ${sandboxId}:`, error.message)
+          logger.warn(`[Microsandbox] Failed to cleanup local sandbox ${sandboxId}:`, error.message)
         }
       }
   }

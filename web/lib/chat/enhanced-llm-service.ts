@@ -1957,7 +1957,7 @@ export class EnhancedLLMService {
         content: result.content
       };
     } catch (error: any) {
-      console.error('Tool request processing error:', error);
+      chatLogger.error('Tool request processing error', { error: error?.message, stack: error?.stack });
       return {
         requiresAuth: false,
         toolCalls: [],
@@ -2198,7 +2198,7 @@ export class EnhancedLLMService {
     }
 
     if (dispatch.rejected.length > 0) {
-      console.warn('[EnhancedLLMService] Rejected tool calls during parser validation:', dispatch.rejected);
+      chatLogger.warn('[EnhancedLLMService] Rejected tool calls during parser validation', { rejectedCount: dispatch.rejected.length, rejected: dispatch.rejected });
     }
 
     return calls;
@@ -2281,7 +2281,7 @@ export class EnhancedLLMService {
         }
       };
     } catch (error: any) {
-      console.error('Sandbox request processing error:', error);
+      chatLogger.error('Sandbox request processing error', { error: error?.message, stack: error?.stack });
       return {
         content: `Error executing in sandbox: ${error.message}`,
         tokensUsed: 0,

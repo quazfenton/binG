@@ -8,6 +8,8 @@
  */
 
 import type { SandboxHandle, CheckpointInfo } from './providers/sandbox-provider';
+import { createLogger } from '@/lib/utils/logger';
+const logger = createLogger('Sandbox:CheckpointSystem');
 
 export interface CheckpointRetentionPolicy {
   maxCheckpoints: number;
@@ -32,7 +34,7 @@ export class CheckpointSystem {
       (checkpoint as any).comment = comment;
     }
 
-    console.log(`[CheckpointSystem] Created checkpoint '${checkpoint.id}' for sandbox ${handle.id}`);
+    logger.debug(`[CheckpointSystem] Created checkpoint '${checkpoint.id}' for sandbox ${handle.id}`);
     return checkpoint;
   }
 
@@ -45,7 +47,7 @@ export class CheckpointSystem {
     }
 
     await handle.restoreCheckpoint(checkpointId);
-    console.log(`[CheckpointSystem] Restored sandbox ${handle.id} to checkpoint ${checkpointId}`);
+    logger.debug(`[CheckpointSystem] Restored sandbox ${handle.id} to checkpoint ${checkpointId}`);
   }
 
   /**
@@ -67,7 +69,7 @@ export class CheckpointSystem {
     checkpointId: string,
     newBranchName: string
   ): Promise<string> {
-    console.log(`[CheckpointSystem] Branching '${newBranchName}' from '${checkpointId}'`);
+    logger.debug(`[CheckpointSystem] Branching '${newBranchName}' from '${checkpointId}'`);
 
     try {
       // Try provider-specific branching if available
@@ -121,14 +123,14 @@ export class CheckpointSystem {
           throw new Error(`Failed to restore checkpoint: ${restoreError.message}`);
         }
 
-        console.log(`[CheckpointSystem] Branch created: ${newHandle.id}`);
+        logger.debug(`[CheckpointSystem] Branch created: ${newHandle.id}`);
         return newHandle.id;
       }
 
       // Fallback: Return error if branching not supported
       throw new Error('Checkpoint branching not supported by this provider');
     } catch (error: any) {
-      console.error(`[CheckpointSystem] Branching failed: ${error.message}`);
+      logger.error(`[CheckpointSystem] Branching failed: ${error.message}`);
       throw error;
     }
   }

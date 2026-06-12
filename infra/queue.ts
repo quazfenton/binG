@@ -155,7 +155,8 @@ export async function getQueueStats(): Promise<{
  * Get job by ID
  */
 export async function getJob(jobId: string): Promise<Job | null> {
-  return await agentQueue.getJob(jobId);
+  const job = await agentQueue.getJob(jobId);
+  return job ?? null;
 }
 
 /**
