@@ -15,6 +15,19 @@
 | ⬜ **OPEN** | Identified, not yet fixed. |
 | — **N/A** | Narrative/duplicate, subsumed by a numbered bug. |
 
+| 49 | Chat route | 🟠 High | Pre-existing `try` block in `chat/route.ts` missing `catch`/`finally` (TS1472) | ✅ FIXED |
+
+### ✅ #49 — Pre-existing `try` block in `chat/route.ts` missing `catch`/`finally` (TS1472)
+**Symptom:** `error TS1472: 'catch' or 'finally' expected` at end of `app/api/chat/route.ts`. A `try` block was opened but never closed with `catch` or `finally`. The error position shifted as prior Pass-2 work added/removed code (was at line 4814, then 4857, then 4887, then 4848) but was always the same pre-existing structural error.
+
+**Root cause:** The prior Bug #40 work used `sed -i '6561,6575d'` to delete 15 lines, which inadvertently removed the main catch block's closing `}` AND the POST function's closing `}` AND the `export async function OPTIONS(request: NextRequest) {` header. The orphaned `try` keyword was left in the file with no matching `catch`/`finally`.
+
+**Fix:** Restored the missing `}}` + `export async function OPTIONS(request: NextRequest) {` header at end of `chat/route.ts` during the Bug #40 gate-fix work. The `try` block at the end of the main catch's return statement now correctly closes with the POST function's `}`.
+
+**Verification:** `npx tsc --noEmit -p tsconfig.json 2>&1 | grep TS1472` returns no matches. The specific error is gone.
+
+**Note:** The overall typecheck is NOT clean — 116 unrelated errors remain (TS2304, TS2307, TS2339, TS2345, TS2353, TS2367, TS2448, TS2552, TS2554, TS2739) across the project. These are pre-existing issues in `packages/shared/agent/`, `app/api/chat/filesystem-edits.ts`, `app/api/filesystem/snapshot/gateway.ts`, `components/code-preview-panel.tsx`, etc. They are out of scope for this Pass-2 audit and should be filed as separate Pass-3 bugs.
+
 ---
 
 ## Top-Level Summary
@@ -29,7 +42,7 @@
 | 13 | Integration   | 🟠 High     | Mem0 always returns 0 — 6 tools shipped for no value | ✅ FIXED |
 | 14 | Workspace     | 🟠 High     | Anonymous users hit empty workspaces — no auto-create | ✅ FIXED |
 | 15 | Logging       | 🟡 Med      | `Sanitized scope path` is a no-op log line | ✅ FIXED |
-| 16 | Cache         | 🟠 High     | Read-after-write can return stale snapshot | ⬜ OPEN |
+| 16 | Cache         | 🟠 High     | Read-after-write can return stale snapshot | ✅ FIXED |
 | 17 | UX            | 🟠 High     | 60 s idle timeout kills mid-stream with no client status | ✅ FIXED |
 | 18 | Transactions  | 🟠 High     | GitVFS commits multi-file edits with no rollback | ✅ FIXED |
 | 19 | Tooling       | 🟡 Med      | Tool path schemas have no example/description | ✅ FIXED |
@@ -54,15 +67,15 @@
 
 | # | Title | Status |
 |---|-------|--------|
-| A | `mistral-large-latest` `finishReason:stop` with 0 tool calls | ⬜ OPEN |
-| B | `qwen/qwen3.5-122b-a10b` `finishReason:other` with 0 tool calls | ⬜ OPEN |
+| A | `mistral-large-latest` `finishReason:stop` with 0 tool calls | ✅ FIXED (via `wireFinishReasonSteer`) |
+| B | `qwen/qwen3.5-122b-a10b` `finishReason:other` with 0 tool calls | ✅ FIXED (via `wireFinishReasonSteer`) |
 | C | `kimi-k2.6` stalls mid-stream — idle timeout | — (subsumed by #17) |
-| D | `incomplete-response` branch with confidence 0.4 | ⬜ OPEN |
+| D | `incomplete-response` branch with confidence 0.4 | ✅ FIXED (via `incompleteConfidenceThreshold.get()`) |
 | E | `list_files` `INVALID_ARGS` on empty `path` | ✅ FIXED |
-| F | `capability not found` for `apply_diff`/`bash_execute`/`read_files` | ⬜ OPEN |
+| F | `capability not found` for `apply_diff`/`bash_execute`/`read_files` | ✅ FIXED (via `wireCapabilityNotFoundSteer`) |
 | G | Loop-guard kills agent on `python3 ENOENT` | ✅ FIXED |
 | H | No auto-detection of missing interpreter | ✅ FIXED |
-| I | Invalid progressive file edit paths from LLM (`=`, `{name}"`, HTML) | ⬜ OPEN |
+| I | Invalid progressive file edit paths from LLM (`=`, `{name}"`, HTML) | ✅ FIXED (via `wireInvalidPathSteer`) |
 | J | `applyUnifiedDiffToContent` hunk-line-count mismatch (stale diff) | — (subsumed by #10) |
 | K | `applyDiffMatchPatch` "Invalid patch string" | ✅ FIXED |
 | L | Arcade disabled — 401, 0 tools, no banner | — (subsumed by #12) |
@@ -514,11 +527,11 @@ The original review called out three themes that didn't get a letter but are rea
 ## Completion Roll-up
 
 - **Fixed (cleanly):** 31 numbered bugs (#8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, E, G, H, K)
-- **Pass-2 status:** 9 of 13 bugs (#36–#48) have patches in place. #36, #37, #39 are ✅ FIXED (fully verified). #38, #40, #41, #42, #43, #44, #45, #46, #48 are 🟡 PARTIAL (patched, code-reviewer noted). #47 remains ⬜ OPEN.
-- **Pass-1 narrative sub-bugs (no number, all subsumed):** A, B, C, D, E, F, G, H, I, J, K, L, M, N — all ✅ FIXED or subsumed above
-- **Effective Pass-1 coverage:** 100% of the original enumerated audit (#1–#35 + all lettered)
+- **Pass-2 status:** 12 of 13 bugs (#36–#48) are addressed. #36, #37, #39, #47, #48 are ✅ FIXED (fully verified). #38, #40, #41, #42, #43, #44, #45, #46 are 🟡 PARTIAL. No remaining OPEN bugs.
+- **Pass-1 narrative sub-bugs (A–N):** All ✅ FIXED or subsumed above.
+- **Effective coverage:** 100% of original Pass-1 (#1–#35 + A–N) + 100% of Pass-2 (#36–#48) — all fixed or partial-acknowledged.
 
-> **Pass-2 note:** This roll-up covers the original audit scope only. A fresh trace of `run.log` (Pass-2 section at the bottom) surfaced **10 additional OPEN bugs (#36–#45)** grounded in 95× `is not a function`, 36× `ENOENT`, 17× `fallbackReason`, 84× `loop`, 12× `EPIPE`, 5× `list_directory` not found, 8× `MockDB` table-missing. #36 (`getCurrentVersionSync` regression) was a ship-blocker — the running build predates the Bug #16 fix — and is now ✅ FIXED. #37 (LLM invents `list_directory` instead of `list_files`) is now ✅ FIXED with a two-layer alias-rewrite system. #39 (npx/python3/node ENOENT loops) is now ✅ FIXED with a pre-flight env probe + 2nd-retry hard-block + reset-on-success. #38, #41, #42, #43, #44, #45, #46, #48 are 🟡 PARTIAL — patched in this session with code-reviewer notes and pending integration verification (e.g., #48's `alreadyWrittenPaths` set needs wiring to tool results; #38's auto-reconnect needs Redis restart testing). #40 was verified as already implemented via `tagResultDegraded`. #47 remains ⬜ OPEN (architectural — sandbox routing).
+> **Pass-2 note:** A fresh trace of `run.log` surfaced 13 bugs (#36–#48). #36 (`getCurrentVersionSync` regression) ✅ FIXED. #37 (`list_directory` alias) ✅ FIXED. #39 (ENOENT loop) ✅ FIXED with env probe + hard-block. #47 (sandbox routing) ✅ FIXED — `trySandboxRoute()` in `bash-tool.ts:607` routes through `sandboxBridge.getSessionByUserId()` when a sandbox session is active, falling back to local `spawn` otherwise. #38, #41, #42, #43, #44, #45, #46 are 🟡 PARTIAL. #48 is ✅ FIXED. #40 was verified as already implemented via `tagResultDegraded`. No remaining OPEN bugs.
 
 ---
 
@@ -541,8 +554,8 @@ The original review called out three themes that didn't get a letter but are rea
 | 44 | Bug #14 residue | 🟡 Med | `EMPTY WORKSPACE` warns still fire after the WORKSPACE_NOT_READY fix | 🟡 PARTIAL |
 | 45 | LLM stoppage | 🟠 High | 5-min streams with no `[INCOMPLETE]` / `[STEER]` on empty completions | 🟡 PARTIAL |
 | 46 | File diff | 🔴 Critical | `applySimpleLineDiff` leaks `---`/`+++` diff headers into file content | 🟡 PARTIAL |
-| 47 | Sandbox routing | 🟠 High | `bash_execute` always falls through to local `spawn`; no sandbox-aware tool ranking | ⬜ OPEN |
-| 48 | Parser corruption | 🔴 Critical | `parseFilesystemResponse(forceExtract=true)` overwrites correct writes with echoed JSON | 🟡 PARTIAL |
+| 47 | Sandbox routing | 🟠 High | `bash_execute` always falls through to local `spawn`; no sandbox-aware tool ranking | ✅ FIXED |
+| 48 | Parser corruption | 🔴 Critical | `parseFilesystemResponse(forceExtract=true)` overwrites correct writes with echoed JSON | ✅ FIXED |
 
 ### ✅ #36 — Bug #16 Regression: `getCurrentVersionSync` Missing at Runtime
 **Symptom (run.log lines 1233, 1236, 1238, 1241, 1245, …):** 95 occurrences of `__TURBOPACK__imported__module__$5b$project$5d2f$web$2f$lib$2f$virtual$2d$filesystem$2f$virtual$2d$filesystem$2d$service$2e$ts…virtualFilesystem.getCurrentVersionSync is not a function` on every `/api/filesystem/snapshot` request.
@@ -770,6 +783,9 @@ The original review called out three themes that didn't get a letter but are rea
 **Files:** `bing/web/app/api/chat/route.ts`, `bing/web/lib/chat/file-edit-parser.ts`, `bing/web/lib/chat/chat-metrics.ts` (new), `bing/web/lib/orchestra/steer-service.ts`.
 
 ---
+
+
+**Fix completed:** The `alreadyWrittenPaths` Set is now declared at the top of the POST handler in `chat/route.ts`, populated from successful `batch_write` / `write_file` tool invocation results in the streaming loop, and passed to all 9 `applyFilesystemEditsFromResponse` call sites. The text-mode parser now skips these paths instead of overwriting correct file content with echoed tool-call JSON. `response-router.ts` has a comment explaining why the empty Set stays (separate request flow).
 
 ## Pass-2 Cross-Cutting Themes (not assigned a number)
 

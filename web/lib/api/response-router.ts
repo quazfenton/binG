@@ -2667,7 +2667,11 @@ export class ResponseRouter {
             lastUserMessage: '',
             attachedPaths: [],
             responseContent: refinedOutput,
-        alreadyWrittenPaths: new Set<string>(),
+            // Bug #48: response-router.ts is a separate request flow from chat/route.ts,
+            // so it doesn't share the `alreadyWrittenPaths` Set. The empty Set means
+            // legitimate incremental edits to already-written paths will be staged as
+            // pendingEdits for LLM review on the next turn (see filesystem-edits.ts:344).
+            alreadyWrittenPaths: new Set<string>(),
           })
           logger.debug('Refinement filesystem edits result', {
             appliedCount: filesystemEdits?.applied?.length,

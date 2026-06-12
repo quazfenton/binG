@@ -315,6 +315,10 @@ export const STREAM_TIMEOUTS = {
   // > thinkPingMs and < idleTimeoutMs so the stall steer fires between the
   // thinking ping and the hard idle abort.
   stallSteerMs: parseInt(process.env.LLM_STREAM_STALL_STEER_MS || '30000', 10),
+  // Bug #45: mid-stream stall detection threshold. A stream that goes
+  // stallThresholdMs+ between chunks with no meaningful content is
+  // treated as effectively silent.
+  stallThresholdMs: parseInt(process.env.LLM_STREAM_STALL_THRESHOLD_MS || '30000', 10),
 } as const;
 
 /**
@@ -948,7 +952,7 @@ export async function* streamWithVercelAI(
   // chunks with no meaningful content, treat it as effectively silent and
   // set the incomplete flag so the next iteration can surface an
   // [INCOMPLETE-RESPONSE-FEEDBACK] to the LLM.
-  const STALL_THRESHOLD_MS = 30_000;
+  const STALL_THRESHOLD_MS = STREAM_TIMEOUTS.stallThresholdMs;
   let firstChunkAt = 0;
   let lastChunkAt = 0;
   let totalChunks = 0;
@@ -1141,7 +1145,7 @@ export async function* streamWithVercelAI(
   const thinkPingQueue: Array<{ type: 'thinking_ping' | 'stall_steer'; elapsedMs: number; lastActivityType: string }> = [];
   let thinkPingIntervalId: NodeJS.Timeout | null = null;
   const THINK_PING_MS = thinkPingMs;
-  const STALL_STEER_MS = stallSteerMs;
+  const STALL_STEER_MS = STREAM_TIMEOUTS.stallSteerMs;
   let stallSteerFiredThisSilence = false;
 
   const startThinkPingInterval = () => {
@@ -1291,7 +1295,7 @@ export async function* streamWithVercelAI(
           elapsedMs: Date.now() - firstChunkAt,
         });
         recordDegradation(
-          String(currentStreamId ?? 'unknown'),
+          String(requestId ?? 'unknown'),
           'mid_stream_stall',
           'vercel-ai-streaming',
           { totalChunks, elapsedMs: Date.now() - firstChunkAt, thresholdMs: STALL_THRESHOLD_MS }

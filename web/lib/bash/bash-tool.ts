@@ -70,6 +70,21 @@ import {
 } from '@/lib/context/rtk-integration';
 
 /**
+ * Extract the base command from a shell command string. Returns the first
+ * whitespace-delimited token, lowercased, or `null` if the input is empty/undefined.
+ *
+ * Used to identify the executable being run so retry-counter state and
+ * missing-binary warnings can be scoped per-command rather than globally.
+ *
+ * NOTE: This does NOT handle quoted executables like `"my tool"`. If/when that
+ * support is added, update this helper and all call sites will follow.
+ */
+function extractBaseCommand(command: string | undefined): string | null {
+  if (!command) return null;
+  return command.trim().split(/\s+/)[0]?.toLowerCase() ?? null;
+}
+
+/**
  * Re-export isCommandSafe for external consumers
  */
 export function isCommandSafe(command: string): boolean {
@@ -181,7 +196,7 @@ const DIRECT_COMMANDS = new Set([
  * Check if a command is a direct (simple, reliable) command that doesn't need self-healing.
  */
 export function isDirectCommand(command: string): boolean {
-  const base = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+  const base = extractBaseCommand(command) ?? '';
   // Direct commands: no pipes, redirects, or chaining
   if (base && !command.includes('|') && !command.includes('>') && !command.includes('&&') && !command.includes(';')) {
     return DIRECT_COMMANDS.has(base) || base.startsWith('./') || base.includes('/');
@@ -413,7 +428,7 @@ export async function executeBashCommand(
         // bash entry points — direct callers, executeBashViaEvent, etc. —
         // benefit from the "blocked only while broken" recovery.
         if (exitCode === 0) {
-          const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase();
+          const baseCmd = extractBaseCommand(command);
           if (baseCmd) resetMissingBinaryRetry(baseCmd);
         }
 
@@ -641,7 +656,7 @@ async function trySandboxRoute(
       workingDir,
     };
     // Bug #39: clear the hard-block retry counter for this binary on success
-    const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase();
+    const baseCmd = extractBaseCommand(command);
     if (result.success && baseCmd) {
       resetMissingBinaryRetry(baseCmd);
     }
@@ -882,7 +897,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           // after the LLM / user fixed the underlying PATH issue. Matches
           // the loop-guard philosophy: "blocked only while broken".
           if (result.success && result.exitCode === 0) {
-            const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+            const baseCmd = extractBaseCommand(command) ?? '';
             if (baseCmd) {
               resetMissingBinaryRetry(baseCmd);
             }

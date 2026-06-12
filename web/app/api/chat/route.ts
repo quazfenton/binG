@@ -271,6 +271,13 @@ const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
 export async function POST(request: NextRequest) {
+  
+  // Bug #48: shared Set of paths already written by structured tool calls
+  // (batch_write, write_file) in this turn. Populated in the tool invocation
+  // result handler (see streaming loop). Passed to all applyFilesystemEditsFromResponse
+  // call sites so the text-mode parser skips these paths instead of overwriting
+  // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
+  const alreadyWrittenPaths = new Set<string>();
   // Bug #43: memory-pressure throttle. If the heap is above the soft
   // threshold, return 503 Retry-After before any processing starts.
   try {
@@ -927,6 +934,7 @@ export async function POST(request: NextRequest) {
                   attachedPaths: [],
                   responseContent: gwResponse,
                   preParsedEdits: null,
+                  alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -987,6 +995,7 @@ export async function POST(request: NextRequest) {
                   attachedPaths: [],
                   responseContent: v2Response,
                   preParsedEdits: null,
+                  alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1428,6 +1437,7 @@ const config: UnifiedAgentConfig = {
                       responseContent: fullResponse,
                       commands: {},
                       forceExtract: true,
+                      alreadyWrittenPaths,
                     });
 
                     await flushVFSBatchMode(filesystemOwnerId);
@@ -1568,6 +1578,7 @@ const config: UnifiedAgentConfig = {
                       responseContent: streamingContentBuffer,
                       commands: {},
                       forceExtract: true,
+                      alreadyWrittenPaths,
                     });
 
                     // Emit applied edits
@@ -1825,6 +1836,33 @@ const config: UnifiedAgentConfig = {
         // This bridges the gap between v1-api chat mode and actual file creation.
         let appliedEdits = null;
         console.log('[FILE-EDIT-DEBUG] enableFilesystemEdits:', enableFilesystemEdits, 'result.success:', result.success, 'response length:', result.response?.length);
+        // Bug #48: pre-populate the shared alreadyWrittenPaths Set from v1 result
+        // sources (result.fileEdits, result.steps, _writtenPaths) so site 1833
+        // shares state with the other 8 call sites. This block runs only in the
+        // v1 chat path where `result` is available; the other 8 sites get their
+        // paths from the streaming tool invocation loop or don't need them
+        // (V2 gateway/local fallback paths use different code paths entirely).
+        if (result.success && result.response) {
+          for (const fe of (result.fileEdits || [])) {
+            if (fe?.path) alreadyWrittenPaths.add(fe.path);
+          }
+          for (const s of (result.steps || [])) {
+            const toolName = s?.toolName;
+            if (!toolName) continue;
+            if (toolName === 'file.batch_write' || toolName === 'batch_write') {
+              for (const f of (s.args?.files || [])) {
+                if (f?.path) alreadyWrittenPaths.add(f.path);
+              }
+            } else if (toolName === 'file.write' || toolName === 'write_file' ||
+                       toolName === 'file.str_replace' || toolName === 'file.append') {
+              if (s.args?.path) alreadyWrittenPaths.add(s.args.path);
+            }
+          }
+          for (const wp of ((result as any)._writtenPaths || [])) {
+            if (wp) alreadyWrittenPaths.add(wp);
+          }
+        }
+
         if (result.success && result.response && enableFilesystemEdits) {
           try {
             console.log('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview:', result.response.slice(0, 200));
@@ -1838,7 +1876,11 @@ const config: UnifiedAgentConfig = {
               responseContent: result.response,
               commands: {},
               forceExtract: true,
-              alreadyWrittenPaths: new Set<string>(),
+              // Bug #48: unified shared Set — pre-populated from result.fileEdits,
+              // result.steps, and _writtenPaths below (see Bug #48 block above
+              // the call). This site now shares state with the other 8 call sites
+              // so streaming tool writes captured during the loop are visible here too.
+              alreadyWrittenPaths,
             });
 
             console.log('[FILE-EDIT-DEBUG] appliedEdits:', JSON.stringify({
@@ -2095,6 +2137,7 @@ const config: UnifiedAgentConfig = {
       // CRITICAL FIX: Declare streamRequestId at function scope to avoid TDZ errors
       // in nested closures (agentic path, fallback streaming path)
       let streamRequestId: string = requestId || '';
+      
 
       const lastUserMessage =
         [...messages].reverse().find((m) => m.role === 'user')?.content;
@@ -2250,6 +2293,7 @@ const config: UnifiedAgentConfig = {
                 responseContent: rawResponseContent,
                 commands: unifiedResponse.commands,
                 preParsedEdits: parsedEdits,
+              alreadyWrittenPaths,
               });
         chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
 
@@ -2813,6 +2857,23 @@ const config: UnifiedAgentConfig = {
                           });
                           toolCallTracker.delete(toolInvocation.toolCallId);
 
+                          // Bug #48: collect paths from successful batch_write / write_file
+                          // tool calls so the text-mode parser skips them. Without this,
+                          // the parser would overwrite correct file content with echoed
+                          // tool-call JSON from the LLM's prose summary.
+                          if (isSuccess && (toolInvocation.toolName === 'batch_write' || toolInvocation.toolName === 'write_file')) {
+                            const output = toolInvocation.result?.output;
+                            if (Array.isArray(output)) {
+                              for (const item of output) {
+                                if (item && typeof item === 'object' && item.path && item.success !== false) {
+                                  alreadyWrittenPaths.add(item.path);
+                                }
+                              }
+                            } else if (output && typeof output === 'object' && output.path && output.success !== false) {
+                              alreadyWrittenPaths.add(output.path);
+                            }
+                          }
+
                           // Real-time: Record tool call for model ranking telemetry
                           try {
                             const { toolCallTracker: realTimeTracker } = await import('@/lib/tools/tool-call-tracker');
@@ -2933,6 +2994,7 @@ const config: UnifiedAgentConfig = {
                           responseContent: streamedContent,
                           commands: unifiedResponse.commands,
                           forceExtract: true,
+                        alreadyWrittenPaths,
                         });
 
                         // Flush batch mode to commit all changes at once
@@ -3494,6 +3556,7 @@ const config: UnifiedAgentConfig = {
                         responseContent: streamedContent,
                         commands: unifiedResponse.commands,
                         forceExtract: true,
+                        alreadyWrittenPaths,
                       });
 
                       // Flush batch mode to commit all changes at once
@@ -3775,6 +3838,7 @@ const config: UnifiedAgentConfig = {
               attachedPaths: attachedFilesystemFiles.map((file) => file.path),
               responseContent: clientResponse.content || unifiedResponse.content || '',
               commands: unifiedResponse.commands,
+              alreadyWrittenPaths,
             });
             
             // Flush batch mode to commit all changes at once

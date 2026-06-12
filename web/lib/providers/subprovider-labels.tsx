@@ -19,6 +19,8 @@ export const SUBPROVIDER_LABELS: Record<string, string> = {
   ollama: 'Ollama Cloud',
   cf: 'Cloudflare',
   mistral: 'Mistral',
+  cx: 'Codex',
+  qd: 'Qoder',
 };
 
 /**

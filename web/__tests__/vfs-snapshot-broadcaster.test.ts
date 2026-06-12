@@ -18,10 +18,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // reference the same FakeRedis class without `require()` hacks that
 // bypass the mock.
 const { FakeRedis } = vi.hoisted(() => {
-  type Handler = (channel: string, message: string) => void;
+  type Handler = (...args: any[]) => void;
   class FakeRedis {
     static instances: FakeRedis[] = [];
-    private messageHandlers: Set<Handler> = new Set();
+    private handlers: Map<string, Set<Handler>> = new Map();
     private subscribedChannels: Set<string> = new Set();
     status: 'wait' | 'connecting' | 'connect' | 'ready' = 'ready';
 
@@ -30,16 +30,25 @@ const { FakeRedis } = vi.hoisted(() => {
     }
 
     on(event: string, handler: (...args: any[]) => void): this {
-      if (event === 'message' && typeof handler === 'function') {
-        this.messageHandlers.add(handler as Handler);
+      if (!this.handlers.has(event)) {
+        this.handlers.set(event, new Set());
       }
+      this.handlers.get(event)!.add(handler as Handler);
       return this;
     }
 
-    off(event: string, handler: (...args: any[]) => void): this {
-      if (event === 'message') {
-        this.messageHandlers.delete(handler as Handler);
+    emit(event: string, ...args: any[]): boolean {
+      const hs = this.handlers.get(event);
+      if (!hs || hs.size === 0) return false;
+      for (const h of hs) {
+        try { h(...args); } catch { /* ignore handler errors */ }
       }
+      return true;
+    }
+
+    off(event: string, handler: (...args: any[]) => void): this {
+      const hs = this.handlers.get(event);
+      if (hs) hs.delete(handler as Handler);
       return this;
     }
 
@@ -61,9 +70,12 @@ const { FakeRedis } = vi.hoisted(() => {
       let delivered = 0;
       for (const inst of FakeRedis.instances) {
         if (!inst.subscribedChannels.has(channel)) continue;
-        for (const h of inst.messageHandlers) {
-          h(channel, message);
-          delivered++;
+        const msgHandlers = inst.handlers.get('message');
+        if (msgHandlers) {
+          for (const h of msgHandlers) {
+            h(channel, message);
+            delivered++;
+          }
         }
       }
       return delivered;
@@ -74,7 +86,7 @@ const { FakeRedis } = vi.hoisted(() => {
     }
 
     disconnect(): void {
-      this.messageHandlers.clear();
+      this.handlers.clear();
       this.subscribedChannels.clear();
     }
 
@@ -258,16 +270,24 @@ describe('VFS Snapshot Broadcaster (Bug #16 multi-worker)', () => {
 
 // Bug #38 — EPIPE auto-reconnect
 describe('Bug #38: broadcaster auto-reconnects on EPIPE', () => {
-  it('does not silently disable after EPIPE — fires reconnect event instead', async () => {
+  it('does not silently disable after EPIPE — resets subscriber state for lazy reconnect', async () => {
     const broadcaster = getSnapshotBroadcaster();
     await broadcaster._reset();
-    // Simulate an EPIPE error on the subscriber
-    const sub = (broadcaster as any).subscriber;
+    // Register a listener to trigger lazy subscribe
+    broadcaster.subscribe(() => {});
+    // Wait for the async subscribe to complete
+    await new Promise((r) => setImmediate(r));
+    // Now the broadcaster has a subscriber. Simulate an EPIPE error.
+    const state = (globalThis as any).__vfsSnapshotBroadcaster__;
+    const sub = state.subscriber;
     if (sub && typeof sub.emit === 'function') {
       sub.emit('error', new Error('write EPIPE'));
     }
-    // The broadcaster should NOT have flipped to disabled state
-    const health = (broadcaster as any).getHealth?.() ?? {};
-    expect(health.disabled).toBe(false);
+    // After EPIPE, subscriber should be reset so the next publish() /
+    // subscribe() call creates a fresh connection.
+    expect(state.subscriber).toBeNull();
+    expect(state.subscribed).toBe(false);
+    // Reconnect count tracks the event for observability.
+    expect(state.reconnectCount).toBe(1);
   });
 });

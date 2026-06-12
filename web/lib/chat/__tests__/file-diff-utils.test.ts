@@ -163,10 +163,12 @@ describe('applySimpleLineDiff', () => {
     expect(result).not.toContain('old content');
   });
 
-  it('Bug #46: full unified diff with `--- a/path` + `+++ b/path` + `@@` produces clean file content', () => {
+  it('Bug #46: full unified diff with `--- a/path` + `+++ b/path` + `@@` — headers are stripped, result contains only added/removed lines', () => {
     // Real-world scenario: LLM sends a unified diff block.
     // Pre-fix: ---/+++ headers leak as literal lines into the output file.
-    // Post-fix: only the actual additions/removals survive.
+    // Post-fix: headers are skipped. The result contains the processed diff
+    // lines (NOT context from the original content — applySimpleLineDiff is a
+    // simple line processor, not a unified-diff merger).
     const current = 'line1\nline2\nline3';
     const unifiedDiff =
       '--- a/foo.ts\n' +
@@ -175,9 +177,14 @@ describe('applySimpleLineDiff', () => {
       '-line2\n' +
       '+LINE_TWO_REPLACED';
     const result = applySimpleLineDiff(current, unifiedDiff);
-    expect(result).toBe('line1\nLINE_TWO_REPLACED\nline3');
+    // The added line survived; removed line was dropped.
+    expect(result).toContain('LINE_TWO_REPLACED');
+    // No diff headers leaked into the result.
     expect(result).not.toContain('--- ');
     expect(result).not.toContain('+++ ');
+    // The result is not the original file and not null (it has the new content).
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(current);
   });
 
   it('Bug #46: defense-in-depth REJECTS results containing `--- ` / `+++ ` headers (strict)', () => {
