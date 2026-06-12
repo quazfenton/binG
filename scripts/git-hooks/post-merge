@@ -6,22 +6,15 @@
 # This hook is itself symlinked from .git/hooks/post-merge →
 # scripts/git-hooks/post-merge by scripts/install-hooks.sh.
 #
-# Output is suppressed to avoid noise on every pull; failures are non-fatal
-# (a broken install-hooks.sh should not break the user's merge).
+# Failures are intentionally non-fatal: a broken installer should never
+# break the user's merge.
 
-set -euo pipefail
-
-# $0 is the active hook path: .git/hooks/post-merge (a symlink to this file).
-# Resolve the real path, then walk up to the repo root: this file lives at
-# <repo>/scripts/git-hooks/post-merge, so the repo root is three levels up.
-HOOK_REAL="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")"
-REPO_ROOT="$(cd "$(dirname "${HOOK_REAL}")/../.." && pwd)"
+# The hook runs inside a git repo, so rev-parse gives us the root directly —
+# no symlink resolution or Python fallback needed.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
 INSTALL_HOOKS="${REPO_ROOT}/scripts/install-hooks.sh"
 
-if [ ! -f "${INSTALL_HOOKS}" ]; then
-    # Fresh clone where install-hooks.sh hasn't been written yet — nothing to do.
-    exit 0
-fi
+[ -f "${INSTALL_HOOKS}" ] || exit 0
 
-# Run silently; don't let a hook-install failure abort the merge.
+# Run silently; never abort the merge on a hook-install failure.
 bash "${INSTALL_HOOKS}" >/dev/null 2>&1 || true
