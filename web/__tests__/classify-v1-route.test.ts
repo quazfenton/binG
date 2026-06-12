@@ -22,12 +22,16 @@ describe('classifyV1Route', () => {
     expect(d.reason).toBe('no_external_tools');
   });
 
-  it('ignores the built-in choose_role tool when deciding tool availability', () => {
+  it('counts the built-in choose_role tool as a real external tool (orchestrator has a dedicated handler for it)', () => {
+    // The classifier deliberately treats `choose_role` as a real external
+    // tool because the orchestrator registers a dedicated handler for it
+    // (see unified-agent-service.ts:2989). Excluding it caused agentic
+    // tasks with only `choose_role` to be silently demoted to v1-api.
     const d = classifyV1Route(
       cfg({ userMessage: 'Refactor the auth service in src/auth.ts', tools: [tool('choose_role')] })
     );
-    expect(d.mode).toBe('v1-api');
-    expect(d.reason).toBe('no_external_tools');
+    expect(d.mode).toBe('v1-agent-loop');
+    expect(d.reason).toBe('agentic_task_with_tools');
   });
 
   it('routes simple chat to v1-api even with tools present', () => {

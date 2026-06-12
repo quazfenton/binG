@@ -22,7 +22,7 @@
 import { authenticateRequest, signJwt } from './auth';
 import { checkIpRateLimit, checkRateLimit } from './rate-limiter';
 import { routeRequest } from './router';
-import { setBackendUrl } from './url-store';
+import { getBackendUrl, setBackendUrl } from './url-store';
 import { handleFileRequest } from './r2-storage';
 import { TraceLog } from './trace-log';
 import type { Env } from './env';
@@ -691,15 +691,26 @@ export default {
       // the streaming connection off to the backend. Worker still does
       // auth, rate limiting, and KV URL resolution. The client then
       // streams directly from the backend with a short-lived signed JWT.
-      const isChatStreamPath = url.pathname.startsWith('/api/chat') ||
-                                url.pathname.startsWith('/v1/chat/completions');
+      //
+      // /v1/chat/completions is INTENTIONALLY excluded. That path is the
+      // 9router (ninerouter) OpenAI-compatible endpoint, which authenticates
+      // clients with its own Bearer API-key format (e.g. `sk-…`), NOT with
+      // a JWT. Forcing a 302 redirect would:
+      //   1. Reject valid 9router Bearer tokens at the edge auth check
+      //      (the verifyJwt path expects 3-part JWT, 9router keys aren't).
+      //   2. Append `?token=<jwt>` to the redirect, which the 9router
+      //      endpoint doesn't understand.
+      // The /v1/* path therefore falls through to the normal proxy flow
+      // below, which forwards the original Authorization header to the
+      // OCI backend (see router.ts) and lets ninerouter validate it.
+      const isChatStreamPath = url.pathname.startsWith('/api/chat');
       if (isChatStreamPath) {
         // (1) CORS preflight
         if (request.method === 'OPTIONS') {
           return new Response(null, { status: 204, headers: CORS_HEADERS });
         }
         // (2) Auth check
-        const auth = await authenticateRequest(request, env);
+        const auth = await authenticateRequest(request, env.JWT_SECRET);
         if (!auth.authenticated) {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), {
             status: 401,
@@ -707,7 +718,7 @@ export default {
           });
         }
         // (3) Rate limit
-        const ipLimit = await checkIpRateLimit(request, env);
+        const ipLimit = await checkIpRateLimit(env.BING_KV, request);
         if (!ipLimit.allowed) {
           return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
             status: 429,

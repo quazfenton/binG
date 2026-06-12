@@ -110,7 +110,7 @@ export const FILE_READ_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Read contents of a file from the filesystem. Supports line ranges for reading partial files and various encodings.',
   inputSchema: z.object({
-    path: z.string().min(1).describe('File path to read'),
+    path: z.string().min(1).describe('File path to read (example: "src/app.tsx")'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     maxBytes: z.number().optional().describe('Maximum bytes to read'),
     startLine: z.number().int().min(1).optional().describe('First line to return (1-based, inclusive). Omit to read from line 1.'),
@@ -134,7 +134,7 @@ export const FILE_WRITE_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Write content to a file. Creates new file or overwrites existing. Supports atomic writes and backup.',
   inputSchema: z.object({
-    path: z.string().min(1).describe('File path to write'),
+    path: z.string().min(1).describe('File path to write (example: "src/app.tsx")'),
     content: z.string().describe('Content to write'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     createDirs: z.boolean().optional().default(true),
@@ -156,7 +156,7 @@ export const FILE_APPEND_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Append content to an existing file. Creates file if it does not exist.',
   inputSchema: z.object({
-    path: z.string().min(1).describe('File path to append to'),
+    path: z.string().min(1).describe('File path to append to (example: "src/app.tsx")'),
     content: z.string().describe('Content to append'),
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     createDirs: z.boolean().optional().default(true),
@@ -176,7 +176,7 @@ export const FILE_DELETE_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Delete a file or directory. Supports recursive deletion for directories.',
   inputSchema: z.object({
-    path: z.string().min(1).describe('Path to delete'),
+    path: z.string().min(1).describe('Path to delete (example: "src/old.ts")'),
     recursive: z.boolean().optional().default(false),
     force: z.boolean().optional().default(false),
   }),
@@ -194,7 +194,7 @@ export const FILE_LIST_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'List contents of a directory with optional filtering and sorting.',
   inputSchema: z.object({
-    path: z.string().min(1).describe('Directory path to list'),
+    path: z.string().min(1).describe('Directory path to list (example: "src/")'),
     pattern: z.string().optional().describe('Glob pattern to filter'),
     recursive: z.boolean().optional().default(false),
     includeHidden: z.boolean().optional().default(false),
@@ -374,7 +374,7 @@ export const REPO_SEARCH_CAPABILITY: CapabilityDefinition = {
   description: 'Search codebase using multiple methods: text search (ripgrep), semantic search (embeddings), or tool-based search (blaxel). Replaces the deprecated file.search and repo.semantic-search — use method=auto for automatic routing.',
   inputSchema: z.object({
     query: z.string().describe('Search query'),
-    path: z.string().optional().describe('Path to search in'),
+    path: z.string().optional().describe('Path to search in (example: "src/")'),
     method: z.enum(['text', 'semantic', 'tool', 'auto']).optional().default('auto'),
     type: z.enum(['file', 'code', 'docs', 'all']).optional().default('all'),
     limit: z.number().optional().default(20),
@@ -430,7 +430,7 @@ export const REPO_GIT_CAPABILITY: CapabilityDefinition = {
     z.object({
       command: z.literal('clone'),
       url: z.string().describe('Repository URL'),
-      path: z.string().optional().describe('Destination path'),
+      path: z.string().optional().describe('Destination path (example: "src/new.ts")'),
       username: z.string().optional().describe('Username for auth'),
       password: z.string().optional().describe('Password/token for auth'),
       branch: z.string().optional().describe('Branch to checkout'),
@@ -489,7 +489,7 @@ export const PROJECT_BUNDLE_CAPABILITY: CapabilityDefinition = {
   category: 'memory',
   description: 'Generate a workspace context bundle (like Repomix) for LLM consumption.',
   inputSchema: z.object({
-    path: z.string().optional().describe('Workspace path'),
+    path: z.string().optional().describe('Workspace path (example: "src/")'),
     format: z.enum(['markdown', 'xml', 'json', 'plain']).optional().default('markdown'),
     maxFileSize: z.number().optional().describe('Max file size in bytes'),
     maxTotalSize: z.number().optional().describe('Max total bundle size'),
@@ -521,7 +521,7 @@ export const REPO_ANALYZE_CAPABILITY: CapabilityDefinition = {
   category: 'repo',
   description: 'Analyze repository structure, dependencies, and code quality.',
   inputSchema: z.object({
-    path: z.string().describe('Repository path'),
+    path: z.string().describe('Repository path (example: "src/lib/")'),
     depth: z.number().optional().default(3),
     includeStats: z.boolean().optional().default(true),
   }),
@@ -1382,7 +1382,7 @@ export const FILE_SYNC_CAPABILITY: CapabilityDefinition = {
   description: 'Synchronize files between sandbox and external filesystem. Supports directional and bidirectional sync.',
   inputSchema: z.object({
     direction: z.enum(['to-sandbox', 'from-sandbox', 'bidirectional']).describe('Sync direction'),
-    path: z.string().describe('Path to sync'),
+    path: z.string().describe('Path to sync (example: "src/utils.ts")'),
     deleteOrphans: z.boolean().optional().default(false).describe('Delete files not in source'),
   }),
   outputSchema: z.object({
@@ -1406,7 +1406,7 @@ export const CODE_AST_DIFF_CAPABILITY: CapabilityDefinition = {
   category: 'file',
   description: 'Apply an AST-aware structural diff to TypeScript/JavaScript files. Preserves formatting while making targeted changes.',
   inputSchema: z.object({
-    path: z.string().min(1).describe('File path (.ts, .tsx, .js, .jsx)'),
+    path: z.string().min(1).describe('File path (.ts, .tsx, .js, .jsx) (example: "src/app.tsx")'),
     operation: z.enum(['insert', 'update', 'delete', 'replace']).describe('AST operation'),
     nodeSelector: z.string().describe('AST node selector'),
     newContent: z.string().optional().describe('New content for insert/update'),

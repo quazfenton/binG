@@ -123,6 +123,36 @@ export type SteerTrigger =
         path?: string;
         reason: string;
       };
+    }
+  | {
+      kind: 'consecutive_tool_cap';
+      detail: {
+        consecutive: number;
+        consecutiveThreshold: number;
+        total: number;
+        totalThreshold: number;
+        provider?: string;
+        model?: string;
+      };
+    }
+  | {
+      // Bug F: emitted by wireCapabilityNotFoundSteer when getCapability() returns null.
+      kind: 'capability_not_found';
+      detail: {
+        capabilityId: string;
+        availableCapabilities?: string[];
+        tool: string;
+      };
+    }
+  | {
+      // Bug #37: emitted by wireToolNameAliasRewriteSteer when the router silently
+      // rewrote an LLM-invented tool name (e.g. list_directory → file.list).
+      kind: 'tool_name_alias_rewrite';
+      detail: {
+        alias: string;
+        canonical: string;
+        tool?: string;
+      };
     };
 
 export type SteerTriggerKind = SteerTrigger['kind'];
@@ -231,6 +261,16 @@ function renderBody(trigger: SteerTrigger): string {
         `(${reason}). Re-issue ONLY edit ${editNumber} with the corrected syntax — do not ` +
         `duplicate edits 1..${editNumber - 1}, which were already applied. ` +
         `Numbered format: "Edit ${editNumber}/${total}:" prefix on every edit.`;
+    }
+
+    case 'consecutive_tool_cap': {
+      const { consecutive, consecutiveThreshold, total, totalThreshold, provider, model } = trigger.detail;
+      const src = provider && model ? ` from ${provider}/${model}` : '';
+      return `Tool-call budget reached${src}: ${consecutive} consecutive tool calls (cap ${consecutiveThreshold}) ` +
+        `and ${total} total this turn (cap ${totalThreshold}). Continuing in text-mode — ` +
+        `summarize what you have so far in plain prose and stop emitting tool calls for this turn. ` +
+        `If you need more tool calls to finish, say so explicitly so the orchestrator can ` +
+        `start a follow-up turn with a fresh budget.`;
     }
   }
 }
@@ -385,6 +425,25 @@ export function steerFromBashError(input: {
   };
 }
 
+/**
+ * Build a SteerTrigger from a consecutive/total tool-call-cap event.
+ * Closes #21 (7-consecutive / 10-total cap silently truncates) by giving
+ * the LLM an explicit text-mode fallback instead of an abrupt cutoff.
+ */
+export function steerFromConsecutiveToolCap(input: {
+  consecutive: number;
+  consecutiveThreshold: number;
+  total: number;
+  totalThreshold: number;
+  provider?: string;
+  model?: string;
+}): SteerTrigger {
+  return {
+    kind: 'consecutive_tool_cap',
+    detail: input,
+  };
+}
+
 // ============================================================================
 // Numbered text-mode edit scheme
 // ============================================================================
@@ -520,4 +579,358 @@ export const ALL_STEER_TRIGGER_KINDS: readonly SteerTriggerKind[] = [
   'idle_timeout',
   'tool_result_false',
   'dropped_text_mode_edit',
+  'consecutive_tool_cap',
+  'capability_not_found',
+  'tool_name_alias_rewrite',
 ] as const;
+
+// ============================================================================
+// SteerMetrics — counters that surface in run.log so the audit can verify
+// every [STEER] kind is firing when expected.
+// ============================================================================
+
+export interface SteerMetricsSnapshot {
+  total: number;
+  byKind: Record<SteerTriggerKind, number>;
+  lastFiredAtMs: number | null;
+  lastFiredKind: SteerTriggerKind | null;
+}
+
+export class SteerMetrics {
+  private readonly counts = new Map<SteerTriggerKind, number>();
+  private totalFired = 0;
+  private lastFiredAtMs: number | null = null;
+  private lastFiredKind: SteerTriggerKind | null = null;
+
+  /** Record a single steer firing. O(1). */
+  recordFire(kind: SteerTriggerKind): void {
+    this.counts.set(kind, (this.counts.get(kind) ?? 0) + 1);
+    this.totalFired += 1;
+    this.lastFiredAtMs = Date.now();
+    this.lastFiredKind = kind;
+  }
+
+  /** Read the total number of steers fired since process start. */
+  total(): number {
+    return this.totalFired;
+  }
+
+  /** Read the count for a specific kind. */
+  countOf(kind: SteerTriggerKind): number {
+    return this.counts.get(kind) ?? 0;
+  }
+
+  /** O(N) snapshot. Cheap enough to log periodically (every Nth turn, etc). */
+  snapshot(): SteerMetricsSnapshot {
+    const byKind = Object.fromEntries(
+      ALL_STEER_TRIGGER_KINDS.map((k) => [k, this.counts.get(k) ?? 0]),
+    ) as Record<SteerTriggerKind, number>;
+    return {
+      total: this.totalFired,
+      byKind,
+      lastFiredAtMs: this.lastFiredAtMs,
+      lastFiredKind: this.lastFiredKind,
+    };
+  }
+
+  /** Reset all counters — used by tests and for periodic "since-reset" snapshots. */
+  reset(): void {
+    this.counts.clear();
+    this.totalFired = 0;
+    this.lastFiredAtMs = null;
+    this.lastFiredKind = null;
+  }
+}
+
+/** Process-singleton steer metrics. Use this from any wiring point. */
+export const steerMetrics = new SteerMetrics();
+
+// ============================================================================
+// Wiring helpers — one-call wrappers that build a steer, record the fire
+// in metrics, and return the prompt. Use these at the call sites so the
+// wiring is identical everywhere and every fire is counted.
+// ============================================================================
+
+/**
+ * Build a steer from a streaming finish reason + tool-call count.
+ * Returns null if no steer is needed (tools were called, or text is non-empty).
+ *
+ * Side effect: records the fire in `steerMetrics` (no-op when null).
+ */
+export function wireFinishReasonSteer(input: {
+  finishReason?: string;
+  availableTools: number;
+  provider?: string;
+  model?: string;
+  responseText: string;
+  toolCallsDone: number;
+}): string | null {
+  const trigger = steerFromFinishReason(input);
+  if (!trigger) return null;
+  steerMetrics.recordFire(trigger.kind);
+  return buildSteerPrompt(trigger);
+}
+
+/**
+ * Build a steer when the consecutive/total tool-call cap is hit.
+ * Closes #21: gives the LLM an explicit text-mode fallback instead of an
+ * abrupt cutoff, and records the fire in `steerMetrics`.
+ */
+export function wireConsecutiveToolCapSteer(input: {
+  consecutive: number;
+  consecutiveThreshold: number;
+  total: number;
+  totalThreshold: number;
+  provider?: string;
+  model?: string;
+}): string | null {
+  if (input.consecutive < input.consecutiveThreshold && input.total < input.totalThreshold) {
+    return null;
+  }
+  const trigger = steerFromConsecutiveToolCap(input);
+  steerMetrics.recordFire(trigger.kind);
+  return buildSteerPrompt(trigger);
+}
+
+/**
+ * Build a steer from a tool result with success:false. Closes #22
+ * (success:false with no reason). Records the fire in `steerMetrics`.
+ */
+export function wireToolResultFalseSteer(input: {
+  tool: string;
+  error: string;
+  argsPreview?: string;
+}): string {
+  const trigger = steerFromToolResultFalse(input);
+  steerMetrics.recordFire(trigger.kind);
+  return buildSteerPrompt(trigger);
+}
+
+// ===========================================================================
+// Bug I: wireInvalidPathSteer — injected when isValidFilePath() rejects a
+// progressive file edit path from the LLM (e.g. "=", "{name}\"", HTML).
+// ===========================================================================
+/**
+ * // ===========================================================================
+// safeSteer — generic try/catch wrapper for steer invocations. A steer
+// helper failure (logger error, metrics throw, etc.) must never break the
+// caller's main flow, so callers wrap the invocation in safeSteer() and get
+// back either the prompt string or `null`.
+// ===========================================================================
+/**
+ * Wrap a steer-invoking callback in a try/catch and normalize its return
+ * value to `T | null`. A steer helper failure (logger throw, metrics
+ * failure, downstream bug) must never break the caller's main flow — this
+ * helper is the single place that enforces that contract.
+ *
+ * Usage:
+ *   const hint = safeSteer(() => wireInvalidPathSteer({ ... }));
+ *   if (hint) logger.warn('[STEER] ...', { hint });
+ */
+export function safeSteer<T>(fn: () => T | null | undefined): T | null {
+  try {
+    const result = fn();
+    return (result ?? null) as T | null;
+  } catch {
+    return null;
+  }
+}
+
+// ===========================================================================
+// Bug I: wireInvalidPathSteer — injected when isValidFilePath() rejects a
+// progressive file edit path from the LLM (e.g. "=", "{name}\"", HTML).
+// ===========================================================================
+/**
+ * Returns a short one-liner steer prompt when the LLM emits a syntactically
+ * invalid file path. Closes bug I: "Invalid progressive file edit paths from
+ * LLM (e.g. '=', '{name}"', HTML)". The steer tells the model to use a real
+ * relative path like "src/app.tsx" instead of code/CSS fragments.
+ */
+export function wireInvalidPathSteer(input: {
+  path: string;
+  reason: string;
+  tool: string;
+}): string {
+  const safePreview = (input.path || '').slice(0, 40).replace(/[`*_]/g, '');
+  const prompt = [
+    `[STEER] Tool \`${input.tool}\` rejected path \`${safePreview}\`: ${input.reason}.`,
+    `Use a real relative path like \`src/app.tsx\` (no leading slash, no URL, no query string, no code/CSS values, no HTML, no \`{}\` template syntax).`,
+  ].join(' ');
+  steerMetrics.recordFire('invalid_path');
+  return prompt;
+}
+
+// ===========================================================================
+// Bug F: wireCapabilityNotFoundSteer — injected when getCapability() returns
+// null/undefined for a tool name the LLM requested (e.g. apply_diff,
+// bash_execute, read_files). Closes bug F: "capability not found for
+// apply_diff/bash_execute/read_files" — log + count these to detect chronic
+// capability degradation, and tell the model the canonical name.
+// ===========================================================================
+/**
+ * Returns a short steer prompt when the LLM requests a capability that the
+ * router cannot resolve. Closes bug F by surfacing a corrective hint with the
+ * canonical tool names and a counter for observability.
+ */
+export function wireCapabilityNotFoundSteer(input: {
+  capabilityId: string;
+  availableCapabilities?: string[];
+  tool: string;
+}): string {
+  const known = (input.availableCapabilities || ['write_file', 'apply_diff', 'read_file', 'read_files', 'list_files', 'search_files', 'grep_code', 'batch_write', 'delete_file']).slice(0, 9);
+  const prompt = [
+    `[STEER] Tool \`${input.tool}\` requested unknown capability \`${input.capabilityId}\`.`,
+    `Available capabilities include: ${known.map(c => `\`${c}\``).join(', ')}.`,
+    `Use one of the canonical tool names above (note the underscore, not camelCase).`,
+  ].join(' ');
+  steerMetrics.recordFire('capability_not_found');
+  return prompt;
+}
+
+// ===========================================================================
+// Bug #37: wireToolNameAliasRewriteSteer — injected when the router auto-
+// rewrites an LLM-invented tool name (e.g. "list_directory", "bash_execute",
+// "read_file" vs "read_files") to the canonical capability ID. The model is
+// told what the rewrite was so it can stop emitting the misname on retry.
+// ===========================================================================
+/**
+ * Build a short steer prompt when the router silently rewrote an LLM-invented
+ * tool name to the canonical capability. Closes bug #37 (LLM-invented tool
+ * misnames must auto-rewrite AND surface a corrective hint) by giving the
+ * model a one-liner it can grep for: "[STEER] Tool name 'X' was rewritten to
+ * 'Y'. Use 'Y' on retry to skip the rewrite."
+ */
+export function wireToolNameAliasRewriteSteer(input: {
+  /** What the LLM called. e.g. 'list_directory', 'bash_execute', 'read_file'. */
+  alias: string;
+  /** What the router rewrote it to. e.g. 'file.list', 'bash.execute', 'file.read'. */
+  canonical: string;
+  /** Optional routing context (e.g. capability router, MCP gateway, etc). */
+  tool?: string;
+}): string {
+  const src = input.tool ? ` (in ${input.tool})` : '';
+  const prompt = `[STEER] Tool name \`${input.alias}\`${src} was auto-rewritten to canonical \`${input.canonical}\`. ` +
+    `On your next turn, use the canonical name \`${input.canonical}\` directly so the rewrite step is skipped.`;
+  // Bug #37: dedicated metric bucket (NOT 'capability_not_found') so the
+  // not-found counter only tracks genuine unknown-capability events, and
+  // rewrite firings stay observable as a separate signal.
+  steerMetrics.recordFire('tool_name_alias_rewrite');
+  return prompt;
+}
+
+// ===========================================================================
+// Bug D: make incompleteConfidence threshold configurable via env var
+// ===========================================================================
+function getIncompleteConfidenceThreshold(): number {
+  const raw = process.env.INCOMPLETE_RESPONSE_CONFIDENCE_THRESHOLD;
+  if (!raw) return 0.4;
+  const parsed = Number.parseFloat(raw);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) return 0.4;
+  return parsed;
+}
+
+/**
+ * Re-export the threshold getter so tests can override it.
+ * Closes bug D: "incomplete-response branch with confidence 0.4" — surface a
+ * clearer message and make the threshold configurable via env.
+ */
+export const incompleteConfidenceThreshold = {
+  get: getIncompleteConfidenceThreshold,
+};
+
+/**
+ * Build a steer from an ENOENT/EACCES bash error. Returns null for
+ * non-environmental error codes. Records the fire in `steerMetrics`
+ * when a trigger fires.
+ */
+export function wireBashErrorSteer(input: {
+  command: string;
+  code: string;
+  tool: string;
+}): string | null {
+  const trigger = steerFromBashError(input);
+  if (!trigger) return null;
+  steerMetrics.recordFire(trigger.kind);
+  return buildSteerPrompt(trigger);
+}
+
+// ============================================================================
+// Bug #31: wireFileEditRejectionSteer — injected when the text-mode parser
+// (extractFileEdits) drops one or more edits because of path validation,
+// empty content, dedup collision, or extraction failure. The LLM previously
+// had no way to know WHICH edits were dropped; it would move on as if every
+// edit succeeded. This helper builds a single steer listing every dropped
+// edit with its editNumber, path, and reason so the LLM can re-issue ONLY
+// the failed edits on the next turn.
+// ============================================================================
+
+/**
+ * Build a single combined steer prompt from a parser rejection report. Use
+ * this at the dispatcher / chat route level so the LLM learns about
+ * per-edit failures instead of seeing a silent drop.
+ *
+ * @returns null if no edits were rejected (caller can skip the steer).
+ *          A `[STEER]` prefixed prompt otherwise.
+ */
+export function wireFileEditRejectionSteer(input: {
+  /** Rejections from `extractFileEditsWithStatus(content).rejections`. */
+  rejections: ReadonlyArray<{
+    editNumber: number;
+    path?: string;
+    reason: string;
+    stage: string;
+  }>;
+  /** Total edits the LLM attempted (`edits.length + rejections.length`). */
+  total: number;
+  /** Optional: max rejections to surface. Defaults to 5 to fit the steer budget. */
+  maxRejections?: number;
+}): string | null {
+  if (!input.rejections || input.rejections.length === 0) return null;
+
+  const max = input.maxRejections ?? 5;
+  const included = input.rejections.slice(0, max);
+  const remaining = input.rejections.length - included.length;
+
+  // Group by stage for a tighter, more actionable prompt.
+  const byStage = new Map<string, typeof included>();
+  for (const r of included) {
+    const list = byStage.get(r.stage) ?? [];
+    list.push(r);
+    byStage.set(r.stage, list);
+  }
+
+  const lines: string[] = [];
+  lines.push(
+    `${input.rejections.length} of ${input.total} text-mode edits were dropped by the parser. ` +
+    `Re-issue ONLY the dropped edits below on your next turn — do not duplicate edits that already landed.`,
+  );
+
+  for (const [stage, list] of byStage.entries()) {
+    const stageLabel = stage.replace(/_/g, ' ');
+    const refs = list
+      .map((r) => {
+        const pathPart = r.path ? ` for "${truncate(r.path, 60)}"` : '';
+        return `#${r.editNumber}${pathPart} (${r.reason})`;
+      })
+      .join('; ');
+    lines.push(`- ${stageLabel} (${list.length}): ${refs}`);
+  }
+
+  if (remaining > 0) {
+    lines.push(
+      `(+${remaining} more dropped edit${remaining === 1 ? '' : 's'} suppressed to stay within the steer budget.)`,
+    );
+  }
+
+  // General self-correction guidance so the model can fix the root cause
+  // for the next batch, not just the immediate re-issues.
+  lines.push(
+    `Common fixes: paths must look like "src/app.ts" (no CSS values, no template literals, no HTML); ` +
+    `fenced blocks need non-empty content; ` +
+    `do not re-emit the same path twice - combine into one edit.`,
+  );
+
+  const prompt = `[STEER] ${lines.join(' ')}`;
+  steerMetrics.recordFire('dropped_text_mode_edit');
+  return prompt;
+}

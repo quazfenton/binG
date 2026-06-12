@@ -170,7 +170,7 @@ export function initializeDefaultTools(): void {
       name: 'readFile',
       description: 'Read a file from the virtual filesystem',
       inputSchema: z.object({
-        path: z.string().describe('File path to read'),
+        path: z.string().describe('File path to read (example: "src/app.tsx")'),
         ownerId: z.string().optional().describe('Owner ID for persistent sessions (generates unique anonymous fallback for agent contexts)'),
       }),
       outputSchema: z.object({
@@ -204,7 +204,7 @@ export function initializeDefaultTools(): void {
       name: 'writeFile',
       description: 'Write content to a file in the virtual filesystem',
       inputSchema: z.object({
-        path: z.string().describe('File path to write'),
+        path: z.string().describe('File path to write (example: "src/app.tsx")'),
         content: z.string().describe('Content to write'),
         ownerId: z.string().describe('Owner ID is REQUIRED for write operations to prevent cross-session pollution'),
       }),
@@ -244,7 +244,7 @@ export function initializeDefaultTools(): void {
       name: 'listDirectory',
       description: 'List contents of a directory',
       inputSchema: z.object({
-        path: z.string().optional().describe('Directory path (defaults to root)'),
+        path: z.string().optional().describe('Directory path, defaults root (example: "src/")'),
         ownerId: z.string().optional().describe('Owner ID for persistent sessions (generates unique anonymous fallback for agent contexts)'),
       }),
       outputSchema: z.object({
@@ -279,7 +279,7 @@ export function initializeDefaultTools(): void {
       name: 'deletePath',
       description: 'Delete a file or directory',
       inputSchema: z.object({
-        path: z.string().describe('Path to delete'),
+        path: z.string().describe('Path to delete (example: "src/old.ts")'),
         ownerId: z.string().describe('Owner ID is REQUIRED for delete operations to prevent cross-session pollution'),
       }),
       outputSchema: z.object({
@@ -311,7 +311,7 @@ export function initializeDefaultTools(): void {
       description: 'Search for files by content',
       inputSchema: z.object({
         query: z.string().describe('Search query'),
-        path: z.string().optional().describe('Limit search to this path'),
+        path: z.string().optional().describe('Limit search to this path (example: "src/")'),
         ownerId: z.string().optional().describe('Owner ID for persistent sessions (generates unique anonymous fallback for agent contexts)'),
       }),
       outputSchema: z.object({

@@ -21,6 +21,8 @@ import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { createLogger } from '@/lib/utils/logger';
+import { wouldLoseSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { invalidateAllScopeCachesForRename } from '@/lib/virtual-filesystem/session-path-guard';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 const logger = createLogger('API:Filesystem:Rename');
@@ -72,6 +74,33 @@ export async function POST(req: NextRequest) {
         success: true,
         data: { oldPath, newPath, overwritten: false },
       });
+    }
+
+    // ── Bug #26: session-id-loss guard ────────────────────────────────
+    // Block any rename that would REPLACE the session-id segment under
+    // workspace/sessions/ with a non-session-id value. The previous code
+    // path (safeRename) already has this guard, but the gateway is a
+    // separate implementation that was unprotected — a folder rename
+    // here would orphan every subsequent tool call scoped to the session.
+    const lostSessionId = wouldLoseSessionId(oldPath, newPath);
+    if (lostSessionId) {
+      logger.error(
+        `[CRITICAL] Refusing rename: would lose session id segment "${lostSessionId}". ` +
+        `Source: "${oldPath}" → Dest: "${newPath}". ` +
+        `Session-scoped renames must preserve the workspace/sessions/<id> prefix.`,
+        { oldPath, newPath, lostSessionId, ownerId },
+      );
+      invalidateAllScopeCachesForRename(ownerId, oldPath, newPath, undefined);
+      return NextResponse.json(
+        {
+          error: `Refusing rename: would lose session id "${lostSessionId}". ` +
+            `Renaming workspace/sessions/${lostSessionId} to a non-session-id path ` +
+            `is not allowed because it orphans every tool call scoped to that session. ` +
+            `Move the folder inside a session (e.g. workspace/sessions/${lostSessionId}/<name>) ` +
+            `or pick a different destination that keeps the session id segment intact.`,
+        },
+        { status: 400 },
+      );
     }
 
     // Check for circular move (moving folder into itself)
@@ -167,6 +196,13 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+
+    // ── Bug #26: invalidate stale caches after a successful rename ─────
+    // Drop every toolResultCache entry that could be pointing at the old
+    // path (old + new + ancestors + search: prefix). Without this, the next
+    // listDirectory or readFile call may serve a stale directory listing
+    // that doesn't reflect the rename.
+    invalidateAllScopeCachesForRename(ownerId, oldPath, newPath, undefined);
 
     logger.info('Rename operation completed:', { oldPath, newPath, isDirectory });
 

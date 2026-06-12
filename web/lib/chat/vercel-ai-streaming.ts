@@ -29,6 +29,11 @@ import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
 import { recordCall } from './llm-provider-health';
+// Pass-2 cross-cutting theme: record mid-stream stalls (TTFT/idle timeout)
+// so the degradation chain shows the silent failure that contributed to
+// the user reprompting. sessionId is best-effort — not always available
+// inside the streaming generator.
+import { recordDegradation } from '@/lib/observability/degradation-tracker';
 
 import { getProviderForModel } from './openai-compat-wrapper';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
@@ -1049,6 +1054,18 @@ export async function* streamWithVercelAI(
           startTime,
           healthCheckPassed: true,
         });
+        // Pass-2 cross-cutting theme: record the mid-stream stall so the
+        // degradation chain shows the silent failure. The sessionId is
+        // not in scope here (we're inside a stream generator), so we use
+        // 'default' — operators can correlate by timestamp.
+        try {
+          recordDegradation(
+            'default',
+            'mid_stream_stall',
+            'vercel-ai-streaming',
+            { kind: 'ttft', provider, model: modelName, ttftLatencyMs },
+          );
+        } catch { /* best-effort */ }
         timeoutController?.abort(new Error(
           `No response within ${firstTokenTimeoutMs}ms (time-to-first-token timeout). ` +
           `Provider=${provider}, model=${modelName}, elapsed=${ttftLatencyMs}ms. ` +
@@ -1186,6 +1203,15 @@ export async function* streamWithVercelAI(
           effectiveTimeout,
           idleTimeoutMs: IDLE_TIMEOUT_MS,
         });
+        // Pass-2 cross-cutting theme: record the idle-timeout stall.
+        try {
+          recordDegradation(
+            'default',
+            'mid_stream_stall',
+            'vercel-ai-streaming',
+            { kind: 'idle', provider, model: modelName, lastActivityType, timeSinceLastActivity },
+          );
+        } catch { /* best-effort */ }
         timeoutController.abort(new Error(diagnosticMsg));
       }
     }, effectiveTimeout);
@@ -1687,8 +1713,9 @@ export async function* streamWithVercelAI(
     // Bug #17: Before pulling the next chunk from the stream, drain any pending
     // 'thinking' pings first. Pings accumulate when the stream has been silent
     // for thinkPingMs — yielding them here keeps the client UI responsive
-    // without changing abort semantics.
-    while (thinkPingQueue.length > 0) {
+// without changing abort semantics.
+try {
+while (thinkPingQueue.length > 0) {
       if (signal?.aborted) return;
       const ping = thinkPingQueue.shift()!;
       yield {
@@ -2121,21 +2148,21 @@ resetIdleTimeout(TOOL_SUCCESS_EXTENSION_MULTIPLIER);
         case 'start':
         case 'finish':
           // Skip these event types — handled elsewhere
-          break;
-      }
-    }
+  break;
+}
+}
+} finally {
+  if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+  if (idleTimeoutId) clearTimeout(idleTimeoutId);
+  stopThinkPingInterval();
+}
 
-    // Get final usage and metadata (from the winner's result if speculative fallback was used)
-    const finalResult = fallbackResultRef?.result || result;
-    const usage = await finalResult.usage;
-    const finishReason = (await finalResult.finishReason) || 'stop';
-    const toolCalls = await finalResult.toolCalls;
-    const steps = await finalResult.steps;
-
-    // Cleanup timeout
-    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
-        if (idleTimeoutId) clearTimeout(idleTimeoutId);
-        stopThinkPingInterval();
+// Get final usage and metadata (from the winner's result if speculative fallback was used)
+const finalResult = fallbackResultRef?.result || result;
+const usage = await finalResult.usage;
+const finishReason = (await finalResult.finishReason) || 'stop';
+const toolCalls = await finalResult.toolCalls;
+const steps = await finalResult.steps;
 
     // Collect all tool calls from steps (multi-step support)
     const allToolCalls: Array<{ id: string; name: string; arguments: Record<string, any> }> = [];

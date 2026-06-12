@@ -545,9 +545,3 @@ async function takeSnapshot(
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-// ============================================================================
-// Re-exports for ergonomic imports
-// ============================================================================
-
-export const __testing = { takeSnapshot };

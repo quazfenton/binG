@@ -40,11 +40,32 @@ export class AdvancedToolCallDispatcher {
       if (candidate === 'native') {
         parsedCalls = this.nativeParser.parse(context);
       } else if (candidate === 'content') {
-        // Use extractFileEdits as the single source of truth for all text-based formats:
-        // bash heredocs, function-calls, flat JSON, tool tags, XML, fenced blocks, etc.
-        const { extractFileEdits } = await import('@/lib/chat/file-edit-parser');
-        const edits = extractFileEdits(String(context.content || ''));
-        parsedCalls = editsToToolCalls(edits);
+        // Use extractFileEditsWithStatus (Bug #31) so we get per-edit
+        // rejections alongside the successful edits. The orchestrator can
+        // use the rejections to inject a [STEER] prompt on the next turn
+        // telling the LLM which edits were dropped and why.
+        const { extractFileEditsWithStatus } = await import('@/lib/chat/file-edit-parser');
+        const extractionResult = extractFileEditsWithStatus(String(context.content || ''));
+        if (extractionResult.rejections.length > 0) {
+          // Surface the rejections in the dispatcher's run.log entry so
+          // operators can spot partial-failure patterns. The steer
+          // injection happens at the orchestrator level (see
+          // wireFileEditRejectionSteer).
+          try {
+            const { createLogger } = await import('@/lib/utils/logger');
+            const log = createLogger('TextModeEdits');
+            log.warn(
+              `[TextModeEdits] ${extractionResult.rejections.length} of ${extractionResult.totalDetected} text-mode edits were dropped: ` +
+                extractionResult.rejections
+                  .map((r) => `#${r.editNumber}(${r.stage})`)
+                  .join(', '),
+              { rejections: extractionResult.rejections, total: extractionResult.totalDetected },
+            );
+          } catch {
+            // best effort — never let logging break the parse
+          }
+        }
+        parsedCalls = editsToToolCalls(extractionResult.edits);
       } else if (candidate === 'xml') {
         parsedCalls = this.xmlParser.parse(context);
       }

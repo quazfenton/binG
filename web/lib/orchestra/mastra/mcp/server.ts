@@ -55,7 +55,7 @@ const mcpTools: MCPTool[] = [
     name: 'WRITE_FILE',
     description: 'Write content to a file in the virtual filesystem',
     inputSchema: z.object({
-      path: z.string().describe('File path relative to workspace root'),
+      path: z.string().describe('File path relative to workspace root (example: "src/utils.ts")'),
       content: z.string().describe('Complete file content'),
       ownerId: z.string().describe('Workspace owner ID'),
     }),
@@ -78,7 +78,7 @@ const mcpTools: MCPTool[] = [
     name: 'READ_FILE',
     description: 'Read content from a file in the virtual filesystem',
     inputSchema: z.object({
-      path: z.string().describe('File path relative to workspace root'),
+      path: z.string().describe('File path relative to workspace root (example: "src/app.tsx")'),
       ownerId: z.string().describe('Workspace owner ID'),
     }),
     handler: async ({ path, ownerId }: any) => {
@@ -98,7 +98,7 @@ const mcpTools: MCPTool[] = [
     name: 'LIST_FILES',
     description: 'List files and directories at the given path',
     inputSchema: z.object({
-      path: z.string().optional().describe('Directory path (default: root)'),
+      path: z.string().optional().describe('Directory path, default root (example: "src/")'),
       ownerId: z.string().describe('Workspace owner ID'),
     }),
     handler: async ({ path, ownerId }: any) => {
@@ -122,7 +122,7 @@ const mcpTools: MCPTool[] = [
     name: 'DELETE_PATH',
     description: 'Delete a file or directory from the virtual filesystem',
     inputSchema: z.object({
-      path: z.string().describe('File or directory path'),
+      path: z.string().describe('File or directory path (example: "src/old.ts")'),
       ownerId: z.string().describe('Workspace owner ID'),
     }),
     handler: async ({ path, ownerId }: any) => {

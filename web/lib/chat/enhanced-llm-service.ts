@@ -12,6 +12,7 @@
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
+import { wireFinishReasonSteer, incompleteConfidenceThreshold } from '../orchestra/steer-service';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
 import { PROVIDER_FALLBACK_CHAINS, getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { toolContextManager } from '../tools/tool-context-manager';
@@ -1859,6 +1860,27 @@ export class EnhancedLLMService {
         steps: result.steps?.length || 0,
       });
 
+      // Bug A/B: if finishReason:'stop' with 0 tool calls and the model is
+      // known to misbehave (mistral-large-latest, qwen3.5-122b-a10b), inject
+      // a steer hint via wireFinishReasonSteer so the model self-corrects on
+      // retry. Best-effort — a steer failure must never break the stream.
+      const toolCallsDone = (result.steps || []).reduce(
+        (n, s) => n + ((s as any).toolCalls || []).length, 0
+      );
+      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5') || provider === 'mistral' || provider === 'qwen')) {
+        try {
+          const hint = wireFinishReasonSteer({
+            finishReason: 'stop',
+            availableTools: 0,
+            provider,
+            model,
+            responseText: result.response || '',
+            toolCallsDone,
+          });
+          if (hint) chatLogger.warn('[STEER] finishReason stop with 0 tool calls', { hint, model, provider });
+        } catch { /* steer helper failure is non-fatal */ }
+      }
+
       yield {
         content: result.response || '',
         isComplete: true,
@@ -2242,8 +2264,15 @@ export class EnhancedLLMService {
 
       return {
         content: `Sandbox execution completed.\n\nOutput:\n${result.output || 'No output'}${result.exitCode !== undefined && result.exitCode !== 0 ? `\n\nExit code: ${result.exitCode}` : ''}`,
-        tokensUsed: 0,
-        finishReason: result.success ? 'stop' : 'error',
+  tokensUsed: 0,
+  finishReason: (() => {
+    const sandboxToolCallsDone = (result.steps || []).reduce(
+      (n: number, st: any) => n + ((st.toolCalls || []).length), 0
+    );
+    return (result.success && sandboxToolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5')))
+      ? 'incomplete-response'
+      : result.success ? 'stop' : 'error';
+  })(),
         timestamp: new Date(),
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         metadata: {

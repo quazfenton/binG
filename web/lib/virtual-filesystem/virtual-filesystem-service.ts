@@ -16,7 +16,9 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
-import { stripWorkspacePrefixes } from './scope-utils';
+import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';;;
+import { assertScopePathMatchesSessionId } from './session-path-guard';
+import { getSnapshotBroadcaster } from './snapshot-broadcaster';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 import { getDatabase } from '@/lib/database/connection';
@@ -135,6 +137,15 @@ export class VirtualFilesystemService {
 
   private emitSnapshotChange(ownerId: string, version: number): void {
     this.events.emit('snapshotChange', ownerId, version);
+    // Bug #16 (audit) — multi-worker caveat. The local in-process
+    // `onSnapshotChange` listener only fires within this Node process.
+    // In a multi-worker Next.js deployment, worker A's write would never
+    // notify worker B. Broadcast the same event over Redis pub/sub
+    // (fire-and-forget, contract: never throws) so every worker can
+    // update its own `latestSeenVersion` and invalidate its own cache
+    // entries. If Redis is unavailable, this call is a silent no-op
+    // and the single-process path still works.
+    getSnapshotBroadcaster().publish(ownerId, version);
   }
 
   constructor(options: { workspaceRoot?: string } = {}) {
@@ -233,6 +244,15 @@ export class VirtualFilesystemService {
    * @returns The virtual file object with content and metadata
    */
   async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    // Bug #26: verify the file path is consistent with the ownerId's
+    // session. Catches the path-drift case where workspace/sessions/001 was
+    // renamed to workspace/sessions/ai_terminal but the ownerId still
+    // encodes "001" — the read would otherwise silently resolve to the wrong
+    // folder. The check is a no-op for non-session paths (workspace root
+    // reads, etc.) so it doesn't affect existing non-session workflows.
+    const resolvedFilePath = resolveFilePathScopeFromOwnerId(ownerId, filePath);
+      assertScopePathMatchesSessionId(ownerId, resolvedFilePath);
+
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
@@ -297,6 +317,12 @@ export class VirtualFilesystemService {
     options?: { failIfExists?: boolean; append?: boolean; bypassSync?: boolean; expectedVersion?: number; strictConcurrency?: boolean },
     _sessionId?: string // optional: for GitBackedVFS session scoping (unused in base VFS)
   ): Promise<VirtualFile> {
+    // Bug #26: verify the file path is consistent with the ownerId's
+    // session. Same rationale as readFile above — catch path drift before
+    // we silently write to the wrong folder.
+    const resolvedFilePath = resolveFilePathScopeFromOwnerId(ownerId, filePath);
+      assertScopePathMatchesSessionId(ownerId, resolvedFilePath);
+
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
@@ -937,6 +963,39 @@ export class VirtualFilesystemService {
     logger.info('[VFS] getWorkspaceVersion called', { ownerId });
     const workspace = await this.ensureWorkspace(ownerId);
     return workspace.version;
+  }
+
+  /**
+   * Synchronous, in-memory workspace version getter.
+   *
+   * Bug #16 (audit hot-fix) — `getCurrentVersionSync` is the source of
+   * truth for read-after-write staleness. The `workspaces` Map is updated
+   * synchronously at the START of every write (before `await persistWorkspace`),
+   * so this getter sees the in-flight version even before the persistence
+   * completes and the `onSnapshotChange` listener fires.
+   *
+   * Returns 0 if the workspace has never been loaded — semantically
+   * equivalent to "no writes have happened yet" (a fresh workspace starts
+   * at version 0). A cached snapshot with version 0 should be treated as
+   * "stale" if a write has happened in this process.
+   *
+   * The previous read-path check used `latestSeenVersion` (set by the
+   * `onSnapshotChange` listener) which fires AFTER `await persistWorkspace`
+   * completes. This left a race window: a read that started before the
+   * write's listener fired would see the OLD `latestSeenVersion` and return
+   * the cached entry, even though the in-memory workspace was already at
+   * the new version. The sync getter eliminates the race because it reads
+   * the authoritative in-memory state.
+   *
+   * Note: this only covers single-process correctness. For multi-process
+   * invalidation (Next.js workers, multiple replicas), the listener-based
+   * `latestSeenVersion` is still consulted as a cross-process fallback.
+   *
+   * @param ownerId  VFS owner id
+   * @returns  Current in-memory workspace version (0 if not loaded)
+   */
+  getCurrentVersionSync(ownerId: string): number {
+    return this.workspaces.get(ownerId)?.version ?? 0;
   }
 
   async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot & { structure?: Record<string, string[]> }> {
@@ -1694,9 +1753,17 @@ class GitBackedVFSProxy {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean; append?: boolean },
+    options?: { failIfExists?: boolean; append?: boolean; bypassSync?: boolean; expectedVersion?: number; strictConcurrency?: boolean },
     sessionId?: string // optional: for GitBackedVFS session scoping
   ): Promise<VirtualFile> {
+    // #10/#18/#25 fix: the `strictConcurrency` option is propagated
+    // through `options` to gitVFS.writeFile → this.vfs.writeFile (the
+    // primary writeFile method at line ~301), which already checks
+    // `options?.strictConcurrency` and throws ConcurrentModificationError
+    // when the time-since-last-write threshold is exceeded. No additional
+    // pre-check is needed here — the downstream check uses the correct
+    // time-based semantic (we don't want to block legitimate sequential
+    // edits where the file already exists).
     const gitVFS = this.vfs.getGitBackedVFS(ownerId, sessionId ? { sessionId } : undefined);
     return gitVFS.writeFile(ownerId, filePath, content, language, options);
   }
@@ -1774,6 +1841,21 @@ class GitBackedVFSProxy {
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
     return this.vfs.getWorkspaceVersion(ownerId);
+  }
+
+  /**
+   * Synchronous, in-memory workspace version getter.
+   *
+   * @see VirtualFilesystemService.getCurrentVersionSync — the canonical
+   * implementation. This is a thin proxy that delegates to it.
+   *
+   * Bug #16 (audit) — read-after-write staleness. This proxy preserves
+   * the synchronous read path so the snapshot gateway can use the
+   * authoritative in-memory version instead of the (racy) listener-tracked
+   * `latestSeenVersion`.
+   */
+  getCurrentVersionSync(ownerId: string): number {
+    return this.vfs.getCurrentVersionSync(ownerId);
   }
 
   async exportWorkspace(ownerId: string): Promise<import('./filesystem-types').VirtualWorkspaceSnapshot> {
@@ -1909,4 +1991,32 @@ declare global {
   var __vfsSingleton__: GitBackedVFSProxy | undefined;
 }
 
-export const virtualFilesystem = globalThis.__vfsSingleton__ ?? (globalThis.__vfsSingleton__ = new GitBackedVFSProxy(new VirtualFilesystemService()));
+export const virtualFilesystem: GitBackedVFSProxy = globalThis.__vfsSingleton__ ?? (globalThis.__vfsSingleton__ = new GitBackedVFSProxy(new VirtualFilesystemService()));
+
+// Bug #36 (audit) — startup fingerprint. The snapshot gateway calls
+// `virtualFilesystem.getCurrentVersionSync(ownerId)` as the primary
+// staleness check for read-after-write correctness (Bug #16 fix). If
+// the deployed build predates the patch, the method is missing and
+// every snapshot request fails with `... is not a function` (95
+// occurrences in run.log with the `__TURBOPACK__imported__module__`
+// prefix confirming a stale Turbopack module cache). Print a
+// one-line fingerprint at module load so the regression is visible
+// immediately in the next run.log without code-reading.
+{
+  const hasGetCurrentVersionSync = typeof (virtualFilesystem as any).getCurrentVersionSync === 'function';
+  const hasForOwner = typeof (virtualFilesystem as any).forOwner === 'function';
+  const hasUnderlying = typeof (virtualFilesystem as any).underlying === 'function';
+  const proxyClassName = (virtualFilesystem as any)?.constructor?.name ?? 'unknown';
+  logger.info('[VFS Startup Fingerprint]', {
+    buildArtifact: 'virtualFilesystemService',
+    proxyClass: proxyClassName,
+    hasGetCurrentVersionSync,
+    hasForOwner,
+    hasUnderlying,
+    pid: typeof process !== 'undefined' ? process.pid : 'n/a',
+    nodeEnv: process.env.NODE_ENV ?? 'undefined',
+  });
+  if (!hasGetCurrentVersionSync) {
+    logger.warn('[VFS Startup Fingerprint] virtualFilesystem.getCurrentVersionSync is MISSING — snapshot gateway will fall back to listener-tracked latestSeenVersion. Restart the dev server to flush the stale Turbopack module cache.');
+  }
+}

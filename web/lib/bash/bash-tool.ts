@@ -17,6 +17,47 @@ import {
   createBashFailureContext,
 } from './bash-event-schema';
 import { executeWithHealing, isCommandSafe as _isCommandSafe } from './self-healing';
+// Bug #39: pre-flight env probe + 2nd-ENOENT-retry hard-block. The probe
+// gives the LLM a concrete list of available binaries (so it stops reaching
+// for `npx`/`python3` when they aren't on $PATH), and the retry counter
+// hard-blocks the 2nd ENOENT for the same binary with a "use write_file
+// / read_file instead" suggestion. Closes the "3 consecutive tool failures"
+// loop on the same missing binary.
+import {
+  formatAvailableBinariesAsync,
+  incrementMissingBinaryRetry,
+  resetMissingBinaryRetry,
+} from './env-probe';
+// Pass-2 cross-cutting theme: every silent-failure path that contributes to
+// 'user has to reprompt' is recorded into the degradation chain so the next
+// time the user complains, run.log shows which kinds fired. The bash tool
+// records both the 1st-ENOENT steer and the 2nd-ENOENT hard-block (Bug #39).
+import { recordDegradation } from '@/lib/observability/degradation-tracker';
+// Lazy-loaded steer helper so the bash tool can emit [STEER] hints on
+// ENOENT/EACCES so the LLM switches strategy (try a different binary,
+// use write_file/read_file, etc.) instead of looping on the same
+// missing command. Closes bugs G (loop-guard kills on python3 ENOENT)
+// and H (no auto-detection of missing interpreter).
+let _bashSteer: ((input: { command: string; code: string; tool: string }) => string | null) | null = null;
+let _bashSteerImportFailed = false;
+async function getBashSteer() {
+  if (_bashSteer) return _bashSteer;
+  try {
+    const mod = await import('@/lib/orchestra/steer-service');
+    _bashSteer = mod.wireBashErrorSteer;
+  } catch (err: any) {
+    // One-shot WARN so production logs surface a broken/missing steer-service
+    // module instead of silently letting the LLM loop on the same ENOENT.
+    if (!_bashSteerImportFailed) {
+      _bashSteerImportFailed = true;
+      logger.warn('[STEER] bash steer helper unavailable — ENOENT will not emit hints', {
+        error: err?.message,
+      });
+    }
+    _bashSteer = null;
+  }
+  return _bashSteer;
+}
 import {
   rewriteCommand,
   filterOutput,
@@ -501,7 +542,10 @@ async function persistToVFS(
     ].join('\n');
 
     // Write to VFS
-    await (await getVirtualFilesystem()).writeFile(agentId, outputPath, output);
+    // #10/#18/#25 fix: opt into strictConcurrency so concurrent modifications
+    // to the same outputPath are blocked at the VFS layer instead of
+    // racing and producing a torn write.
+    await (await getVirtualFilesystem()).writeFile(agentId, outputPath, output, undefined, { strictConcurrency: true });
 
     logger.info('Persisted bash output to VFS', { outputPath });
 
@@ -722,6 +766,18 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           // PATCH 2: Trigger postExecution hooks (allows file sync, logging, etc.)
           await triggerHooks('postExecution', { ...hookCtx, result });
 
+          // Bug #39 follow-up: a successful invocation of a binary clears
+          // its missing-binary retry counter. Without this, the 2nd-ENOENT
+          // hard-block would persist forever (or until process restart) even
+          // after the LLM / user fixed the underlying PATH issue. Matches
+          // the loop-guard philosophy: "blocked only while broken".
+          if (result.success && result.exitCode === 0) {
+            const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+            if (baseCmd) {
+              resetMissingBinaryRetry(baseCmd);
+            }
+          }
+
           // Stream output to terminal callback if provided (for TerminalPanel integration)
         if (cfg.onTerminalOutput && result.stdout) {
           cfg.onTerminalOutput(result.stdout);
@@ -788,14 +844,107 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         } catch (error: any) {
           let errorMessage = error.message || 'Unknown error';
 
-          // Detect ENOENT (command not found) and give a clear diagnostic
-          // so the LLM stops retrying the same missing binary.
-          if (errorMessage.includes('ENOENT')) {
+          // Detect environment-level errors (ENOENT, EACCES, ENOEXEC, ENOSPC, …)
+          // and give a clear diagnostic + [STEER] hint so the LLM stops
+          // retrying the same missing binary or hitting the same permission
+          // wall. Closes bugs G + H (ENOENT loop) and the EACCES gap.
+          const ENV_ERROR_RE = /(ENOENT|EACCES|ENOEXEC|ENOSPC|EISDIR|ENOTDIR)\b/;
+          const envMatch = errorMessage.match(ENV_ERROR_RE);
+          if (envMatch) {
+            const envCode = envMatch[1];
             const baseCmd = command.trim().split(/\s+/)[0] || command;
-            errorMessage = `Command not found: "${baseCmd}" is not available in this environment. ` +
-              `Available tools: use "which <cmd>" to check, or use write_file/read_file for file operations. ` +
-              `Do NOT retry "${baseCmd}" — it will keep failing.`;
-            logger.warn('ENOENT caught — providing diagnostic', { command, baseCmd });
+
+            // Bug #39: 2nd-ENOENT-retry hard-block. Increment the counter for
+            // this binary and refuse the 2nd retry with a "use write_file"
+            // suggestion. Breaks the "3× same ENOENT → loop-guard kills" cycle.
+            const retryCount = incrementMissingBinaryRetry(baseCmd);
+            if (envCode === 'ENOENT' && retryCount >= 2) {
+              const hardBlock = `Hard-blocked (Bug #39): "${baseCmd}" failed with ENOENT ${retryCount}× in this process. ` +
+                `It is not on $PATH. Stop calling bash_execute with "${baseCmd}". ` +
+                `Use write_file / read_file / apply_diff for file operations, ` +
+                `or use a different binary that IS available (see the "Available Binaries" list in your system prompt).`;
+              logger.warn(`[Bug #39] Hard-blocked 2nd ENOENT retry for "${baseCmd}"`, {
+                baseCmd,
+                retryCount,
+                command: command.slice(0, 80),
+              });
+              // Pass-2 cross-cutting theme: record the hard-block into the
+              // per-session degradation chain so run.log shows the silent
+              // failure that contributed to the user reprompting.
+              try {
+                recordDegradation(
+                  agentId || 'default',
+                  'binary_missing',
+                  'bash-tool',
+                  { baseCmd, retryCount, kind: 'hard_block' },
+                );
+              } catch { /* best-effort */ }
+              return {
+                success: false,
+                output: '',
+                error: hardBlock,
+                exitCode: -1,
+                duration: 0,
+              };
+            }
+
+            const diagnosticMap: Record<string, string> = {
+              ENOENT: `Command not found: "${baseCmd}" is not available in this environment. Available tools: use "which <cmd>" to check, or use write_file/read_file for file operations. Do NOT retry "${baseCmd}" — it will keep failing.`,
+              EACCES: `Permission denied: "${baseCmd}" is not executable or the target is not writable. Check file permissions with ls -l, or use write_file/read_file for file operations. Do NOT retry with the same path/permissions.`,
+              ENOEXEC: `Exec format error: "${baseCmd}" is not a valid executable for this platform. Verify the binary architecture (e.g. file <cmd>) or use a compatible alternative.`,
+              ENOSPC: `No space left on device while running "${baseCmd}". Free up disk space (df -h) or persist outputs to a smaller path. Do NOT retry — it will keep failing until space is freed.`,
+              EISDIR: `"${baseCmd}" is a directory, not a file. Use ls, cd, or stat to inspect it; do not pass it to commands that expect a file path.`,
+              ENOTDIR: `Not a directory: a path component in "${baseCmd}" is not a directory. Verify the path with ls; do not retry with the same path.`,
+            };
+            const diagnostic = diagnosticMap[envCode] ||
+              `Environment error ${envCode} while running "${baseCmd}". Use a different command or fix the underlying issue; do not retry.`;
+            // Bug #39: on the FIRST ENOENT for a binary, also include the
+            // env probe result so the LLM sees concrete alternatives right
+            // at the point of failure (not just the steer hint).
+            let envProbeFragment = '';
+            if (envCode === 'ENOENT') {
+              try {
+                const probeList = await formatAvailableBinariesAsync();
+                if (probeList) {
+                  // Take only the first ~600 chars of the probe list to keep
+                  // the error message under budget. The full list is also in
+                  // the system prompt.
+                  envProbeFragment = `\n\n[ENV PROBE]\n${probeList.length > 600 ? probeList.slice(0, 600) + '\n[... truncated; full list in system prompt ...]' : probeList}`;
+                }
+              } catch (probeErr: any) {
+                logger.debug('Env probe fragment skipped (non-fatal)', { error: probeErr?.message });
+              }
+            }
+            errorMessage = diagnostic + envProbeFragment;
+            logger.warn(`${envCode} caught — providing diagnostic`, { command, baseCmd, envCode, retryCount });
+            // Pass-2 cross-cutting theme: record the 1st-ENOENT steer so
+            // operators can distinguish "user got the hint" (1st event
+            // only) from "user hit the 2nd-retry hard-block" (1st event
+            // + 2nd hard-block event). sessionId = threadId from the LLM
+            // tool context, falling back to agentId/default.
+            try {
+              recordDegradation(
+                agentId || 'default',
+                'binary_missing',
+                'bash-tool',
+                { baseCmd, envCode, retryCount, kind: 'steer' },
+              );
+            } catch { /* best-effort */ }
+            // [STEER] G + H: emit a one-shot corrective hint so the LLM
+            // switches strategy (use a different command or fall back to
+            // write_file/read_file) instead of looping on the same env error.
+            // The hint is APPENDED to the error string so the LLM actually
+            // sees it in the next tool result.
+            try {
+              const steer = await getBashSteer();
+              const hint = steer?.({ command, code: envCode, tool: 'bash_execute' });
+              if (hint) {
+                errorMessage = errorMessage + '\n\n[STEER] ' + hint;
+                logger.info(`[STEER] bash ${envCode} — corrective hint appended to error`, { baseCmd, hintLength: hint.length, retryCount });
+              }
+            } catch (steerErr: any) {
+              logger.debug('Steer hint skipped (non-fatal)', { error: steerErr?.message });
+            }
           }
 
           // PATCH 2: Trigger onError hooks
@@ -946,7 +1095,7 @@ export function registerVFSSyncHook(): void {
           vfsPath,
           content,
           'text/plain',
-          { failIfExists: false }
+          { failIfExists: false, strictConcurrency: true }
         );
 
         logger.debug('VFS sync: bash-created file synced to VFS', {

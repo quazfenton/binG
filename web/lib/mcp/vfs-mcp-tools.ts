@@ -39,6 +39,45 @@ export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
 
 const logger = createLogger('VFS-MCP-Tools');
 
+/**
+ * Returns a corrected path example for the model when a tool call is rejected
+ * for a missing/invalid path. Closes bug #19: "Tool path schemas have no
+ * example/description" — the model gets a concrete example to follow on retry.
+ *
+ * Shape is intentionally simple so any provider (Anthropic, OpenAI, Google)
+ * can include the example in the next tool call's `path` field.
+ */
+function correctedExample(
+    toolName: 'write_file' | 'apply_diff' | 'read_file' | 'read_files' | 'list_files' | 'search_files' | 'grep_code' | 'batch_write' | 'delete_file',
+    field: 'path' | 'paths' | 'query' = 'path',
+  ): { example: string; format: string; examples: string[]; toolName: string; field: string } {
+    // Path examples per tool
+    const pathExamples: Record<string, { example: string; format: string; examples: string[] }> = {
+      write_file:   { example: 'src/app.tsx',     format: 'relative path like "src/app.tsx" (no URL, no query string, no leading slash)', examples: ['hello.py', 'src/App.tsx', 'README.md'] },
+      apply_diff:   { example: 'src/app.tsx',     format: 'relative path like "src/app.tsx" (the file to patch)',                       examples: ['src/App.tsx', 'package.json', 'lib/utils.ts'] },
+      read_file:    { example: 'src/app.tsx',     format: 'relative path like "src/app.tsx" (the file to read)',                        examples: ['src/App.tsx', 'package.json', 'README.md'] },
+      read_files:   { example: '["src/a.ts","src/b.ts"]', format: 'JSON array of relative paths like ["src/a.ts", "src/b.ts"]',      examples: ['["src/a.ts","src/b.ts"]', '["package.json","tsconfig.json"]'] },
+      list_files:   { example: 'src/',            format: 'directory path like "/" (root) or "src/" or "lib/components"',              examples: ['/', 'src/', 'lib/', 'web/app'] },
+      search_files: { example: 'src/',            format: 'directory path like "src/" to limit search scope',                          examples: ['src/', 'lib/', 'web/app/api'] },
+      grep_code:    { example: 'src/',            format: 'root directory like "src/" or "lib/" (default: workspace root)',             examples: ['src/', 'lib/', 'web/'] },
+      batch_write:  { example: 'src/utils.ts',    format: 'relative file path like "src/utils.ts" inside each files[] entry',            examples: ['src/utils.ts', 'src/components/Button.tsx', 'README.md'] },
+      delete_file:  { example: 'src/old.ts',      format: 'relative path like "src/old.ts" (file or directory to delete)',              examples: ['src/old.ts', 'temp/', 'lib/deprecated.ts'] },
+    };
+    // Query examples (for search_files, grep_code)
+    const queryExamples: Record<string, { example: string; format: string; examples: string[] }> = {
+      search_files: { example: 'TODO',                format: 'search term or natural language description',                          examples: ['TODO', 'useState', 'authentication'] },
+      grep_code:    { example: 'useState\\(',        format: 'regex pattern (or literal text if fixedString=true)',                  examples: ['useState\\(', 'TODO|FIXME', 'import.*from'] },
+      default:      { example: 'search term',         format: 'non-empty search string',                                              examples: ['TODO', 'function', 'import'] },
+    };
+    if (field === 'query') {
+      const entry = queryExamples[toolName] || queryExamples.default;
+      return { ...entry, toolName, field };
+    }
+    const entry = pathExamples[toolName] || pathExamples.write_file;
+    return { ...entry, toolName, field };
+  }
+
+
 // ============================================================================
 // Tool Argument Normalization (Self-Healing for LLM Mistakes)
 // ============================================================================
@@ -248,6 +287,12 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   patch: 'apply_diff',
   readfile: 'read_file',
   readfiles: 'read_files',
+  // Bug #37: LLM-invented 'list_directory' is the most common misname for list_files.
+  // Map both the bare-verb 'list' and the alternate 'list_directory' to the canonical name.
+  listdirectory: 'list_files',
+  list_dir: 'list_files',
+  listdir: 'list_files',
+  dir: 'list_files',
   listfiles: 'list_files',
   ls: 'list_files',
   searchfiles: 'search_files',
@@ -562,10 +607,10 @@ export const writeFileTool = (tool as any)({
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string' || !path.trim()) {
-    return { success: false, path, error: 'Path is required' };
+    return { success: false, path, error: { code: 'INVALID_PATH', message: 'Path is required (a non-empty string).', retryable: true, correctedExample: correctedExample('write_file') } };
   }
   if (content === undefined || content === null) {
-    return { success: false, path, error: 'Content is required' };
+    return { success: false, path, error: { code: 'INVALID_CONTENT', message: 'Content is required.', retryable: true, correctedExample: correctedExample('write_file') } };
   }
   // Unwrap code fences if LLM wrapped content in ``` blocks (safety net)
   if (typeof content === 'string') content = unwrapCodeBlock(content);
@@ -771,10 +816,10 @@ export const applyDiffTool = (tool as any)({
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string' || !path.trim()) {
-    return { success: false, path, error: 'Path is required' };
+    return { success: false, path, error: { code: 'INVALID_PATH', message: 'Path is required (a non-empty string).', retryable: true, correctedExample: correctedExample('apply_diff') } };
   }
   if (!diff || typeof diff !== 'string') {
-    return { success: false, path, error: 'Diff content is required' };
+    return { success: false, path, error: { code: 'INVALID_DIFF', message: 'Diff content is required.', retryable: true, correctedExample: correctedExample('apply_diff') } };
   }
 
   // Unwrap code fences if LLM wrapped diff in ``` blocks
@@ -1134,7 +1179,7 @@ export const readFileTool = (tool as any)({
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string' || !path.trim()) {
-    return { success: false, path, error: 'Path is required', exists: false };
+    return { success: false, path, exists: false, error: { code: 'INVALID_PATH', message: 'Path is required (a non-empty string).', retryable: true, correctedExample: correctedExample('read_file') } };
   }
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
@@ -1221,7 +1266,7 @@ export const readFilesTool = (tool as any)({
   parameters: z.preprocess(
     (raw) => normalizeToolArgs('read_files', raw),
     z.object({
-      paths: z.array(z.string()).min(1).max(20, 'Cannot read more than 20 files at once').describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
+      paths: z.array(z.string()).min(1, 'At least one path is required').max(20, 'Cannot read more than 20 files at once').describe('Array of file paths like ["src/a.ts", "src/b.ts"] (example: ["src/a.ts", "src/b.ts"])'),
     }).passthrough()
   ),
   execute: async ({ paths }) => {
@@ -1236,7 +1281,7 @@ export const readFilesTool = (tool as any)({
       const results = await Promise.all(paths.map(async (originalPath: string) => {
         try {
           if (!originalPath || typeof originalPath !== 'string') {
-            return { path: originalPath, success: false, error: 'Path is required' } as any;
+            return { path: originalPath, success: false, error: { code: 'INVALID_PATH', message: 'Path is required (a non-empty string).', retryable: true, correctedExample: correctedExample('read_files') } } as any;
           }
           const scopedPath = resolveScopedPath(originalPath);
           const file = await virtualFilesystem.readFile(context.userId, scopedPath);
@@ -1378,7 +1423,7 @@ export const searchFilesTool = (tool as any)({
   execute: async ({ query, path, limit = 10 }) => {
     try {
   if (!query || typeof query !== 'string' || !query.trim()) {
-    return { success: false, query, error: 'Query is required', files: [], total: 0 };
+    return { success: false, query, error: { code: 'INVALID_QUERY', message: 'Query is required (a non-empty string).', retryable: true, correctedExample: correctedExample('search_files', 'query') }, files: [], total: 0 };
   }
   const context = getToolContext();
   // Scope the path filter to the current session, just like other file tools
@@ -1476,7 +1521,7 @@ export const grepCodeTool = (tool as any)({
   }) => {
     try {
       if (!args.query || typeof args.query !== 'string') {
-        return { success: false, query: args.query, error: 'Query is required', matches: [], total: 0 };
+        return { success: false, query: args.query, error: { code: 'INVALID_QUERY', message: 'Query is required (a non-empty string).', retryable: true, correctedExample: correctedExample('grep_code', 'query') }, matches: [], total: 0 };
       }
       
       // Get ownerId from tool context
@@ -1849,7 +1894,7 @@ export const deleteFileTool = (tool as any)({
   execute: async ({ path, reason }) => {
     try {
   if (!path || typeof path !== 'string' || !path.trim()) {
-    return { success: false, path, error: 'Path is required' };
+    return { success: false, path, error: { code: 'INVALID_PATH', message: 'Path is required (a non-empty string).', retryable: true, correctedExample: correctedExample('delete_file') } };
   }
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
@@ -2040,7 +2085,7 @@ const TOOL_DEFS: Record<string, { description: string; parameters: Record<string
   read_files: {
     description: readFilesTool.description,
     parameters: toJsonSchema(z.object({
-      paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"]'),
+      paths: z.array(z.string()).min(1).max(20).describe('Array of file paths like ["src/a.ts", "src/b.ts"] (example: ["src/a.ts", "src/b.ts"])'),
     })),
   },
   list_files: {

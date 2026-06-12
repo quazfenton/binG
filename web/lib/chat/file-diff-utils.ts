@@ -296,6 +296,27 @@ export function applySearchAndReplace(currentContent: string, diffBody: string):
  * This library can handle diffs even when context lines don't match exactly
  */
 export function applyDiffMatchPatch(currentContent: string, diffBody: string): string | null {
+  // #K FIX: pre-validate the diff body before handing it to the library.
+  // diff-match-patch throws "Invalid patch string" for malformed input;
+  // catching it in the try/catch below works but the error reason is
+  // opaque. A cheap structural check surfaces the real issue to the LLM
+  // so the next patch attempt uses the correct format.
+  if (!diffBody || diffBody.trim().length === 0) {
+    return null;
+  }
+  // Unified-diff format requires at least one @@ hunk header or a SAR block.
+  // Accept any `@@` followed by `-\d` so `@@ -1,2 +3,4 @@` and `@@ -1 +1 @@`
+  // both pass (the second form is valid diff-match-patch when the new
+  // range is implicit). Rejecting it would cause false-negative rejections
+  // of legitimate single-line patches.
+  const hasHunkHeader = /^@@\s+-\d/m.test(diffBody);
+  const hasSarBlock = /^={2,}\s*SAR\s*={2,}/m.test(diffBody);
+  if (!hasHunkHeader && !hasSarBlock) {
+    logger.warn('[applyDiffMatchPatch] Pre-validation failed: no @@ hunk or SAR block found', {
+      diffPreviewLength: Math.min(diffBody.length, 200),
+    });
+    return null;
+  }
   try {
     const dmp = new diff_match_patch();
     

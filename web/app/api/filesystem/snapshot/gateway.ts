@@ -5,7 +5,9 @@ import { fsBridge, isUsingLocalFS } from '@bing/shared/FS/fs-bridge';
 import { stripWorkspacePrefixes } from '@/lib/virtual-filesystem/scope-utils';
 import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+import { getSnapshotBroadcaster, type SnapshotChangedMessage } from '@/lib/virtual-filesystem/snapshot-broadcaster';
 import { createLogger } from '@/lib/utils/logger';
+import { vfsSnapshotCacheMetrics } from './cache-metrics';
 
 const logger = createLogger('API:VFS:Snapshot');
 
@@ -31,6 +33,16 @@ const snapshotCache = globalThis.__snapshotCache__ ?? (globalThis.__snapshotCach
 }>());
 const CACHE_TTL_MS = 30000; // 30 seconds server-side cache
 const MAX_CACHE_SIZE = 50; // Max entries before proactive cleanup
+// Bug #11 (audit) — the snapshot cache both over-invalidates and goes stale.
+// The audit's literal ask was "tighten staleness threshold (455 s is way too
+// long for a chat session)". The gateway's TTL is 30 s, but the per-entry
+// staleness check inside the gateway was 5 min. Now we surface a tighter
+// `VfsSnapshotCacheMetrics.staleThresholdMs` (default 60 s, env-tunable
+// via VFS_SNAPSHOT_STALE_THRESHOLD_MS) so a 1+ minute-old cache hit is
+// counted as `staleHit` rather than a clean `hit`. The 30 s TTL still
+// applies to the actual cache entry, but the counter surfaces how often
+// the cache is serving data that is older than the staleness threshold.
+const SNAPSHOT_STALENESS_MS = vfsSnapshotCacheMetrics.staleThresholdMs;
 
 // Periodic cache cleanup interval
 let cleanupInterval: NodeJS.Timeout | null = null;
@@ -44,6 +56,10 @@ function startPeriodicCleanup() {
 
     for (const [key, value] of snapshotCache.entries()) {
       if (now - value.timestamp > cacheThreshold) {
+        // Bug #11 — record every TTL-driven eviction so operators can see
+        // how often the cache is being swept by the cleanup interval vs
+        // by a fresh write (invalidations).
+        vfsSnapshotCacheMetrics.recordTtlEviction();
         snapshotCache.delete(key);
         // Also clean up corresponding latestSeenVersion entry
         // SECURITY: Use indexOf (FIRST :) not split()[0], because:
@@ -68,6 +84,10 @@ function startPeriodicCleanup() {
         .sort((a, b) => a[1].timestamp - b[1].timestamp);
       const toDelete = entries.slice(0, entries.length - MAX_CACHE_SIZE);
       for (const [key] of toDelete) {
+        // Bug #11 — record every size-limit eviction separately from TTL
+        // evictions so operators can distinguish chronic over-invalidation
+        // (size limit hit) from natural TTL expiration.
+        vfsSnapshotCacheMetrics.recordSizeEviction();
         snapshotCache.delete(key);
         // Also clean up corresponding latestSeenVersion entry
         // SECURITY: Use indexOf (FIRST :) not split()[0], because:
@@ -81,6 +101,7 @@ function startPeriodicCleanup() {
       }
       logger.info('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
     }
+    vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
 }
 
@@ -101,19 +122,58 @@ const latestSeenVersion = globalThis.__snapshotLatestVersion__ ?? (globalThis.__
 // Only register the listener once, even across hot-reloads
 if (!globalThis.__snapshotListenerRegistered__) {
   globalThis.__snapshotListenerRegistered__ = true;
-  virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
-    const currentMax = latestSeenVersion.get(ownerId) || 0;
-    latestSeenVersion.set(ownerId, Math.max(currentMax, version));
 
+  /**
+   * Invalidate cache entries for an owner when a newer workspace
+   * version is observed. Shared by the local in-process listener and
+   * the cross-process Redis pub/sub subscriber — both paths converge
+   * here so the eviction logic is in exactly one place.
+   */
+  function invalidateForOwner(ownerId: string, version: number, source: string): void {
+    const currentMax = latestSeenVersion.get(ownerId) || 0;
+    if (version <= currentMax) {
+      return; // already seen a newer or equal version
+    }
+    latestSeenVersion.set(ownerId, version);
+
+    let evicted = 0;
     for (const key of snapshotCache.keys()) {
       if (key.startsWith(`${ownerId}:`)) {
         const cached = snapshotCache.get(key);
         if (cached && cached.version < version) {
+          // Bug #11 — count every listener-driven eviction so the
+          // `invalidations` counter surfaces chronic over-invalidation.
+          vfsSnapshotCacheMetrics.recordInvalidation();
           snapshotCache.delete(key);
-          logger.info('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+          evicted++;
         }
       }
     }
+    if (evicted > 0) {
+      logger.info(
+        `[VFS SNAPSHOT] Cache invalidated (${evicted} entries) for owner:`,
+        ownerId,
+        'version:',
+        version,
+        'source:',
+        source
+      );
+    }
+    vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+  }
+
+  // Local in-process listener: fires when this process writes via VFS.
+  virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
+    invalidateForOwner(ownerId, version, 'local');
+  });
+
+  // Cross-process listener: fires when ANOTHER worker writes via VFS.
+  // Bug #16 (audit) follow-up — without this, worker A's write would
+  // not notify worker B, and worker B would return a stale cached
+  // snapshot. The broadcaster is a no-op if Redis is unavailable, so
+  // this subscribe() is safe to call in any environment.
+  getSnapshotBroadcaster().subscribe((msg: SnapshotChangedMessage) => {
+    invalidateForOwner(msg.ownerId, msg.version, `pubsub:${msg.source}`);
   });
 }
 
@@ -273,14 +333,69 @@ export async function GET(req: NextRequest) {
     const cacheKey = `${owner.ownerId}:${pathFilter}:${authHeader ? 'auth' : 'anon'}`;
     const cached = snapshotCache.get(cacheKey);
     const now = Date.now();
-    const latestVersion = latestSeenVersion.get(owner.ownerId);
+    // Bug #16 (audit hot-fix) — the read path now uses the authoritative
+    // in-memory workspace version (`getCurrentVersionSync`) as the primary
+    // staleness check, with the listener-tracked `latestSeenVersion` as a
+    // cross-process fallback. The previous code only used the listener
+    // version, which left a race window: a read that started before the
+    // write's listener fired would see the OLD listener version and return
+    // the cached entry, even though the in-memory workspace was already at
+    // the new version. The sync getter sees the in-flight version because
+    // `workspaces` Map is updated synchronously at the start of writeFile
+    // (before `await persistWorkspace`).
+    //
+    // Multi-worker caveat: this fix is single-process. In a multi-worker
+    // Next.js deployment, worker A's write updates its in-memory Map and
+    // fires its listener, but worker B's in-memory Map is still empty. A
+    // read on worker B will see `currentVersion = 0` from its own Map and
+    // fall back to the (also empty) `listenerVersion` — serving stale data.
+    // True cross-worker invalidation needs a shared pub/sub (e.g. Redis
+    // pub/sub on `onSnapshotChange`).
+    //
+    // Note: `cached.version < latestVersion` is false when `latestVersion
+    // === 0`, so we don't need a special-case for "no writes yet" — the
+    // arithmetic naturally short-circuits.
+    // Bug #36 (audit) — defensive guard. If the deployed build predates
+    // the Bug #16 fix (or hot-reload produced a partial singleton state),
+    // `virtualFilesystem.getCurrentVersionSync` may be missing. Fall
+    // back to the listener-tracked `latestSeenVersion` so the snapshot
+    // path still works (with a throttled [WARN] so the regression is
+    // visible in run.log) instead of crashing every request.
+    let currentVersion = 0;
+    if (typeof (virtualFilesystem as any).getCurrentVersionSync === 'function') {
+      currentVersion = virtualFilesystem.getCurrentVersionSync(owner.ownerId);
+    } else {
+      const nowMs = Date.now();
+      if (nowMs - (globalThis.__vfsDefensiveGuardLastWarnedAt__ ?? 0) > 60_000) {
+        globalThis.__vfsDefensiveGuardLastWarnedAt__ = nowMs;
+        logWarn('[' + requestId + '] getCurrentVersionSync missing on virtualFilesystem — falling back to listener-tracked latestSeenVersion. This indicates a stale build; restart the dev server to flush the Turbopack module cache.');
+      }
+    }
+    const listenerVersion = latestSeenVersion.get(owner.ownerId) ?? 0;
+    const latestVersion = Math.max(currentVersion, listenerVersion);
 
     if (cached && now - cached.timestamp < CACHE_TTL_MS) {
       if (latestVersion !== undefined && cached.version < latestVersion) {
+        // Bug #11 — a newer VFS version was seen since this entry was cached.
+        // Count this as a staleHit (not a hit) so operators can see the cache
+        // is being bypassed because the version was bumped.
+        vfsSnapshotCacheMetrics.recordStaleHit();
+        vfsSnapshotCacheMetrics.recordInvalidation();
         snapshotCache.delete(cacheKey);
+        // Do NOT record a miss — the staleHit is the signal. The fall-through
+        // to the export path will record the export duration so operators
+        // see the cost of the staleHit-induced re-export.
+      } else if (now - cached.timestamp > SNAPSHOT_STALENESS_MS) {
+        // Bug #11 — entry is older than the staleness threshold. Still
+        // within the 30 s TTL, but operators want to know this is "almost
+        // stale" so they can tune SNAPSHOT_STALENESS_MS downward.
+        vfsSnapshotCacheMetrics.recordStaleHit();
+        snapshotCache.delete(cacheKey);
+        // Do NOT record a miss (same rationale as above).
       } else {
         const ifNoneMatch = req.headers.get('if-none-match');
         if (ifNoneMatch === cached.etag) {
+          vfsSnapshotCacheMetrics.recordHit();
           log(`[${requestId}] Cache hit with matching ETag, returning 304`);
           const response = new NextResponse(null, {
             status: 304,
@@ -293,6 +408,7 @@ export async function GET(req: NextRequest) {
           return withAnonSessionCookie(response, owner);
         }
 
+        vfsSnapshotCacheMetrics.recordHit();
         log(`[${requestId}] Cache hit (age: ${Math.round((now - cached.timestamp) / 1000)}s)`);
         const response = NextResponse.json({
           success: true,
@@ -309,8 +425,17 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Count a miss ONLY for requests that had no cache entry at all. A
+    // staleHit-induced fall-through already counted its signal above; we
+    // do not want staleHit + miss to double-count the same logical "no
+    // clean hit" event.
+    if (!cached) {
+      vfsSnapshotCacheMetrics.recordMiss();
+    }
+
     // Generate new snapshot
     let snapshot;
+    const exportStart = Date.now();
     try {
       if (useDesktopSnapshot) {
         const localSnapshot = await fsBridge.exportWorkspace(owner.ownerId);
@@ -324,6 +449,8 @@ export async function GET(req: NextRequest) {
       } else {
         snapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
       }
+      // Bug #11 — record the export duration for the cache metrics.
+      vfsSnapshotCacheMetrics.recordExport(Date.now() - exportStart);
     } catch (error: unknown) {
       const duration = Date.now() - startTime;
       logError(`[${requestId}] exportWorkspace failed:`, error instanceof Error ? error.message : error);
@@ -344,6 +471,31 @@ export async function GET(req: NextRequest) {
     // Log if we're getting empty results - helps debug session ID mismatches
     if (files.length === 0 && snapshot.files.length === 0) {
       logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+
+      // Bug #14 (audit) — when an anonymous user hits an empty
+      // workspace, the LLM previously saw `{success: true, files: []}`
+      // and had no way to distinguish "the workspace is initializing"
+      // from "the workspace is genuinely empty". It would then
+      // hallucinate file contents and proceed with stale context.
+      //
+      // The fix: detect the empty-workspace case for non-authenticated
+      // owners and return a typed 202 Accepted response with error
+      // code `WORKSPACE_NOT_READY`. The LLM can match on this code
+      // and either retry, ask the user to wait, or surface a clearer
+      // UI message ("Session initializing, please wait…") instead of
+      // acting on the empty list.
+      if (owner.source !== 'authenticated') {
+        log(`[${requestId}] Returning WORKSPACE_NOT_READY for ${owner.source} owner — workspace not yet initialized`);
+        const notReadyResponse = NextResponse.json({
+          success: false,
+          error: 'Workspace not yet initialized. Please retry shortly.',
+          errorCode: 'WORKSPACE_NOT_READY',
+          retryable: true,
+          ownerId: owner.ownerId,
+          source: owner.source,
+        }, { status: 202 });
+        return withAnonSessionCookie(notReadyResponse, owner);
+      }
     } else if (files.length === 0 && snapshot.files.length > 0) {
       logWarn(`[${requestId}] PATH MISMATCH: workspace has ${snapshot.files.length} files but none match path="${pathFilter}"`);
       log(`[${requestId}] Workspace file paths:`, snapshot.files.map(f => f.path));
@@ -382,6 +534,9 @@ export async function GET(req: NextRequest) {
       etag,
       version: snapshot.version,
     });
+    // Bug #11 — keep the metrics' size in sync with the cache so the
+    // /api/health block reports an accurate entry count.
+    vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
 
     const response = NextResponse.json({
       success: true,

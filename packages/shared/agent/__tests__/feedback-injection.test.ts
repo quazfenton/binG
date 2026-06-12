@@ -628,3 +628,227 @@ describe('integrated feedback injection with tracker', () => {
     expect(trigger.reason).toContain('Stuck in loop');
   });
 });
+
+// ============================================================================
+// Bug #30 (audit) — checkReEvalTrigger spam regression tests
+// ============================================================================
+//
+// The original `checkReEvalTrigger` emitted a trigger on EVERY tool-call
+// multiple of 5 (15, 20, 25, 30, ...) and on every consecutive-tool
+// increment above the threshold (7, 8, 9, 10, ...), flooding run.log with
+// identical re-eval events. The fix is a category-based dedup Set that's
+// cleared only on `recordResponse()` or `recordReEval()` — so a category
+// can fire at most once per cycle.
+
+describe('checkReEvalTrigger — Bug #30 spam regression', () => {
+  const spamTestSessionId = 'spam-test-' + Date.now();
+
+  beforeEach(() => {
+    resetTracker(spamTestSessionId);
+    cleanupTrackers(0);
+  });
+
+  afterEach(() => {
+    resetTracker(spamTestSessionId);
+    cleanupTrackers(0);
+  });
+
+  it('fires the total-tool-count trigger exactly once across toolCallCount 15..24', () => {
+    // Bump the consecutive threshold so the 'consecutive' category
+    // never fires — this isolates the 'tools' category for this test.
+    for (let i = 0; i < 10; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    // toolCallCount is now 10 — below the default threshold of 15, so
+    // the trigger should NOT have fired yet.
+    const t10 = checkReEvalTrigger(spamTestSessionId, { consecutiveToolThreshold: 1000 });
+    expect(t10.triggered).toBe(false);
+
+    // 5 more tool calls → toolCallCount = 15 (first crossing).
+    recordToolCall(spamTestSessionId);
+    recordToolCall(spamTestSessionId);
+    recordToolCall(spamTestSessionId);
+    recordToolCall(spamTestSessionId);
+    recordToolCall(spamTestSessionId);
+    const t15 = checkReEvalTrigger(spamTestSessionId, { consecutiveToolThreshold: 1000 });
+    expect(t15.triggered).toBe(true);
+    expect(t15.reason).toContain('15 total tool calls');
+    expect(t15.reason).toContain('total tool calls');
+
+    // Tool calls 16..24 should all be SUPPRESSED — the 'tools' category
+    // already fired in this cycle. This is the spam fix: the old code
+    // would have fired at 20, 25, 30, 35, ...
+    for (let i = 0; i < 9; i++) {
+      recordToolCall(spamTestSessionId);
+      const t = checkReEvalTrigger(spamTestSessionId, { consecutiveToolThreshold: 1000 });
+      expect(t.triggered).toBe(false);
+    }
+
+    // toolCallCount is now 24. Exactly one fire across the whole 15..24
+    // window — verified.
+  });
+
+  it('re-arms the tool-count trigger after recordResponse (new cycle)', () => {
+    // First cycle: 16 tool calls, trigger fires at 15, suppressed at 16.
+    for (let i = 0; i < 16; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t15 = checkReEvalTrigger(spamTestSessionId);
+    expect(t15.triggered).toBe(true);
+
+    // recordResponse clears the Set → re-armed.
+    recordResponse(spamTestSessionId, 500, true);
+
+    // Next call → count = 17, above threshold, category not in Set → fires.
+    recordToolCall(spamTestSessionId);
+    const tNew = checkReEvalTrigger(spamTestSessionId);
+    expect(tNew.triggered).toBe(true);
+    expect(tNew.reason).toContain('17 total tool calls');
+  });
+
+  it('re-arms the tool-count trigger after recordReEval (new cycle)', () => {
+    for (let i = 0; i < 15; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    checkReEvalTrigger(spamTestSessionId); // fires, marks 'tools' as fired
+
+    recordReEval(spamTestSessionId);
+
+    recordToolCall(spamTestSessionId);
+    const t = checkReEvalTrigger(spamTestSessionId);
+    expect(t.triggered).toBe(true);
+    expect(t.reason).toContain('16 total tool calls');
+  });
+
+  it('fires the consecutive-tool trigger exactly once per spike', () => {
+    // Bump the tool-call threshold so the 'tools' category never fires
+    // — this isolates the 'consecutive' category for this test.
+    for (let i = 0; i < 10; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t1 = checkReEvalTrigger(spamTestSessionId, { toolCallThreshold: 1000 });
+    expect(t1.triggered).toBe(true);
+    expect(t1.reason).toContain('consecutive tool calls');
+
+    // 5 more tool calls (consecutive = 15) → category fired, suppressed.
+    for (let i = 0; i < 5; i++) {
+      recordToolCall(spamTestSessionId);
+      const t = checkReEvalTrigger(spamTestSessionId, { toolCallThreshold: 1000 });
+      expect(t.triggered).toBe(false);
+    }
+  });
+
+  it('re-arms trigger categories after recordResponse resets the cycle', () => {
+    // First cycle: 7 tool calls (count=7, no 'tools' fire because 7<15).
+    // 'consecutive' fires (consecutive=7 >= 7), set={'consecutive'}.
+    for (let i = 0; i < 7; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t1 = checkReEvalTrigger(spamTestSessionId);
+    expect(t1.triggered).toBe(true);
+    expect(t1.reason).toContain('consecutive tool calls');
+
+    // 1 more → 'consecutive' in set, suppressed.
+    recordToolCall(spamTestSessionId);
+    const t2 = checkReEvalTrigger(spamTestSessionId);
+    expect(t2.triggered).toBe(false);
+
+    // recordResponse: clears Set, resets consecutive=0, toolCount=8.
+    recordResponse(spamTestSessionId, 200, true);
+
+    // 7 more tool calls: toolCount=15, consecutive=7. The 'tools'
+    // check fires first (count=15 >= 15). The Set was cleared by
+    // recordResponse, so 'tools' is a fresh fire (not suppressed by
+    // a previous cycle). This proves the cycle re-arms.
+    for (let i = 0; i < 7; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t3 = checkReEvalTrigger(spamTestSessionId);
+    expect(t3.triggered).toBe(true);
+    expect(t3.reason).toContain('15 total tool calls');
+  });
+
+  it('fires each category at most once per cycle (cross-category isolation)', () => {
+    // 14 tool calls: toolCount=14 < 15, so 'tools' check is skipped.
+    // 'consecutive' (consecutive=14 >= 7) fires on first check.
+    for (let i = 0; i < 14; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t1 = checkReEvalTrigger(spamTestSessionId);
+    expect(t1.triggered).toBe(true);
+    expect(t1.reason).toContain('consecutive tool calls');
+
+    // 1 more: toolCount=15, now 'tools' can fire. 'consecutive' is in
+    // the Set so the 'consecutive' check is suppressed; the 'tools'
+    // check fires (different category, not in Set).
+    recordToolCall(spamTestSessionId);
+    const t2 = checkReEvalTrigger(spamTestSessionId);
+    expect(t2.triggered).toBe(true);
+    expect(t2.reason).toContain('15 total tool calls');
+
+    // 1 more: toolCount=16, both 'tools' and 'consecutive' in Set.
+    // Both checks suppressed, no fire.
+    recordToolCall(spamTestSessionId);
+    const t3 = checkReEvalTrigger(spamTestSessionId);
+    expect(t3.triggered).toBe(false);
+  });
+
+  it('fires the low-success-rate trigger exactly once across multiple checks', () => {
+    // Drive 5 responses with 1 success (20% success rate) — below the
+    // 40% threshold. The 'success' category fires.
+    recordResponse(spamTestSessionId, 100, false);  // fail
+    recordResponse(spamTestSessionId, 100, false);  // fail
+    recordResponse(spamTestSessionId, 100, false);  // fail
+    recordResponse(spamTestSessionId, 100, false);  // fail
+    recordResponse(spamTestSessionId, 100, true);   // success
+    // successRate = 0.2 < 0.4 → fires.
+    const t1 = checkReEvalTrigger(spamTestSessionId);
+    expect(t1.triggered).toBe(true);
+    expect(t1.reason).toContain('Low success rate');
+
+    // Multiple checks should all be SUPPRESSED — the 'success' category
+    // already fired. The reason text also changes with successRate
+    // ("Low success rate: 20%" then "Low success rate: 17%" then "15%"),
+    // so the category-Set is the only way to dedup these.
+    for (let i = 0; i < 5; i++) {
+      const t = checkReEvalTrigger(spamTestSessionId);
+      expect(t.triggered).toBe(false);
+    }
+
+    // recordResponse re-arms the 'success' category. The next
+    // response drops successRate to 1/6 = 0.17, so the trigger fires
+    // again on the next check.
+    recordResponse(spamTestSessionId, 100, false);
+    const t2 = checkReEvalTrigger(spamTestSessionId);
+    expect(t2.triggered).toBe(true);
+    expect(t2.reason).toContain('Low success rate');
+  });
+
+  it('recordResponse clears firedTriggersThisCycle (rapid-clear verification)', () => {
+    // Drives 7 tool calls → 'consecutive' fires. Then 5 rapid
+    // recordResponse calls (mimics streaming-chunk per-response). After
+    // these, the Set MUST be empty. Then 7 more tool calls prove
+    // 'consecutive' can fire again in the new cycle.
+    for (let i = 0; i < 7; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t1 = checkReEvalTrigger(spamTestSessionId, { toolCallThreshold: 1000 });
+    expect(t1.triggered).toBe(true);
+    expect(t1.reason).toContain('consecutive tool calls');
+
+    // Rapid recordResponse calls (mimics streaming).
+    for (let i = 0; i < 5; i++) {
+      recordResponse(spamTestSessionId, 100, true);
+    }
+
+    // If clear() is called per recordResponse, the Set is empty after
+    // the 5 calls. If clear() is missing or behind a gate, 'consecutive'
+    // would still be in the Set and the next fire would be suppressed.
+    for (let i = 0; i < 7; i++) {
+      recordToolCall(spamTestSessionId);
+    }
+    const t2 = checkReEvalTrigger(spamTestSessionId, { toolCallThreshold: 1000 });
+    expect(t2.triggered).toBe(true);
+    expect(t2.reason).toContain('consecutive tool calls');
+  });
+});

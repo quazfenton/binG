@@ -1,5 +1,6 @@
 import { normalizeLLMPath } from './path-normalizer';
 import { isDesktopMode } from '@bing/platform/env';
+import { extractSessionIdFromOwnerId } from './id-normalization';
 
 /**
  * Strip common sandbox/workspace prefixes from a path.
@@ -299,6 +300,15 @@ export function normalizeSessionPath(sessionId: string, subPath?: string): strin
  * @param sessionId - Optional session ID for web mode
  * @returns The appropriate VFS scope base path
  */
+/**
+ * The default fallback scopePath returned by getVfsScopeBasePath() when
+ * no sessionId is provided in web mode. This is a SENTINEL value meaning
+ * "no session provided" — it is NOT a real session folder, and the path
+ * guard (assertScopePathMatchesSessionId) must skip its check when it sees
+ * this value to avoid false-positive SessionPathMismatchError on app open.
+ */
+export const DEFAULT_FALLBACK_SCOPE_PATH = 'workspace/sessions/000';
+
 export function getVfsScopeBasePath(sessionId?: string): string {
   if (isDesktopMode()) {
     // Desktop/CLI mode: use 'workspace' as VFS root - users choose their own workspace
@@ -309,7 +319,7 @@ export function getVfsScopeBasePath(sessionId?: string): string {
     const simpleSessionId = normalizeSessionId(sessionId);
     return `workspace/sessions/${simpleSessionId}`;
   }
-  return 'workspace/sessions/000'; // Default fallback for web mode without session
+  return DEFAULT_FALLBACK_SCOPE_PATH; // Default fallback for web mode without session
 }
 
 /**
@@ -412,4 +422,96 @@ export function getVfsScopePath(options: { sessionId?: string; scopePath?: strin
   }
   // Otherwise derive from sessionId with mode awareness
   return getVfsScopeBasePath(sessionId);
+}
+
+/**
+ * Resolve a scopePath against an ownerId. If the provided scopePath is the
+ * default fallback (workspace/sessions/000) AND the ownerId encodes a real
+ * session, return a scopePath derived from the ownerId's session. Otherwise
+ * return the scopePath unchanged.
+ *
+ * IMPORTANT (Bug #26 hot-fix): the ownerId is considered to "encode a
+ * session" ONLY when it contains a `$` delimiter (e.g. `user$001` or
+ * `anon:USERID$001`). For plain `anon:USERID` ownerIds, NO session is
+ * encoded — the `USERID` portion is the user's identity, not a session.
+ * Such ownerIds get the default fallback kept unchanged; the session is
+ * expected to be determined by the request context (not derived from the
+ * userId). The previous behavior of deriving a session from the userId
+ * portion of `anon:USERID` caused 234 false-positive `SessionPathMismatch`
+ * errors in run.log.
+ *
+ * @param ownerId   VFS owner id (e.g. `anon:1780963912001_a097129a4515a7fa67`)
+ * @param scopePath The request's scopePath (may be the default fallback)
+ * @returns The resolved scopePath, derived from ownerId if the fallback was used
+ *
+ * @example
+ *   resolveScopePathFromOwnerId('anon:1780963912001_a097129a4515a7fa67', 'workspace/sessions/000')
+ *   // → 'workspace/sessions/000' (no `$` → no session encoded; USERID is identity, not session)
+ *
+ *   resolveScopePathFromOwnerId('anon:1780963912001_a097129a4515a7fa67$001', 'workspace/sessions/000')
+ *   // → 'workspace/sessions/001' (composite with `$` → session is derived)
+ *
+ *   resolveScopePathFromOwnerId('user@domain$001', 'workspace/sessions/000')
+ *   // → 'workspace/sessions/001'
+ *
+ *   resolveScopePathFromOwnerId('anon:abc123', 'workspace/sessions/001')
+ *   // → 'workspace/sessions/001' (not the fallback, returned as-is)
+ */
+export function resolveScopePathFromOwnerId(
+  ownerId: string,
+  scopePath: string | undefined,
+): string {
+  if (!scopePath) return scopePath || 'workspace';
+  const normalized = normalizeScopePath(scopePath);
+  if (normalized === 'workspace') return normalized; // root scope, no session
+  if (normalized !== DEFAULT_FALLBACK_SCOPE_PATH) return normalized; // not the fallback
+
+  // The scopePath IS the default fallback. Try to derive a real session
+  // from the ownerId. If the ownerId encodes a session, use it; otherwise
+  // keep the fallback (the guard will skip its check anyway since there's
+  // no ownerSession to compare against).
+  // Reuse the canonical extraction from id-normalization.ts — single source of
+  // truth for ownerId parsing. Handles `anon:<id>`, `anon$<id>`, `<user>$<session>`,
+  // and other formats produced by the auth layer.
+  const ownerSession = ownerId ? extractSessionIdFromOwnerId(ownerId) : null;
+  if (ownerSession) {
+    return `workspace/sessions/${normalizeSessionId(ownerSession)}`;
+  }
+  return normalized;
+}
+
+
+/**
+ * Resolve the scope segment within a filePath. If the filePath starts with
+ * the default fallback (workspace/sessions/000/...) AND the ownerId encodes
+ * a real session (contains a `$` delimiter), rewrite the scope segment to
+ * the ownerId's session. Otherwise return the filePath unchanged.
+ *
+ * IMPORTANT (Bug #26 hot-fix): the ownerId is considered to "encode a
+ * session" ONLY when it contains a `$` delimiter. For plain `anon:USERID`
+ * ownerIds, no session is encoded and the filePath is returned unchanged
+ * (it stays at the default fallback scope). See
+ * `resolveScopePathFromOwnerId` for the full rationale.
+ *
+ * @param ownerId   VFS owner id
+ * @param filePath  The file path (may start with the default fallback scope)
+ * @returns The resolved filePath
+ */
+export function resolveFilePathScopeFromOwnerId(
+  ownerId: string,
+  filePath: string | undefined,
+): string {
+  if (!filePath) return filePath || '';
+  const ownerSession = ownerId ? extractSessionIdFromOwnerId(ownerId) : null;
+  if (!ownerSession) return filePath;
+  // Check if filePath starts with the default fallback scope
+  if (filePath === DEFAULT_FALLBACK_SCOPE_PATH ||
+      filePath.startsWith(DEFAULT_FALLBACK_SCOPE_PATH + '/')) {
+    return filePath.replace(
+      DEFAULT_FALLBACK_SCOPE_PATH,
+      `workspace/sessions/${ownerSession}`,
+      1
+    );
+  }
+  return filePath;
 }

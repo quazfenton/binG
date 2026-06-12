@@ -39,6 +39,15 @@ export interface SessionConfig {
 class DatabaseSessionStore {
   private db: Database.Database | null = null;
   private dbPath: string;
+  /**
+   * Bug #35 (audit) — tracks how many times `initialize()` has been
+   * called on this instance. The audit observed 4 inits in 1 hour,
+   * which strongly suggested either a hot-reload leak or a lifecycle
+   * bug where the previous instance was not closed. The counter is
+   * logged at warn level when > 1 so the regression is visible in
+   * run.log without a separate metric.
+   */
+  public initCount: number = 0;
 
   constructor(dbPath: string = './data/sessions.db') {
     this.dbPath = dbPath;
@@ -48,7 +57,32 @@ class DatabaseSessionStore {
    * Initialize database and create tables
    */
   initialize(): void {
+    this.initCount++;
+    // Bug #35 (audit) — warn on every re-init past the first. If you
+    // see this in production logs, either the singleton is being
+    // recreated (hot-reload, misconfigured module resolution) or
+    // some call site is calling initialize() directly without going
+    // through getDatabaseSessionStore(). A typical healthy run logs
+    // exactly one "Database session store initialized" line.
+    if (this.initCount > 1) {
+      logger.warn(`Database session store re-initialized ${this.initCount} times at ${this.dbPath} — possible lifecycle leak`, {
+        initCount: this.initCount,
+        dbPath: this.dbPath,
+      });
+    }
     try {
+      // Bug #35 (audit) — close any prior connection on this instance
+      // before opening a new one. Without this, a re-init leaves the
+      // previous better-sqlite3 handle open, leaking file descriptors
+      // and risking "database is locked" errors on the old handle.
+      if (this.db) {
+        try {
+          this.db.close();
+        } catch (closeErr: any) {
+          logger.debug('Prior db close during re-init failed (non-fatal)', { error: closeErr.message });
+        }
+        this.db = null;
+      }
       const Database = require('better-sqlite3');
       this.db = new Database(this.dbPath);
 
@@ -65,7 +99,7 @@ class DatabaseSessionStore {
         CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active);
       `);
 
-      logger.info(`Database session store initialized at ${this.dbPath}`);
+      logger.info(`Database session store initialized at ${this.dbPath}`, { initCount: this.initCount });
     } catch (error: any) {
       logger.error('Failed to initialize database:', error.message);
       logger.warn('Session persistence disabled - sessions will be in-memory only');
@@ -298,15 +332,44 @@ class DatabaseSessionStore {
   }
 }
 
-// Singleton instance
-let instance: DatabaseSessionStore | null = null;
+// Singleton instance.
+// Bug #35 (audit) — persist the singleton on `globalThis` so a
+// hot-reload (Next.js dev server) doesn't construct a fresh
+// `DatabaseSessionStore` on every reload. Without this, the
+// audit's "4 inits in 1 hour" symptom recurs in development
+// because each HMR cycle evaluates the module again and `let
+// instance` starts as `null` again. The `__dbSessionStore__`
+// symbol also doubles as a re-init tripwire — if the module is
+// being re-evaluated, the getter now returns the *same* instance
+// the previous module load created, and the re-init warning
+// fires if `initialize()` is called again on it.
+declare global {
+  // eslint-disable-next-line no-var
+  var __dbSessionStore__: DatabaseSessionStore | undefined;
+}
 
 export function getDatabaseSessionStore(): DatabaseSessionStore {
-  if (!instance) {
-    instance = new DatabaseSessionStore();
-    instance.initialize();
+  if (!globalThis.__dbSessionStore__) {
+    globalThis.__dbSessionStore__ = new DatabaseSessionStore();
+    globalThis.__dbSessionStore__.initialize();
   }
-  return instance;
+  return globalThis.__dbSessionStore__;
+}
+
+/**
+ * Bug #35 (audit) — test helper. Resets the singleton so tests can
+ * re-initialize cleanly without leaking DB connections across test
+ * files. Not exported in the production API surface.
+ */
+export function __resetDatabaseSessionStoreForTests(): void {
+  if (globalThis.__dbSessionStore__) {
+    try {
+      globalThis.__dbSessionStore__.close();
+    } catch {
+      // Best-effort close; ignore errors.
+    }
+    globalThis.__dbSessionStore__ = undefined;
+  }
 }
 
 export default DatabaseSessionStore;

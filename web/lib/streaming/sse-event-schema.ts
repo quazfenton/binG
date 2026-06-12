@@ -442,17 +442,28 @@ export function createSSEEmitter(
   abortSignal?: AbortSignal,
 ) {
   const encoder = new TextEncoder();
+  let closed = false;
   const baseEmit = (eventType: SSEEventTypeName, payload: Record<string, unknown>) => {
-    controller.enqueue(encoder.encode(sseEncode(eventType, payload)));
+    if (closed) return;
+    try {
+      controller.enqueue(encoder.encode(sseEncode(eventType, payload)));
+    } catch {
+      closed = true;
+      cleanup();
+    }
+  };
+
+  const cleanup = () => {
+    closed = true;
+    if (heartbeatId) clearInterval(heartbeatId);
   };
 
   if (!abortSignal) return baseEmit;
 
   let lastActivity = Date.now();
-  const heartbeatId = setInterval(() => {
-    // Cleanup on signal abort OR stream close/error
-    if (abortSignal.aborted || controller.desiredSize === null) {
-      clearInterval(heartbeatId);
+  let heartbeatId = setInterval(() => {
+    if (closed || abortSignal.aborted || controller.desiredSize === null) {
+      cleanup();
       return;
     }
     if (Date.now() - lastActivity >= HEARTBEAT_INTERVAL_MS) {
@@ -460,7 +471,7 @@ export function createSSEEmitter(
     }
   }, HEARTBEAT_INTERVAL_MS);
 
-  abortSignal.addEventListener('abort', () => clearInterval(heartbeatId), { once: true });
+  abortSignal.addEventListener('abort', () => cleanup(), { once: true });
 
   return (eventType: SSEEventTypeName, payload: Record<string, unknown>) => {
     lastActivity = Date.now();

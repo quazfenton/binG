@@ -72,6 +72,15 @@ import {
   recordReEval,
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';
+// [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
+// an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
+import { wireConsecutiveToolCapSteer } from './steer-service';
+
+// Mirrors successive-tracker.ts internal constants. The package doesn't
+// export them; keep these in sync with DEFAULT_CONSECUTIVE_TOOL_THRESHOLD = 7
+// and DEFAULT_TOOL_CALL_THRESHOLD = 15 in packages/shared/agent/successive-tracker.ts.
+const STEER_CONSECUTIVE_CAP = 7;
+const STEER_TOTAL_CAP = 15;
 import {
   parseFirstResponseRouting,
   stripRoutingMarkers,
@@ -127,6 +136,18 @@ import {
   ingestAntiPattern,
 } from '@/lib/rag/retrieval';
 import { mem0Add, isMem0Configured } from '@/lib/powers/mem0-power';
+// Bug #39: pre-flight env probe (which npx python3 node npm pnpm ...) is
+// injected into the system prompt ONCE per request so the LLM knows what
+// binaries are available BEFORE it picks a tool. Closes the 3× ENOENT loop
+// on `npx` / `python3` by preventing the LLM from reaching for missing
+// binaries in the first place. The env probe is appended to the existing
+// auto-inject context so all downstream mode handlers pick it up via the
+// same config._autoInjectContext mechanism.
+import { formatAvailableBinariesAsync } from '@/lib/bash/env-probe';
+// Pass-2 cross-cutting theme: record orchestration fallback events so the
+// degradation chain shows when the v1-api text-mode fallback fired. The
+// sessionId is passed through config.conversationId / config.userId / 'default'.
+import { recordDegradation } from '@/lib/observability/degradation-tracker';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
@@ -736,7 +757,7 @@ function extractRawUserTask(userMessage: string): string {
   return task || userMessage.slice(0, 200);
 }
 
-type V1RouteDecision = {
+export type V1RouteDecision = {
   mode: 'v1-api' | 'v1-agent-loop';
   reason: string;
   signals: Record<string, unknown>;
@@ -775,8 +796,35 @@ type ContextualSignals = {
  */
 function deriveContextualSignals(
   conversationHistory?: Array<{ role: string; content: string }>,
+  userMessage?: string,
 ): ContextualSignals {
-  if (!Array.isArray(conversationHistory) || conversationHistory.length === 0) {
+  // Look at assistant + tool + user messages (skip system) AND the current
+  // userMessage — the audit scenario has a 55-char follow-up whose context
+  // can live in the current message (e.g. a user pastes a stack trace or
+  // quotes a [STEER] marker into the same turn) as well as in the prior
+  // history. The classifier must catch both shapes; the regexes below are
+  // strict enough that this broadening does not cause false positives on
+  // ordinary chat messages.
+  const historyCorpus = Array.isArray(conversationHistory) && conversationHistory.length > 0
+    ? conversationHistory
+        .filter((m) => m && m.role && m.role !== 'system')
+        .map((m) => (typeof m.content === 'string' ? m.content : ''))
+        .join('\n')
+    : '';
+  // Intentional broadening: the audit called for "prior conversation state"
+  // signals, but in practice a 55-char follow-up can carry its own context
+  // (user pastes a stack trace, types "[STEER] continue", or quotes a code
+  // fence inline). The regexes are strict enough (fenced code + file
+  // extension for hasCodeContext; sentinel-only for hasReprompt; named-error
+  // keywords for hasErrorContext) that scanning the current turn does not
+  // introduce false positives on casual chat. Test scenarios in
+  // autoclass-turn-aware.test.ts intentionally paste context into userMessage
+  // to lock this behavior in.
+  const corpus = [historyCorpus, userMessage || '']
+    .filter((s) => typeof s === 'string' && s.length > 0)
+    .join('\n');
+
+  if (!corpus) {
     return {
       hasCodeContext: false,
       hasErrorContext: false,
@@ -785,21 +833,25 @@ function deriveContextualSignals(
     };
   }
 
-  // Look at assistant + tool + user messages (skip system).
-  const corpus = conversationHistory
-    .filter((m) => m && m.role && m.role !== 'system')
-    .map((m) => (typeof m.content === 'string' ? m.content : ''))
-    .join('\n');
-
   // hasCodeContext: require BOTH a fenced code block AND a file-extension/path
-  // mention. Either alone is too noisy — a fenced snippet is needed to confirm
-  // this is a programming context, not just a sentence that mentions 'class'.
+  // mention OR a recognized language tag in the fence opener (e.g. ` ```ts `,
+  // ` ```python `). The fenced snippet is what distinguishes a programming
+  // context from a sentence that casually mentions "class" or "function" —
+  // the false-positive test in autoclass-turn-aware.test.ts passes a sentence
+  // with no fenced code and expects hasCodeContext to be false. Accepting
+  // a language tag in the opener covers the headline audit scenario (a
+  // 55-char follow-up after a ` ```ts ` exchange) where the code fence
+  // contains no file mention.
   const hasFencedCode = /```[\s\S]*?```/.test(corpus);
   const hasFileMention =
     /[\w./-]+\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|json|md|css|scss|html|yml|yaml|sql|sh|toml|env)\b/i.test(
       corpus,
     );
-  const hasCodeContext = hasFencedCode && hasFileMention;
+  const hasFencedLanguageTag =
+    /```\s*(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|rb|php|c|cpp|h|json|md|markdown|yaml|yml|sql|sh|bash|html|css|scss|toml)\b/i.test(
+      corpus,
+    );
+  const hasCodeContext = hasFencedCode && (hasFileMention || hasFencedLanguageTag);
 
   const hasErrorContext =
     /\b(error|exception|traceback|stack trace|failed|failure|panic|TypeError|ReferenceError|SyntaxError|RangeError|ENOENT|EACCES|EAGAIN|ETIMEDOUT|ECONNRESET|undefined is not|cannot read|cannot find|unhandled|unhandledrejection)\b/i.test(
@@ -810,12 +862,16 @@ function deriveContextualSignals(
   // field. The latter is broad enough to catch most real tool result shapes
   // (`{"success":true,"output":...}`, `{"bash":{"success":true}}`, etc.) without
   // requiring a nested object that the old regex demanded.
-  const hasToolResultContext = conversationHistory.some(
-    (m) =>
-      m &&
-      (m.role === 'tool' ||
-        (typeof m.content === 'string' && /"success"\s*:/i.test(m.content))),
-  );
+  // Guard against undefined conversationHistory (test scenarios and audit
+  // scenarios can pass only userMessage with no history).
+  const hasToolResultContext = Array.isArray(conversationHistory)
+    ? conversationHistory.some(
+        (m) =>
+          m &&
+          (m.role === 'tool' ||
+            (typeof m.content === 'string' && /"success"\s*:/i.test(m.content))),
+      )
+    : false;
 
   // hasReprompt: only the bracketed sentinels. Phrases like "do NOT retry"
   // or "try a different approach" appear in normal English and caused
@@ -892,7 +948,7 @@ function computeToolingRichness(
  *     intent over real code/workspace. When in doubt, prefer the more resilient
  *     v1-api path.
  */
-function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
+export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   const rawTask = extractRawUserTask(config.userMessage || '').trim();
 
   // Count ALL tools including choose_role — it is a real routing tool with
@@ -904,7 +960,7 @@ function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   );
   const hasExternalTools = externalTools.length > 0;
 
-  const contextual = deriveContextualSignals(config.conversationHistory);
+  const contextual = deriveContextualSignals(config.conversationHistory, config.userMessage);
   const toolingRichness = computeToolingRichness(externalTools);
 
   const signals = {
@@ -1071,6 +1127,25 @@ export async function processUnifiedAgentRequest(
     autoInjectContext = buildAutoInjectUserMessage(userMsg) || '';
   } catch (err: any) {
     log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
+  }
+
+  // Bug #39: pre-flight env probe (which npx python3 node npm pnpm ...). Run
+  // ONCE per request and append to the auto-inject context so every mode
+  // (v1-api, v2-native, desktop, OpenCode SDK, Mastra, progressive build) sees
+  // the same Available Binaries list in its system prompt. The LLM uses this
+  // to avoid reaching for `npx` / `python3` when they aren't on $PATH. Failures
+  // are swallowed (the env probe is best-effort — the bash tool also embeds
+  // the probe result in its ENOENT error message as a fallback).
+  let envProbeSuffix = '';
+  try {
+    envProbeSuffix = await formatAvailableBinariesAsync();
+  } catch (err: any) {
+    log.debug('Env probe skipped at entry point (non-fatal)', { error: err?.message });
+  }
+  if (envProbeSuffix) {
+    autoInjectContext = autoInjectContext
+      ? `${autoInjectContext}\n\n${envProbeSuffix}`
+      : envProbeSuffix;
   }
 
   // Stash auto-inject context for mode handlers that don't use conversationHistory
@@ -1402,11 +1477,24 @@ export async function processUnifiedAgentRequest(
 
     if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
-      
+
       // For orchestrated modes, retry with text-only fallback
       if (mode === 'v1-agent-loop' || mode === 'execution-controller') {
         const fallbackResult = await runV1Api(config);
         log.info('[UnifiedAgent] Phase 2 fallback (text-mode) completed');
+        // Pass-2 cross-cutting theme: record the Phase-2 fallback so the
+        // chain shows when the orchestrator gave up and the LLM had to
+        // complete the request in text mode. Operators can then
+        // distinguish "model succeeded with tools" from "model gave up
+        // and we fell back to text".
+        try {
+          recordDegradation(
+            config.conversationId || config.userId || 'default',
+            'orchestration_fallback',
+            'unified-agent-service',
+            { originalMode: mode, fallbackMode: 'v1-api', phase1Result: 'no-tools' },
+          );
+        } catch { /* best-effort */ }
         return {
           ...fallbackResult,
           metadata: {
@@ -4412,6 +4500,25 @@ async function runV1Orchestrated(
     recordResponse(sessionId, content.length, true);
     
     const healingTrigger = detectHealingTrigger(feedbackContext, content, freshTracker.consecutiveToolCalls);
+
+    // [STEER] Bug #21: when the consecutive/total tool-call cap fires, emit a
+    // steer so the LLM switches to text-mode instead of being silently truncated.
+    // No-op when the cap hasn't been hit (returns null).
+    const capSteer = wireConsecutiveToolCapSteer({
+      consecutive: freshTracker.consecutiveToolCalls,
+      consecutiveThreshold: STEER_CONSECUTIVE_CAP,
+      total: freshTracker.toolCallCount,
+      totalThreshold: STEER_TOTAL_CAP,
+      provider: config.provider,
+      model: config.model,
+    });
+    if (capSteer) {
+      log.info('[STEER] consecutive-tool-cap fired', {
+        consecutive: freshTracker.consecutiveToolCalls,
+        total: freshTracker.toolCallCount,
+      });
+      (config as any)._toolCapSteer = capSteer;
+    }
 
     // FIX: Wire up healingTrigger to actually trigger self-healing paths
     // Previously healingTrigger was detected but only logged, not used to route to healing

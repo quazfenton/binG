@@ -27,6 +27,62 @@ let workspaceVersion = 0;
 let flushBatchResult: { success: boolean; error?: string } = { success: true };
 const deletedPaths: string[] = [];
 
+// Default writeFile mock implementation. Extracted to module level so the
+// initial `vi.mock` install and both beforeEach `mockReset` calls share a
+// single source of truth (previously duplicated 3x). The function closes
+// over the module-level `versionByPath` / `contentByPath` / `workspaceVersion`
+// maps defined above, so vi.mocked(vfs.writeFile).mockImplementation(
+// defaultWriteFileImpl) restores the canonical behavior.
+async function defaultWriteFileImpl(
+  ownerId: string,
+  filePath: string,
+  content: string,
+  _language: string | undefined,
+  options: any,
+) {
+  // NOTE: must use a named 5th parameter — `arguments` is not available
+  // in arrow functions and would silently read `undefined` for the
+  // options object, defeating the OCC check.
+  const expectedVersion = options?.expectedVersion;
+  const strictConcurrency = options?.strictConcurrency;
+  const currentVersion = versionByPath.get(filePath) ?? 0;
+
+  // Bug #25: strict-concurrency block
+  if (strictConcurrency && currentVersion > 0) {
+    const err: any = new Error(`Potential concurrent modification blocked for ${filePath}`);
+    err.name = 'ConcurrentModificationError';
+    err.path = filePath;
+    err.previousVersion = currentVersion;
+    throw err;
+  }
+
+  // Bug #10: optimistic-concurrency check
+  if (typeof expectedVersion === 'number' && currentVersion !== expectedVersion) {
+    const err: any = new Error(`Version mismatch for ${filePath}`);
+    err.name = 'VersionMismatchError';
+    err.path = filePath;
+    err.expectedVersion = expectedVersion;
+    err.actualVersion = currentVersion;
+    err.attempts = 1;
+    throw err;
+  }
+
+  const newVersion = currentVersion + 1;
+  versionByPath.set(filePath, newVersion);
+  contentByPath.set(filePath, content);
+  workspaceVersion += 1;
+  return {
+    path: filePath,
+    content,
+    language: 'text',
+    size: content.length,
+    version: newVersion,
+    lastModified: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+
 vi.mock('@/lib/virtual-filesystem/index.server', () => ({
   virtualFilesystem: {
     readFile: vi.fn(async (ownerId: string, filePath: string) => {
@@ -44,48 +100,7 @@ vi.mock('@/lib/virtual-filesystem/index.server', () => ({
         createdAt: new Date().toISOString(),
       };
     }),
-    writeFile: vi.fn(async (ownerId: string, filePath: string, content: string, _language: string | undefined, options: any) => {
-      // NOTE: must use a named 5th parameter — `arguments` is not available
-      // in arrow functions and would silently read `undefined` for the
-      // options object, defeating the OCC check.
-      const expectedVersion = options?.expectedVersion;
-      const strictConcurrency = options?.strictConcurrency;
-      const currentVersion = versionByPath.get(filePath) ?? 0;
-
-      // Bug #25: strict-concurrency block
-      if (strictConcurrency && currentVersion > 0) {
-        const err: any = new Error(`Potential concurrent modification blocked for ${filePath}`);
-        err.name = 'ConcurrentModificationError';
-        err.path = filePath;
-        err.previousVersion = currentVersion;
-        throw err;
-      }
-
-      // Bug #10: optimistic-concurrency check
-      if (typeof expectedVersion === 'number' && currentVersion !== expectedVersion) {
-        const err: any = new Error(`Version mismatch for ${filePath}`);
-        err.name = 'VersionMismatchError';
-        err.path = filePath;
-        err.expectedVersion = expectedVersion;
-        err.actualVersion = currentVersion;
-        err.attempts = 1;
-        throw err;
-      }
-
-      const newVersion = currentVersion + 1;
-      versionByPath.set(filePath, newVersion);
-      contentByPath.set(filePath, content);
-      workspaceVersion += 1;
-      return {
-        path: filePath,
-        content,
-        language: 'text',
-        size: content.length,
-        version: newVersion,
-        lastModified: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-      };
-    }),
+    writeFile: vi.fn(defaultWriteFileImpl),
     deletePath: vi.fn(async (ownerId: string, filePath: string) => {
       deletedPaths.push(filePath);
       versionByPath.delete(filePath);
@@ -152,42 +167,7 @@ describe('transactional-vfs: writeWithVersion', () => {
     // Transaction block below).
     const vfs = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
     vi.mocked(vfs.writeFile).mockReset();
-    vi.mocked(vfs.writeFile).mockImplementation(
-      async (ownerId: string, filePath: string, content: string, _language: string | undefined, options: any) => {
-        const expectedVersion = options?.expectedVersion;
-        const strictConcurrency = options?.strictConcurrency;
-        const currentVersion = versionByPath.get(filePath) ?? 0;
-        if (strictConcurrency && currentVersion > 0) {
-          const err: any = new Error(`Potential concurrent modification blocked for ${filePath}`);
-          err.name = 'ConcurrentModificationError';
-          err.path = filePath;
-          err.previousVersion = currentVersion;
-          throw err;
-        }
-        if (typeof expectedVersion === 'number' && currentVersion !== expectedVersion) {
-          const err: any = new Error(`Version mismatch for ${filePath}`);
-          err.name = 'VersionMismatchError';
-          err.path = filePath;
-          err.expectedVersion = expectedVersion;
-          err.actualVersion = currentVersion;
-          err.attempts = 1;
-          throw err;
-        }
-        const newVersion = currentVersion + 1;
-        versionByPath.set(filePath, newVersion);
-        contentByPath.set(filePath, content);
-        workspaceVersion += 1;
-        return {
-          path: filePath,
-          content,
-          language: 'text',
-          size: content.length,
-          version: newVersion,
-          lastModified: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-        };
-      },
-    );
+    vi.mocked(vfs.writeFile).mockImplementation(defaultWriteFileImpl);
   });
 
   it('unconditional write (no expectedVersion) writes and bumps version', async () => {
@@ -356,42 +336,7 @@ describe('transactional-vfs: Transaction', () => {
     // every unconditional write fail).
     const vfs = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
     vi.mocked(vfs.writeFile).mockReset();
-    vi.mocked(vfs.writeFile).mockImplementation(
-      async (ownerId: string, filePath: string, content: string, _language: string | undefined, options: any) => {
-        const expectedVersion = options?.expectedVersion;
-        const strictConcurrency = options?.strictConcurrency;
-        const currentVersion = versionByPath.get(filePath) ?? 0;
-        if (strictConcurrency && currentVersion > 0) {
-          const err: any = new Error(`Potential concurrent modification blocked for ${filePath}`);
-          err.name = 'ConcurrentModificationError';
-          err.path = filePath;
-          err.previousVersion = currentVersion;
-          throw err;
-        }
-        if (typeof expectedVersion === 'number' && currentVersion !== expectedVersion) {
-          const err: any = new Error(`Version mismatch for ${filePath}`);
-          err.name = 'VersionMismatchError';
-          err.path = filePath;
-          err.expectedVersion = expectedVersion;
-          err.actualVersion = currentVersion;
-          err.attempts = 1;
-          throw err;
-        }
-        const newVersion = currentVersion + 1;
-        versionByPath.set(filePath, newVersion);
-        contentByPath.set(filePath, content);
-        workspaceVersion += 1;
-        return {
-          path: filePath,
-          content,
-          language: 'text',
-          size: content.length,
-          version: newVersion,
-          lastModified: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-        };
-      },
-    );
+    vi.mocked(vfs.writeFile).mockImplementation(defaultWriteFileImpl);
   });
 
   it('commit() runs all queued edits and flushes a single batch', async () => {

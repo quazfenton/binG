@@ -23,6 +23,13 @@ import {
   steerFromHunkMismatch,
   steerFromBashError,
   steerFromDroppedEdits,
+  steerFromConsecutiveToolCap,
+  wireConsecutiveToolCapSteer,
+  wireFinishReasonSteer,
+  wireToolResultFalseSteer,
+  wireBashErrorSteer,
+  SteerMetrics,
+  steerMetrics,
   applyNumberedEdits,
   ALL_STEER_TRIGGER_KINDS,
   type SteerTrigger,
@@ -72,6 +79,17 @@ describe('buildSteerPrompt — every trigger kind produces a [STEER] prompt', ()
       dropped_text_mode_edit: {
         kind: 'dropped_text_mode_edit',
         detail: { editNumber: 2, total: 5, path: 'src/foo.ts', reason: 'invalid path' },
+      },
+      consecutive_tool_cap: {
+        kind: 'consecutive_tool_cap',
+        detail: {
+          consecutive: 7,
+          consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+          total: 10,
+          totalThreshold: 15,
+          provider: 'mistral',
+          model: 'mistral-large-latest',
+        },
       },
     };
 
@@ -322,5 +340,185 @@ describe('buildNumberedEditPromptPrefix — system-prompt helper', () => {
     const prefix = buildNumberedEditPromptPrefix();
     expect(prefix).toMatch(/Edit N\/M/);
     expect(prefix).toMatch(/1-based/i);
+  });
+});
+
+describe('steerFromConsecutiveToolCap + wireConsecutiveToolCapSteer — closes #21', () => {
+  it('builds a trigger with the cap counts and provider/model', () => {
+    const t = steerFromConsecutiveToolCap({
+      consecutive: 8,
+      consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+      total: 10,
+      totalThreshold: 15,
+      provider: 'mistral',
+      model: 'mistral-large-latest',
+    });
+    expect(t.kind).toBe('consecutive_tool_cap');
+    if (t.kind === 'consecutive_tool_cap') {
+      expect(t.detail.consecutive).toBe(8);
+      expect(t.detail.total).toBe(10);
+    }
+  });
+
+  it('renders a [STEER] prompt that tells the LLM to switch to text-mode', () => {
+    const prompt = buildSteerPrompt(steerFromConsecutiveToolCap({
+      consecutive: 7,
+      consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+      total: 10,
+      totalThreshold: 15,
+      provider: 'mistral',
+      model: 'mistral-large-latest',
+    }));
+    expect(prompt).toMatch(/^\[STEER\]/);
+    expect(prompt).toMatch(/text-mode/);
+    expect(prompt).toMatch(/7 consecutive/);
+    expect(prompt).toMatch(/10 total/);
+  });
+
+  it('wireConsecutiveToolCapSteer returns null when both counts are under the cap', () => {
+    expect(wireConsecutiveToolCapSteer({
+      consecutive: 3,
+      consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+      total: 5,
+      totalThreshold: 15,
+    })).toBeNull();
+  });
+
+  it('wireConsecutiveToolCapSteer returns a prompt when ONLY total hits the cap (consecutive under)', () => {
+    expect(wireConsecutiveToolCapSteer({
+      consecutive: 5,
+      consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+      total: 15,
+      totalThreshold: 15,
+    })).not.toBeNull(); // total hits the cap
+  });
+
+  it('wireConsecutiveToolCapSteer returns a prompt when consecutive hits the cap', () => {
+    const prompt = wireConsecutiveToolCapSteer({
+      consecutive: 7,
+      consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+      total: 7,
+      totalThreshold: 15,
+    });
+    expect(prompt).not.toBeNull();
+    expect(prompt).toMatch(/^\[STEER\]/);
+  });
+
+  it('wireConsecutiveToolCapSteer returns a prompt when total hits the cap', () => {
+    const prompt = wireConsecutiveToolCapSteer({
+      consecutive: 3,
+      consecutiveThreshold: 7, // (mirrors STEER_CONSECUTIVE_CAP)
+      total: 15,
+      totalThreshold: 15,
+    });
+    expect(prompt).not.toBeNull();
+    expect(prompt).toMatch(/^\[STEER\]/);
+  });
+});
+
+describe('wireFinishReasonSteer + wireToolResultFalseSteer + wireBashErrorSteer', () => {
+  it('wireFinishReasonSteer returns null when tools were called', () => {
+    expect(wireFinishReasonSteer({
+      responseText: 'Done',
+      availableTools: 19,
+      toolCallsDone: 3,
+    })).toBeNull();
+  });
+
+  it('wireFinishReasonSteer returns a [STEER] prompt for empty_completion', () => {
+    const prompt = wireFinishReasonSteer({
+      responseText: '',
+      availableTools: 5,
+      provider: 'mistral',
+      model: 'mistral-large-latest',
+      toolCallsDone: 0,
+    });
+    expect(prompt).toMatch(/^\[STEER\].*was empty/);
+  });
+
+  it('wireFinishReasonSteer returns a [STEER] prompt for missing_tool_call', () => {
+    const prompt = wireFinishReasonSteer({
+      responseText: 'I think we should...',
+      availableTools: 19,
+      finishReason: 'stop',
+      toolCallsDone: 0,
+    });
+    expect(prompt).toMatch(/^\[STEER\].*did not call any of the 19 available tools/);
+  });
+
+  it('wireToolResultFalseSteer always returns a [STEER] prompt', () => {
+    const prompt = wireToolResultFalseSteer({
+      tool: 'bash_execute',
+      error: 'permission denied',
+    });
+    expect(prompt).toMatch(/^\[STEER\]/);
+    expect(prompt).toContain('bash_execute');
+    expect(prompt).toContain('permission denied');
+  });
+
+  it('wireBashErrorSteer returns null for non-errno codes', () => {
+    expect(wireBashErrorSteer({
+      command: 'foo',
+      code: 'TYPE_ERROR',
+      tool: 'bash_execute',
+    })).toBeNull();
+  });
+
+  it('wireBashErrorSteer returns a [STEER] prompt for ENOENT', () => {
+    const prompt = wireBashErrorSteer({
+      command: 'python3 main.py',
+      code: 'ENOENT',
+      tool: 'bash_execute',
+    });
+    expect(prompt).toMatch(/^\[STEER\]/);
+    expect(prompt).toContain('ENOENT');
+  });
+});
+
+describe('SteerMetrics — process-singleton counter for [STEER] telemetry', () => {
+  it('starts at zero with all kinds counted as 0', () => {
+    const m = new SteerMetrics();
+    expect(m.total()).toBe(0);
+    const snap = m.snapshot();
+    expect(snap.total).toBe(0);
+    expect(snap.lastFiredAtMs).toBeNull();
+    expect(snap.lastFiredKind).toBeNull();
+    for (const kind of ALL_STEER_TRIGGER_KINDS) {
+      expect(snap.byKind[kind]).toBe(0);
+    }
+  });
+
+  it('records fires and tracks kind + total + lastFiredAtMs', () => {
+    const m = new SteerMetrics();
+    m.recordFire('empty_completion');
+    m.recordFire('empty_completion');
+    m.recordFire('consecutive_tool_cap');
+    expect(m.countOf('empty_completion')).toBe(2);
+    expect(m.countOf('consecutive_tool_cap')).toBe(1);
+    expect(m.countOf('idle_timeout')).toBe(0);
+    expect(m.total()).toBe(3);
+    const snap = m.snapshot();
+    expect(snap.total).toBe(3);
+    expect(snap.lastFiredKind).toBe('consecutive_tool_cap');
+    expect(snap.lastFiredAtMs).not.toBeNull();
+    expect(snap.lastFiredAtMs!).toBeGreaterThan(0);
+  });
+
+  it('reset() clears all counters and the lastFired fields', () => {
+    const m = new SteerMetrics();
+    m.recordFire('idle_timeout');
+    m.reset();
+    expect(m.total()).toBe(0);
+    expect(m.countOf('idle_timeout')).toBe(0);
+    expect(m.snapshot().lastFiredAtMs).toBeNull();
+    expect(m.snapshot().lastFiredKind).toBeNull();
+  });
+
+  it('steerMetrics singleton is shared across imports', () => {
+    // The singleton should be usable and the same instance everywhere.
+    expect(steerMetrics).toBeInstanceOf(SteerMetrics);
+    steerMetrics.reset(); // clean slate for the test
+    wireBashErrorSteer({ command: 'x', code: 'ENOENT', tool: 'bash' });
+    expect(steerMetrics.countOf('enoent_eacces')).toBeGreaterThanOrEqual(1);
   });
 });

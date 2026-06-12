@@ -23,6 +23,19 @@ export async function GET(request: NextRequest) {
       const errorStats = errorHandler.getErrorStats();
       const availableProviders = enhancedLLMService.getAvailableProviders();
 
+      // Bug #8: surface the processMemoryMonitor status so operators can see
+      // soft-throttle/critical crossings and the most recent heap snapshot
+      // path. Importing here (not at module top) keeps the cold-start path
+      // free of the monitor's import graph and lets the monitor auto-start
+      // lazily on first status read.
+      const { processMemoryMonitor } = await import('@/lib/management/process-memory-monitor');
+      const memoryStatus = processMemoryMonitor.getStatus();
+
+      // Bug #11: surface the VFS snapshot cache hit/miss/stale/invalidation
+      // counters so operators can verify the cache is doing its job.
+      const { vfsSnapshotCacheMetrics: vfsCacheMetrics } = await import('@/app/api/filesystem/snapshot/cache-metrics');
+      const snapshotCache = vfsCacheMetrics.snapshot();
+
       return NextResponse.json({
         ...health,
         providers: {
@@ -37,6 +50,15 @@ export async function GET(request: NextRequest) {
         },
         system: {
           memory: process.memoryUsage(),
+          memoryMonitor: memoryStatus,
+          snapshotCache: {
+            ...snapshotCache,
+            // Reuse the metrics object's derived methods instead of inlining
+            // the calculation. The metrics object owns the formula; the
+            // health endpoint just surfaces it.
+            averageExportMs: vfsCacheMetrics.getAverageExportMs(),
+            hitRatio: vfsCacheMetrics.getHitRatio(),
+          },
           nodeVersion: process.version,
           platform: process.platform
         }

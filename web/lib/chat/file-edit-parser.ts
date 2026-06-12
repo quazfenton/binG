@@ -51,7 +51,23 @@ function looksLikeCssValueSegment(segment: string): boolean {
  * NOTE: Trailing slashes ARE allowed for directory paths (e.g., "src/", "components/")
  */
 export function isValidFilePath(path: string, isFolder: boolean = false): boolean {
-  if (!path || path.length === 0) return false;
+  return getPathValidationReason(path, isFolder) === null;
+}
+
+/**
+ * Return a specific, human-readable reason why a path fails validation, or
+ * `null` if the path is valid. Used by call sites that want a precise
+ * corrective signal for the LLM (e.g. `wireInvalidPathSteer`) instead of a
+ * generic "invalid path" message.
+ *
+ * Reasons are intentionally short and specific so the model can self-correct
+ * on retry (e.g. "looks like a CSS value" → drop the trailing `0.3s`).
+ *
+ * @returns null when `path` passes `isValidFilePath(path, isFolder)`; otherwise
+ *   a one-line reason string.
+ */
+export function getPathValidationReason(path: string, isFolder: boolean = false): string | null {
+  if (!path || path.length === 0) return 'empty path';
 
   // CRITICAL: Check the last segment of the path (the actual filename)
   // This catches "workspace/sessions/002/0.3s" where "0.3s" is the invalid part
@@ -59,14 +75,20 @@ export function isValidFilePath(path: string, isFolder: boolean = false): boolea
   const lastSegment = pathSegments[pathSegments.length - 1] || path;
 
   // Reject paths that are clearly CSS values or code snippets (check last segment)
-  if (looksLikeCssValueSegment(lastSegment)) return false;  // e.g., "0.3s", "10px"
-  if (/^[,;:!?()\[\]{}\/]+$/.test(lastSegment)) return false;  // e.g., ",", "/", "("
-  if (/^[+\-*/%&|^~<>]+$/.test(lastSegment)) return false;  // e.g., "=", "+", "-"
+  if (looksLikeCssValueSegment(lastSegment)) {
+    return 'looks like a CSS value (e.g. 0.3s, 10px, 50%)';
+  }
+  if (/^[,;:!?()\[\]{}\/]+$/.test(lastSegment)) {
+    return 'last path segment is punctuation-only (e.g. ",", "/", "(")';
+  }
+  if (/^[+\-*/%&|^~<>]+$/.test(lastSegment)) {
+    return 'last path segment is an operator-only string (e.g. "=", "+", "-")';
+  }
 
   // Paths should NOT contain JSON/object syntax
   if (path.includes('{') || path.includes('}') ||
       path.includes('[') || path.includes(']')) {
-    return false;
+    return 'contains JSON/object syntax (curly or square brackets)';
   }
 
   // For files: should NOT end with special characters
@@ -75,7 +97,7 @@ export function isValidFilePath(path: string, isFolder: boolean = false): boolea
     if (path.endsWith('/') || path.endsWith(':') ||
         path.endsWith(',') || path.endsWith('{') ||
         path.endsWith('<') || path.endsWith('>')) {
-      return false;
+      return 'ends with a reserved character (/, :, ,, {, <, >)';
     }
   }
 
@@ -87,13 +109,15 @@ export function isValidFilePath(path: string, isFolder: boolean = false): boolea
       path.startsWith('$') ||  // SCSS/SASS variables like $transition-fast
       path.startsWith('@') ||  // CSS imports, decorators like @import
       path.startsWith('#')) {  // CSS IDs like #header
-    return false;
+    return 'starts with a reserved character ($, @, #, <, >, {, }, [, ])';
   }
 
   // Must have valid path format (alphanumeric, dots, dashes, underscores, slashes)
-  if (!/^[a-zA-Z0-9_./\-\\]+$/.test(path)) return false;
+  if (!/^[a-zA-Z0-9_./\-\\]+$/.test(path)) {
+    return 'contains invalid characters (only alphanumerics, dots, dashes, underscores, slashes, and backslashes are allowed)';
+  }
 
-  return true;
+  return null;
 }
 
 export function sanitizeExtractedPath(
@@ -369,6 +393,88 @@ export interface FileEdit {
   action?: 'write' | 'delete' | 'patch' | 'mkdir'; // Optional action type for bash commands
   flags?: string; // For sed patches with flags (g, i, m)
   diff?: string; // Optional unified diff for patch operations
+}
+
+// ============================================================================
+// Bug #31 — Per-edit rejection tracking
+//
+// When the text-mode parser extracts N edits from an LLM response and K of
+// them fail validation (invalid path, empty content, dedup collision), the
+// LLM currently has no way to know WHICH edits were dropped. The result: the
+// LLM moves on as if everything worked, and the user ends up with a
+// half-applied file set and no way to know what to retry.
+//
+// The fix: every candidate the parsers encounter is recorded as a
+// `CandidateEdit` with a 1-based `editNumber` and an optional `rejection`.
+// `extractFileEditsWithStatus` returns the rich shape so callers can emit a
+// per-edit steer (`wireFileEditRejectionSteer`) telling the LLM exactly
+// which edits were dropped and why.
+// ============================================================================
+
+/**
+ * Where in the pipeline an edit was dropped. Surfaced to the LLM so it can
+ * self-correct on retry.
+ *
+ * - `extraction`     — failed at parse time (regex matched but JSON/template
+ *                      was malformed; usually streaming cut-off or
+ *                      unbalanced brackets in a template literal).
+ * - `path_validation`— `isValidExtractedPath()` rejected the path. Common
+ *                      cause: the LLM emitted a CSS value, Vue directive,
+ *                      or HTML fragment as the path.
+ * - `empty_content`  — the parsed content was empty (likely streaming
+ *                      cut-off mid-block).
+ * - `dedup`          — a previous candidate (smaller `editNumber`) already
+ *                      wrote the same path. First-wins is the policy.
+ * - `missing_path`   — the parser could not extract a path at all (e.g.
+ *                      an unlabelled batch_write without `path` keys).
+ */
+export type EditRejectionStage =
+  | 'extraction'
+  | 'path_validation'
+  | 'empty_content'
+  | 'dedup'
+  | 'missing_path';
+
+/**
+ * A single dropped edit. Surfaced to the LLM via a [STEER] prompt so the
+ * model can re-issue ONLY the failed edit instead of the whole batch.
+ */
+export interface EditRejection {
+  /** 1-based index of the dropped edit in encounter order. */
+  editNumber: number;
+  /** The path the LLM tried to write, if extractable. */
+  path?: string;
+  /** Short, LLM-actionable reason (≤120 chars; used verbatim in the steer). */
+  reason: string;
+  /** Where the drop happened. */
+  stage: EditRejectionStage;
+}
+
+/**
+ * The full result of parsing an LLM response for file edits. Includes
+ * successful edits and the rejections that would otherwise be silent.
+ */
+export interface FileEditExtractionResult {
+  /** Edits that survived validation + dedup, in encounter order. */
+  edits: FileEdit[];
+  /** Edits that were dropped, in encounter order. */
+  rejections: EditRejection[];
+  /** Total edits encountered by the extractors (`edits.length + rejections.length`). */
+  totalDetected: number;
+}
+
+/**
+ * Internal: a single candidate the extractors emitted. Either survives
+ * (no `rejection`) or is dropped (carries a `rejection` with the reason
+ * and stage). The `editNumber` is stable across the pipeline so a steer
+ * can refer to "Edit 5 of 12 was dropped" even after dedup.
+ */
+interface CandidateEdit {
+  editNumber: number;
+  /** The candidate edit. Null when only the rejection metadata is known. */
+  edit: FileEdit | DeleteEdit | null;
+  /** Set when the candidate was rejected at parse time. */
+  rejection?: { reason: string; stage: EditRejectionStage };
 }
 
 export interface DiffEdit {
@@ -1063,6 +1169,252 @@ function extractToolNameFencedBlocks(content: string): FileEdit[] {
  * usually restatements or examples.
  */
 export function extractFileEdits(content: string): FileEdit[] {
+  // Thin wrapper around `extractFileEditsWithStatus` that discards the
+  // rejection report. Kept for backward compatibility with the 100+
+  // call sites that only need the successful edits.
+  return extractFileEditsWithStatus(content).edits;
+}
+
+/**
+ * Bug #31 — extract edits AND track per-edit rejections.
+ *
+ * Returns the same `FileEdit[]` as `extractFileEdits` (via the `.edits`
+ * field) PLUS a `rejections` array describing every edit the parser
+ * dropped (invalid path, empty content, dedup collision, extraction
+ * failure). Callers use `wireFileEditRejectionSteer({rejections, total})`
+ * to build a [STEER] prompt that tells the LLM which specific edits were
+ * dropped and why, so it can re-issue just the failed edits on the next
+ * turn instead of the whole batch.
+ *
+ * Rejection stages:
+ *   - `extraction`     — regex matched but the body was malformed (e.g.
+ *                        unbalanced brackets, streaming cut-off).
+ *   - `path_validation`— `isValidExtractedPath()` rejected the path. The
+ *                        most common cause: the LLM emitted a CSS value,
+ *                        Vue directive, or HTML fragment as a path.
+ *   - `empty_content`  — the parsed content was empty (likely streaming
+ *                        cut-off mid-block).
+ *   - `dedup`          — a previous candidate (smaller editNumber) wrote
+ *                        the same path. First-wins is the policy.
+ *   - `missing_path`   — the parser could not extract a path at all
+ *                        (e.g. an unlabelled batch_write without `path`).
+ */
+export function extractFileEditsWithStatus(content: string): FileEditExtractionResult {
+  // Run the master extractor to get the successful (dedup'd) edits.
+  const edits = extractFileEditsRaw(content);
+
+  // Shadow pass: re-scan the content for the most common edit formats and
+  // capture raw candidates with their encounter-order editNumber. The
+  // shadow does NOT filter (so it captures the full attempt set); we
+  // re-validate and dedup below to identify what the master extractor
+  // actually kept vs dropped.
+  const rawCandidates = shadowCountEdits(content);
+
+  // Build a set of (path -> winning editNumber) from the successful edits
+  // so we can attribute dedup rejections to the losing editNumbers.
+  const winningEditNumberByPath = new Map<string, number>();
+  for (const raw of rawCandidates) {
+    if (raw.path && !winningEditNumberByPath.has(raw.path)) {
+      // First occurrence in encounter order is the winner.
+      winningEditNumberByPath.set(raw.path, raw.editNumber);
+    }
+  }
+
+  const rejections: EditRejection[] = [];
+  const seenValidPaths = new Set<string>();
+
+  // Re-validate every raw candidate to classify it as applied or dropped.
+  for (const raw of rawCandidates) {
+    const editNumber = raw.editNumber;
+
+    // Stage 1: missing path
+    if (!raw.path || raw.path.trim().length === 0) {
+      rejections.push({
+        editNumber,
+        reason: 'no path extracted from the edit block',
+        stage: 'missing_path',
+      });
+      continue;
+    }
+
+    // Stage 2: path validation
+    if (!isValidExtractedPath(raw.path)) {
+      rejections.push({
+        editNumber,
+        path: raw.path,
+        reason: `path "${truncate(raw.path, 60)}" failed validation (likely looks like code, CSS, or HTML rather than a real file path)`,
+        stage: 'path_validation',
+      });
+      continue;
+    }
+
+    // Stage 3: empty content (only for write/patch actions)
+    const isContentRequired = raw.action !== 'delete' && raw.action !== 'mkdir';
+    if (isContentRequired && (!raw.content || raw.content.trim().length === 0)) {
+      rejections.push({
+        editNumber,
+        path: raw.path,
+        reason: 'empty content (likely streaming cut-off mid-block)',
+        stage: 'empty_content',
+      });
+      continue;
+    }
+
+    // Stage 4: dedup collision (a previous candidate wrote the same path)
+    if (seenValidPaths.has(raw.path)) {
+      rejections.push({
+        editNumber,
+        path: raw.path,
+        reason: `duplicate of edit #${winningEditNumberByPath.get(raw.path)} (first-wins policy)`,
+        stage: 'dedup',
+      });
+      continue;
+    }
+
+    seenValidPaths.add(raw.path);
+  }
+
+  // Sanity: totalDetected should equal rawCandidates.length. If the raw
+  // pass found zero candidates, the content had no edit markers at all
+  // and the master extractor should have returned [].
+  const totalDetected = rawCandidates.length;
+  return {
+    edits,
+    rejections,
+    totalDetected,
+  };
+}
+
+/**
+ * Shadow pass: scan the content for raw edit attempts and capture each
+ * with its encounter-order `editNumber`. Returns one entry per detected
+ * edit across the most common formats. The shadow does NOT filter or
+ * dedup, so the result is a faithful count of what the LLM *attempted*,
+ * including attempts that the master extractor would have dropped.
+ *
+ * Used by `extractFileEditsWithStatus` to attribute per-edit rejections
+ * to a specific `editNumber` so the [STEER] prompt can name "Edit 5 of 12
+ * was dropped" instead of a generic "some edits were dropped".
+ */
+function shadowCountEdits(content: string): Array<{
+  editNumber: number;
+  path?: string;
+  content?: string;
+  action?: string;
+}> {
+  const out: Array<{ editNumber: number; path?: string; content?: string; action?: string }> = [];
+  let counter = 0;
+  const track = (path: string | undefined, content: string | undefined, action?: string) => {
+    counter += 1;
+    out.push({ editNumber: counter, path, content, action });
+  };
+
+  // <file_edit path="...">content</file_edit>
+  const compactRe = /<file_edit\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = compactRe.exec(content)) !== null) {
+    track(m[1]?.trim(), m[2]?.trim(), 'write');
+  }
+
+  // <file_write path="...">content</file_write>
+  const fileWriteRe = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi;
+  while ((m = fileWriteRe.exec(content)) !== null) {
+    track(m[1]?.trim(), m[2]?.trim(), 'write');
+  }
+
+  // <path>...</path>...</file_edit> (malformed/legacy)
+  const pathRe = /<path>\s*([^<\s]+)\s*<\/path>\s*([\s\S]*?)<file[\s_]edit\s*\/?>/gi;
+  while ((m = pathRe.exec(content)) !== null) {
+    const p = m[1]?.trim();
+    const c = m[2]?.replace(/\s*<file\s*edit\s*>?\s*$/gi, '').trim();
+    if (p) track(p, c, 'write');
+  }
+
+  // ```file: path\ncontent\n```  (text-mode)
+  const fencedFileRe = /```\s*file\s*:\s*([^\n`]+)\n([\s\S]*?)```/gi;
+  while ((m = fencedFileRe.exec(content)) !== null) {
+    track(m[1]?.trim(), m[2]?.trim(), 'write');
+  }
+
+  // ```mkdir: path```  (mkdir action)
+  const mkdirRe = /```\s*mkdir\s*:\s+([^\s`]+)[\s\S]*?```/gi;
+  while ((m = mkdirRe.exec(content)) !== null) {
+    track(m[1]?.trim(), '', 'mkdir');
+  }
+
+  // ```delete: path```  (delete action)
+  const deleteRe = /```\s*delete\s*:\s+([^\s`]+)[\s\S]*?```/gi;
+  while ((m = deleteRe.exec(content)) !== null) {
+    track(m[1]?.trim(), '', 'delete');
+  }
+
+  // JSON tool calls: { "tool": "write_file", "arguments": { "path": "...", "content": "..." } }
+  const jsonRe = /"tool"\s*:\s*"(write_file|create_file|writeToFile|write_files|batch_write|delete_file|apply_diff|mkdir)"/gi;
+  while ((m = jsonRe.exec(content)) !== null) {
+    const toolName = m[1].toLowerCase();
+    // Try to find the path/content in the surrounding JSON object (best-effort)
+    const window = content.slice(Math.max(0, m.index - 64), Math.min(content.length, m.index + 1024));
+    const pathMatch = window.match(/"path"\s*:\s*"([^"]+)"/);
+    const contentMatch = window.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    const action = toolName === 'delete_file' ? 'delete' : toolName === 'apply_diff' ? 'patch' : toolName === 'mkdir' ? 'mkdir' : 'write';
+    track(pathMatch?.[1]?.trim(), contentMatch?.[1], action);
+  }
+
+  // Flat JSON tool calls: { "tool": "write_file", "path": "...", "content": "..." }
+  // NOTE: The JSON-with-arguments pass above already handles most flat calls
+  // via a 1KB window scan. A separate flat-form pass would double-count, so
+  // it's intentionally omitted here.
+
+  // JS-style tool calls: write_file("path", "content")
+  const jsWriteRe = /\bwrite_file\s*\(\s*["']([^"']+)["']\s*,\s*["']([\s\S]*?)["']\s*\)/gi;
+  while ((m = jsWriteRe.exec(content)) !== null) {
+    track(m[1]?.trim(), m[2], 'write');
+  }
+  const jsDeleteRe = /\bdelete_file\s*\(\s*["']([^"']+)["']\s*\)/gi;
+  while ((m = jsDeleteRe.exec(content)) !== null) {
+    track(m[1]?.trim(), '', 'delete');
+  }
+  const jsMkdirRe = /\bmkdir\s*\(\s*["']([^"']+)["']\s*\)/gi;
+  while ((m = jsMkdirRe.exec(content)) !== null) {
+    track(m[1]?.trim(), '', 'mkdir');
+  }
+
+  // Bash heredoc: cat > path << 'EOF' ... EOF
+  const catRe = /cat\s*(>>?)\s*([^\s<>&|]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n?\3(?:\s|$)/gi;
+  while ((m = catRe.exec(content)) !== null) {
+    const mode = m[1] === '>>' ? 'append' : 'write';
+    track(m[2]?.trim(), m[4]?.trimEnd(), mode);
+  }
+  // mkdir -p path (bash command)
+  const mkdirCmdRe = /mkdir\s+(?:-p\s+)?([^\s&|;<>]+)/gi;
+  while ((m = mkdirCmdRe.exec(content)) !== null) {
+    const p = m[1]?.trim();
+    if (p && !p.startsWith('-')) track(p, '', 'mkdir');
+  }
+  // rm -rf path (bash command)
+  const rmRe = /\brm\s+(?:-[rf]+\s+)?([^\s&|;<>]+)/gi;
+  while ((m = rmRe.exec(content)) !== null) {
+    const p = m[1]?.trim();
+    if (p && !p.startsWith('-')) track(p, '', 'delete');
+  }
+  // sed -i 's/pattern/replacement/' path
+  const sedRe = /\bsed\s+-i\s+['"]s\/([^\/]+)\/([^\/]*)\/['"]\s+([^\s&|;<>]+)/gi;
+  while ((m = sedRe.exec(content)) !== null) {
+    track(m[3]?.trim(), `s/${m[1]}/${m[2]}/`, 'patch');
+  }
+
+  return out;
+}
+
+/** Truncate a string for steer prompts. Centralized so all rejections
+ *  use the same length cap. */
+function truncate(s: string | undefined, max: number): string {
+  if (!s) return '';
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
+}
+
+function extractFileEditsRaw(content: string): FileEdit[] {
   // Fast-path: bail out if no file edit markers are present at all
   // Avoids running all individual extractors (and their sub-operations like maskHeredocs)
   // on content that contains no file edits — common in streaming parse windows

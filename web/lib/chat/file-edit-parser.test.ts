@@ -12,6 +12,8 @@ import {
   sanitizeFileEditTags,
   sanitizeAssistantDisplayContent,
   isValidExtractedPath,
+  getPathValidationReason,
+  isValidFilePath,
 } from './file-edit-parser';
 
 // ============================================================================
@@ -237,5 +239,98 @@ describe('isValidExtractedPath', () => {
   it('rejects paths with special ending chars', () => {
     expect(isValidExtractedPath('file.txt/')).toBe(false);
     expect(isValidExtractedPath('file.txt,')).toBe(false);
+  });
+});
+
+// ============================================================================
+// getPathValidationReason — specific reason strings used by wireInvalidPathSteer
+// ============================================================================
+
+describe('getPathValidationReason', () => {
+  it('returns null for valid file paths', () => {
+    expect(getPathValidationReason('src/index.ts')).toBeNull();
+    expect(getPathValidationReason('package.json')).toBeNull();
+    expect(getPathValidationReason('components/Button.tsx')).toBeNull();
+    expect(getPathValidationReason('src/lib/utils/helper.ts')).toBeNull();
+  });
+
+  it('returns null for valid folder paths (trailing slash allowed)', () => {
+    expect(getPathValidationReason('src/', true)).toBeNull();
+    expect(getPathValidationReason('components/', true)).toBeNull();
+  });
+
+  it('returns "empty path" for empty / nullish input', () => {
+    expect(getPathValidationReason('')).toBe('empty path');
+  });
+
+  it('identifies CSS-value last segments', () => {
+    const reason = getPathValidationReason('workspace/sessions/002/0.3s');
+    expect(reason).toBe('looks like a CSS value (e.g. 0.3s, 10px, 50%)');
+    expect(getPathValidationReason('10px')).toBe('looks like a CSS value (e.g. 0.3s, 10px, 50%)');
+    expect(getPathValidationReason('50%')).toBe('looks like a CSS value (e.g. 0.3s, 10px, 50%)');
+  });
+
+  it('identifies punctuation-only last segments', () => {
+    expect(getPathValidationReason(',')).toMatch(/punctuation-only/);
+    expect(getPathValidationReason('src/foo/(')).toMatch(/punctuation-only/);
+  });
+
+  it('identifies operator-only last segments', () => {
+    // `=` is not in the operator char-set [+\-*/%&|^~<>], so it falls through
+    // to the invalid-characters check; use a real operator like `+` here.
+    expect(getPathValidationReason('+')).toMatch(/operator-only/);
+    expect(getPathValidationReason('src/foo/+')).toMatch(/operator-only/);
+  });
+
+  it('identifies JSON/object syntax in path', () => {
+    const reason = getPathValidationReason('src/{name}.ts');
+    expect(reason).toBe('contains JSON/object syntax (curly or square brackets)');
+    expect(getPathValidationReason('{"path":"foo"}')).toBe('contains JSON/object syntax (curly or square brackets)');
+  });
+
+  it('identifies paths ending with reserved characters (files only)', () => {
+    expect(getPathValidationReason('src/app.ts/')).toMatch(/ends with a reserved character/);
+    expect(getPathValidationReason('src/app.ts:')).toMatch(/ends with a reserved character/);
+  });
+
+  it('identifies paths starting with reserved characters ($, @, #, <, >, {, }, [, ])', () => {
+    expect(getPathValidationReason('$transition-fast')).toMatch(/starts with a reserved character/);
+    expect(getPathValidationReason('@import')).toMatch(/starts with a reserved character/);
+    expect(getPathValidationReason('#header')).toMatch(/starts with a reserved character/);
+    // Use a leading reserved char without a trailing `>` (which would hit the
+    // "ends with a reserved character" check first for files).
+    expect(getPathValidationReason('<fragment')).toMatch(/starts with a reserved character/);
+  });
+
+  it('identifies invalid character sets', () => {
+    // Space is not in the allowed set [a-zA-Z0-9_./\-\\]
+    expect(getPathValidationReason('src/file with space.ts')).toMatch(/contains invalid characters/);
+  });
+
+  it('stays consistent with isValidFilePath() — null iff valid', () => {
+    const samples: Array<[string, boolean]> = [
+      ['src/index.ts', false],
+      ['package.json', false],
+      ['0.3s', false],
+      ['10px', false],
+      ['=', false], // 'contains invalid characters' — '=' is not in the allowed path char-set
+      ['{', false],
+      ['$transition-fast', false],
+      ['@import/styles', false],
+      ['#header', false],
+      ['src/app.ts/', false],
+      ['src/{name}.ts', false],
+      ['{"path":"foo"}', false],
+      ['', false],
+    ];
+    for (const [path, isFolder] of samples) {
+      const reason = getPathValidationReason(path, isFolder);
+      const valid = isValidFilePath(path, isFolder);
+      if (valid) {
+        expect(reason, `expected ${JSON.stringify(path)} to be valid`).toBeNull();
+      } else {
+        expect(reason, `expected ${JSON.stringify(path)} to be invalid with a reason`).not.toBeNull();
+      }
+    }
   });
 });

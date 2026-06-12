@@ -23,6 +23,13 @@ import type { ToolExecutionContext, ToolExecutionResult, LatencyBudget } from '.
 import { getToolManager } from './index';
 import { getArcadeService } from '../integrations/arcade-service';
 import { getNangoService } from '../integrations/nango-service';
+import { assertScopePathMatchesSessionId } from '../virtual-filesystem/session-path-guard';
+import { resolveScopePathFromOwnerId } from '../virtual-filesystem/scope-utils';
+import { wireToolResultFalseSteer, wireCapabilityNotFoundSteer, wireToolNameAliasRewriteSteer, safeSteer } from '../orchestra/steer-service';
+// Pass-2 cross-cutting theme: record tool-name misnamings, capability-not-found,
+// and success:false results into the per-session degradation chain so run.log
+// shows which silent failures contributed to the user reprompting.
+import { recordDegradation } from '../observability/degradation-tracker';
 import path from 'path';
 import os from 'os';
 import { sliceLines } from '../utils/slice-lines';
@@ -31,6 +38,129 @@ const logger = createLogger('Tools:CapabilityRouter');
 
 // Re-export for backward compatibility with consumers importing from '../tools/router'
 export { sliceLines };
+
+// ============================================================================
+// Bug #37: Centralized tool-name alias map.
+//
+// LLMs frequently invent alternate tool names that don't match our canonical
+// capability IDs (which are dotted strings like `file.list`, `bash.execute`).
+// Common offenders seen in run.log:
+//   - list_directory / list_dir / ls / dir   → file.list
+//   - bash / bash_execute / shell / run_cmd  → bash.execute
+//   - read_file  (singular)                  → file.read
+//   - read_files (plural)                    → file.read  (we expose only `file.read`; `read_files` is an MCP-only tool)
+//   - write_file / write                     → file.write
+//   - delete_file / rm / remove              → file.delete
+//   - search / search_files                  → repo.search
+//   - grep / rg / ripgrep                    → repo.search
+//   - edit / patch / str_replace             → file.str_replace
+//
+// The map is consulted at the top of `router.execute()`. On a hit, the alias
+// is silently rewritten to the canonical ID and a [STEER] hint is emitted
+// so the model learns the canonical name for the next turn. Closes #37 by
+// turning a "5× `is not a function` after LLM invents `list_directory`" loop
+// into a single rewrite + one-line steer.
+// ============================================================================
+
+export const TOOL_NAME_ALIASES: Record<string, string> = {
+  // ── VFS file operations ──
+  list_directory: 'file.list',
+  listdirectory: 'file.list',
+  list_dir: 'file.list',
+  listdir: 'file.list',
+  dir: 'file.list',
+  list: 'file.list',
+  ls: 'file.list',
+  read_file: 'file.read',
+  readfile: 'file.read',
+  read: 'file.read',
+  // `read_files` (plural) is an MCP-only convenience; the capability layer
+  // exposes only `file.read` (single). Map the plural to the single.
+  read_files: 'file.read',
+  readfiles: 'file.read',
+  write_file: 'file.write',
+  writefile: 'file.write',
+  write: 'file.write',
+  delete_file: 'file.delete',
+  deletefile: 'file.delete',
+  delete: 'file.delete',
+  rm: 'file.delete',
+  remove: 'file.delete',
+  edit: 'file.str_replace',
+  str_replace: 'file.str_replace',
+  strreplace: 'file.str_replace',
+  patch: 'file.str_replace',
+  batch_write: 'file.batch_write',
+  batchwrite: 'file.batch_write',
+  write_files: 'file.batch_write',
+  writefiles: 'file.batch_write',
+  append: 'file.append',
+  append_file: 'file.append',
+  // ── Sandbox / bash execution ──
+  bash: 'bash.execute',
+  bash_execute: 'bash.execute',
+  bashexecute: 'bash.execute',
+  shell: 'bash.execute',
+  shell_execute: 'bash.execute',
+  run_cmd: 'bash.execute',
+  runcmd: 'bash.execute',
+  exec: 'bash.execute',
+  exec_shell: 'bash.execute',
+  execshell: 'bash.execute',
+  sandbox: 'sandbox.execute',
+  sandbox_execute: 'sandbox.execute',
+  sandboxexecute: 'sandbox.execute',
+  run_sandbox: 'sandbox.execute',
+  // ── Search / repo ──
+  search: 'repo.search',
+  search_files: 'repo.search',
+  searchfiles: 'repo.search',
+  search_code: 'repo.search',
+  searchcode: 'repo.search',
+  grep: 'repo.search',
+  grep_code: 'repo.search',
+  grepcode: 'repo.search',
+  rg: 'repo.search',
+  ripgrep: 'repo.search',
+  find: 'repo.search',
+  // ── Web ──
+  web_search: 'web.search',
+  websearch: 'web.search',
+  search_web: 'web.search',
+  browse: 'web.browse',
+  web_browse: 'web.browse',
+  webbrowse: 'web.browse',
+  fetch: 'web.fetch',
+  web_fetch: 'web.fetch',
+  webfetch: 'web.fetch',
+  // ── Task / memory ──
+  list_tasks: 'task.list',
+  listtasks: 'task.list',
+  create_task: 'task.create',
+  createtask: 'task.create',
+  add_task: 'task.create',
+  store: 'memory.store',
+  retrieve: 'memory.retrieve',
+};
+
+/**
+ * Resolve an LLM-supplied tool name to the canonical capability ID. Returns
+ * `{ canonical, rewritten }` so the caller can emit a [STEER] hint when a
+ * rewrite happened. The lookup is case-insensitive and strips a single
+ * trailing/leading space, so `'List_Directory'` and `'list_directory'`
+ * resolve identically.
+ */
+export function resolveToolNameAlias(rawName: string): { canonical: string; rewritten: boolean } {
+  if (!rawName || typeof rawName !== 'string') {
+    return { canonical: '', rewritten: false };
+  }
+  const key = rawName.trim().toLowerCase();
+  const canonical = TOOL_NAME_ALIASES[key];
+  if (canonical && canonical !== key) {
+    return { canonical, rewritten: true };
+  }
+  return { canonical: key, rewritten: false };
+}
 
 // ============================================================================
 
@@ -239,6 +369,25 @@ class VFSProvider implements CapabilityProvider {
       return { success: false, error: 'Missing ownerId/userId' };
     }
 
+    // Bug #26: pre-tool-call session-id guard. Verify the request's
+    // scopePath (if any) still matches the session id encoded in the
+    // ownerId. Catches the path-drift case where the session folder was
+    // renamed out from under us (workspace/sessions/001 →
+    // workspace/sessions/ai_terminal). The check is a no-op when the
+    // request has no scopePath or when the ownerId has no extractable
+    // session, so it doesn't affect non-session workflows.
+    const scopePath = (input as any)?.scopePath || (context as any)?.scopePath;
+    try {
+      // Resolve the default-fallback scopePath to the ownerId's encoded session
+      // before invoking the guard. Prevents false-positive SessionPathMismatchError
+      // on app open when the scopePath is 'workspace/sessions/000' (the sentinel)
+      // but the ownerId encodes a real session.
+      const resolvedScopePath = resolveScopePathFromOwnerId(ownerId, scopePath);
+      assertScopePathMatchesSessionId(ownerId, resolvedScopePath);
+    } catch (err: any) {
+      return { success: false, error: err?.message ?? String(err) };
+    }
+
     const handler = this.methods[capabilityId];
     if (!handler) {
       return { success: false, error: `Unknown capability: ${capabilityId}` };
@@ -246,8 +395,56 @@ class VFSProvider implements CapabilityProvider {
 
     try {
       const output = await handler(ownerId, input, context);
+      // #22/#29 fix: surface the reason when a handler returns success:false
+      // so the LLM (and run.log) can see WHY the call failed instead of a bare
+      // {success:false}. Also emit a [STEER] hint via wireToolResultFalseSteer
+      // so the orchestrator can re-prompt with a corrective message on
+      // consecutive false results.
+      if (output && typeof output === 'object' && (output as any).success === false) {
+        const errorMsg =
+          (output as any).error ?? (output as any).message ?? 'unknown error';
+        logger.warn('[TOOL] success:false result', { capabilityId, ownerId, error: errorMsg });
+        try {
+          const hint = wireToolResultFalseSteer({
+            tool: capabilityId,
+            error: errorMsg,
+            argsPreview: JSON.stringify(input ?? {}).slice(0, 200),
+          });
+          if (hint) logger.info('[STEER] tool result false', { capabilityId, hint });
+        } catch { /* steer failure must never break the tool result */ }
+        // Pass-2 cross-cutting theme: record the success:false result so
+        // run.log shows which tool was the silent failure.
+        try {
+          recordDegradation(
+            (context as any)?.sessionId || ownerId || 'default',
+            'success_false',
+            'router',
+            { capabilityId, error: errorMsg.slice(0, 200) },
+          );
+        } catch { /* best-effort */ }
+      }
       return { success: true, output };
     } catch (error: any) {
+      // #22/#29 fix: same surface-the-reason treatment for thrown errors.
+      logger.error('Tool execution failed', { capabilityId, ownerId, error: error.message });
+      try {
+        const hint = wireToolResultFalseSteer({
+          tool: capabilityId,
+          error: error.message ?? 'unknown error',
+          argsPreview: JSON.stringify(input ?? {}).slice(0, 200),
+        });
+        if (hint) logger.info('[STEER] tool threw', { capabilityId, hint });
+      } catch { /* steer failure must never break the error path */ }
+      // Pass-2 cross-cutting theme: record the thrown error as success_false
+      // (a thrown error is functionally a success:false from the LLM's POV).
+      try {
+        recordDegradation(
+          (context as any)?.sessionId || ownerId || 'default',
+          'success_false',
+          'router',
+          { capabilityId, error: (error.message ?? 'unknown').slice(0, 200), thrown: true },
+        );
+      } catch { /* best-effort */ }
       return { success: false, error: error.message };
     }
   }
@@ -2321,8 +2518,58 @@ export class CapabilityRouter {
   ): Promise<ToolExecutionResult> {
     await this.initialize();
 
+    // Bug #37: centralized tool-name alias rewrite. If the LLM invented a
+    // tool name like `list_directory` or `bash_execute`, silently rewrite it
+    // to the canonical capability ID and emit a [STEER] hint so the model
+    // learns the canonical name for the next turn. Closes the
+    // "5× `is not a function` after LLM invents `list_directory`" loop.
+    const alias = resolveToolNameAlias(capabilityId);
+    if (alias.rewritten) {
+      logger.info('[CapabilityRouter] tool name aliased', {
+        alias: capabilityId,
+        canonical: alias.canonical,
+        userId: context.userId,
+      });
+      const hint = safeSteer(() => wireToolNameAliasRewriteSteer({
+        alias: capabilityId,
+        canonical: alias.canonical,
+        tool: 'capability_router',
+      }));
+      if (hint) logger.info('[STEER] tool name aliased', { alias: capabilityId, hint });
+      // Pass-2 cross-cutting theme: record the alias rewrite into the
+      // per-session degradation chain so run.log shows the silent misname.
+      try {
+        recordDegradation(
+          (context as any)?.sessionId || context.userId || 'default',
+          'tool_name_alias_rewrite',
+          'router',
+          { alias: capabilityId, canonical: alias.canonical },
+        );
+      } catch { /* best-effort */ }
+      capabilityId = alias.canonical;
+    }
+
     const capability = getCapability(capabilityId);
     if (!capability) {
+      // Bug F: emit a [STEER] hint with the canonical capability names so the
+      // model can self-correct on retry. wireCapabilityNotFoundSteer is
+      // best-effort — a steer helper failure must never break the error path.
+      const hint = safeSteer(() => wireCapabilityNotFoundSteer({
+        capabilityId,
+        availableCapabilities: ALL_CAPABILITIES.map(c => c.id),
+        tool: 'capability_router',
+      }));
+      if (hint) logger.warn('[TOOL] capability not found', { capabilityId, hint });
+      // Pass-2 cross-cutting theme: record the unknown capability into the
+      // per-session degradation chain.
+      try {
+        recordDegradation(
+          (context as any)?.sessionId || context.userId || 'default',
+          'capability_not_found',
+          'router',
+          { capabilityId },
+        );
+      } catch { /* best-effort */ }
       return { success: false, error: `Unknown capability: ${capabilityId}` };
     }
 

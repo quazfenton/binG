@@ -1186,10 +1186,10 @@ export default function TopPanel() {
 
               {/* Mobile: Tab content area with swipe gesture support */}
               <div className="relative z-10 flex-1 overflow-y-auto rounded-b-xl">
-                <Tabs
-                  value={topPanelActiveTab}
-                  className="h-full"
-                >
+        <Tabs
+          value={topPanelActiveTab}
+          className="flex-1 min-h-0 flex flex-col overflow-hidden"
+        >
                   <div
                     className="p-2 h-[calc(100vh-180px)] overflow-y-auto"
                     onTouchStart={(e) => {
@@ -1209,12 +1209,12 @@ export default function TopPanel() {
                       }
                     }}
                   >
-                    <TabsContent value="news" className="h-full mt-0">
+                    <TabsContent value="news" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="News">
                         <NewsTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="plugins" className="h-full mt-0">
+                    <TabsContent value="plugins" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Plugins">
                         <PluginsTab 
                           visibleTabs={visibleTabs}
@@ -1224,37 +1224,37 @@ export default function TopPanel() {
                         />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="marketplace" className="h-full mt-0">
+                    <TabsContent value="marketplace" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Marketplace">
                         <PluginMarketplace />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="workflows" className="h-full mt-0">
+                    <TabsContent value="workflows" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Workflows">
                         <WorkflowsTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="orchestration" className="h-full mt-0">
+                    <TabsContent value="orchestration" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Orchestration">
                         <OrchestrationTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="art-gallery" className="h-full mt-0">
+                    <TabsContent value="art-gallery" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Art Gallery">
                         <ArtGalleryTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="mind-map" className="h-full mt-0">
+                    <TabsContent value="mind-map" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Mind Map">
                         <MindMapTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="prompt-lab" className="h-full mt-0">
+                    <TabsContent value="prompt-lab" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Prompt Lab">
                         <PromptLabTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="music" className="h-full mt-0">
+                    <TabsContent value="music" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Music Visualizer">
                         <MusicVisualizerTab />
                       </TabErrorBoundary>
@@ -1264,32 +1264,32 @@ export default function TopPanel() {
                         <MusicHubTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="immersive" className="h-full mt-0">
+                    <TabsContent value="immersive" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Immersive View">
                         <ImmersiveView />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="flow" className="h-full mt-0">
+                    <TabsContent value="flow" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Flow">
                         <FlowEngine />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="events" className="h-full mt-0">
+                    <TabsContent value="events" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Events">
                         <EventsPanel />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="bookmarks" className="h-full mt-0">
+                    <TabsContent value="bookmarks" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Bookmarks">
                         <BookmarksCurationPlugin />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="code-playground" className="h-full mt-0">
+                    <TabsContent value="code-playground" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Code Playground">
                         <CodePlaygroundTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="monaco-editor" className="h-full mt-0">
+                    <TabsContent value="monaco-editor" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Monaco Editor">
                         <MonacoVFSEditor 
                           initialFilePath={monacoFilePath || undefined}
@@ -1300,37 +1300,37 @@ export default function TopPanel() {
                         />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="broadway-deal-hunter" className="h-full mt-0">
+                    <TabsContent value="broadway-deal-hunter" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Broadway Deal Hunter">
                         <BroadwayDealHunterTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="model-comparison" className="h-full mt-0">
+                    <TabsContent value="model-comparison" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Model Comparison">
                         <ModelComparisonTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="zine-display" className="h-full mt-0">
+                    <TabsContent value="zine-display" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Zine Display">
                         <ZineDisplayTab />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="mcp" className="h-full mt-0">
+                    <TabsContent value="mcp" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="MCP Store">
                         <MCPStore />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="movies" className="h-full mt-0">
+                    <TabsContent value="movies" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Movies">
                         <PStreamEmbedPlugin onClose={closeTopPanel} />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="experience" className="h-full mt-0">
+                    <TabsContent value="experience" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Experience">
                         <ExperiencePanel />
                       </TabErrorBoundary>
                     </TabsContent>
-                    <TabsContent value="movies-old" className="h-full mt-0">
+                    <TabsContent value="movies-old" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Movies">
                         <PStreamEmbedPlugin onClose={closeTopPanel} />
                       </TabErrorBoundary>
@@ -1479,14 +1479,14 @@ export default function TopPanel() {
               <div className="flex-1 overflow-y-auto pointer-events-auto">
                 <Tabs value={topPanelActiveTab} className="h-full">
                   {/* News */}
-                  <TabsContent value="news" className="h-full mt-0">
+                  <TabsContent value="news" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="News">
                       <NewsTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Plugins */}
-                  <TabsContent value="plugins" className="h-full mt-0">
+                  <TabsContent value="plugins" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Plugins">
                       <PluginsTab 
                         visibleTabs={visibleTabs}
@@ -1498,49 +1498,49 @@ export default function TopPanel() {
                   </TabsContent>
 
                   {/* Marketplace */}
-                  <TabsContent value="marketplace" className="h-full mt-0">
+                  <TabsContent value="marketplace" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Marketplace">
                       <PluginMarketplace />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Workflows */}
-                  <TabsContent value="workflows" className="h-full mt-0">
+                  <TabsContent value="workflows" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Workflows">
                       <WorkflowsTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Orchestration */}
-                  <TabsContent value="orchestration" className="h-full mt-0">
+                  <TabsContent value="orchestration" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Orchestration">
                       <OrchestrationTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Art Gallery */}
-                  <TabsContent value="art-gallery" className="h-full mt-0">
+                  <TabsContent value="art-gallery" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Art Gallery">
                       <ArtGalleryTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Mind Map */}
-                  <TabsContent value="mind-map" className="h-full mt-0">
+                  <TabsContent value="mind-map" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Mind Map">
                       <MindMapTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Prompt Lab */}
-                  <TabsContent value="prompt-lab" className="h-full mt-0">
+                  <TabsContent value="prompt-lab" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Prompt Lab">
                       <PromptLabTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Music Visualizer */}
-                  <TabsContent value="music" className="h-full mt-0">
+                  <TabsContent value="music" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Music Visualizer">
                       <MusicVisualizerTab />
                     </TabErrorBoundary>
@@ -1554,26 +1554,26 @@ export default function TopPanel() {
                   </TabsContent>
 
                   {/* Immersive View */}
-                  <TabsContent value="immersive" className="h-full mt-0">
+                  <TabsContent value="immersive" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Immersive View">
                       <ImmersiveView />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Zine Flow Engine */}
-<TabsContent value="flow" className="h-full mt-0">
+<TabsContent value="flow" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Flow">
                       <FlowEngine />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="events" className="h-full mt-0">
+                  <TabsContent value="events" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Events">
                       <EventsPanel />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="bookmarks" className="h-full mt-0">
+                  <TabsContent value="bookmarks" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Bookmarks">
                       <BookmarksCurationPlugin />
                     </TabErrorBoundary>
@@ -1582,14 +1582,14 @@ export default function TopPanel() {
                   {/* Workflows — duplicate removed; primary at line 986 */}
 
                   {/* Code Playground */}
-                  <TabsContent value="code-playground" className="h-full mt-0">
+                  <TabsContent value="code-playground" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Code Playground">
                       <CodePlaygroundTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
                   {/* Monaco Editor */}
-                  <TabsContent value="monaco-editor" className="h-full mt-0">
+                  <TabsContent value="monaco-editor" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Monaco Editor">
                       <MonacoVFSEditor 
                         initialFilePath={monacoFilePath || undefined}
@@ -1619,31 +1619,31 @@ export default function TopPanel() {
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="zine-display" className="h-full mt-0">
+                  <TabsContent value="zine-display" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Zine Display">
                       <ZineDisplayTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="mcp" className="h-full mt-0">
+                  <TabsContent value="mcp" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="MCP Store">
                       <MCPStore />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="movies" className="h-full mt-0">
+                  <TabsContent value="movies" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Movies">
                       <PStreamEmbedPlugin onClose={closeTopPanel} />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="experience" className="h-full mt-0">
+                  <TabsContent value="experience" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Experience">
                       <ExperiencePanel />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  <TabsContent value="movies-old" className="h-full mt-0">
+                  <TabsContent value="movies-old" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Movies">
                       <PStreamEmbedPlugin onClose={closeTopPanel} />
                     </TabErrorBoundary>

@@ -118,10 +118,25 @@ export function useOPFS(
   }, []);
 
   // Update sync status (defined early to avoid hoisting issues)
+  // Only setState when values actually change to prevent infinite re-render loops.
+  // getSyncStatus() returns a new object literal every call, so naive setState
+  // triggers re-renders on every interval tick even when nothing changed.
   const updateSyncStatus = useCallback(() => {
     const status = opfsAdapter.getSyncStatus();
-    setSyncStatus(status);
-    setIsSyncing(status.isSyncing);
+    setSyncStatus(prev => {
+      if (
+        prev.isSyncing === status.isSyncing &&
+        prev.pendingChanges === status.pendingChanges &&
+        prev.lastSyncTime === status.lastSyncTime &&
+        prev.isOnline === status.isOnline &&
+        prev.hasConflicts === status.hasConflicts &&
+        prev.opfsSupported === status.opfsSupported
+      ) {
+        return prev;
+      }
+      return status;
+    });
+    setIsSyncing(prev => prev === status.isSyncing ? prev : status.isSyncing);
   }, []);
 
   // Auto-enable on mount

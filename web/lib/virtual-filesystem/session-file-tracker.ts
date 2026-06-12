@@ -27,6 +27,20 @@ interface FileReference {
   firstSeen: number;
   lastSeen: number;
   mentionCount: number;
+  /**
+   * Bug #33 (audit) — estimated byte cost of the file reference. We use
+   * `path.length` as a cheap proxy so we don't have to read the file
+   * contents on the hot path. The exact value matters less than the
+   * relative ordering it gives the eviction policy.
+   */
+  byteSize: number;
+  /**
+   * Bug #27 (audit) — true for paths under cache/ephemeral roots
+   * (`/tmp/`, `.cache/`, `/node_modules/`, `.log`, `.tmp`). Ephemeral
+   * files are evicted FIRST when the session is at capacity, so a
+   * workspace source file is never lost in favor of a build artefact.
+   */
+  ephemeral: boolean;
 }
 
 /**
@@ -36,6 +50,13 @@ interface SessionEntry {
   files: Map<string, FileReference>;
   lastAccessed: number;
   messageCount: number;
+  /**
+   * Bug #33 (audit) — running sum of `byteSize` across all files in
+   * this session. Compared against `CONFIG.MAX_BYTES_PER_SESSION` on
+   * every insert so we evict proactively instead of letting memory
+   * creep past the cap.
+   */
+  totalBytes: number;
 }
 
 /**
@@ -44,12 +65,31 @@ interface SessionEntry {
 const CONFIG = {
   /** Maximum sessions to track (LRU eviction) */
   MAX_SESSIONS: 100,
-  /** Maximum files per session to track */
-  MAX_FILES_PER_SESSION: 50,
+  /**
+   * Bug #27 (audit) — was 50. Lowered to 25 so the LRU-eviction
+   * pathway is exercised on real sessions; the audit observed 42
+   * files in 17 min with no eviction triggering.
+   */
+  MAX_FILES_PER_SESSION: 25,
+  /**
+   * Bug #33 (audit) — soft cap on total bytes per session. The
+   * tracker uses `path.length` as a proxy for byte cost, so 5 MB
+   * roughly maps to ~5 MB of path-string memory in the worst case.
+   * Set conservatively; the real disk cost is bounded by what the
+   * VFS actually wrote (see #8).
+   */
+  MAX_BYTES_PER_SESSION: 5 * 1024 * 1024,
   /** Session TTL in milliseconds (1 hour) */
   SESSION_TTL_MS: 60 * 60 * 1000,
   /** File pattern regex - matches common code file extensions */
   FILE_PATTERN: /[\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl)/gi,
+  /**
+   * Bug #27 (audit) — paths matching this regex are flagged
+   * `ephemeral: true` and evicted before persistent files when the
+   * session is at capacity. Source files in the workspace are
+   * `ephemeral: false` and survive eviction.
+   */
+  EPHEMERAL_PATH_REGEX: /(?:\/tmp\/|\.cache\/|\.npm\/|\.next\/|\.log|\/node_modules\/|\/dist\/|\.tmp$|\.bak$)/i,
 } as const;
 
 /**
@@ -89,6 +129,7 @@ export async function trackSessionFiles(
         files: new Map(),
         lastAccessed: Date.now(),
         messageCount: 0,
+        totalBytes: 0, // Bug #33 — initialize byte counter for new sessions.
       };
       sessionStore.set(conversationId, entry);
     }
@@ -111,23 +152,32 @@ export async function trackSessionFiles(
       // Extract file references from message content
       for (const match of content.matchAll(CONFIG.FILE_PATTERN)) {
         const filePath = match[0];
-        
+
         // Update or create file reference
         let ref = entry.files.get(filePath);
         if (!ref) {
-          // Evict if at capacity for this session
-          if (entry.files.size >= CONFIG.MAX_FILES_PER_SESSION) {
-            evictLeastMentioned(entry);
+          // Bug #27 + #33 — evict BEFORE inserting if either the
+          // file-count cap or the byte cap would be exceeded. Uses
+          // the new LRU + ephemeral-aware eviction policy.
+          const incomingByteSize = filePath.length;
+          if (
+            entry.files.size >= CONFIG.MAX_FILES_PER_SESSION ||
+            entry.totalBytes + incomingByteSize > CONFIG.MAX_BYTES_PER_SESSION
+          ) {
+            evictForNewFile(entry, incomingByteSize);
           }
           ref = {
             path: filePath,
             firstSeen: Date.now(),
             lastSeen: Date.now(),
             mentionCount: 0,
+            byteSize: incomingByteSize, // Bug #33 — track byte cost.
+            ephemeral: CONFIG.EPHEMERAL_PATH_REGEX.test(filePath), // Bug #27.
           };
           entry.files.set(filePath, ref);
+          entry.totalBytes += incomingByteSize; // Bug #33 — update running sum.
         }
-        
+
         // Update reference metadata
         ref.lastSeen = Date.now();
         ref.mentionCount++;
@@ -175,11 +225,22 @@ export function getSessionFiles(
 }
 
 /**
- * Get detailed file reference metadata for a session
+ * Get detailed file reference metadata for a session.
+ *
+ * Bug #27 + #33 (audit) — extended to expose `byteSize` and
+ * `ephemeral` so callers (and the test surface) can see the new
+ * state. The previous shape omitted these, making the dedup
+ * behavior invisible to UIs and dashboards.
  */
 export function getSessionFileDetails(
   conversationId: string
-): Array<{ path: string; mentionCount: number; lastSeen: number }> {
+): Array<{
+  path: string;
+  mentionCount: number;
+  lastSeen: number;
+  byteSize: number;
+  ephemeral: boolean;
+}> {
   const entry = sessionStore.get(conversationId);
   if (!entry) {
     return [];
@@ -193,6 +254,8 @@ export function getSessionFileDetails(
       path: ref.path,
       mentionCount: ref.mentionCount,
       lastSeen: ref.lastSeen,
+      byteSize: ref.byteSize,
+      ephemeral: ref.ephemeral,
     }));
 }
 
@@ -211,16 +274,46 @@ export function clearAllSessions(): void {
 }
 
 /**
- * Get session statistics (for monitoring/debugging)
+ * Get session statistics (for monitoring/debugging).
+ *
+ * Bug #27 + #33 (audit) — extended to surface both file counts AND
+ * byte counts, broken down by ephemeral vs persistent. The
+ * SessionFileTracker used to expose only `totalFilesTracked`, so the
+ * real memory/disk cost was invisible. Now callers can see the
+ * proportion of ephemeral bytes (cache, build output) and trigger
+ * alerts when the ratio climbs.
  */
-export function getSessionStats(): { activeSessions: number; totalFilesTracked: number } {
+export function getSessionStats(): {
+  activeSessions: number;
+  totalFilesTracked: number;
+  totalBytesTracked: number;
+  ephemeralFiles: number;
+  ephemeralBytes: number;
+  persistentFiles: number;
+  persistentBytes: number;
+} {
   let totalFiles = 0;
+  let totalBytes = 0;
+  let ephemeralFiles = 0;
+  let ephemeralBytes = 0;
   for (const entry of sessionStore.values()) {
     totalFiles += entry.files.size;
+    for (const ref of entry.files.values()) {
+      totalBytes += ref.byteSize;
+      if (ref.ephemeral) {
+        ephemeralFiles++;
+        ephemeralBytes += ref.byteSize;
+      }
+    }
   }
   return {
     activeSessions: sessionStore.size,
     totalFilesTracked: totalFiles,
+    totalBytesTracked: totalBytes,
+    ephemeralFiles,
+    ephemeralBytes,
+    persistentFiles: totalFiles - ephemeralFiles,
+    persistentBytes: totalBytes - ephemeralBytes,
   };
 }
 
@@ -245,21 +338,60 @@ function evictLRU(): void {
 }
 
 /**
- * Evict least mentioned file from a session
+ * Bug #27 (audit) — replace `evictLeastMentioned` with an
+ * ephemeral-first, LRU eviction policy. The old policy evicted the
+ * file with the lowest mention count, which is the OPPOSITE of what
+ * a context tracker wants: a single mention might be the only signal
+ * for an important file. LRU (oldest `lastSeen` first) preserves the
+ * recently-active working set.
+ *
+ * Order of preference (most evictable first):
+ *  1. Ephemeral files, oldest `lastSeen` first (cache/build artefacts
+ *     that don't represent user-intent context).
+ *  2. Persistent files, oldest `lastSeen` first (the actual fallback
+ *     when no ephemeral files exist).
+ *
+ * Strategy: evict-first, then check. Each iteration evicts one
+ * candidate and re-checks whether the incoming file would now fit.
+ * Stops as soon as it would. Logs every eviction at debug level.
  */
-function evictLeastMentioned(entry: SessionEntry): void {
-  let leastKey: string | null = null;
-  let leastCount = Infinity;
-  
-  for (const [key, ref] of entry.files.entries()) {
-    if (ref.mentionCount < leastCount) {
-      leastCount = ref.mentionCount;
-      leastKey = key;
-    }
+function evictForNewFile(entry: SessionEntry, incomingByteSize: number): void {
+  // No-op if there's already room for the incoming file.
+  if (
+    entry.files.size < CONFIG.MAX_FILES_PER_SESSION &&
+    entry.totalBytes + incomingByteSize <= CONFIG.MAX_BYTES_PER_SESSION
+  ) {
+    return;
   }
-  
-  if (leastKey) {
-    entry.files.delete(leastKey);
+
+  // Build eviction candidates: ephemeral first, then by oldest lastSeen.
+  const candidates: FileReference[] = [];
+  for (const ref of entry.files.values()) {
+    candidates.push(ref);
+  }
+  candidates.sort((a, b) => {
+    if (a.ephemeral !== b.ephemeral) return a.ephemeral ? -1 : 1;
+    return a.lastSeen - b.lastSeen;
+  });
+
+  for (const ref of candidates) {
+    // Evict this candidate first.
+    entry.files.delete(ref.path);
+    entry.totalBytes = Math.max(0, entry.totalBytes - ref.byteSize);
+    logger.debug('Evicted file for capacity', {
+      path: ref.path,
+      ephemeral: ref.ephemeral,
+      lastSeen: ref.lastSeen,
+      totalBytesAfter: entry.totalBytes,
+      totalFilesAfter: entry.files.size,
+    });
+    // Now check whether the incoming file would fit. If yes, stop.
+    if (
+      entry.files.size < CONFIG.MAX_FILES_PER_SESSION &&
+      entry.totalBytes + incomingByteSize <= CONFIG.MAX_BYTES_PER_SESSION
+    ) {
+      return;
+    }
   }
 }
 

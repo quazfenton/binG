@@ -1997,7 +1997,7 @@ export default function InteractionPanel({
             </Button>
           )}
 
-          {/* Header - Compact layout */}
+          {/* Header Logo - Compact layout */}
           <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1 ml-10" onDoubleClick={toggleMinimized}>
             <div className="flex items-center gap-2">
               <div className="">
@@ -2772,7 +2772,7 @@ function FileMentionAutocompleteIntegration({
         ref={textareaRef}
         value={input}
         onChange={(e) => handleInputChange(e.target.value)}
-        placeholder="Type your message... (use @ to mention files)"
+        placeholder="          (use @ to mention files)"
         className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
         rows={2}
         onKeyDown={(e) => {
