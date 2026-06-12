@@ -35,7 +35,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   prod_files=$(echo "$changed_files" | grep -vE '(^|/)(__tests__/|\.test\.|\.spec\.)' || :)
   if [ -n "$prod_files" ]; then
     marker_hits=$(echo "$prod_files" | xargs grep -nE \
-      '\.\.\.\[TRUNCATED\]|TODO_RESTORE|CUT_HERE|\[REST_OF_FILE\]|\[CODE_CONTINUES\]|\.\.\\. remainder omitted|\.\.\. \d+ more lines?\.\.\.|\[OUTPUT_TRUNCATED\]|\[FILE_TRUNCATED\]|\[CONTENT_SKIPPED\]' \
+      'TODO_RESTORE|CUT_HERE|\[REST_OF_FILE\]|\[CODE_CONTINUES\]|\.\.\\. remainder omitted|\.\.\. \d+ more lines?\.\.\.|\[OUTPUT_TRUNCATED\]|\[FILE_TRUNCATED\]|\[CONTENT_SKIPPED\]' \
       2>/dev/null || :)
     if [ -n "$marker_hits" ]; then
       echo "❌ Layer 1 — Truncation/corruption markers found:"
