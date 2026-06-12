@@ -923,10 +923,12 @@ export class MCPClient extends EventEmitter {
       this._wsSendRequest(request);
     } else if (this.config.type === 'sse' && this.sseEndpoint) {
       // SSE transport: POST JSON-RPC to the discovered endpoint
+      // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
+      // alias for back-compat with older server configs (deprecated).
       await ssePost(
         this.sseEndpoint,
         JSON.stringify(request) + '\n',
-        this.config.authToken,
+        this.config.bearerToken ?? this.config.authToken,
         this.config.timeout,
       );
     } else if (this.process?.stdin) {
@@ -944,10 +946,12 @@ export class MCPClient extends EventEmitter {
       this._wsSendNotification(notification);
     } else if (this.config.type === 'sse' && this.sseEndpoint) {
       // SSE transport: POST JSON-RPC to the discovered endpoint
+      // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
+      // alias for back-compat with older server configs (deprecated).
       await ssePost(
         this.sseEndpoint,
         JSON.stringify(notification) + '\n',
-        this.config.authToken,
+        this.config.bearerToken ?? this.config.authToken,
         this.config.timeout,
       );
     } else if (this.process?.stdin) {

@@ -458,7 +458,7 @@ The original review called out three themes that didn't get a letter but are rea
 | Theme | Title | Covered by |
 |-------|-------|------------|
 | — | Rate Limit & Quota Handling (Gemini 250K cap, Mistral/MoonshotAI 429s) | **No owning bug** — #34 is sandbox-provider init (different concern). **OPEN follow-up (no # assigned)**: distinguish quota-exceeded from rate-limit, persist quota state, surface a "rotating provider" toast. |
-| — | Path Canonicalization (`workspace/sessions/001/…` vs `sessions/001/…` vs `ai_terminal/…`) | **Partially addressed by #26 — FIXED.** The session-id-loss half is closed (`assertScopePathMatchesSessionId` + `invalidateAllScopeCachesForRename` in `bing/web/lib/virtual-filesystem/session-path-guard.ts`). #19 (tool schema examples) is the remaining OPEN piece. **OPEN follow-up**: centralize one `normalizeSessionPath(input)` and include the canonical root in every system-prompt header. |
+| — | Path Canonicalization (`workspace/sessions/001/…` vs `sessions/001/…` vs `ai_terminal/…`) | **Partially addressed by #26 — FIXED.** The session-id-loss half is closed (`assertScopePathMatchesSessionId` + `invalidateAllScopeCachesForRename` in `bing/web/lib/virtual-filesystem/session-path-guard.ts`). #19 (tool schema examples) is the remaining OPEN piece. 
 | — | Missing Steering / Reprompt Mechanisms (no `[STEER]` log lines anywhere) | A, B, D (pass-1 LLM-stoppage letters), #21, #22, #31 — **OPEN follow-up**: build a unified steer/reprompt service that injects corrective messages for empty completions, missing tool calls, invalid paths, hunk mismatches, env errors, and rate-limit transitions. |
 
 ## Pass-1 Narrative Sub-Bugs (no number; some subsumed above)
@@ -950,7 +950,7 @@ If the grep returns zero importers, the file is dead and safe to `git rm`. If it
 | — | **Binary availability belongs in the system prompt, not the bash tool** — the Bash:Tool can detect ENOENT after the fact, but the LLM needs to know what's available BEFORE it picks a tool. Probe the env once per request and inject `Available binaries: ...` into the system prompt. This single change would prevent ~50% of the #39 ENOENT loops. | #39 |
 
 === APPEND: findings from run.log (lines ~1-900) ===
-Recorded: Orchestrator failures (502 Bad Gateway), provider rate-limits/timeouts (429/TTFT), models not using function-calling (fallback to text-mode), invalid/malformed paths parsed from LLM text, VFS normalizePath ambiguity (isWithin:false but writes resolved to workspace/sessions/<id>), frequent Redis EPIPE errors causing Snapshot publisher/subscriber failures, overly-aggressive retry policy for snapshot SUBSCRIBE, progressive empty edits triggering "skipping empty edit content", provider-specific tool stripping silently removing capabilities, and bulk auto-applies from parsed text without explicit confirmation.
+Recorded: Orchestrator failures (502 Bad Gateway), provider rate-limits/timeouts (429/TTFT),  invalid/malformed paths parsed from LLM text, VFS normalizePath ambiguity (isWithin:false but writes resolved to workspace/sessions/<id>), frequent Redis EPIPE errors causing Snapshot publisher/subscriber failures, overly-aggressive retry policy for snapshot SUBSCRIBE, progressive empty edits triggering "skipping empty edit content", provider-specific tool stripping silently removing capabilities, and bulk auto-applies from parsed text without explicit confirmation.
 
 Status: OPEN. See top of file for detailed suggestions and mitigations.
 
@@ -967,13 +967,7 @@ Status: OPEN. See top of file for detailed suggestions and mitigations.
 - Impact: single-file patch failures while other files are written; inconsistent state and user confusion.
 - Suggested fix: strengthen parser tolerance, sanitize diffs before applying, and fall back to atomic replace with user confirmation when patch cannot be applied.
 
-13) Session folder auto-rename / migration without clear UX
-- Symptom: System renames session folder (oldPath workspace/sessions/001 -> newPath workspace/sessions/src) and states "files would need manual migration".
-- Evidence: log entries at 10:12:43.890–892.
-- Impact: surprising folder rename, migration burden on users, potential path mismatch for subsequent tool calls.
-- Suggested fix: do NOT auto-rename sessions silently. Instead, surface a prompt/notification and offer a one-click migration with rollback; log mapping decisions and keep both aliases for a grace period.
 
-Status: OPEN
 
 === APPEND: observations (lines 900-1240) ===
 14) STALE snapshots and polling warnings
@@ -997,13 +991,7 @@ Status: OPEN
 - Impact: possible OOM, GC pressure, degraded latency and stalls mid-request.
 - Suggested fix: profile memory allocations for large responses and batch writes, add streaming parsers to avoid building huge response buffers, and enforce per-request memory caps.
 
-17) Repeated models not invoking tools (recurring)
-- Symptom: Many provider/model variants did not call tools; the system keeps falling back to text-mode.
-- Evidence: multiple [TOOL-SUMMARY] WARN lines across timestamps.
-- Impact: same brittle text->edit parsing repeated across sessions.
-- Suggested fix: central handling (see earlier) and telemetry to identify which model/provider combos are reliably tool-capable.
 
-Status: OPEN
 
 === APPEND: observations (lines 1360-1636) ===
 18) Disk exhaustion causing CAS and heap-snapshot failures
@@ -1016,7 +1004,7 @@ Status: OPEN
 - Symptom: MCP gateway SSE connection failed repeatedly; Arcade disabled due to 401 (invalid key).
 - Evidence: "SSE connection failed: fetch failed" and "Arcade service disabled due to 401" (multiple timestamps).
 - Impact: many integrated tools unavailable, degraded feature set, and silent capability loss for users.
-- Suggested fix: surface optional-infra degradation to the user, add retry/backoff + cached capability lists, and failover messaging (e.g., tools not available: <list>).
+- Suggested fix: surface optional-infra degradation to the user, add retry/backoff + cached capability lists
 
 Status: OPEN
 
@@ -1039,13 +1027,7 @@ Status: OPEN
 - Impact: Commands appear to succeed (simulated) but do not reflect real FS state and can mislead higher-level orchestrator decisions.
 - Suggested fix: ensure agent uses correct workingDir per-session, expose simulation flag clearly to upstream, and fail fast when requested action can't be simulated accurately.
 
-23) Provider returned empty assistant messages / malformed stream chunks
-- Symptom: Stream error chunk: "Assistant message must have either content or tool_calls, but not none." from Mistral.
-- Evidence: 10:52:05 stream error and 400 status from Vercel AI SDK.
-- Impact: Orchestrator treats provider as failed and retries others; reduces throughput and increases latency.
-- Suggested fix: validate provider responses early, retry providers with small backoff, and record example payloads for provider debugging.
 
-Status: OPEN
 
 === APPEND: observations (lines 2097-4192) ===
 24) VFS Snapshot Broadcaster: EPIPE + single retry limit

@@ -191,6 +191,16 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   const diffLines = diffBody.split("\n");
   if (!diffLines.length) return null;
 
+  // Bug #46: If the diff body has structured `@@` hunk headers, this is
+  // a multi-hunk unified diff. The naive line-add/remove model below
+  // doesn't track hunk line numbers, so it would produce structurally
+  // broken output. Bail out and let the pipeline try `applyUnifiedDiffToContent`
+  // (which uses `parsePatch` + `applyPatch` and handles multi-hunk correctly).
+  const hunkHeaderCount = diffLines.filter(l => l.startsWith("@@")).length;
+  if (hunkHeaderCount > 1) {
+    return null;
+  }
+
   const resultLines: string[] = [];
   for (const line of diffLines) {
     // Skip @@ hunk headers (e.g., "@@ -1,5 +1,6 @@")

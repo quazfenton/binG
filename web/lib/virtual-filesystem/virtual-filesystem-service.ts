@@ -402,7 +402,7 @@ export class VirtualFilesystemService {
         // File was modified very recently - potential conflict
         // In tests: only warn if < 50ms (likely race condition)
         // In production: warn if < 1000ms (potential concurrent user edits)
-        logger.warn('[VFS] Potential concurrent modification:', filePath, {
+        logger.warn('[VFS] Potential concurrent modification', { filePath,
           timeSinceLastWrite,
           previousVersion: previous.version,
           threshold,
@@ -1222,7 +1222,7 @@ export class VirtualFilesystemService {
       return normalizedPath;
     }
 
-    logger.info('[VFS normalizePath] inputPath:', inputPath, 'workspaceRoot:', this.workspaceRoot, 'normalizedPath:', normalizedPath, 'workspacePrefix:', workspacePrefix);
+    logger.info('[VFS normalizePath] inputPath/workspaceRoot/normalizedPath/workspacePrefix', { inputPath, workspaceRoot: this.workspaceRoot, normalizedPath, workspacePrefix });
     
     // Verify the normalized path is within or an ancestor of the workspace root
     // When workspacePrefix is empty (no workspace root set), any non-empty relative path is valid
@@ -1230,7 +1230,7 @@ export class VirtualFilesystemService {
       ? true
       : normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
     const isAncestor = workspacePrefix.startsWith(normalizedPath + '/');
-    logger.info('[VFS normalizePath] isWithin:', isWithin, 'isAncestor:', isAncestor);
+    logger.info('[VFS normalizePath] isWithin/isAncestor', { isWithin, isAncestor });
     if (!isWithin && !isAncestor) {
       throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
     }
@@ -1276,7 +1276,15 @@ export class VirtualFilesystemService {
    * CAS content is fetched on first access and cached in the workspace Map.
    * Subsequent reads serve from memory without CAS lookup.
    */
-  private async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
+  // Bug #14 (audit) follow-up — `ensureWorkspace` is now public so the
+  // snapshot gateway can eagerly initialize a workspace BEFORE returning
+  // WORKSPACE_NOT_READY. Without this, an anonymous user's first snapshot
+  // read returns 202 WORKSPACE_NOT_READY, the client throws, the LLM never
+  // writes, and the workspace stays uninitialized forever — every subsequent
+  // snapshot repeats the same loop. With this, the gateway initializes the
+  // workspace (creating an empty WorkspaceState in the map + DB) and the
+  // NEXT read sees success with 0 files, breaking the loop.
+  public async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     let workspace = this.workspaces.get(normalizedOwnerId);
 

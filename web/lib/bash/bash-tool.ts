@@ -978,6 +978,36 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         } catch (error: any) {
           let errorMessage = error.message || 'Unknown error';
 
+          // Bug #39: If the command was blocked by the safety/router layer
+          // (routeDecision.mode === 'blocked' or 'confirm'), surface a
+          // structured BLOCKED_ENV code so the LLM's upstream logic can
+          // distinguish a safety-block from a generic crash. Without this,
+          // the LLM sees 'Tool failed Unknown error' and can't tell that
+          // the command was refused (not executed). Operators can also
+          // surface a banner with the remediation text.
+          // Null-guard: routeDecision is only assigned when getFilesystemState
+          // is set. If it's null, the command was never routed (default
+          // behavior) and we fall through to the env-error handling below.
+          if (routeDecision != null && (routeDecision.mode === 'blocked' || routeDecision.mode === 'confirm')) {
+            const blockCode = routeDecision.mode === 'blocked' ? 'BLOCKED_ENV' : 'BLOCKED_CONFIRM';
+            errorMessage = `[${blockCode}] ${routeDecision.reason || 'Command blocked by safety policy'}. ` +
+              `Remediation: use a different command, or use write_file/read_file for file operations.`;
+            logger.warn(`[Bash] ${blockCode} — structured denial`, {
+              command: commandToUse.slice(0, 100),
+              reason: routeDecision.reason,
+              code: blockCode,
+            });
+            return {
+              success: false,
+              output: '',
+              error: errorMessage,
+              exitCode: -1,
+              duration: 0,
+              _routed: routeDecision.mode,
+              _blockCode: blockCode,
+            };
+          }
+
           // Detect environment-level errors (ENOENT, EACCES, ENOEXEC, ENOSPC, …)
           // and give a clear diagnostic + [STEER] hint so the LLM stops
           // retrying the same missing binary or hitting the same permission

@@ -1760,6 +1760,7 @@ export class LivePreviewOffloading {
       'flask': 'python',
       'fastapi': 'python',
       'django': 'python',
+      'python': 'python',
       'unknown': 'node',  // Default to Node.js template
     };
 

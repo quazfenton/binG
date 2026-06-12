@@ -319,7 +319,7 @@ export class OPFSGitIntegration {
         },
         onProgress: (progress) => {
           if (progress.phase === 'Receiving objects:') {
-            logger.info('[OPFS Git] Clone progress:', progress.loaded, '/', progress.total);
+            logger.info('[OPFS Git] Clone progress', { loaded: progress.loaded, total: progress.total });
           }
         },
       });
@@ -351,7 +351,7 @@ export class OPFSGitIntegration {
         // Ignore
       }
 
-      logger.info('[OPFS Git] Clone complete:', defaultBranch, commits, 'commits');
+      logger.info('[OPFS Git] Clone complete', { branch: defaultBranch, commits });
 
       return {
         success: true,
@@ -558,7 +558,7 @@ export class OPFSGitIntegration {
       parent: options.parent,
     });
 
-    logger.info('[OPFS Git] Committed:', oid, message);
+    logger.info('[OPFS Git] Committed', { oid, message });
 
     return oid;
   }
@@ -600,7 +600,7 @@ export class OPFSGitIntegration {
         },
       });
 
-      logger.info('[OPFS Git] Push complete to', remote, branch);
+      logger.info('[OPFS Git] Push complete', { remote, branch });
 
       return {
         success: true,
@@ -884,7 +884,7 @@ export class OPFSGitIntegration {
       url,
     });
 
-    logger.info('[OPFS Git] Added remote:', name, url);
+    logger.info('[OPFS Git] Added remote', { name, url });
   }
 
   /**

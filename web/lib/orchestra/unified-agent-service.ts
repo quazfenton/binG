@@ -77,6 +77,10 @@ import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAb
 // Bug #40: per-session orchestration-fallback counter. Incremented in
 // tagResultDegraded so /api/health?detailed can surface the count.
 import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
+// Bug #40: chat-route metrics (orchestrationFallbacks, doubleWriteBlocked,
+// incompleteResponses, injectedSteers) — wired so the new chat-metrics
+// module is actually consumed alongside the legacy degradation tracker.
+import { recordOrchestrationFallback as recordChatOrchestrationFallback } from '@/lib/chat/chat-metrics';
 
 // Mirrors successive-tracker.ts internal constants. The package doesn't
 // export them; keep these in sync with DEFAULT_CONSECUTIVE_TOOL_THRESHOLD = 7
@@ -1650,6 +1654,12 @@ export function tagResultDegraded(
   // is degrading to v1-api text-mode. Fire-and-forget; never throws.
   try {
     incrementOrchestrationFallback(sessionId || 'default');
+  } catch { /* best-effort */ }
+  // Also record in the new chat-metrics module so the cross-process
+  // counter (chatMetrics.orchestrationFallbacks) is consistent with the
+  // per-session degradation tracker. Both are best-effort.
+  try {
+    recordChatOrchestrationFallback(fallbackReason || 'unknown');
   } catch { /* best-effort */ }
 
   return {

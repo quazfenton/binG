@@ -496,6 +496,63 @@ export async function GET(req: NextRequest) {
       // UI message ("Session initializing, please wait…") instead of
       // acting on the empty list.
       if (owner.source === 'anonymous') {
+        // Bug #14 (audit) follow-up — eagerly initialize the workspace
+        // BEFORE returning WORKSPACE_NOT_READY. Without this, an anonymous
+        // user's first snapshot read returns 202, the client throws, the
+        // LLM never writes, and the workspace stays uninitialized forever
+        // — every subsequent snapshot repeats the same loop. With this,
+        // the gateway initializes the workspace (creating an empty
+        // WorkspaceState in the map + DB) and the NEXT read sees success
+        // with 0 files, breaking the loop.
+        try {
+          if (typeof (virtualFilesystem as any).ensureWorkspaceForOwner === 'function') {
+            await (virtualFilesystem as any).ensureWorkspaceForOwner(owner.ownerId);
+            log(`[${requestId}] Eagerly initialized workspace for anonymous owner — breaking WORKSPACE_NOT_READY loop`);
+            // Re-export the now-initialized snapshot and return success
+            // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
+            // file edits on the very next read.
+            const initializedSnapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
+            const initializedFiles = initializedSnapshot.files.filter((file: any) => {
+              const prefix = `${pathFilter}/`;
+              return file.path === pathFilter || file.path.startsWith(prefix);
+            });
+            const initEtag = `"${initializedSnapshot.version}-${initializedSnapshot.updatedAt}"`;
+            snapshotCache.set(cacheKey, {
+              data: {
+                root: initializedSnapshot.root,
+                version: initializedSnapshot.version,
+                updatedAt: initializedSnapshot.updatedAt,
+                path: pathFilter,
+                files: initializedFiles,
+              },
+              timestamp: now,
+              etag: initEtag,
+              version: initializedSnapshot.version,
+            });
+            vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+            const initResponse = NextResponse.json({
+              success: true,
+              data: {
+                root: initializedSnapshot.root,
+                version: initializedSnapshot.version,
+                updatedAt: initializedSnapshot.updatedAt,
+                path: pathFilter,
+                files: initializedFiles,
+                justInitialized: true,
+              },
+              cached: false,
+            }, {
+              headers: {
+                'cache-control': 'private, no-store',
+                'vary': 'Authorization, Cookie',
+                etag: initEtag,
+              },
+            });
+            return withAnonSessionCookie(initResponse, owner);
+          }
+        } catch (initErr: any) {
+          logWarn(`[${requestId}] Eager workspace init failed (falling back to WORKSPACE_NOT_READY): ${initErr?.message}`);
+        }
         log(`[${requestId}] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized`);
         const notReadyResponse = NextResponse.json({
           success: false,

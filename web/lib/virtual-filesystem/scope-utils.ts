@@ -510,7 +510,6 @@ export function resolveFilePathScopeFromOwnerId(
     return filePath.replace(
       DEFAULT_FALLBACK_SCOPE_PATH,
       `workspace/sessions/${ownerSession}`,
-      1
     );
   }
   return filePath;

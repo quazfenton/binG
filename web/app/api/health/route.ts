@@ -36,6 +36,25 @@ export async function GET(request: NextRequest) {
       const { vfsSnapshotCacheMetrics: vfsCacheMetrics } = await import('@/app/api/filesystem/snapshot/cache-metrics');
       const snapshotCache = vfsCacheMetrics.snapshot();
 
+      // Bug #38: surface the cross-process snapshot broadcaster health so
+      // operators can see whether Redis pub/sub is connected, how many EPIPE
+      // reconnects have happened, and the last error timestamp. The broadcaster
+      // is best-effort: if it's degraded, the single-process path still works
+      // — but cross-process invalidation is broken, so the warning is loud.
+      const { getSnapshotBroadcaster } = await import('@/lib/virtual-filesystem/snapshot-broadcaster');
+      let snapshotBroadcasterHealth: Record<string, unknown> = { isRedisBacked: false };
+      try {
+        const broadcaster = getSnapshotBroadcaster();
+        snapshotBroadcasterHealth = {
+          isRedisBacked: broadcaster.isRedisBacked(),
+        };
+      } catch (err) {
+        snapshotBroadcasterHealth = {
+          isRedisBacked: false,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+
       // Bug #40: surface the per-session orchestration-fallback counters
       // (incremented by tagResultDegraded in unified-agent-service.ts).
       // Operators use these to detect chronic orchestrator degradation —
@@ -80,6 +99,7 @@ export async function GET(request: NextRequest) {
             averageExportMs: vfsCacheMetrics.getAverageExportMs(),
             hitRatio: vfsCacheMetrics.getHitRatio(),
           },
+          snapshotBroadcaster: snapshotBroadcasterHealth,
           nodeVersion: process.version,
           platform: process.platform
         }

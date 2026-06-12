@@ -35,6 +35,12 @@
 export interface MCPServerConfig {
   url: string
   name: string
+  /** Bearer token for authenticating requests to this server (preferred). */
+  bearerToken?: string
+  /**
+   * @deprecated Use `bearerToken` instead. Kept for back-compat with existing
+   * configs that pre-date the rename. If both are set, `bearerToken` wins.
+   */
   authToken?: string
   enabled?: boolean
   timeout?: number
@@ -229,8 +235,11 @@ class MCPGatewayImpl implements MCPGateway {
         'Content-Type': 'application/json',
       }
 
-      if (config.authToken) {
-        headers['Authorization'] = `Bearer ${config.authToken}`
+      // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
+      // alias for back-compat with existing server configs (deprecated).
+      const authToken = config.bearerToken ?? config.authToken
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`
       }
 
       if (config.headers) {
@@ -331,8 +340,11 @@ class MCPGatewayImpl implements MCPGateway {
           'Content-Type': 'application/json',
         }
 
-        if (targetServer.config.authToken) {
-          headers['Authorization'] = `Bearer ${targetServer.config.authToken}`
+        // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
+        // alias for back-compat with existing server configs (deprecated).
+        const authToken = targetServer.config.bearerToken ?? targetServer.config.authToken
+        if (authToken) {
+          headers['Authorization'] = `Bearer ${authToken}`
         }
 
         const response = await fetch(`${targetServer.config.url}/tools/call`, {
@@ -385,8 +397,11 @@ class MCPGatewayImpl implements MCPGateway {
             'Content-Type': 'application/json',
           }
 
-          if (connection.config.authToken) {
-            headers['Authorization'] = `Bearer ${connection.config.authToken}`
+          // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
+          // alias for back-compat with existing server configs (deprecated).
+          const authToken = connection.config.bearerToken ?? connection.config.authToken
+          if (authToken) {
+            headers['Authorization'] = `Bearer ${authToken}`
           }
 
           const response = await fetch(`${connection.config.url}/ping`, {
@@ -492,14 +507,16 @@ export function createGatewayFromEnv(): MCPGateway {
   
   if (serversEnv) {
     const serverEntries = serversEnv.split(',').filter(s => s.trim())
-    
+
     for (const entry of serverEntries) {
       const [name, url, authToken] = entry.split('|')
       if (name && url) {
         servers.push({
           name: name.trim(),
           url: url.trim(),
-          authToken: authToken?.trim(),
+          // MCP_SERVERS env pipe-format uses the legacy `authToken` slot;
+          // map it onto the canonical `bearerToken` field.
+          bearerToken: authToken?.trim(),
           enabled: true,
         })
       }
@@ -511,7 +528,10 @@ export function createGatewayFromEnv(): MCPGateway {
     servers.push({
       name: 'gateway',
       url: process.env.MCP_GATEWAY_URL,
-      authToken: process.env.MCP_GATEWAY_AUTH_TOKEN,
+      // MCP_GATEWAY_AUTH_TOKEN is the legacy env var; map it onto the
+      // canonical `bearerToken` field. New deployments should set
+      // MCP_GATEWAY_BEARER_TOKEN instead.
+      bearerToken: process.env.MCP_GATEWAY_BEARER_TOKEN ?? process.env.MCP_GATEWAY_AUTH_TOKEN,
       timeout: parseInt(process.env.MCP_GATEWAY_TIMEOUT_MS || '15000', 10),
       enabled: true,
     })

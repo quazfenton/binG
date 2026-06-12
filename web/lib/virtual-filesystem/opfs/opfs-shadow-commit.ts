@@ -320,7 +320,7 @@ export class OPFSShadowCommitManager {
               restoredFiles++;
             }
           } catch (error: any) {
-            logger.warn('[OPFS ShadowCommit] Failed to restore file:', entry.name, error.message);
+            logger.warn('[OPFS ShadowCommit] Failed to restore file', { name: entry.name, error: error.message });
           }
         }
       }
