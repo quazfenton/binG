@@ -1,0 +1,27 @@
+#!/bin/bash
+# Post-merge hook — re-install git hooks after every `git pull` / `git merge`
+# so .git/hooks/pre-push (and friends) never drift apart from the canonical
+# sources in scripts/git-hooks/ and scripts/git-pre-push.sh.
+#
+# This hook is itself symlinked from .git/hooks/post-merge →
+# scripts/git-hooks/post-merge by scripts/install-hooks.sh.
+#
+# Output is suppressed to avoid noise on every pull; failures are non-fatal
+# (a broken install-hooks.sh should not break the user's merge).
+
+set -euo pipefail
+
+# $0 is the active hook path: .git/hooks/post-merge (a symlink to this file).
+# Resolve the real path, then walk up to the repo root: this file lives at
+# <repo>/scripts/git-hooks/post-merge, so the repo root is three levels up.
+HOOK_REAL="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c "import os,sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")"
+REPO_ROOT="$(cd "$(dirname "${HOOK_REAL}")/../.." && pwd)"
+INSTALL_HOOKS="${REPO_ROOT}/scripts/install-hooks.sh"
+
+if [ ! -f "${INSTALL_HOOKS}" ]; then
+    # Fresh clone where install-hooks.sh hasn't been written yet — nothing to do.
+    exit 0
+fi
+
+# Run silently; don't let a hook-install failure abort the merge.
+bash "${INSTALL_HOOKS}" >/dev/null 2>&1 || true
