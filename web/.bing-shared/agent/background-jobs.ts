@@ -116,7 +116,7 @@ export class BackgroundExecutor extends EventEmitter {
                 stderr += data.toString();
               });
 
-              proc.on('close', (exitCode) => {
+              proc.on('close', (exitCode: number | null) => {
                 resolve({ stdout, stderr, exitCode });
               });
 
@@ -261,7 +261,7 @@ export class BackgroundExecutor extends EventEmitter {
                 stderr += data.toString();
               });
 
-              proc.on('close', (exitCode) => {
+              proc.on('close', (exitCode: number | null) => {
                 resolve({ stdout, stderr, exitCode });
               });
 

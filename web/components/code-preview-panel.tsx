@@ -69,6 +69,7 @@ import {
 } from "@/lib/previews/live-preview-offloading";
 import { createLogger } from '@/lib/utils/logger';
 
+const logger = createLogger('UI:CodePreviewPanel');;
 // Import Preview Error Boundary
 import { PreviewErrorBoundary } from "./preview-error-boundary";
 
@@ -1179,7 +1180,7 @@ export default function CodePreviewPanel({
                 const file = await readFilesystemFile(node.path);
                 files[relativePath] = file.content ?? '';
               } catch (err) {
-                logger.warn('Failed to load file:', node.path, err);
+                logger.warn('Failed to load file', { path: node.path, error: err });
               }
             }
           }
@@ -2447,7 +2448,7 @@ export default function CodePreviewPanel({
           zip.file(relativePath, file.content || '');
         }
         
-        logger.info('[Download] Added', vfsFiles.length, 'files from VFS');
+        logger.info('[Download] Added files from VFS', { count: vfsFiles.length });
       }
     } catch (err) {
       logger.warn('[Download] Failed to get VFS files, using fallback:', err);
@@ -3134,7 +3135,7 @@ createApp(App).mount('#app');` };
                 filesCopy["src/index.jsx"] = { code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
-const logger = createLogger('UI:CodePreviewPanel');
+
 
 function App() {
   return (

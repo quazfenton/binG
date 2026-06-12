@@ -839,7 +839,7 @@ Respond with valid JSON matching this schema:
 
       this.taskGraph = {
         id: `taskgraph-${Date.now()}`,
-        tasks: result.object.tasks.map((t: any, index: number) => ({
+        tasks: result.output.tasks.map((t: any, index: number) => ({
           ...t,
           id: t.id || `task-${index}`,
           status: 'pending' as const,

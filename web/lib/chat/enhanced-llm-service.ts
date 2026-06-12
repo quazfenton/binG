@@ -982,7 +982,7 @@ export class EnhancedLLMService {
             // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
             // into the Vercel AI SDK tool set so the LLM can call them during streaming.
             try {
-              const { getVFSToolDefinitions, getVFSTool, toolContextStore } = await import('../mcp/vfs-mcp-tools');
+              const { getVFSToolDefinitions, getVFSTool, runWithToolContext } = await import('../mcp/vfs-mcp-tools');
               const { tool: createTool } = await import('ai');
               const vfsToolDefs = getVFSToolDefinitions();
               for (const toolDef of vfsToolDefs) {
@@ -1009,7 +1009,7 @@ export class EnhancedLLMService {
                         path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
                       });
 
-                      const result = await toolContextStore.run(
+                      const result = await runWithToolContext(
                         {
                           userId: request.userId || 'anonymous',
                           sessionId: sessionIdFromConv,
@@ -1867,7 +1867,7 @@ export class EnhancedLLMService {
       const toolCallsDone = (result.steps || []).reduce(
         (n, s) => n + ((s as any).toolCalls || []).length, 0
       );
-      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5') || provider === 'mistral' || provider === 'qwen')) {
+      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5'))) {
         try {
           const hint = wireFinishReasonSteer({
             finishReason: 'stop',
@@ -2262,6 +2262,9 @@ export class EnhancedLLMService {
 
       const result = await sandboxBridge.executeCommand(session.sandboxId, validatedCommand.command);
 
+      // Define model from request so the finishReason IIFE can reference it
+      const model = request.model || 'local';
+
       return {
         content: `Sandbox execution completed.\n\nOutput:\n${result.output || 'No output'}${result.exitCode !== undefined && result.exitCode !== 0 ? `\n\nExit code: ${result.exitCode}` : ''}`,
   tokensUsed: 0,
@@ -2269,7 +2272,7 @@ export class EnhancedLLMService {
     const sandboxToolCallsDone = (result.steps || []).reduce(
       (n: number, st: any) => n + ((st.toolCalls || []).length), 0
     );
-    return (result.success && sandboxToolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5')))
+    return (result.success && sandboxToolCallsDone === 0 && (model.includes('mistral-large') || model.includes('qwen3.5')))
       ? 'incomplete-response'
       : result.success ? 'stop' : 'error';
   })(),

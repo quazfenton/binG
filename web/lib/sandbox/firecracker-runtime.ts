@@ -6,7 +6,7 @@
 
 import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess, execFileSync } from 'child_process';
-import { execFile } from 'node:child_process/promises';
+import { execFile } from 'node:child_process';
 import { mkdirSync, existsSync, copyFileSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
 import http from 'node:http';
 import { join } from 'path';

@@ -174,6 +174,14 @@ export async function applyFilesystemEditsFromResponse(input: {
   // STAGED as pending (not silently dropped) so legitimate incremental edits
   // are preserved for LLM review on the next turn. The caller (route.ts)
   // checks result.pendingEdits and prepends a [STEER] review prompt.
+  //
+  // IMPORTANT: `pendingEdits` is declared UP HERE (before the filtering loop
+  // below) so the Bug #48 filter block can populate it. The result object's
+  // `pendingEdits` field is then set from the same array at the bottom of
+  // the function. This was previously a TDZ bug (the filter ran before the
+  // declaration, causing a runtime `ReferenceError: Cannot access
+  // 'pendingEdits' before initialization`).
+  const pendingEdits: NonNullable<FilesystemEditResult['pendingEdits']> = [];
   const alreadyWritten = input.alreadyWrittenPaths;
   if (alreadyWritten && alreadyWritten.size > 0) {
     const blockedWrites: typeof parsedResponse.writes = [];
@@ -197,8 +205,11 @@ export async function applyFilesystemEditsFromResponse(input: {
       chatLogger.info('[PARSER] Bug #48: staged pending write for LLM review', { path: w.path, contentLength: w.content.length });
     }
     for (const d of blockedDiffs) {
-      pendingEdits.push({ path: d.path, content: d.content, type: 'diff', diffBody: d.diff, reason: 'Path already written by structured tool call in this turn' });
-      chatLogger.info('[PARSER] Bug #48: staged pending diff for LLM review', { path: d.path, contentLength: d.content.length });
+      // PatchEdit has { path, diff } — no `content` field. Surface the diff
+      // body in `diffBody` and the path under `path`; the LLM can re-issue
+      // the diff on the next turn if it wants to apply a follow-up edit.
+      pendingEdits.push({ path: d.path, content: d.diff, type: 'diff', diffBody: d.diff, reason: 'Path already written by structured tool call in this turn' });
+      chatLogger.info('[PARSER] Bug #48: staged pending diff for LLM review', { path: d.path, diffLength: d.diff.length });
     }
   }
 
@@ -341,10 +352,9 @@ export async function applyFilesystemEditsFromResponse(input: {
       })
     : null;
 
-  // Bug #48: pending edits (blocked by alreadyWrittenPaths) are staged here
-  // for LLM review on the next turn. Declared before result so the filtering
-  // logic above can populate it, then it's attached to the result below.
-  const pendingEdits: NonNullable<FilesystemEditResult['pendingEdits']> = [];
+  // Bug #48: pending edits (blocked by alreadyWrittenPaths) are declared at
+  // the TOP of this function (above the filter block) so the filter can
+  // populate them, then attached to the result below.
 
   const result: FilesystemEditResult = {
     transactionId: transaction ? transaction.id : null,

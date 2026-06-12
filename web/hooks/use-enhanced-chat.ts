@@ -2185,7 +2185,7 @@ ${stepReprompt}`;
                         }
                         return true;
                       });
-                      logger.info('[Chat] Using server-provided fileEdits for task:', allEdits.length, 'files');
+                      logger.info('[Chat] Using server-provided fileEdits for task', { count: allEdits.length });
                     } else if (eventData.content) {
                       // Fallback: extract from content (may fail with strict validation)
                       const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
@@ -2193,13 +2193,13 @@ ${stepReprompt}`;
                       const writeEdits = extractFileWriteEdits(eventData.content);
                       allEdits = [...compactEdits, ...writeEdits];
                       if (allEdits.length > 0) {
-                        logger.info('[Chat] Extracted fileEdits from task content:', allEdits.length, 'files');
+                        logger.info('[Chat] Extracted fileEdits from task content', { count: allEdits.length });
                       } else {
                         logger.info('[Chat] No fileEdits extracted, content length:', eventData.content.length);
                       }
                     }
 
-                    logger.info('[Chat] Creating refinement message, edits:', allEdits.length, 'content length:', eventData.content?.length);
+                    logger.info('[Chat] Creating refinement message', { editCount: allEdits.length, contentLength: eventData.content?.length });
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -2277,7 +2277,7 @@ ${stepReprompt}`;
                         }
                         return true;
                       });
-                      logger.info('[Chat] Using server-provided fileEdits:', allEdits.length, 'files');
+                      logger.info('[Chat] Using server-provided fileEdits', { count: allEdits.length });
                     } else if (eventData.refinedContent) {
                       // Fallback: extract from content (may fail with strict validation)
                       const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
@@ -2285,11 +2285,11 @@ ${stepReprompt}`;
                       const writeEdits = extractFileWriteEdits(eventData.refinedContent);
                       allEdits = [...compactEdits, ...writeEdits];
                       if (allEdits.length > 0) {
-                        logger.info('[Chat] Extracted fileEdits from content:', allEdits.length, 'files');
+                        logger.info('[Chat] Extracted fileEdits from content', { count: allEdits.length });
                       }
                     }
 
-                    logger.info('[Chat] Creating refinement summary message, edits:', allEdits.length, 'content length:', eventData.refinedContent?.length);
+                    logger.info('[Chat] Creating refinement summary message', { editCount: allEdits.length, contentLength: eventData.refinedContent?.length });
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -2820,7 +2820,7 @@ ${stepReprompt}`;
                 default:
                   // Handle unknown event types gracefully
                   if (process.env.NODE_ENV === 'development') {
-                    logger.warn('Unknown event type:', eventType, eventData);
+                    logger.warn('Unknown event type', { eventType, data: eventData });
                   }
                   break;
               }

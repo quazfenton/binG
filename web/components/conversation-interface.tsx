@@ -844,7 +844,7 @@ export default function ConversationInterface() {
       hasLoadedInitialMessagesRef.current = true;
       // Mark all existing messages as processed to prevent re-processing on page reload
       messages.forEach(m => processedMessageIdsRef.current.add(m.id));
-      logger.info('[ConversationInterface] Initial load - marked', messages.length, 'messages as processed');
+      logger.info('[ConversationInterface] Initial load marked messages as processed', { count: messages.length });
       return;
     }
 
@@ -1589,7 +1589,7 @@ export default function ConversationInterface() {
           readErrorMsg = null; // Clear error for 404 - it's expected for new files
         } else if (readResponse.status === 400 || readResponse.status === 429) {
           // Invalid path or rate limited - skip this file to prevent retry loop
-          logger.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
+          logger.warn('[applyDiffsToFilesystem] Skipping path due to server rejection', { path: resolvedPath, status: readResponse.status });
           // Mark as permanently rejected for 429 (rate limit) or 400 (invalid path)
           rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
           failed[entry.path] = failed[entry.path] || [];
@@ -1633,7 +1633,8 @@ export default function ConversationInterface() {
       const nextContent = patchResult.content;
 
       if (patchResult.strategy !== 'unified') {
-        logger.debug('[applyDiffsToFilesystem] Used strategy:', patchResult.strategy, {
+        logger.debug('[applyDiffsToFilesystem] Used strategy', {
+          strategy: patchResult.strategy,
           path: resolvedPath,
           confidence: patchResult.confidence,
           attempts: patchResult.attempts,

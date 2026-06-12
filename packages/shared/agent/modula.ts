@@ -940,7 +940,7 @@ export async function executeWithOrchestrationMode(
               totalSteps: maxIterations,
               metadata: { progressPercent: progress.progress },
               timestamp: Date.now(),
-            }, request.ownerId, request.sessionId).catch((err: any) => {
+            }, request.ownerId ?? 'unknown', request.sessionId).catch((err: any) => {
               logger.debug('Failed to emit progress event (non-fatal)', { error: err.message });
             });
           };
@@ -958,7 +958,7 @@ export async function executeWithOrchestrationMode(
               nodeRole: step.role,
               currentAction: `Step completed: ${step.role}`,
               timestamp: Date.now(),
-            }, request.ownerId, request.sessionId).catch((err: any) => {
+            }, request.ownerId ?? 'unknown', request.sessionId).catch((err: any) => {
               logger.debug('Failed to emit step event (non-fatal)', { error: err.message });
             });
           };

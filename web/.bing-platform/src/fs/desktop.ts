@@ -36,10 +36,9 @@ class DesktopFs implements FsAdapter {
 
   async readBinaryFile(path: string): Promise<Uint8Array> {
     try {
-      const { readFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      // Handle absolute paths
+      const { readBinaryFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
       const isAbsolute = path.startsWith('/') || /^[a-zA-Z]:\\/.test(path);
-      return await readFile(path, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
+      return await readBinaryFile(path, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
     } catch (err) {
       throw new Error(`Failed to read binary file ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -56,10 +55,9 @@ class DesktopFs implements FsAdapter {
 
   async writeBinaryFile(path: string, data: Uint8Array): Promise<void> {
     try {
-      const { writeFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
-      // Handle absolute paths
+      const { writeBinaryFile, BaseDirectory } = await import('@tauri-apps/plugin-fs');
       const isAbsolute = path.startsWith('/') || /^[a-zA-Z]:\\/.test(path);
-      await writeFile(path, data, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
+      await writeBinaryFile(path, data, { baseDir: isAbsolute ? undefined : BaseDirectory.Home });
     } catch (err) {
       throw new Error(`Failed to write binary file ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -128,9 +126,7 @@ class DesktopFs implements FsAdapter {
       const srcBaseDir = this.getBaseDir(src, BaseDirectory);
       const destBaseDir = this.getBaseDir(dest, BaseDirectory);
 
-      // Tauri v2 supports independent base directories via fromPathBaseDir and toPathBaseDir,
-      // so mixed absolute/relative paths are valid when both base dirs are configured
-      await copyFile(src, dest, { fromPathBaseDir: srcBaseDir, toPathBaseDir: destBaseDir });
+      await copyFile(src, dest);
     } catch (err) {
       throw new Error(`Failed to copy file from ${src} to ${dest}: ${err instanceof Error ? err.message : String(err)}`);
     }

@@ -14,7 +14,7 @@ import {
   listFilesTool,
   writeFileTool,
   applyDiffTool,
-  toolContextStore,
+  runWithToolContext,
 } from './vfs-mcp-tools';
 
 export interface MCPServerOptions {
@@ -74,7 +74,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
       try {
         const effectiveScopePath = context?.scopePath || 'workspace';
         const effectiveSessionId = context?.sessionId;
-        const result = await toolContextStore.run(
+        const result = await runWithToolContext(
           { userId: 'mcp-server', sessionId: effectiveSessionId, scopePath: effectiveScopePath },
           async () => applyDiffTool.execute(params, {
             messages: [],
@@ -114,7 +114,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await toolContextStore.run(
+        const result = await runWithToolContext(
           { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => readFileTool.execute(params, {
             messages: [],
@@ -158,7 +158,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await toolContextStore.run(
+        const result = await runWithToolContext(
           { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => listFilesTool.execute(params, {
             messages: [],
@@ -200,7 +200,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await toolContextStore.run(
+        const result = await runWithToolContext(
           { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => writeFileTool.execute(params, {
             messages: [],
@@ -257,7 +257,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     {},
     async () => {
       try {
-        const result = await toolContextStore.run(
+        const result = await runWithToolContext(
           { userId: 'mcp-server', sessionId: undefined, scopePath: 'workspace' },
           async () => listFilesTool.execute({ path: '.' }, {
             messages: [],

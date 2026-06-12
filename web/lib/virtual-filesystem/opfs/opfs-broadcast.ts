@@ -139,7 +139,7 @@ export class OPFSBroadcast {
     this.broadcastPresence();
 
     this.enabled = true;
-    logger.info('[OPFS Broadcast] Enabled for workspace:', this.options.workspaceId, 'tab:', this.tabId);
+    logger.info('[OPFS Broadcast] Enabled for workspace', { workspaceId: this.options.workspaceId, tabId: this.tabId });
   }
 
   /**

@@ -311,7 +311,7 @@ export class OpencodeV2Provider implements LLMProvider {
         // Parse output and execute tools
         const lines = result.output.split('\n').filter(Boolean);
         
-        logger.info('[OpencodeV2Provider] Parsed', lines.length, 'lines from output');
+        logger.info('[OpencodeV2Provider] Parsed lines from output', { lineCount: lines.length });
         
         for (const line of lines) {
           try {
@@ -373,7 +373,7 @@ export class OpencodeV2Provider implements LLMProvider {
                 }
 
                 logger.info('[OpencodeV2Provider] === TOOL RESULT ===');
-                logger.info('[OpencodeV2Provider] Tool:', toolName, '- Success:', toolResult.success);
+                logger.info('[OpencodeV2Provider] Tool result', { tool: toolName, success: toolResult.success });
                 logger.info('[OpencodeV2Provider] Output length:', toolResult.output?.length ?? 0);
                 logger.info('[OpencodeV2Provider] Exit code:', toolResult.exitCode);
                 logger.info('[OpencodeV2Provider] ===================');

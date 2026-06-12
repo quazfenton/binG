@@ -185,7 +185,8 @@ export class UnifiedAgent {
           // P1 FIX: Use envVars key instead of env
           envVars: this.config.env,
         } as any)
-        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${workspaceSession.provider || this.config.provider}`)
+        const sessionProvider = (workspaceSession as any).provider ?? this.config.provider;
+        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${sessionProvider}`)
       } catch (error: any) {
         log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(
@@ -581,24 +582,26 @@ export class UnifiedAgent {
     y: number
     button?: 'left' | 'right' | 'middle'
   }): Promise<void> {
-    if (!this.desktopHandle) {
+    const handle = this.desktopHandle;
+    if (!handle) {
       throw new Error('Desktop not initialized')
     }
 
-    if (opts.button === 'right') await this.desktopHandle.rightClick(opts.x, opts.y)
-    else if (opts.button === 'middle') await this.desktopHandle.middleClick(opts.x, opts.y)
-    else await this.desktopHandle.leftClick(opts.x, opts.y)
+    if (opts.button === 'right') await handle.rightClick(opts.x, opts.y)
+    else if (opts.button === 'middle') await handle.middleClick(opts.x, opts.y)
+    else await handle.leftClick(opts.x, opts.y)
   }
 
   /**
    * Move mouse to position
    */
   async desktopMove(opts: { x: number; y: number }): Promise<void> {
-    if (!this.desktopHandle) {
+    const handle = this.desktopHandle;
+    if (!handle) {
       throw new Error('Desktop not initialized')
     }
 
-    await this.desktopHandle.moveMouse(opts.x, opts.y)
+    await handle.moveMouse(opts.x, opts.y)
   }
 
   /**

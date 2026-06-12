@@ -220,7 +220,7 @@ export class OPFSShadowCommitManager {
 
       await this.saveMetadata();
 
-      logger.info('[OPFS ShadowCommit] Created commit:', commitId, filesChanged, 'files');
+      logger.info('[OPFS ShadowCommit] Created commit', { commitId, filesChanged });
 
       // Auto-sync to server if enabled
       if (options.autoSync) {
@@ -325,7 +325,7 @@ export class OPFSShadowCommitManager {
         }
       }
 
-      logger.info('[OPFS ShadowCommit] Restored commit:', commitId, restoredFiles, 'files');
+      logger.info('[OPFS ShadowCommit] Restored commit', { commitId, restoredFiles });
 
       return {
         success: true,

@@ -153,6 +153,14 @@ export interface LoopDetectorState {
    * abort reason correctly (Bug #41 reviewer finding).
    */
   failedToolErrors: Map<string, string>;
+  /**
+   * Ordered list of recent failure entries for the loop-abort steer payload.
+   * Each entry mirrors `{ name, error }` from `wireLoopAbortSteer`'s
+   * `failedTools` field so call sites can read the last N failures in
+   * insertion order. Maintained alongside `failedToolErrors` for O(1)
+   * categorization in `buildLoopAbortResult`.
+   */
+  recentFailures: Array<{ name: string; error: string }>;
 }
 
 export function createLoopDetectorState(): LoopDetectorState {
@@ -162,6 +170,7 @@ export function createLoopDetectorState(): LoopDetectorState {
     totalSteps: 0,
     failedToolKeys: new Map(),
     failedToolErrors: new Map(),
+    recentFailures: [],
   };
 }
 
@@ -271,18 +280,26 @@ function buildLoopAbortResult(
 ): { message: string; abort: NonNullable<LoopDetectorResult['abort']> } {
   // Collect the last few failed tool calls (dedup by tool name) so the steer
   // is grounded in REAL failures (with their real error strings), not just a
-  // count + placeholder. The failedToolErrors parallel map is keyed the same
-  // way as failedToolKeys; we look up by full key and split on the FIRST `:`
-  // (which separates the tool name from JSON.stringify(args)). Args can
-  // contain `:` in JSON but the leading tool name is the part that the
-  // categorizeAbortReason classifier keys on, so this split is safe.
+  // count + placeholder. Prefer `recentFailures` (insertion-ordered, capped
+  // at 10) as the source of truth; fall back to `failedToolKeys` iteration
+  // for backwards compatibility with older state objects that predate the
+  // field.
   const failedTools: Array<{ name: string; error: string }> = [];
-  for (const [key] of state.failedToolKeys) {
-    const sep = key.indexOf(':');
-    const name = sep >= 0 ? key.slice(0, sep) : key;
-    const realError = state.failedToolErrors.get(key);
-    failedTools.push({ name, error: realError || 'repeated failure' });
-    if (failedTools.length >= 3) break;
+  if (state.recentFailures && state.recentFailures.length > 0) {
+    // Take the last 3 entries (most recent failures are most relevant).
+    const tail = state.recentFailures.slice(-3);
+    for (const entry of tail) {
+      failedTools.push({ name: entry.name, error: entry.error || 'repeated failure' });
+    }
+  } else {
+    // Fallback: iterate failedToolKeys map (pre-recentFailures state shape).
+    for (const [key] of state.failedToolKeys) {
+      const sep = key.indexOf(':');
+      const name = sep >= 0 ? key.slice(0, sep) : key;
+      const realError = state.failedToolErrors.get(key);
+      failedTools.push({ name, error: realError || 'repeated failure' });
+      if (failedTools.length >= 3) break;
+    }
   }
   // If we have no failed tool keys (shouldn't happen on the 3-consecutive
   // path but guard anyway), fall back to a single placeholder so the steer
@@ -369,6 +386,14 @@ export function recordStepAndCheckLoop(
     // useful (later errors are usually the same root cause re-surfacing).
     if (error && !state.failedToolErrors.has(toolKey)) {
       state.failedToolErrors.set(toolKey, error);
+      // Populate recentFailures (insertion-ordered, dedup by toolKey) so
+      // buildLoopAbortResult and call sites can read the last N failures
+      // in chronological order without iterating the Map.
+      state.recentFailures.push({ name: toolName, error });
+      // Cap at 10 entries to bound memory on long-lived agents.
+      if (state.recentFailures.length > 10) {
+        state.recentFailures.shift();
+      }
     }
 
     // Exact-repeat detection

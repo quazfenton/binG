@@ -109,7 +109,7 @@ export class CodeSandboxProvider implements SandboxProvider {
           'svelte': 'svelte',
         }
         createOpts.id = templateMap[config.language] || this.defaultTemplate || 'node'
-        logger.info('[CodeSandbox] Using template:', createOpts.id, 'for language:', config.language)
+        logger.info('[CodeSandbox] Using template for language', { template: createOpts.id, language: config.language })
       } else if (this.defaultTemplate) {
         createOpts.id = this.defaultTemplate
         logger.info('[CodeSandbox] Using default template:', this.defaultTemplate)

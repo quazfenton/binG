@@ -467,6 +467,23 @@ export class ExecutionGraphEngine {
   }
 
   /**
+   * Delete a graph from the in-memory Map.  Frees the graph object
+   * (nodes, edges, results, abortControllers) for GC.  Idempotent —
+   * returns false if the graph was not in the map.
+   *
+   * Called from SessionManager.destroySession() to close the in-memory
+   * leak: graphs were previously only marked cancelled and never
+   * removed, causing the `this.graphs` Map to grow monotonically with
+   * every session.  See BUGS_AUDIT.md #43 (heap at ~890 MB within
+   * 26% of 1.2 GB soft throttle — primary retention path is this Map).
+   *
+   * @returns true if the graph was found and removed, false otherwise.
+   */
+  deleteGraph(graphId: string): boolean {
+    return this.graphs.delete(graphId);
+  }
+
+  /**
    * Cancel graph execution, aborting any in-flight operations.
    * FIX (Bug 12): Creates and triggers abort signals for running nodes
    * so that downstream operations can clean up properly.

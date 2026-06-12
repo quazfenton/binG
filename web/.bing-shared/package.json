@@ -20,9 +20,11 @@
     }
   },
   "dependencies": {
+    "@bing/platform": "workspace:*",
     "jsonrepair": "^3.14.0"
   },
   "peerDependencies": {
+    "@bing/platform": "*",
     "typescript": "^5.0.0"
   }
 }

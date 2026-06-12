@@ -1340,7 +1340,7 @@ export async function callMCPToolFromAI_SDK(
 
     // NEW: Check if it's a VFS filesystem tool (write_file, read_file, apply_diff, etc.)
     // These are defined in vfs-mcp-tools.ts and execute directly against the VFS.
-    const { vfsTools, toolContextStore, getVFSTool } = await import('./vfs-mcp-tools');
+    const { vfsTools, runWithToolContext, getVFSTool } = await import('./vfs-mcp-tools');
     const vfsTool = getVFSTool(toolName);
     if (vfsTool) {
       // Pre-validate common VFS tool arguments to avoid malformed invocations
@@ -1393,7 +1393,8 @@ export async function callMCPToolFromAI_SDK(
         sessionId: sessionIdFromConv || undefined,
       });
 
-      const result = await toolContextStore.run(        {
+      const result = await runWithToolContext(
+        {
           userId,
           sessionId: args.sessionId ?? sessionIdFromConv ?? 'anonymous',
           scopePath: computedScopePath, // Use session-aware scope path
@@ -1489,7 +1490,7 @@ export async function callMCPToolFromAI_SDK(
       let filesystemState: Record<string, { content?: string; isDirectory?: boolean }> = {};
       // Note: This fetches state once per tool call - in production, cache this at session level
       try {
-        const { virtualFilesystem: vfs } = await import('../virtual-filesystem');
+        const { virtualFilesystem: vfs } = await import('../virtual-filesystem/index.server');
         const listing = await vfs.listDirectory(userId, '/');
         for (const node of listing.nodes || []) {
           const nodePath = `/${node.name}`;

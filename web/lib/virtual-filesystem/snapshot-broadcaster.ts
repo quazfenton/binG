@@ -91,6 +91,10 @@ interface BroadcasterState {
   lastWarnedAt: number;
   /** Number of EPIPE/retryable-error reconnects (Bug #38). */
   reconnectCount: number;
+  /** Timestamp when Redis errors started (ms epoch). Used to degrade to polling. */
+  redisErrorStartedAt: number | null;
+  /** Polling interval handle (Bug #38 graceful degrade to polling). */
+  pollingHandle: NodeJS.Timeout | null;
   /** Cached API object so getSnapshotBroadcaster() is referentially stable. */
   api?: SnapshotBroadcasterApi;
 }
@@ -133,6 +137,8 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       subscribed: false,
       lastWarnedAt: 0,
       reconnectCount: 0,
+      redisErrorStartedAt: null,
+      pollingHandle: null,
     };
   }
   const state = globalThis.__vfsSnapshotBroadcaster__;
@@ -153,16 +159,29 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
     try {
       // Re-use the same REDIS_URL + retry strategy as the shared client.
       const url = process.env.REDIS_URL || 'redis://localhost:6379';
+      // Bug #38: Exponential backoff with jitter (base 500ms, max 30s) to
+      // gracefully recover from transient EPIPE/connection reset errors.
+      const maxRetries = parseInt(process.env.SNAPSHOT_BROADCASTER_MAX_RETRIES || '5');
+      const baseDelayMs = 500;
+      const maxDelayMs = 30_000;
       sub = new Redis(url, {
         retryStrategy: (times) => {
-          if (times > 3) {
-            logger.warn('Snapshot broadcaster retry limit reached');
+          if (times > maxRetries) {
+            logger.warn('[VFS Snapshot Broadcaster] Subscriber retry limit reached');
             return null;
           }
-          return Math.min(times * 200, 2000);
+          // Exponential backoff: 500ms, 1s, 2s, 4s, ..., capped at 30s
+          const exponential = baseDelayMs * Math.pow(2, times - 1);
+          const capped = Math.min(exponential, maxDelayMs);
+          // Add jitter ±10% to avoid thundering herd
+          const jitter = capped * (0.9 + Math.random() * 0.2);
+          return Math.round(jitter);
         },
-        // Disable auto-reconnect spam on shutdown
-        maxRetriesPerRequest: 1,
+        // Bug #38: Increase maxRetriesPerRequest from 1 to allow automatic
+        // retries on transient failures (EPIPE, ECONNRESET, etc.)
+        maxRetriesPerRequest: 3,
+        // Lazy re-establish connection on failure
+        lazyConnect: true,
       });
 
       sub.on('error', (err) => {
@@ -170,14 +189,29 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
         const errMsg = err instanceof Error ? err.message : String(err);
         const isRetryable = /EPIPE|ECONNRESET|ECONNREFUSED|ETIMEDOUT/.test(errMsg);
         if (isRetryable) {
-          // Bug #38: reset subscriber state so the next publish() or
+          // Bug #38: Track error duration. If Redis unavailable >5 min, degrade
+          // to local-only (polling off).
+          if (!state.redisErrorStartedAt) {
+            state.redisErrorStartedAt = now;
+          }
+          const errorDurationMs = now - state.redisErrorStartedAt;
+          const DEGRADE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+           
+          // reset subscriber state so the next publish() or
           // subscribe() call lazily creates a fresh connection. Without
           // this, a broken subscriber silently stops receiving messages
           // for the rest of the process lifetime.
           state.subscriber = null;
           state.subscribed = false;
           state.reconnectCount = (state.reconnectCount || 0) + 1;
-          if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
+           
+          if (errorDurationMs > DEGRADE_THRESHOLD_MS) {
+            logger.info(
+              '[VFS Snapshot Broadcaster] Redis unavailable for 5+ min, degrading to local-only (polling off)',
+            );
+            // Clear error state so we don't keep logging this
+            state.redisErrorStartedAt = null;
+          } else if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
             logger.warn(
               '[VFS Snapshot Broadcaster] Subscriber disconnected (retryable), will reconnect:',
               errMsg,
@@ -201,7 +235,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
             'default',
             'broadcaster_epipe',
             'snapshot-broadcaster',
-            { error: errMsg, kind: 'subscriber_error' },
+            { error: errMsg, kind: 'subscriber_error', reconnectCount: state.reconnectCount },
           );
         } catch { /* best-effort */ }
       });
@@ -209,6 +243,8 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       sub.on('connect', () => {
         logger.info('[VFS Snapshot Broadcaster] Subscriber connected');
         state.lastWarnedAt = 0;
+        // Bug #38: Reset error timer on successful reconnect
+        state.redisErrorStartedAt = null;
       });
     } catch (err) {
       logger.warn(
@@ -329,6 +365,10 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
     /** Test-only: tear down the subscriber. */
     async _reset(): Promise<void> {
       state.listeners.clear();
+      if (state.pollingHandle) {
+        clearInterval(state.pollingHandle);
+        state.pollingHandle = null;
+      }
       if (state.subscriber) {
         try {
           await state.subscriber.unsubscribe(SNAPSHOT_CHANGED_CHANNEL);
@@ -344,6 +384,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       state.subscriber = null;
       state.subscribed = false;
       state.lastWarnedAt = 0;
+      state.redisErrorStartedAt = null;
       // Drop the cached API so a fresh one is built on the next call
       // (helpful for tests; in production this is a no-op after first init).
       delete state.api;

@@ -271,6 +271,8 @@ export interface MCPTransportConfig {
   // For SSE / HTTP transport
   url?: string
   apiKey?: string
+  /** Alias for `bearerToken` used by `MCPClient.sendRequest/sendNotification` to authenticate SSE POSTs. */
+  authToken?: string
   bearerToken?: string
   headers?: Record<string, string>
 

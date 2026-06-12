@@ -75,7 +75,7 @@ function startPeriodicCleanup() {
     }
 
     if (deleted > 0) {
-      logger.info('[VFS SNAPSHOT] Periodic cache cleanup:', deleted, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Periodic cache cleanup', { count: deleted });
     }
 
     // Also enforce max size - remove oldest entries if over limit
@@ -99,7 +99,7 @@ function startPeriodicCleanup() {
           latestSeenVersion.delete(ownerFromKey);
         }
       }
-      logger.info('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Size limit cleanup', { count: toDelete.length });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
@@ -150,14 +150,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
       }
     }
     if (evicted > 0) {
-      logger.info(
-        `[VFS SNAPSHOT] Cache invalidated (${evicted} entries) for owner:`,
-        ownerId,
-        'version:',
-        version,
-        'source:',
-        source
-      );
+      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }
@@ -216,7 +209,7 @@ function startRequestTrackerCleanup() {
     }
 
     if (deleted > 0 && DEBUG) {
-      logger.info('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Request tracker cleanup', { count: deleted });
     }
   }, 120000).unref(); // Run every 2 minutes, unref to allow process exit
 }
@@ -472,9 +465,19 @@ export async function GET(req: NextRequest) {
     if (files.length === 0 && snapshot.files.length === 0) {
       // Bug #44: for anonymous users an empty workspace is EXPECTED (the
       // WORKSPACE_NOT_READY path below handles it). Log at debug so operators
-      // don't think #14 is broken. For authenticated users it's genuinely
-      // suspicious and worth a warn.
-      if (owner.source === 'authenticated') {
+      // don't think #14 is broken. For authenticated users (session cookie or
+      // JWT) it's genuinely suspicious and worth a warn.
+      //
+      // NOTE: `FilesystemOwnerResolution.source` is typed as
+      // `'anonymous' | 'session' | 'jwt'`. There is NO literal 'authenticated'
+      // value — "authenticated" in this code path is the union of 'session'
+      // and 'jwt' (i.e., anything that is not 'anonymous'). Comparing to the
+      // non-existent 'authenticated' string was a typecheck (TS2367) AND
+      // runtime bug (the warn branch was dead code — never executed because
+      // `owner.source` could never equal the literal 'authenticated'). Fixed
+      // by comparing to 'anonymous' instead, which correctly captures the
+      // "real user, not anonymous visitor" semantic.
+      if (owner.source !== 'anonymous') {
         logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
       } else {
         log(`[${requestId}] EMPTY WORKSPACE (expected): ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
@@ -492,8 +495,8 @@ export async function GET(req: NextRequest) {
       // and either retry, ask the user to wait, or surface a clearer
       // UI message ("Session initializing, please wait…") instead of
       // acting on the empty list.
-      if (owner.source !== 'authenticated') {
-        log(`[${requestId}] Returning WORKSPACE_NOT_READY for ${owner.source} owner — workspace not yet initialized`);
+      if (owner.source === 'anonymous') {
+        log(`[${requestId}] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized`);
         const notReadyResponse = NextResponse.json({
           success: false,
           error: 'Workspace not yet initialized. Please retry shortly.',

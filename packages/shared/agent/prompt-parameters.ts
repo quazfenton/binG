@@ -975,7 +975,7 @@ function cacheSet(key: string, value: string): void {
     MODIFIER_CACHE.delete(key);
   } else if (MODIFIER_CACHE.size >= MODIFIER_CACHE_MAX_SIZE) {
     const oldestKey = MODIFIER_CACHE.keys().next().value;
-    MODIFIER_CACHE.delete(oldestKey);
+    if (oldestKey) MODIFIER_CACHE.delete(oldestKey);
   }
   MODIFIER_CACHE.set(key, value);
 }

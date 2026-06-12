@@ -235,6 +235,8 @@ export interface VercelStreamOptions {
    * fallback chain can take over.
    */
   firstTokenTimeoutMs?: number;
+  /** Request timeout in milliseconds (default: 90000). */
+  timeoutMs?: number;
   /**
    * Rolling idle timeout in milliseconds.
    * Resets on every chunk after the first token. Fires when the stream goes

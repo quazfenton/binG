@@ -377,7 +377,7 @@ export async function POST(request: NextRequest) {
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
     chatLogger.debug('[ROUTE] Raw body keys:', Object.keys(rawBody));
-    chatLogger.debug('[ROUTE] Parsed result:', parseResult.success ? 'success' : parseResult.error?.message);
+    chatLogger.debug('[ROUTE] Parsed result:', { status: parseResult.success ? 'success' : parseResult.error?.message });
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
       chatLogger.error('Schema validation failed', { requestId }, {
@@ -877,7 +877,7 @@ export async function POST(request: NextRequest) {
     // V2 Agent Mode: route to OpenCode/Nullclaw workflow
     // Use task classifier result instead of redundant regex detection
     const isCodeRequestAuto = classification.isCodeRequest;
-    chatLogger.debug('[ROUTE] agentMode from request:', agentMode);
+    chatLogger.debug('[ROUTE] agentMode from request', { agentMode });
     const wantsV2 =
       agentMode === 'v2' ||
       (agentMode === 'auto' && (
@@ -1746,7 +1746,15 @@ const config: UnifiedAgentConfig = {
 
       // Check if custom orchestration mode is selected via header
       // This applies to ALL chat requests, not just integration pipeline requests
-      const orchestrationMode = getOrchestrationModeFromRequest(request);
+      // Bug #63 (Pass-3 follow-up) — the `getOrchestrationModeFromRequest`
+      // helper from `@bing/shared/agent` declares its own `NextRequest` type
+      // which has an incompatible `nextUrl` shape with the local `NextRequest`
+      // imported from `next/server`. Casting to the helper's accepted shape
+      // via `as unknown as` is the least-invasive workaround that keeps the
+      // call site semantically correct (the helper only reads a header, not
+      // the full request body). TODO long-term: align the two NextRequest
+      // types in the shared package so no cast is needed.
+      const orchestrationMode = getOrchestrationModeFromRequest(request as unknown as Parameters<typeof getOrchestrationModeFromRequest>[0]);
 
       if (orchestrationMode !== 'task-router') {
         // User has selected a custom orchestration mode
@@ -1821,8 +1829,8 @@ const config: UnifiedAgentConfig = {
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
       // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
-      chatLogger.debug('[ROUTE-DEBUG] About to call processUnifiedAgentRequest, AGENT_EXECUTION_ENGINE:', AGENT_EXECUTION_ENGINE);
-      chatLogger.debug('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call:', enableFilesystemEdits);
+      chatLogger.debug('[ROUTE-DEBUG] About to call processUnifiedAgentRequest', { agentExecutionEngine: AGENT_EXECUTION_ENGINE });
+      chatLogger.debug('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call', { enableFilesystemEdits });
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
         const result = await processUnifiedAgentRequest(config);
         chatLogger.debug('[ROUTE-DEBUG] processUnifiedAgentRequest returned', { resultSuccess: result.success, hasResponse: !!result.response });
@@ -1835,7 +1843,7 @@ const config: UnifiedAgentConfig = {
           hasResponse: !!result.response,
           responseLength: result.response?.length || 0,
         };
-        chatLogger.debug('[ROUTE-DEBUG] debugInfo:', JSON.stringify(debugInfo));
+        chatLogger.debug('[ROUTE-DEBUG] debugInfo', { ...debugInfo });
 
         // FIX: Extract and apply file edits from the LLM response text.
         // The LLM may output code blocks, diffs, or write_file instructions
@@ -1872,7 +1880,7 @@ const config: UnifiedAgentConfig = {
 
         if (result.success && result.response && enableFilesystemEdits) {
           try {
-            chatLogger.debug('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview:', result.response.slice(0, 200));
+            chatLogger.debug('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview', { responsePreview: result.response.slice(0, 200) });
             appliedEdits = await applyFilesystemEditsFromResponse({
               ownerId: filesystemOwnerId,
               conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
@@ -1890,12 +1898,12 @@ const config: UnifiedAgentConfig = {
               alreadyWrittenPaths,
             });
 
-            chatLogger.debug('[FILE-EDIT-DEBUG] appliedEdits:', JSON.stringify({
+            chatLogger.debug('[FILE-EDIT-DEBUG] appliedEdits', {
               writes: appliedEdits?.writes?.length,
               patches: appliedEdits?.patches?.length,
               applied: appliedEdits?.applied?.length,
               errors: appliedEdits?.errors?.length,
-            }));
+            });
 
             if (appliedEdits?.applied?.length) {
               chatLogger.info('File edits extracted from v1-api response', {
@@ -5228,7 +5236,7 @@ function extractFolderCreateTags(content: string): string[] {
     // Validate folder path the same way we validate file paths
     const validPath = validateExtractedPath(rawPath)
     if (!validPath) {
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder_create path:', rawPath.substring(0, 80))
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder_create path', { path: rawPath.substring(0, 80) })
       continue
     }
     folders.push(validPath)
@@ -5351,7 +5359,7 @@ async function applyFilesystemEditsFromResponse(input: {
     });
     parsedResponse.diffs = parsedResponse.diffs.filter(d => {
       if (alreadyWritten.has(d.path)) {
-        pendingEdits.push({ path: d.path, content: d.content, type: 'diff', diffBody: d.diff, reason: 'Already written by structured tool call this turn' });
+        pendingEdits.push({ path: d.path, content: d.diff, type: 'diff', diffBody: d.diff, reason: 'Already written by structured tool call this turn' });
         return false;
       }
       return true;
@@ -5428,7 +5436,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(edit.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid path: ${edit.path.substring(0, 100)}`);
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid write path', { path: edit.path.substring(0, 80) });
       return false;
     }
     edit.path = validPath;
@@ -5441,7 +5449,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid diff path: ${op.path.substring(0, 100)}`);
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid diff path', { path: op.path.substring(0, 80) });
       return false;
     }
     op.path = validPath;
@@ -5451,7 +5459,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid apply_diff path: ${op.path.substring(0, 100)}`);
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid apply_diff path', { path: op.path.substring(0, 80) });
       return false;
     }
     op.path = validPath;
@@ -5463,7 +5471,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(p);
     if (!validPath) {
       invalidPathErrors.push(`Invalid delete path: ${p.substring(0, 100)}`);
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid delete path', { path: p.substring(0, 80) });
       return null;
     }
     return validPath;
@@ -5474,7 +5482,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(folderPath, true); // isFolder = true
     if (!validPath) {
       invalidPathErrors.push(`Invalid folder path: ${folderPath.substring(0, 100)}`);
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder path', { path: folderPath.substring(0, 80) });
       return null;
     }
     return validPath;
@@ -5485,7 +5493,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(requestedPath);
     if (!validPath) {
       invalidPathErrors.push(`Invalid requested read path: ${requestedPath.substring(0, 100)}`);
-      chatLogger.warn('[applyFilesystemEdits] Rejected invalid requested read path:', requestedPath.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid requested read path', { path: requestedPath.substring(0, 80) });
       return null;
     }
     return validPath;

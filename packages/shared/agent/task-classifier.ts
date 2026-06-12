@@ -377,7 +377,7 @@ Task: ${message.substring(0, 500)}`,
       maxOutputTokens: 200,
     });
 
-    const analysis = result.object;
+    const analysis = (result as any).output;
     let score = 0.5;
     const factors: string[] = [];
 

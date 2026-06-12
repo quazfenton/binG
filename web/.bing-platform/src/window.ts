@@ -209,7 +209,7 @@ class WindowControl {
       const a = document.createElement('a');
       a.href = url;
       a.target = target;
-      a.rel = target === '_blank' ? 'noopener noreferrer' : undefined;
+      a.rel = target === '_blank' ? 'noopener noreferrer' : '';
       a.click();
     } else {
       const openedWindow = window.open(url, target, 'noopener,noreferrer');

@@ -43,6 +43,13 @@ export interface FilesystemUpdatedDetail {
   workspaceVersion?: number;
   applied?: any;
   errors?: any;
+  /**
+   * Originating UI surface tag (e.g. `workspace-panel`, `terminal-panel`,
+   * `code-preview-panel`). Optional — set by the server when the request
+   * forwarded an `X-UI-Source` header (Phase A→B wiring). Used to filter
+   * run.log entries by UI origin.
+   */
+  uiSource?: string;
 }
 
 function normalizeFilesystemUpdatedDetail(detail: FilesystemUpdatedDetail = {}): FilesystemUpdatedDetail {

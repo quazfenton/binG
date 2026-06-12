@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { vfsTools, getVFSToolDefinitions, setToolContext, toolContextStore } from '@/lib/mcp/vfs-mcp-tools';
+import { vfsTools, getVFSToolDefinitions, setToolContext, runWithToolContext } from '@/lib/mcp/vfs-mcp-tools';
 import { buildMem0MCPTools } from '@/lib/mcp/vfs-mcp-tools';
 import { isMem0Configured } from '@/lib/powers/mem0-power';
 import { createHTTPTransport, isValidMCPURL } from '@/lib/mcp/http-transport';
@@ -311,7 +311,7 @@ export async function POST(request: NextRequest) {
       // Set tool context so files are written to the correct workspace
       let result: any;
       try {
-        result = await toolContextStore.run(
+        result = await runWithToolContext(
           { userId, sessionId: compositeSessionId, scopePath },
           async () => {
             // @ts-ignore - AI SDK tool execute signature

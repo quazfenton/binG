@@ -824,6 +824,9 @@ importers:
 
   packages/shared:
     dependencies:
+      '@bing/platform':
+        specifier: workspace:*
+        version: link:../platform
       jsonrepair:
         specifier: ^3.14.0
         version: 3.14.0
@@ -865,7 +868,7 @@ importers:
         version: file:web/.bing-platform
       '@bing/shared':
         specifier: file:.bing-shared
-        version: file:web/.bing-shared(typescript@5.9.3)
+        version: file:web/.bing-shared(@bing/platform@file:web/.bing-platform)(typescript@5.9.3)
       '@blaxel/core':
         specifier: ^0.2.69
         version: 0.2.81(@cfworker/json-schema@4.1.1)(@hey-api/openapi-ts@0.97.0(typescript@5.9.3))(bufferutil@4.1.0)(utf-8-validate@6.0.6)
@@ -2074,6 +2077,7 @@ packages:
   '@bing/shared@file:web/.bing-shared':
     resolution: {directory: web/.bing-shared, type: directory}
     peerDependencies:
+      '@bing/platform': '*'
       typescript: ^5.0.0
 
   '@blaxel/core@0.2.81':
@@ -14154,8 +14158,9 @@ snapshots:
       '@tauri-apps/plugin-notification': 2.3.3
       '@tauri-apps/plugin-opener': 2.5.3
 
-  '@bing/shared@file:web/.bing-shared(typescript@5.9.3)':
+  '@bing/shared@file:web/.bing-shared(@bing/platform@file:web/.bing-platform)(typescript@5.9.3)':
     dependencies:
+      '@bing/platform': file:web/.bing-platform
       jsonrepair: 3.14.0
       typescript: 5.9.3
 

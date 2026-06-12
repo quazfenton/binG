@@ -327,6 +327,9 @@ const FRAMEWORK_ENTRY_POINTS: Record<AppFramework, string[]> = {
   gradio: [
     '/main.py', '/app.py', '/demo.py', '/serve.py'
   ],
+  python: [
+    '/main.py', '/app.py', '/run.py', '/cli.py'
+  ],
   streamlit: [
     '/main.py', '/app.py', '/streamlit_app.py'
   ],
