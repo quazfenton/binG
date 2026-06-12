@@ -1,0 +1,29 @@
+#!/bin/bash
+# Pre-checkout hook — re-install git hooks before a branch switch so
+# .git/hooks/* stays in sync with the canonical sources in scripts/.
+#
+# This fires BEFORE the checkout, so it reinstalls from the CURRENT branch's
+# sources. For post-checkout reinstall from the NEW branch's sources, add a
+# post-checkout hook too.
+#
+# Args (from git, see githooks(5)):
+#   $1 — previous HEAD ref
+#   $2 — new HEAD ref
+#   $3 — 1 if branch checkout, 0 if file checkout
+#
+# File checkouts (e.g. `git checkout -- file.txt`) don't change the set of
+# installed hooks, so we skip the reinstall for them — keeps `git checkout
+# -- .` fast on big trees.
+
+# Skip file-only checkouts (flag=0). Default to 0 if $3 is unset.
+[ "${3:-0}" = "1" ] || exit 0
+
+# The hook runs inside a git repo, so rev-parse gives us the root directly.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+INSTALL_HOOKS="${REPO_ROOT}/scripts/install-hooks.sh"
+
+# Fresh clone where install-hooks.sh hasn't been written yet — nothing to do.
+[ -f "${INSTALL_HOOKS}" ] || exit 0
+
+# Run silently; never abort the checkout on a hook-install failure.
+bash "${INSTALL_HOOKS}" >/dev/null 2>&1 || true

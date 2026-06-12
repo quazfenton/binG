@@ -6,9 +6,10 @@
 #   (run from anywhere; resolves the repo root from $0)
 #
 # Hooks installed (all as relative symlinks, so they survive repo moves):
-#   pre-commit  -> scripts/git-hooks/pre-commit
-#   pre-push    -> scripts/git-pre-push.sh
-#   post-merge  -> scripts/git-hooks/post-merge  (auto-reinstalls hooks on pull)
+#   pre-commit   -> scripts/git-hooks/pre-commit
+#   pre-push     -> scripts/git-pre-push.sh
+#   post-merge   -> scripts/git-hooks/post-merge  (auto-reinstalls hooks on pull)
+#   pre-checkout -> scripts/git-hooks/pre-checkout (auto-reinstalls hooks before branch switch)
 #
 # Symlinks mean the active .git/hooks/<name> *is* the canonical source — they
 # can never drift apart by construction. The post-merge hook is a belt-and-
@@ -26,6 +27,7 @@ HOOKS=(
     "pre-commit:scripts/git-hooks/pre-commit"
     "pre-push:scripts/git-pre-push.sh"
     "post-merge:scripts/git-hooks/post-merge"
+    "pre-checkout:scripts/git-hooks/pre-checkout"
 )
 
 install_hook() {
