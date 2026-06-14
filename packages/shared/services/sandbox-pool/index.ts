@@ -14,8 +14,8 @@
 
 import { createServer } from 'http';
 import { createLogger } from '@/lib/utils/logger';
-import { getSandboxProvider, getSandboxProviderWithFallback } from '@/lib/providers/9router/providers';
-import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '@/lib/providers/9router/providers';
+import { getSandboxProvider, getSandboxProviderWithFallback } from '@/lib/sandbox/providers';
+import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '@/lib/sandbox/providers';
 import { backgroundExecutor } from '@bing/shared/agent/background-jobs';
 import { resourceMonitor, createResourceMonitor } from '@/lib/management/resource-monitor';
 import Redis from 'ioredis';
@@ -255,7 +255,7 @@ class SandboxPoolService {
 
     // Destroy the sandbox
     try {
-      const { getSandboxProvider } = await import('../../lib/sandbox/providers');
+      const { getSandboxProvider } = await import('@/lib/sandbox/providers');
       const provider = await getSandboxProvider(pooled.provider);
       await provider.destroySandbox(sandboxId);
     } catch (error: any) {

@@ -608,20 +608,17 @@ async function getVFSSnapshot(
 /**
  * Bug #47 — Sandbox-aware bash routing.
  *
- * If the user has an active sandbox session (created via
- * `sandboxBridge.getOrCreateSession(userId)`), route the bash command through
- * the sandbox provider instead of falling through to local `child_process.spawn`.
+ * Routes bash commands through an available sandbox when one exists.
+ * A pre-warmed sandbox pool (SandboxPoolService) maintains ready sandboxes
+ * at startup. When bash_execute runs and no sandbox session is mapped to
+ * this user, this function acquires a sandbox from the pool and registers
+ * it against the user's ID — so subsequent bash_execute calls reuse it.
  *
- * This closes the gap where bash_execute always ran on the local host, causing
- * ENOENT for sandbox-only binaries (e.g. `npx serve`, `node` in a fresh sandbox
- * with no dev deps) and breaking tasks that need a development environment.
+ * If the sandbox pool is unavailable (not initialized, no provider), falls
+ * through to local `child_process.spawn`. The `routed: false` signal tells
+ * the caller to proceed with local execution.
  *
- * Falls back to local spawn when no sandbox is active (dev mode without a
- * sandbox provider, or sandbox creation failed). The `routed: false` signal
- * tells the caller to proceed with the existing local-execution path.
- *
- * Lazy-loads the sandboxBridge to keep bash-tool.ts import-light and avoid
- * pulling the sandbox stack into the module-init path.
+ * Lazy-loads sandbox dependencies to keep bash-tool.ts import-light.
  */
 async function trySandboxRoute(
   agentId: string,
@@ -635,7 +632,26 @@ async function trySandboxRoute(
 }> {
   try {
     const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
-    const session = sandboxBridge.getSessionByUserId(agentId);
+    let session = sandboxBridge.getSessionByUserId(agentId);
+
+    // No existing session — ask sandboxBridge to get or create one.
+    // This bridges to the pre-warmed sandbox pool when available.
+    if (!session) {
+      try {
+        const newSession = await sandboxBridge.getOrCreateSession(agentId);
+        if (newSession && newSession.sandboxId) {
+          session = newSession;
+          logger.info('Bug #47: Sandbox session created/acquired for ' + agentId, {
+            sandboxId: newSession.sandboxId,
+          });
+        }
+      } catch (createErr: any) {
+        logger.debug('Bug #47: sandboxBridge.getOrCreateSession failed, falling through to local spawn', {
+          error: createErr?.message,
+        });
+      }
+    }
+
     if (!session || !session.sandboxId) {
       return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
     }
@@ -687,7 +703,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
 
   return {
     bash_execute: tool({
-      description: 'Execute bash commands in the sandbox. Use for file operations (create, read, write, delete), navigating directories, running scripts, installing packages, and any shell task. Supports pipes, redirects, multi-line heredocs, and complex pipelines. Output is persisted to VFS.\n\nEXAMPLES:\n  Create files:  echo "content" > file.txt  |  cat > file.txt << EOF  |  mkdir -p src/components\n  Read files:    cat file.txt  |  grep pattern file.txt\n  Navigate:      mkdir -p src/components  |  cd src && pwd\n  Build/Test:    npm install  |  npm test  |  npx tsc --noEmit',
+      description: 'Execute bash commands. Routes to a sandbox environment when one is available (pre-warmed sandbox pool) for full runtime support including node, python3, npx, npm. Use for file operations (create, read, write, delete), navigating directories, running scripts, installing packages, and any shell task. Supports pipes, redirects, multi-line heredocs, and complex pipelines. Output is persisted to VFS.\n\nEXAMPLES:\n  Create files:  echo "content" > file.txt  |  cat > file.txt << EOF  |  mkdir -p src/components\n  Read files:    cat file.txt  |  grep pattern file.txt\n  Navigate:      mkdir -p src/components  |  cd src && pwd\n  Build/Test:    npm install  |  npm test  |  npx tsc --noEmit',
       inputSchema: z.object({
         command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern > output.txt")').optional(),
         code: z.string().describe('Bash command to execute (alias for command)').optional(),

@@ -5,6 +5,10 @@ import { authService } from '@/lib/auth/auth-service';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';
 import { generateMfaToken } from '@/lib/auth/jwt';
+import { transferVFSOnLogin } from '@/lib/auth/transfer-anon-vfs';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('API:Auth:Login');
 
 export async function POST(request: NextRequest) {
   try {
@@ -107,13 +111,43 @@ export async function POST(request: NextRequest) {
             });
           }
         }
-      } catch (mfaError) {
-        // MFA check failed — log but continue with normal login (fail open)
-        console.warn('[Login] MFA check failed, proceeding without MFA:', mfaError);
-      }
+    } catch (mfaError) {
+      // MFA check failed — log but continue with normal login (fail open)
+      console.warn('[Login] MFA check failed, proceeding without MFA:', mfaError);
     }
+  }
 
-    // MED-5 fix: Log successful login
+  // Transfer anonymous VFS workspace to the newly authenticated user.
+  // Fire-and-forget so the login response is not blocked by a slow
+  // transfer — the helper itself is non-fatal (failures are logged
+  // inside) and reads only `request.cookies`, which is a synchronous
+  // accessor on the Web Request and remains valid after the response
+  // is sent. The function is idempotent: if it runs concurrently with
+  // the client-side `auth-context.tsx` post-login fetch to
+  // /api/auth/transfer-vfs-on-login, the second call is a no-op.
+  //
+  // Parity with /api/auth/transfer-vfs-on-login (the client-side
+  // endpoint): we log the transferred count when >0 so ops can see
+  // when the in-line path actually moves data. Logging on 0 is
+  // intentionally suppressed — the vast majority of logins are
+  // returning users with no anon data, and a log line per login
+  // would drown out the signal.
+  //
+  // For MFA-enabled users, the mfaRequired branch above returns
+  // early before reaching this point. The MFA challenge endpoint
+  // calls this same function after TOTP verification.
+  const loginUserId = result.user?.id !== undefined ? String(result.user.id) : undefined;
+  void transferVFSOnLogin(request, result.user).then((transferResult) => {
+    if (transferResult.transferredFiles > 0) {
+      logger.info('VFS ownership transferred on login', {
+        userId: loginUserId,
+        transferredFiles: transferResult.transferredFiles,
+        source: 'login-gateway-inline',
+      });
+    }
+  });
+
+  // MED-5 fix: Log successful login
     try {
       const { logLoginSuccess } = await import('@/lib/auth/auth-audit-logger');
       await logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });

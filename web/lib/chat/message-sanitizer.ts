@@ -24,6 +24,7 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
       // of generateText / streamText.
       const role = m && typeof m.role === 'string' ? m.role : null;
       if (role === 'system') return false;
+<<<<<<< Updated upstream
 
       // Drop ASSISTANT messages that have NO content AND NO tool_calls.
       // Vercel AI SDK provider adapters reject `{role:'assistant', content:''}`
@@ -39,6 +40,8 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
         if (!hasText && !hasToolCalls) return false;
       }
 
+=======
+>>>>>>> Stashed changes
       // Keep messages even with unknown roles — coerce to 'user' below
       // to avoid silently dropping context from non-standard message formats.
       return true;
@@ -74,6 +77,7 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
 
       // Tool role MUST have array content per AI SDK ModelMessage schema.
       // Plain-string tool content triggers "messages do not match
+<<<<<<< Updated upstream
       // ModelMessage[] schema" errors. The SDK requires each part to be a
       // `tool-result` (or `tool-approval-response`), NOT a generic `text`
       // part — the union discriminator for tool messages accepts only
@@ -154,5 +158,13 @@ export function sanitizeMessages(messages: any[], options: SanitizeOptions = {})
       }
 
       return result;
+=======
+      // ModelMessage[] schema" errors.
+      if (role === 'tool' && typeof content === 'string') {
+        content = [{ type: 'text' as const, text: content }];
+      }
+
+      return { role, content };
+>>>>>>> Stashed changes
     });
 }

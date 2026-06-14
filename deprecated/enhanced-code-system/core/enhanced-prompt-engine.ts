@@ -134,7 +134,7 @@ interface AgenticFrameworkConfig {
 }
 
 class EnhancedPromptEngine extends EventEmitter {
-  private dmp: diff_match_patch;
+  private dmp: typeof diff_match_patch;
   private contextCache: Map<string, any> = new Map();
   private projectState: Map<string, ProjectItem> = new Map();
   private workflowStack: Array<Partial<EnhancedResponse>> = [];

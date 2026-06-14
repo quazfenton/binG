@@ -292,6 +292,19 @@ const TOOL_VALIDATION_SCHEMAS: Record<
     defaults: {},
     help: 'file.delete requires: path (string) — file path to delete',
   },
+<<<<<<< Updated upstream
+=======
+  createDirectory: {
+    required: ['path'],
+    defaults: {},
+    help: 'createDirectory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
+  },
+  create_directory: {
+    required: ['path'],
+    defaults: {},
+    help: 'create_directory requires: path (string) — directory path to create. Use listFiles("/") to browse existing directories first.',
+  },
+>>>>>>> Stashed changes
   mkdir: {
     required: ['path'],
     defaults: {},
@@ -699,6 +712,7 @@ export class PlanActVerifyOrchestrator {
               // Record result for conversation history threading
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result });
 
+<<<<<<< Updated upstream
               // Track files modified by writeFile/applyDiff for verification
               if ((call.name === 'writeFile' || call.name === 'applyDiff') && normalizedArgs?.path) {
                 modifiedFiles.push(normalizedArgs.path);
@@ -712,6 +726,84 @@ export class PlanActVerifyOrchestrator {
               // Errors are still activity — don't let error handling trigger idle timeout
               controller.recordActivity();
             }
+=======
+          // Instrumentation: redact and log constructed tool-call payloads to trace origins of malformed calls
+          let _redactedForLog: any = null;
+          try {
+            _redactedForLog = redactArgsForLogging(call.arguments);
+            log.debug('PlanActVerify: constructed tool call', { tool: call.name, redactedArgs: _redactedForLog, stack: (new Error()).stack?.split('\n').slice(1,6) });
+          } catch (e) {
+            log.debug('PlanActVerify: failed to redact tool call args', { tool: call.name });
+          }
+
+          // Persist redacted invocation payload for later aggregation and analysis
+          try {
+            import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
+              toolCallTracker.recordInvocationPayload({
+                timestamp: Date.now(),
+                model: this.validatedConfig.model,
+                provider: this.validatedConfig.provider,
+                toolName: call.name,
+                redactedArgs: typeof _redactedForLog === 'string' ? _redactedForLog : JSON.stringify(_redactedForLog || {}),
+                originStack: createOriginStack(),
+                toolCallId: call.id || null,
+              }).catch((err: any) => { log.debug?.('PlanActVerify: recordInvocationPayload failed:', err); });
+            }).catch((err: any) => { log.debug?.('PlanActVerify: recordToolResultTelemetry failed:', err); });
+          } catch (e) {
+            log.debug('PlanActVerify: failed to persist invocation payload', { tool: call.name });
+          }
+
+          let structuredResult: ToolResult;
+
+          // ── Pre-execution argument validation ──────────────────────────
+          // Check required fields and fill sensible defaults BEFORE calling
+          // the tool.  This catches empty path/content/etc. early and gives
+          // the model a structured error it can recover from, rather than
+          // letting the tool itself fail with a cryptic "Path is required".
+          const validation = validateAndNormalizeArgs(call.name, call.arguments);
+          if (validation.error) {
+            // Validation failed — yield a tool_error so the model sees the
+            // structured feedback and can self-heal on the next iteration.
+            structuredResult = {
+              success: false,
+              toolName: call.name,
+              args: call.arguments,
+              error: validation.error,
+              summary: `Pre-execution validation failed: ${validation.error.message}`,
+            };
+            yield { type: 'tool_error', tool: call.name, error: validation.error };
+
+            // Push the error into conversation history so the LLM can recover.
+            // Uses tool-role with array content per AI SDK ModelMessage schema.
+            conversationHistory.push({
+              role: 'tool' as const,
+              content: [{
+                type: 'tool-result' as const,
+                toolCallId: call.id,
+                toolName: call.name,
+                output: structuredResult as any,
+              }],
+            });
+            continue; // Skip execution, let the model retry with corrected args
+          }
+
+          // Use validated/normalized args (with defaults filled) for execution
+          const normalizedArgs = validation.args!;
+
+          try {
+            const rawResult = await this.executeToolWithHealing(call.name, normalizedArgs);
+            // P2 #7: Build structured ToolResult instead of JSON.stringify blob
+            structuredResult = buildToolResult(call.name, normalizedArgs, rawResult);
+            yield { type: 'tool_result', tool: call.name, result: structuredResult };
+
+            if (call.name === 'writeFile' || call.name === 'applyDiff') {
+              modifiedFiles.push(normalizedArgs.path || normalizedArgs.file);
+            }
+          } catch (error: any) {
+            // P2 #7: Build structured ToolResult for errors too
+            structuredResult = buildToolResult(call.name, normalizedArgs, undefined, error);
+            yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
+>>>>>>> Stashed changes
           }
         } else if (llmResponse.text) {
           yield { type: 'token', content: llmResponse.text };
@@ -876,12 +968,18 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
    * P2 #9: Uses properly adapted sdkTools (no @ts-expect-error).
    *
    * Includes a retry wrapper: if generateText throws a schema validation error
+<<<<<<< Updated upstream
    * (e.g. "messages do not match ModelMessage[] schema"), the conversation
    * history is run through `sanitizeMessages` and the call is retried once
    * before giving up. The sanitizer strips system-role messages, converts
    * tool-role plain-string content into the required array form, drops
    * assistant messages with no content and no tool_calls, and coerces any
    * unknown roles to 'user'. System messages must always go via
+=======
+   * (e.g. "messages do not match ModelMessage[] schema"), system-role messages
+   * are filtered from history and the call is retried once before giving up.
+   * System messages are always proactively filtered since they must go via
+>>>>>>> Stashed changes
    * generateText's `system` param, not the messages array.
    */
   private async callLLM(prompt: string, history: ModelMessage[]) {
@@ -897,19 +995,32 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
     const MAX_ATTEMPTS = 2;
     let lastError: any;
+<<<<<<< Updated upstream
     // Working copy of history — sanitized once up-front (defensive) and again
     // on retry in case the first attempt exposed another malformed message.
     // Defensive fallback to empty array in case of null/undefined at runtime.
     let workingHistory = sanitizeMessages(history || []) as ModelMessage[];
+=======
+    // Working copy of history — mutated on retry to strip system messages.
+    // Defensive fallback to empty array in case of null/undefined at runtime.
+    let workingHistory = history || [];
+>>>>>>> Stashed changes
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         // Build messages using AI SDK ModelMessage format.
         // System/user/assistant roles accept plain-string content;
         // tool role MUST use content: [{ type: 'tool-result', ... }] array.
+<<<<<<< Updated upstream
         // The system prompt is passed via generateText's `system` param, not
         // in the messages array; sanitizeMessages() also strips any system
         // message that leaked in from upstream code paths.
+=======
+        // System prompt is passed via generateText's `system` param (not in
+        // messages). If a system message leaked into history, the first
+        // attempt will fail with a ModelMessage[] schema error and the
+        // retry below will filter it out.
+>>>>>>> Stashed changes
         const messages: ModelMessage[] = [
           ...workingHistory,
           { role: 'user' as const, content: prompt },
@@ -918,6 +1029,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const result = await generateText({
           model: vercelModel,
           messages,
+<<<<<<< Updated upstream
           tools: (Object.keys(this.sdkTools).length > 0 && (this.validatedConfig.provider !== 'ninerouter' || !(this.validatedConfig.model || '').startsWith('gh/'))) ? this.sdkTools : ({} as any),
           system:
             'You are an autonomous AI coding agent. You have tools available to interact with the system.' +
@@ -931,6 +1043,11 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
           // ignored at runtime and fails the type check). Multi-step execution
           // is handled by this orchestrator's own plan-step loop, so a single
           // generation per call is intentional here.
+=======
+          tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
+          system:
+            'You are an autonomous AI coding agent. You have tools available to interact with the system.',
+>>>>>>> Stashed changes
           maxOutputTokens: 4000,
           temperature: 0.2,
         });
@@ -939,17 +1056,26 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const toolCalls = (result as any).toolCalls?.map((tc: any) => ({
           id: tc.toolCallId,
           name: tc.toolName,
+<<<<<<< Updated upstream
           arguments: tc.args || tc.input || {},
+=======
+          arguments: tc.args || {},
+>>>>>>> Stashed changes
         })) || [];
 
         return {
           text: result.text || '',
+<<<<<<< Updated upstream
+=======
+          done: toolCalls.length === 0,
+>>>>>>> Stashed changes
           toolCalls,
           usage: result.usage || { totalTokens: 0 },
         };
       } catch (error: any) {
         lastError = error;
 
+<<<<<<< Updated upstream
         // Detect AI SDK schema validation errors. The most common causes are
         // a system-role message in the messages array, a tool-role message
         // with plain-string content, an assistant message with empty content
@@ -962,6 +1088,21 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             { provider, model, error: error.message },
           );
           workingHistory = sanitizeMessages(workingHistory) as ModelMessage[];
+=======
+        // Detect AI SDK schema validation errors — the most common cause is
+        // a system-role message in the messages array. Filter system messages
+        // from history and retry once before giving up.
+        const isSchemaError =
+          error.message?.includes('ModelMessage[]') ||
+          error.message?.includes('messages do not match');
+
+        if (isSchemaError && attempt < MAX_ATTEMPTS - 1) {
+          log.warn(
+            'callLLM: schema validation error, filtering system messages from history and retrying',
+            { provider, model, error: error.message },
+          );
+          workingHistory = workingHistory.filter(m => (m as any).role !== 'system');
+>>>>>>> Stashed changes
           continue;
         }
 
@@ -969,6 +1110,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
       }
     }
 
+<<<<<<< Updated upstream
     // ── Plain-text fallback for schema errors ──
     // If both retries failed due to ModelMessage[] schema errors, the
     // conversation history is likely corrupted beyond repair. Fall back
@@ -1012,6 +1154,8 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
       }
     }
 
+=======
+>>>>>>> Stashed changes
     log.error('Vercel AI SDK callLLM failed', { provider, model, error: lastError?.message });
     throw lastError;
   }

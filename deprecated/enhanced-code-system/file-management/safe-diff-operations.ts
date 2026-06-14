@@ -2197,7 +2197,7 @@ class SafeDiffOperations extends EventEmitter {
           
           this.emit('conflict_resolved', { fileId, conflictId: resolution.conflictId, resolution });
         } catch (error) {
-          errors.push(`Failed to resolve conflict ${resolution.conflictId}: ${error.message}`);
+          errors.push(`Failed to resolve conflict ${resolution.conflictId}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -2220,7 +2220,7 @@ class SafeDiffOperations extends EventEmitter {
         success: false,
         resolvedConflicts,
         remainingConflicts: activeConflicts,
-        errors: [`Conflict resolution failed: ${error.message}`]
+        errors: [`Conflict resolution failed: ${error instanceof Error ? error.message : String(error)}`]
       };
     }
   }

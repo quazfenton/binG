@@ -1560,6 +1560,72 @@ export class VirtualFilesystemService {
   }
 
   /**
+   * Find all distinct anonymous ownerIds currently in the VFS.
+   *
+   * Used by the auth transfer flow as a safety net: if the cookie-derived
+   * ownerId doesn't match anything in the DB (e.g. the anon cookie was
+   * rotated between write and transfer, or was set in a format that
+   * doesn't round-trip through the sanitizer), the transfer can still
+   * find and move the user's anonymous workspace.
+   *
+   * SECURITY: This returns ownerIds from ALL anonymous users in the DB.
+   * Callers MUST scope the result to a single user before transferring
+   * (the cookie-derived ownerId is the only authoritative per-browser
+   * handle). Used only as a last-resort fallback in the auth flow, and
+   * bounded by `maxAgeHours` so stale data from previous visitors is
+   * ignored.
+   *
+   * Errors are PROPAGATED to the caller (not swallowed) so the auth
+   * flow can distinguish "no anon files" from "scan failed" and react
+   * accordingly. The caller in `transfer-anon-vfs.ts` wraps the call
+   * in its own error handling.
+   *
+   * @param maxAgeHours - Optional cutoff. When set, only returns
+   *   ownerIds whose files have been updated within this window.
+   *   Defaults to 7 days. Clamped to a minimum of 1 hour to prevent a
+   *   typo (e.g. `0`) from accidentally disabling the bound. Pass a
+   *   negative value to throw.
+   */
+  async findAnonOwnerIds(maxAgeHours: number = 24 * 7): Promise<string[]> {
+    if (maxAgeHours < 0) {
+      throw new Error(
+        `findAnonOwnerIds: maxAgeHours must be >= 0 (got ${maxAgeHours})`
+      );
+    }
+    const db = getDatabase();
+    let rows: Array<{ owner_id: string }>;
+    if (maxAgeHours > 0) {
+      const cutoffIso = new Date(
+        Date.now() - maxAgeHours * 60 * 60 * 1000
+      ).toISOString();
+      rows = db
+        .prepare(
+          `SELECT DISTINCT owner_id
+           FROM vfs_workspace_files
+           WHERE owner_id LIKE 'anon:%'
+             AND updated_at >= ?
+           ORDER BY owner_id`
+        )
+        .all(cutoffIso) as Array<{ owner_id: string }>;
+    } else {
+      // Caller explicitly passed 0 \u2014 allow it but log a warn so the
+      // un-scoped scan is visible in the logs.
+      logger.warn(
+        '[VFS] findAnonOwnerIds called with maxAgeHours=0; scanning ALL anon ownerIds with no time bound'
+      );
+      rows = db
+        .prepare(
+          `SELECT DISTINCT owner_id
+           FROM vfs_workspace_files
+           WHERE owner_id LIKE 'anon:%'
+           ORDER BY owner_id`
+        )
+        .all() as Array<{ owner_id: string }>;
+    }
+    return rows.map((r) => r.owner_id);
+  }
+
+  /**
    * Transfer all VFS data from one owner to another.
    * Used when an anonymous user creates an account — their anonymous
    * workspace files, conversations, etc. move to the new authenticated user.
@@ -1635,27 +1701,141 @@ export class VirtualFilesystemService {
         }
       }
 
-      // 4. Transfer meta only if target has none and source has it
-      if (!targetHasMeta) {
-        const sourceMeta = db.prepare(
-          'SELECT version, root, updated_at FROM vfs_workspace_meta WHERE owner_id = ?'
-        ).get(normalizedFrom) as { version: number; root: string; updated_at: string } | undefined;
-        if (sourceMeta) {
+      // 4. Transfer meta: workspace_version ALWAYS transfers so the new
+      // owner picks up the source's version history.
+      //
+      // Concurrency: this runs inside a better-sqlite3 `db.transaction()`
+      // which serializes reads/writes within ONE process. However, the
+      // VFS can run in multi-worker Next.js (and across replicas), so
+      // a SELECT-then-UPDATE on `vfs_workspace_meta` has a race window
+      // where another worker can write between our read and our write.
+      // We close that window with a single atomic statement per case:
+      //   - Target row exists: `UPDATE ... SET version = MAX(...)` does
+      //     the merge in SQL. The CASE expression on updated_at picks
+      //     the more recent of the two timestamps without a read.
+      //   - Target row missing: `INSERT ... ON CONFLICT DO NOTHING`
+      //     makes the insert itself race-safe — if another worker
+      //     inserts the same owner_id between our EXISTS check and our
+      //     INSERT, we don't fail and we don't clobber.
+      //
+      // The fresh-target INSERT preserves `sourceMeta.updated_at`
+      // (not the transfer `now`) so downstream "is this workspace
+      // stale?" checks that compare `updated_at` to a wall-clock
+      // threshold still see the real last-modified time of the source.
+      // The `root` field stays on the target — the target's working
+      // directory configuration is what the user has actually set up.
+      const sourceMeta = db.prepare(
+        'SELECT version, root, updated_at FROM vfs_workspace_meta WHERE owner_id = ?'
+      ).get(normalizedFrom) as { version: number; root: string; updated_at: string } | undefined;
+      if (sourceMeta) {
+        // COALESCE guards against the (theoretical) case where
+        // sourceMeta.updated_at is NULL — the schema default is
+        // CURRENT_TIMESTAMP so this should never happen, but a missing
+        // value would silently get swallowed by the CASE WHEN.
+        const sourceUpdatedAt = sourceMeta.updated_at ?? now;
+        if (targetHasMeta) {
+          // Atomic merge: version = MAX(ours, theirs),
+          // updated_at = whichever ISO-8601 string sorts later.
+          // ISO-8601 sorts lexically by recency, so a single CASE
+          // expression replaces the read-compare-write round-trip.
           db.prepare(
-            'INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at) VALUES (?, ?, ?, ?)'
-          ).run(normalizedTo, sourceMeta.version, sourceMeta.root, now);
+            `UPDATE vfs_workspace_meta
+             SET version = MAX(version, ?),
+                 updated_at = CASE WHEN ? > updated_at THEN ? ELSE updated_at END
+             WHERE owner_id = ?`
+          ).run(
+            sourceMeta.version,
+            sourceUpdatedAt,
+            sourceUpdatedAt,
+            normalizedTo,
+          );
+        } else {
+          // Fully atomic insert-or-merge: `ON CONFLICT DO UPDATE SET`
+          // collapses the (EXISTS-check, INSERT, followup UPDATE)
+          // sequence into a single statement that the SQLite engine
+          // serializes. If another worker has just inserted the same
+          // `owner_id` between our `targetHasMeta` check and now, we
+          // merge our higher version into that row instead of silently
+          // dropping the version transfer. `excluded.<col>` refers to
+          // the values we tried to insert.
+          db.prepare(
+            `INSERT INTO vfs_workspace_meta (owner_id, version, root, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(owner_id) DO UPDATE SET
+               version = MAX(version, excluded.version),
+               updated_at = CASE WHEN excluded.updated_at > updated_at
+                                 THEN excluded.updated_at
+                                 ELSE updated_at END`
+          ).run(
+            normalizedTo,
+            sourceMeta.version,
+            sourceMeta.root,
+            sourceUpdatedAt,
+          );
         }
       }
 
-      // 5. Delete source data
+      // 5. Transfer shadow_commits (the persisted git-style commit
+      // history used for rollback/audit) to the new owner. The `id` is
+      // preserved (commit ids are globally unique ULIDs/UUIDs in this
+      // codebase) and only `owner_id` is rewritten. INSERT OR IGNORE
+      // protects against an unlikely PK collision with an existing
+      // target commit. `session_id` is preserved as-is because it
+      // encodes the historical session that produced the commit — the
+      // anon user's session is still a valid provenance marker even
+      // after the workspace moves to the authenticated user.
+      const sourceCommits = db.prepare(
+        `SELECT id, session_id, message, author, timestamp, source, integration,
+                workspace_version, diff, transactions, created_at
+         FROM shadow_commits WHERE owner_id = ?`
+      ).all(normalizedFrom) as Array<{
+        id: string;
+        session_id: string;
+        message: string;
+        author: string | null;
+        timestamp: string;
+        source: string | null;
+        integration: string | null;
+        workspace_version: number | null;
+        diff: string;
+        transactions: string;
+        created_at: string;
+      }>;
+      if (sourceCommits.length > 0) {
+        const transferCommit = db.prepare(
+          `INSERT OR IGNORE INTO shadow_commits
+           (id, session_id, owner_id, message, author, timestamp, source, integration,
+            workspace_version, diff, transactions, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const commit of sourceCommits) {
+          transferCommit.run(
+            commit.id,
+            commit.session_id,
+            normalizedTo,
+            commit.message,
+            commit.author,
+            commit.timestamp,
+            commit.source,
+            commit.integration,
+            commit.workspace_version,
+            commit.diff,
+            commit.transactions,
+            commit.created_at,
+          );
+        }
+      }
+
+      // 6. Delete source data
       db.prepare('DELETE FROM vfs_workspace_files WHERE owner_id = ?').run(normalizedFrom);
       db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(normalizedFrom);
+      db.prepare('DELETE FROM shadow_commits WHERE owner_id = ?').run(normalizedFrom);
 
-      // 6. Clean up in-memory state
+      // 7. Clean up in-memory state
       this.workspaces.delete(normalizedFrom);
       diffTracker.clear(normalizedFrom);
 
-      // 7. Invalidate target's in-memory cache so it reloads from DB
+      // 8. Invalidate target's in-memory cache so it reloads from DB
       this.workspaces.delete(normalizedTo);
 
       return transferredCount;
@@ -1988,6 +2168,15 @@ class GitBackedVFSProxy {
    */
   async transferOwnership(fromOwnerId: string, toOwnerId: string): Promise<{ transferredFiles: number }> {
     return this.vfs.transferOwnership(fromOwnerId, toOwnerId);
+  }
+
+  /**
+   * Find all distinct anonymous ownerIds currently in the VFS,
+   * bounded by `maxAgeHours` to limit blast radius. Delegates to the
+   * underlying VFS service. See VirtualFilesystemService.findAnonOwnerIds.
+   */
+  async findAnonOwnerIds(maxAgeHours: number = 24 * 7): Promise<string[]> {
+    return this.vfs.findAnonOwnerIds(maxAgeHours);
   }
 }
 

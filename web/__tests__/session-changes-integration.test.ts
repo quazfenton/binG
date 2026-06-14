@@ -31,6 +31,42 @@ describe('VFS Ownership Transfer', () => {
     );
     expect(source).toContain("DELETE FROM vfs_workspace_files WHERE owner_id = ?");
     expect(source).toContain("DELETE FROM vfs_workspace_meta WHERE owner_id = ?");
+    // Shadow commits (git-style commit history) must be deleted from
+    // the source after transfer so the anon workspace doesn't leave
+    // orphan history behind.
+    expect(source).toContain("DELETE FROM shadow_commits WHERE owner_id = ?");
+  });
+
+  it('transferOwnership transfers shadow_commits (git commit history) to the new owner', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../lib/virtual-filesystem/virtual-filesystem-service.ts'),
+      'utf-8'
+    );
+    // The persisted commit history (ShadowCommitManager writes here) must
+    // move with the workspace so the new user can rollback/audit their
+    // own history. Look for an INSERT OR IGNORE into shadow_commits
+    // inside the transfer transaction.
+    expect(source).toMatch(/INSERT OR IGNORE INTO shadow_commits[\s\S]*?owner_id/);
+    // The source must be queried for its existing commits.
+    expect(source).toContain('FROM shadow_commits WHERE owner_id = ?');
+  });
+
+  it('transferOwnership always transfers workspace_version (not just when target has no meta)', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../lib/virtual-filesystem/virtual-filesystem-service.ts'),
+      'utf-8'
+    );
+    // When the target already has meta (returning user), the version
+    // must still be merged (MAX) so the transfer doesn't leave a stale
+    // workspace_version behind. The merge now happens in SQL via
+    // `MAX(version, ?)` to close the read-compare-write race window
+    // in multi-worker Next.js deployments.
+    expect(source).toContain('MAX(version, ?)');
+    expect(source).toContain('ON CONFLICT(owner_id) DO UPDATE SET');
   });
 
   it('transferOwnership skips conflicting paths in target', async () => {
@@ -114,22 +150,76 @@ describe('Auth Session Cleanup', () => {
     expect(source).toContain('virtualFilesystem.transferOwnership');
   });
 
-  it('login does NOT transfer VFS ownership', async () => {
+  it('login DOES transfer VFS ownership to existing account', async () => {
     const fs = require('fs');
     const path = require('path');
     const source = fs.readFileSync(
-      path.join(__dirname, '../app/api/auth/login/route.ts'),
+      path.join(__dirname, '../app/api/auth/login/gateway.ts'),
       'utf-8'
     );
-    expect(source).not.toContain('transferVFSFromAnonymous');
-    expect(source).not.toContain('transferOwnership');
+    // Login should explicitly call transferVFSOnLogin (not the
+    // register-only transferVFSFromAnonymous) so existing-account
+    // logins also pick up anonymous workspace data.
+    expect(source).toContain('transferVFSOnLogin');
+    expect(source).not.toMatch(/await\s+transferVFSFromAnonymous/);
+    // Transfer must be fire-and-forget so a slow transfer doesn't
+    // delay the login response (the helper is non-fatal, idempotent,
+    // and only reads sync request cookies which remain valid post-await).
+    expect(source).toMatch(/void\s+transferVFSOnLogin/);
+  });
+
+  it('transfer-anon-vfs exposes transferVFSOnLogin named export', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../lib/auth/transfer-anon-vfs.ts'),
+      'utf-8'
+    );
+    expect(source).toContain('export async function transferVFSOnLogin');
+  });
+
+  it('transfer-anon-vfs has a DB-scan fallback when cookie-derived ownerId misses', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../lib/auth/transfer-anon-vfs.ts'),
+      'utf-8'
+    );
+    // The cookie-based derivation is lossy (strip anon_, sanitize,
+    // truncate). When it produces 0 transferred files, the helper
+    // MUST fall back to scanning the VFS for recent anon ownerIds
+    // so the user's anonymous workspace is still recovered.
+    expect(source).toContain('findAnonOwnerIds');
+    // The fast path must be tried BEFORE the fallback. Asserting the
+    // `totalTransferred === 0` gate appears before `findAnonOwnerIds`
+    // (not just the order of `transferOwnership`) is the real
+    // contract — the fast path MUST be tried first, and the
+    // fallback MUST only run when the fast path transferred nothing.
+    expect(source).toMatch(/totalTransferred\s*===\s*0[\s\S]*?findAnonOwnerIds/);
+    // The fallback MUST be scoped to this browser's prefix so we
+    // don't transfer other browsers' anon files into this user's
+    // workspace (data graft).
+    expect(source).toMatch(/cookiePrefix/);
+  });
+
+  it('virtual-filesystem-service exposes findAnonOwnerIds bounded by maxAgeHours', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../lib/virtual-filesystem/virtual-filesystem-service.ts'),
+      'utf-8'
+    );
+    expect(source).toContain('async findAnonOwnerIds');
+    // The scan must be bounded (LIMIT blast radius) by default.
+    expect(source).toMatch(/maxAgeHours/);
+    expect(source).toContain("'anon:%'");
   });
 
   it('login clears anon-session-id cookie', async () => {
     const fs = require('fs');
     const path = require('path');
     const source = fs.readFileSync(
-      path.join(__dirname, '../app/api/auth/login/route.ts'),
+      path.join(__dirname, '../app/api/auth/login/gateway.ts'),
       'utf-8'
     );
     expect(source).toContain("'anon-session-id', ''");
@@ -149,6 +239,88 @@ describe('Auth Session Cleanup', () => {
       source.indexOf('const logout = async')
     );
     expect(loginSection).toContain("localStorage.removeItem('anonymous_session_id')");
+  });
+
+  it('auth-context explicitly calls transfer-vfs-on-login endpoint post-login', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../contexts/auth-context.tsx'),
+      'utf-8'
+    );
+    // Defensive client-side trigger so returning users don't lose
+    // anonymous workspace data even if the server-side in-line transfer
+    // was skipped (cookie race, redirect, etc).
+    const loginSection = source.substring(
+      source.indexOf('const login = async'),
+      source.indexOf('const logout = async')
+    );
+    expect(loginSection).toContain("'/api/auth/transfer-vfs-on-login'");
+    expect(loginSection).toContain("method: 'POST'");
+    expect(loginSection).toContain("credentials: 'include'");
+  });
+
+  it('auth-context skips transfer-vfs-on-login fetch when localStorage had no anonymous_session_id', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../contexts/auth-context.tsx'),
+      'utf-8'
+    );
+    // The defensive client-side fetch is only useful for users who
+    // were actually anonymous on this device. If localStorage had no
+    // `anonymous_session_id` key (or it was empty) at the moment of
+    // login, the endpoint would return 0 transferred files and waste
+    // a round-trip + per-user rate-limit token. Gate the fetch on a
+    // captured `hadAnonymousSession` boolean read BEFORE the clear.
+    const loginSection = source.substring(
+      source.indexOf('const login = async'),
+      source.indexOf('const logout = async')
+    );
+    expect(loginSection).toContain("localStorage.getItem('anonymous_session_id')");
+    expect(loginSection).toContain('hadAnonymousSession');
+    // The fetch must be inside the gate, not unconditional.
+    expect(loginSection).toMatch(/if\s*\(\s*hadAnonymousSession\s*\)\s*\{[\s\S]*?\/api\/auth\/transfer-vfs-on-login/);
+  });
+
+  it('login gateway logs transferredFiles when >0 (parity with transfer-vfs-on-login endpoint)', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../app/api/auth/login/gateway.ts'),
+      'utf-8'
+    );
+    // The new endpoint (transfer-vfs-on-login) logs the transferred
+    // count unconditionally. The login gateway's in-line path is the
+    // primary one, so it logs only when files were actually moved
+    // (a log line per 0-file login would drown out the signal).
+    expect(source).toMatch(/createLogger\(['"]API:Auth:Login['"]\)/);
+    expect(source).toMatch(/transferResult\.transferredFiles\s*>\s*0/);
+    expect(source).toContain("'VFS ownership transferred on login'");
+    // Still fire-and-forget — don't await the transfer in the login path.
+    expect(source).toMatch(/void\s+transferVFSOnLogin\(/);
+  });
+
+  it('transfer-vfs-on-login endpoint resolves user via request-auth', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(
+      path.join(__dirname, '../app/api/auth/transfer-vfs-on-login/gateway.ts'),
+      'utf-8'
+    );
+    // SECURITY: the endpoint MUST resolve the user via the canonical
+    // request-auth helper (which handles both session and JWT paths),
+    // never trust a client-sent id (prevents transfers into an
+    // attacker's account).
+    expect(source).toContain('resolveRequestAuth');
+    expect(source).toContain('allowAnonymous: false');
+    expect(source).toContain('transferVFSOnLogin');
+    // The anon cookie name must match the one set by withAnonSessionCookie.
+    expect(source).toContain("'anon-session-id'");
+    // It should return 401 when no valid auth is present.
+    expect(source).toContain('status: 401');
+    // It should be rate-limited per user to bound repeated DB scans.
+    expect(source).toContain('checkUserRateLimit');
   });
 });
 

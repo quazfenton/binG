@@ -113,7 +113,7 @@ class AdvancedFileManager extends EventEmitter {
   private fileStates: Map<string, FileState> = new Map();
   private workflowQueue: WorkflowStep[] = [];
   private autoTriggerRules: AutoTriggerRule[] = [];
-  private dmp: diff_match_patch;
+  private dmp: typeof diff_match_patch;
   private codePreviewState: CodePreviewPanelState;
   private sandpackState: SandpackEditorState;
   private changeHistory: Array<{

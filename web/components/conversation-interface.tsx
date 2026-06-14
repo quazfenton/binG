@@ -254,6 +254,30 @@ export default function ConversationInterface() {
   // Logged-in users get "12345$001" format - their data persists in the database
   useEffect(() => {
     let cancelled = false;
+
+    // FIX: When user changes (login/logout), check if the current compositeSessionId
+    // has the correct prefix for the current user. If not, clear it so the
+    // useEffect regenerates it with the new prefix on the next run.
+    // Without this, after login the compositeSessionId stays as `anon_xxx$001`
+    // because the `!compositeSessionId` guard below skips regeneration when
+    // the state is already populated.
+    if (compositeSessionId && typeof window !== 'undefined') {
+      const expectedPrefix = user?.id || getOrCreateAnonymousSessionId();
+      const currentPrefix = compositeSessionId.indexOf('$') !== -1
+        ? compositeSessionId.slice(0, compositeSessionId.indexOf('$'))
+        : compositeSessionId;
+      if (currentPrefix !== expectedPrefix) {
+        logger.info('[ConversationInterface] User changed, clearing stale compositeSessionId:', {
+          old: compositeSessionId,
+          expectedPrefix,
+          newUserId: user?.id,
+        });
+        setCompositeSessionId('');
+        sessionStorage.removeItem('current_composite_session_id');
+        return; // useEffect will re-run with empty compositeSessionId and regenerate below
+      }
+    }
+
     if (!compositeSessionId) {
       // Restore from sessionStorage to keep VFS files visible across page refreshes
       if (typeof window !== 'undefined') {

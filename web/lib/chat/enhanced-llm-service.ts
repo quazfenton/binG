@@ -923,6 +923,16 @@ export class EnhancedLLMService {
       const messagesForAutoRePrompt = [...processedMessages];
 
       if (vercelProvider) {
+<<<<<<< Updated upstream
+=======
+        // Sanitize streaming messages to avoid provider schema rejections.
+        // The sanitizer strips system-role messages (AI SDK forbids them in
+        // the messages array), so we extract system content BEFORE sanitization
+        // and re-attach it afterwards — streamWithVercelAI's internal
+        // convertMessages() will then move it to the `system` parameter of
+        // streamText(), which is the correct place for system prompts.
+        const systemMsgs = (processedMessages || []).filter((m: any) => m?.role === 'system');
+>>>>>>> Stashed changes
         try {
           const { sanitizeMessages } = await import('./message-sanitizer');
           processedMessages = sanitizeMessages(processedMessages || []);
@@ -934,6 +944,15 @@ export class EnhancedLLMService {
               role: (m?.role && m.role !== 'system') ? m.role : 'user',
               content: typeof m?.content === 'string' ? m.content : JSON.stringify(m?.content || ''),
             }));
+<<<<<<< Updated upstream
+=======
+        }
+        // Re-attach system messages so streamWithVercelAI's convertMessages()
+        // can extract them to the `system` parameter of streamText().
+        // Without this, context-pack and other system-level instructions are lost.
+        if (systemMsgs.length > 0) {
+          processedMessages = [...systemMsgs, ...processedMessages];
+>>>>>>> Stashed changes
         }
 
         // Build tools if enabled — Vercel AI SDK handles tool calling natively

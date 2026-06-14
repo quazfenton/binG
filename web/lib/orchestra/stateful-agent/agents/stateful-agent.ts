@@ -1548,9 +1548,13 @@ export async function* runStatefulAgentStreaming(
   const messages: Array<{ role: 'user'; content: string }> = [];
   let systemPrompt = '';
   if (workspaceSnapshot && !workspaceSnapshot.includes('unavailable') && !workspaceSnapshot.includes('empty')) {
+<<<<<<< Updated upstream
     systemPrompt = `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.\n\n### Workspace State Tools\n- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what's currently running.\n- workspace_graph_diagnostic: Trace service issues to root causes.\n- workspace_graph_find_process: Search for processes by command pattern.`;
   } else {
     systemPrompt = `### Workspace State Tools\n- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what's currently running.\n- workspace_graph_diagnostic: Trace service issues to root causes.\n- workspace_graph_find_process: Search for processes by command pattern.`;
+=======
+    systemPrompt = `### Existing Files in Workspace\n${workspaceSnapshot}\n\nUse ONLY these paths (or new paths you create). Do NOT guess file paths.`;
+>>>>>>> Stashed changes
   }
   messages.push({
     role: 'user',
@@ -1565,7 +1569,11 @@ export async function* runStatefulAgentStreaming(
   const result = streamText({
     model,
     system: systemPrompt,
+<<<<<<< Updated upstream
     messages: sanitizedMessages,
+=======
+    messages,
+>>>>>>> Stashed changes
     tools: toolDefs,
     stopWhen: stepCountIs(maxSteps),
     onChunk: ({ chunk }) => {

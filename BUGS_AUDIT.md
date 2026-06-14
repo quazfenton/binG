@@ -1340,6 +1340,13 @@ Fixes applied during this audit review, grouped by source file:
 - Added `recordClassifierFallback()` and `classifierFallbacks` to `getChatMetrics()`
 - Updated `_resetChatMetricsForTests()`
 
+### Sandbox routing investigation (2026-06-14)
+- **Problem confirmed:** `bash_execute` never reached the pre-warmed sandbox pool. `trySandboxRoute` called `getSessionByUserId(agentId)` which returned null because the pool's `SandboxPoolService` maintains its own internal pool — no bridge connects them.
+- **Fix applied:** `trySandboxRoute` now calls `sandboxBridge.getOrCreateSession(agentId)` when no session exists. This creates a sandbox session (which may or may not come from the pool depending on `SandboxService` implementation).
+- **Pool import fix:** `sandbox-pool/index.ts` had a broken import path (`@/lib/providers/9router/providers`) — fixed to `@/lib/sandbox/providers`. This was a latent bug never triggered because nothing imported the pool module before.
+- **Env probe fix:** `env-probe.ts` now has `probeAvailableBinariesInSandbox(sandboxId)` that runs `which` inside a sandbox, and `formatAvailableBinariesWithSource()` for sandbox-labeled probe output.
+- **Pre-existing build issue:** Next.js 16.2.7 Turbopack cannot handle `import { createRequire } from 'node:module'` in `database/connection.ts` when traced through certain app-route/client-component graphs. This error exists before and after my changes.
+
 ### Previously implemented (confirmed working)
 - **#40** — `tagResultDegraded()` sets `degraded: true` + `fallbackReason` + `nextTurnSteer` in metadata; counters logged; health endpoint surfaces fallback counts
 - **#43** — `softThrottleMb: 1024` (down from 1228) in `ProcessMemoryMonitorConfig.DEFAULT_CONFIG`

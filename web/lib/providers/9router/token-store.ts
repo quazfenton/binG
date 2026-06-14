@@ -33,6 +33,7 @@ export async function getUserRouterTokens(
   provider: string
 ): Promise<RouterTokenResult | null> {
   try {
+    const { oauthService } = await import('@/lib/auth/oauth-service')
     const connections = await oauthService.getUserConnections(userId, provider)
     
     if (!connections || connections.length === 0) {
@@ -68,6 +69,7 @@ export async function getUserRouterTokens(
  */
 export async function getUserRouterConnections(userId: string): Promise<OAuthConnection[]> {
   try {
+    const { oauthService } = await import('@/lib/auth/oauth-service')
     return await oauthService.getUserConnections(userId)
   } catch (error) {
     console.error(`[RouterTokenStore] Failed to get connections for user ${userId}:`, error)
@@ -84,6 +86,7 @@ export async function revokeUserRouterConnection(
   provider: string
 ): Promise<boolean> {
   try {
+    const { oauthService } = await import('@/lib/auth/oauth-service')
     const connections = await oauthService.getUserConnections(userId, provider)
     
     if (!connections || connections.length === 0) {
