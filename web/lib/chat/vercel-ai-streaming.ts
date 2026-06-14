@@ -1111,11 +1111,17 @@ export async function* streamWithVercelAI(
   // abort the network request. The provider (and fetch) sees an aborted
   // signal the moment we call timeoutController.abort(); without this
   // merge, the SDK could keep reading the stream after the timeout fires.
-  // AbortSignal.any is a no-op (returns `signal` unchanged) when
-  // timeoutController is absent, so this is safe in the disabled path too.
-  const effectiveSignal = timeoutController
-    ? AbortSignal.any([signal, timeoutController.signal])
-    : signal;
+  //
+  // signal is optional (typed `signal?: AbortSignal`), so we can't pass
+  // it to AbortSignal.any unconditionally — that throws TypeError on
+  // `undefined`. Filter to defined sources only.
+  const primaryAbortSources: AbortSignal[] = [signal, timeoutController?.signal].filter(
+    (s): s is AbortSignal => !!s,
+  );
+  const effectiveSignal =
+    primaryAbortSources.length > 1
+      ? AbortSignal.any(primaryAbortSources)
+      : primaryAbortSources[0]; // single source: pass through unchanged
   
   // Helper to clear TTFT timeout once first token arrives
   const onFirstToken = () => {
@@ -1685,12 +1691,14 @@ export async function* streamWithVercelAI(
     // firstTokenTimeoutMs / idleTimeoutMs never aborted it. Merge all
     // three signals so the provider sees the abort from ANY source:
     //   - fbController.signal  → primary wins the race, cancel fallback
-    //   - signal               → user cancelled the request
+    //   - signal               → user cancelled the request (may be undefined)
     //   - timeoutController.signal → global TTFT/idle timeout fired
-    // AbortSignal.any is a no-op (returns the single signal) when only
-    // one source exists, so this is safe across the disabled paths too.
-    const fallbackAbortSources: AbortSignal[] = [fbController.signal, signal];
-    if (timeoutController) fallbackAbortSources.push(timeoutController.signal);
+    // Filter undefined sources (AbortSignal.any throws on undefined elements).
+    const fallbackAbortSources: AbortSignal[] = [
+      fbController.signal,
+      signal,
+      timeoutController?.signal,
+    ].filter((s): s is AbortSignal => !!s);
     const fbStreamOpts: any = {
       model: fbVercelModel,
       messages: chatMessages,

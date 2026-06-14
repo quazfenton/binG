@@ -18,7 +18,7 @@ export default defineConfig({
       '**/.next/**',
     ],
     testTimeout: 30000,
-    hooksTimeout: 30000,
+    hookTimeout: 30000,
   },
   resolve: {
     alias: {

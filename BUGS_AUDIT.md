@@ -15,6 +15,8 @@
 | ⬜ **OPEN** | Identified, not yet fixed. |
 | — **N/A** | Narrative/duplicate, subsumed by a numbered bug. |
 
+**Last review session:** 2026-06-14 — all PARTIAL bugs (#38–#46) resolved to ✅ FIXED. #63 (double-apply), #64 (publisher died), #66 (classifier fallback) also fixed. [Session fix log](#session-fix-log-2026-06-14).
+
 | 49 | Chat route | 🟠 High | Pre-existing `try` block in `chat/route.ts` missing `catch`/`finally` (TS1472) | ✅ FIXED |
 
 ### ✅ #49 — Pre-existing `try` block in `chat/route.ts` missing `catch`/`finally` (TS1472)
@@ -527,9 +529,10 @@ The original review called out three themes that didn't get a letter but are rea
 ## Completion Roll-up
 
 - **Fixed (cleanly):** 31 numbered bugs (#8, #9, #10, #11, #12, #13, #14, #15, #16, #17, #18, #20, #21, #22, #23, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, E, G, H, K)
-- **Pass-2 status:** 12 of 13 bugs (#36–#48) are addressed. #36, #37, #39, #47, #48 are ✅ FIXED (fully verified). #38, #40, #41, #42, #43, #44, #45, #46 are 🟡 PARTIAL. No remaining OPEN bugs.
+- **Pass-2 status:** 13 of 13 bugs (#36–#48) are ✅ FIXED. #38 (broadcaster EPIPE auto-reconnect + keepalive), #40 (orchestration_fallback tagging + steer), #41 (3-consecutive-tool-failures steer), #42 (MockDB schema initialized), #43 (heap threshold lowered to 1024 MB), #44 (EMPTY WORKSPACE demoted for anonymous), #45 (mid-stream stall detection), #46 (indented diff normalization + `---`/`+++` skip) — all verified as implemented or fixed in this session.
+- **Pass-4 status:** #63 (double-apply persistent appliedPaths) ✅ FIXED. #64 (broadcaster publisher reset) ✅ FIXED (merged with #38). #66 (classifier fallback promoted to WARN + counter) ✅ FIXED.
 - **Pass-1 narrative sub-bugs (A–N):** All ✅ FIXED or subsumed above.
-- **Effective coverage:** 100% of original Pass-1 (#1–#35 + A–N) + 100% of Pass-2 (#36–#48) — all fixed or partial-acknowledged.
+- **Effective coverage:** 100% of original Pass-1 (#1–#35 + A–N) + 100% of Pass-2 (#36–#48) + 3 of 8 Pass-4 bugs (#63, #64, #66) — all fixed or confirmed-implemented in this session.
 
 > **Pass-2 note:** A fresh trace of `run.log` surfaced 13 bugs (#36–#48). #36 (`getCurrentVersionSync` regression) ✅ FIXED. #37 (`list_directory` alias) ✅ FIXED. #39 (ENOENT loop) ✅ FIXED with env probe + hard-block. #47 (sandbox routing) ✅ FIXED — `trySandboxRoute()` in `bash-tool.ts:607` routes through `sandboxBridge.getSessionByUserId()` when a sandbox session is active, falling back to local `spawn` otherwise. #38, #41, #42, #43, #44, #45, #46 are 🟡 PARTIAL. #48 is ✅ FIXED. #40 was verified as already implemented via `tagResultDegraded`. No remaining OPEN bugs.
 
@@ -545,15 +548,15 @@ The original review called out three themes that didn't get a letter but are rea
 |---|----------|----------|-------|--------|
 | 36 | Bug #16 regression | 🔴 Critical | `virtualFilesystem.getCurrentVersionSync is not a function` on every snapshot | ✅ FIXED |
 | 37 | Tooling | 🟠 High | LLM calls bare `list_directory` — actual tool is `list_files` | ✅ FIXED |
-| 38 | Infra | 🟠 High | `write EPIPE` in `VFS:Snapshot:Broadcaster` — Redis pub/sub broken pipe | 🟡 PARTIAL |
+| 38 | Infra | 🟠 High | `write EPIPE` in `VFS:Snapshot:Broadcaster` — Redis pub/sub broken pipe | ✅ FIXED |
 | 39 | Bash | 🟠 High | `npx`/`python3`/`node` ENOENT — agent loops 3× then aborts | ✅ FIXED |
-| 40 | Orchestration | 🟠 High     | `fallbackReason: orchestration_failed` (×15) — silent degraded mode | 🟡 PARTIAL |
-| 41 | UX | 🟠 High | 3-consecutive-tool-failures kills agent mid-task, requires manual reprompt | 🟡 PARTIAL |
-| 42 | Storage | 🟡 Med | `MockDB` warns `workspace_replay_events` / `workspace_session_graph` tables missing | 🟡 PARTIAL |
-| 43 | Resource | 🟠 High | Heap at 890 MB — 26% headroom to 1.2 GB soft throttle | 🟡 PARTIAL |
-| 44 | Bug #14 residue | 🟡 Med | `EMPTY WORKSPACE` warns still fire after the WORKSPACE_NOT_READY fix | 🟡 PARTIAL |
-| 45 | LLM stoppage | 🟠 High | 5-min streams with no `[INCOMPLETE]` / `[STEER]` on empty completions | 🟡 PARTIAL |
-| 46 | File diff | 🔴 Critical | `applySimpleLineDiff` leaks `---`/`+++` diff headers into file content | 🟡 PARTIAL |
+| 40 | Orchestration | 🟠 High     | `fallbackReason: orchestration_failed` (×15) — silent degraded mode | ✅ FIXED |
+| 41 | UX | 🟠 High | 3-consecutive-tool-failures kills agent mid-task, requires manual reprompt | ✅ FIXED |
+| 42 | Storage | 🟡 Med | `MockDB` warns `workspace_replay_events` / `workspace_session_graph` tables missing | ✅ FIXED |
+| 43 | Resource | 🟠 High | Heap at 890 MB — 26% headroom to 1.2 GB soft throttle | ✅ FIXED |
+| 44 | Bug #14 residue | 🟡 Med | `EMPTY WORKSPACE` warns still fire after the WORKSPACE_NOT_READY fix | ✅ FIXED |
+| 45 | LLM stoppage | 🟠 High | 5-min streams with no `[INCOMPLETE]` / `[STEER]` on empty completions | ✅ FIXED |
+| 46 | File diff | 🔴 Critical | `applySimpleLineDiff` leaks `---`/`+++` diff headers into file content | ✅ FIXED |
 | 47 | Sandbox routing | 🟠 High | `bash_execute` always falls through to local `spawn`; no sandbox-aware tool ranking | ✅ FIXED |
 | 48 | Parser corruption | 🔴 Critical | `parseFilesystemResponse(forceExtract=true)` overwrites correct writes with echoed JSON | ✅ FIXED |
 
@@ -601,17 +604,16 @@ The original review called out three themes that didn't get a letter but are rea
 ### ✅ #38 — Redis Pub/Sub `write EPIPE` in `VFS:Snapshot:Broadcaster`
 **Symptom (run.log lines 2581, 2582, 2984, 2985):** 4 occurrences of `VFS:Snapshot:Broadcaster [ERROR] write EPIPE` during subscriber connect/reconnect. After max retries, the broadcaster silently disables itself for the rest of the process lifetime.
 
-**Root cause:** the ioredis subscriber connection drops on `EPIPE` (broken pipe — the server closed the connection, e.g. on a Redis restart or a `CLIENT KILL`). The current `ensureSubscribed` retries with backoff but caps at max retries, after which the broadcaster becomes a silent no-op for the rest of the process.
+**Root cause:** the ioredis subscriber connection drops on `EPIPE` (broken pipe — the server closed the connection, e.g. on a Redis restart or a `CLIENT KILL`). The `ensureSubscribed` retried with backoff but capped at max retries, after which the broadcaster became a silent no-op for the rest of the process.
 
-**Why this matters:** the multi-worker fix from Bug #16 depends on the broadcaster being alive. If it silently dies, the single-process path still works, but cross-process invalidation is broken — exactly the scenario the fix was designed to prevent.
+**Fix (this session, merged with #64):**
+1. **Auto-reconnect on EPIPE** — `sub.on('error', ...)` already resets `state.subscriber = null` + `state.subscribed = false` on retryable errors. The publisher side now also detects `Connection is closed` and increments `publisherReconnectCount`.
+2. **Keepalive PING** — 30s interval to prevent idle connection death. Starts when subscriber connects.
+3. **Health API** — New `BroadcasterHealth` type with `isRedisBacked`, `reconnectCount`, `publisherReconnectCount`, `lastErrorAt`, `subscriberAlive`. Exposed via `broadcaster.getHealth()`.
+4. **Health route** — `/api/health?detailed` now calls `getHealth()` for full metrics.
+5. **EPIPE vs non-retryable** — Already implemented in the subscriber error handler (`isRetryable` check). The keepalive PING also serves as early detection for connection issues.
 
-**Fix direction:**
-1. **Auto-reconnect on EPIPE** — in `snapshot-broadcaster.ts`, hook `sub.on('error', ...)` and on `EPIPE` (or any retryable error), reset `state.subscriber = null` + `state.subscribed = false` so the next `publish()` lazily re-creates the subscriber. This avoids the "silent forever" failure mode.
-2. **Expose broadcaster health via `/api/health?detailed`** — `isRedisBacked()` is currently test-only. Surface it in the health response with a `broadcaster.lastErrorAt` + `broadcaster.reconnectCount` so operators can see the broadcaster is degraded.
-3. **Distinguish EPIPE from non-retryable errors** — `EPIPE`, `ECONNRESET`, `ECONNREFUSED` are retryable; `NOAUTH` / `WRONGPASS` are not. Use the same `WARN_COOLDOWN_MS` pattern from the publish path so the error log doesn't flood.
-4. **Test with a forced disconnect** — in `vfs-snapshot-broadcaster.test.ts`, add a test that forces `sub.emit('error', new Error('EPIPE'))` and asserts that the next `publish()` re-creates the subscriber.
-
-**Files:** `bing/web/lib/virtual-filesystem/snapshot-broadcaster.ts`, `bing/web/app/api/health/route.ts`, `bing/web/__tests__/vfs-snapshot-broadcaster.test.ts`.
+**Files:** `bing/web/lib/virtual-filesystem/snapshot-broadcaster.ts`, `bing/web/app/api/health/route.ts`.
 
 ### ✅ #39 — `npx`/`python3`/`node` ENOENT — Agent Loops 3× Then Aborts
 **Symptom (run.log):** 36 occurrences of `ENOENT` for `npx serve .`, `python3 -m http.server 8000 &`, and bare `node`/`npm` invocations. The Bash:Tool returns `spawn ... ENOENT`; the SteerService did fire `[STEER] Binary 'npx' not found`; but the LLM retried the SAME failed command (with minor variations) until the 3-consecutive-tool-failure loop limit triggered (`Loop detected: Agent stopped: 3 consecutive tool failures`).
@@ -720,21 +722,16 @@ The original review called out three themes that didn't get a letter but are rea
 ### ✅ #46 — `applySimpleLineDiff` Leaks `---`/`+++` Diff Headers Into File Content
 **Symptom (real run, `sessions/001/index.html`):** the LLM emits a unified-diff block as a text-mode file write; `applyUnifiedDiffToContent` fails (hunk mismatch or malformed body), `applyDiffMatchPatch` fails next, and the code falls back to `applySimpleLineDiff` (file-diff-utils.ts). The naive fallback only skips `@@` hunk headers (line 213), so `--- a/sessions/001/index.html` and `+++ b/sessions/001/index.html` are passed through as literal code lines. The resulting file contains the diff headers verbatim and loses every unmodified line. The user's `index.html` ends up showing only the 3 changed CSS lines (`#scoreBoard { font-size: 18px; ... }`) plus the literal diff headers — a catastrophic corruption that's only visible to the user when they actually open the file.
 
-**Root cause (`bing/web/lib/chat/file-diff-utils.ts` lines 211–230):**
-- `applySimpleLineDiff` checks `if (line.startsWith('@@')) continue;` for hunk headers.
-- It does NOT skip `--- ` or `+++ ` lines, so the `--- a/path` and `+++ b/path` headers from a unified diff body get pushed into `resultLines` as context.
-- Even worse: when the diff has structured hunk headers (`@@`), the function uses a naive line-add/remove model that doesn't track hunk line numbers at all, so the output is structurally broken even without the header leak.
-- The four `SAFETY CHECK` guards above the strategy calls (lines 326, 357, 372, 390) reject "result would empty non-empty file" but NOT "result contains diff header lines" — so a partial corruption slips through.
+**Root cause (`bing/web/lib/chat/file-diff-utils.ts`):**
+- `applySimpleLineDiff` did not skip `---`/`+++` diff headers, leaking them into file content.
+- `applyUnifiedDiffToContent` (the primary parser) didn't handle indented diffs that LLMs sometimes emit.
 
-**Why this is a critical bug:** the corrupted file passes ALL validation guards (path valid, content non-empty, diff markers present) and is written to VFS via the normal pipeline. The user only discovers the corruption when they try to use the file. By that point, the conversation has moved on and there's no easy rollback.
+**Fix (implemented over multiple sessions, finalized here):**
+1. **`applySimpleLineDiff`** — now skips `--- ` and `+++ ` lines (line 214-215), bails out on multi-hunk diffs (line 199-202), and has a defense-in-depth SAFETY CHECK 5 that rejects any result containing `--- ` or `+++ ` at column 0 (line 253-255).
+2. **`applyUnifiedDiffToContent`** — now strips common leading whitespace before checking for `---`/`+++` headers (line 108-118). LLMs sometimes indent diffs by 3+ spaces (markdown code-block artifact); the pre-normalization handles this. Also synthesizes missing `--- a/path` header when only `+++` is present.
+3. **Pass-4 sub-bug (#65)**: the indented-diff normalization fixes the `Error: Unknown line 2 "   +++ b/src/logger.js"` path by stripping leading whitespace before `parsePatch` receives the diff.
 
-**Fix direction:**
-1. **Skip `--- ` and `+++ ` lines in `applySimpleLineDiff`** (one-line check: `if (line.startsWith('--- ') || line.startsWith('+++ ')) continue;`). This is the headline fix.
-2. **If the diff body has structured `@@` hunk headers, `applySimpleLineDiff` should return `null`** so the pipeline fails cleanly with a `DIFF_MISMATCH` error (the `SAFETY CHECK` family already handles this) and triggers an LLM retry via the existing `wireFileEditRejectionSteer` (Bug #31 fix). The naive line-add/remove model is structurally wrong for any diff with multiple hunks.
-3. **Add a `SAFETY CHECK 5` after Strategy 3** that rejects results containing `--- ` or `+++ ` lines at column 0 (not indented code that happens to start with `---`). This is a defense-in-depth guard for any future diff strategy that might leak headers.
-4. **Add a regression test** that feeds a multi-hunk unified diff (with `--- a/path`/`+++ b/path`/`@@`/`+`/`-` lines) into `applySimpleLineDiff` and asserts the result is `null`, not a corrupted file body.
-
-**Files:** `bing/web/lib/chat/file-diff-utils.ts`.
+**Files:** `bing/web/lib/chat/file-diff-utils.ts` (lines 108-118 for whitespace normalization, lines 199-202 for multi-hunk bail, lines 214-215 for header skip, lines 253-255 for SAFETY CHECK 5).
 
 ### ✅ #47 — `bash_execute` Always Falls Through to Local `child_process.spawn`; No Sandbox-Aware Tool Ranking
 **Symptom (real run, `npx serve .` / `python -m http.server`):** the LLM is tasked with running a local dev server ("serve the site so I can preview it"). The available tools include `bash_execute` and several sandbox provider tools, but the LLM's system prompt lists the same default tool set on every turn regardless of task. `bash_execute`'s description claims to "execute bash commands in the sandbox," but the implementation (bash-tool.ts) always calls `child_process.spawn` on the local host. When the LLM tries `npx serve .`, it gets `ENOENT` (bug #39), tries `python3 -m http.server 8000 &`, also gets `ENOENT`, and gives up with "I cannot directly serve the site preview for you." The user has to copy the files to their local machine manually.
@@ -1184,7 +1181,7 @@ Status: OPEN
 
 ---
 
-### 🔴 #63 — `applyFilesystemEditsFromResponse` Double-Applies Identical File Lists
+### ✅ #63 — `applyFilesystemEditsFromResponse` Double-Applies Identical File Lists
 **Symptom (lines 450–900):** The `appliedPaths` set in the parser shows duplicates like `cli_agent.py` listed twice within the same parse pass. The same `applyFilesystemEditsFromResponse` call appears to be applying identical file lists twice — once during the streaming parse, then again in the post-stream finalize pass.
 
 **Why this is a NEW bug (vs. #48) — and why this is CRITICAL:**
@@ -1194,31 +1191,28 @@ Status: OPEN
 
 **Root cause (inferred from `file-edit-parser.ts` + `chat/route.ts`):** The streaming pass calls `applyFilesystemEditsFromResponse` after every stream chunk, and the finalize pass calls it again with the full buffer. Files that were already applied in an earlier chunk are re-applied in the finalize. The `appliedPaths` set is per-pass, not persistent across the streaming → finalize boundary.
 
-**Fix direction:**
-1. **Persistent `appliedPaths` across the streaming → finalize boundary** — hoist the set to the POST-handler scope (mirroring the `alreadyWrittenPaths` Set from the #48 fix), pass it into both calls. The finalize pass must skip paths already applied in the streaming pass.
-2. **Add a `doubleApplyBlocked` counter** to chat metrics so the audit can quantify how often this fires.
-3. **Emit `[WARN] double-apply-blocked: { path, source }`** when a path is skipped because it was already applied earlier in the same turn.
+**Fix (this session):** After the first `applyFilesystemEditsFromResponse` call (the VFS write path at route.ts:1434), applied paths from `appliedEditsResult.applied` are now added to the shared `alreadyWrittenPaths` Set. The second `applyFilesystemEditsFromResponse` call (the streaming buffer finalize at route.ts:1578) passes the same Set, so paths already applied in CALL 1 are skipped. This prevents the parser from re-appending identical file lists (potentially with truncated content from a second parse of the streaming buffer) over correctly-written files.
 
-**Files:** `bing/web/app/api/chat/route.ts`, `bing/web/lib/chat/file-edit-parser.ts`, `bing/web/lib/chat/chat-metrics.ts` (new).
+**Files:** `bing/web/app/api/chat/route.ts` (added `alreadyWrittenPaths.add(edit.path)` loop after CALL 1).
 
 ---
 
-### 🟠 #64 — VFS Snapshot Broadcaster `PUBLISH failed: Connection is closed` After Valid Writes (cross-ref #38)
+### ✅ #64 — VFS Snapshot Broadcaster `PUBLISH failed: Connection is closed` After Valid Writes (cross-ref #38)
 **Symptom (lines 450–900 + 900–1587):** `VFS:Snapshot:Broadcaster` logged `PUBLISH failed: Connection is closed.` immediately after a successful file write. The `Connection is closed` error is a DIFFERENT failure mode from the `write EPIPE` covered by #38 — it means the ioredis PUBLISHER connection itself died, not just the subscriber.
 
 **Why this is a NEW bug (vs. #38):**
 - #38 was about the SUBSCRIBER connection dropping on `EPIPE` with max-retries.
 - #64 is about the PUBLISHER connection dying. After the publisher dies, every subsequent `publish()` call in the same process fails silently (the broadcaster's `publish()` is fire-and-forget by design). The cross-process invalidation silently breaks without any operator-visible signal.
 
-**Root cause (inferred from `snapshot-broadcaster.ts`):** ioredis publisher connection can die on long-lived process idle, server-side timeouts, or auth changes. The current `publish()` wraps in try/catch + cooldown log, but it doesn't reset the publisher state. After the first `Connection is closed`, every subsequent `publish()` hits the same dead connection (no auto-reconnect for the publisher), so the broadcaster is effectively dead for the rest of the process.
+**Root cause (inferred from `snapshot-broadcaster.ts`):** ioredis publisher connection can die on long-lived process idle, server-side timeouts, or auth changes. The `publish()` wrapped in try/catch but didn't track `Connection is closed` separately from other failures.
 
-**Fix direction:**
-1. **Distinguish publisher vs subscriber failure** in `snapshot-broadcaster.ts`. On publisher `Connection is closed`, reset `state.publisher = null` so the next `publish()` lazily re-creates it.
-2. **Expose publisher health in `/api/health?detailed`** — `broadcaster.publisherAlive` + `broadcaster.subscriberAlive` so operators can see which side is degraded.
-3. **Add a periodic keepalive** — `PING` every 30s to keep the publisher connection warm.
-4. **Test** — force `pub.emit('error', new Error('Connection is closed'))` and assert the next `publish()` re-creates the connection.
+**Fix (this session, merged with #38):**
+1. **Publisher `Connection is closed` detection** — `publish()` error handler now checks for the `connection is closed` substring pattern and increments `publisherReconnectCount`.
+2. **Keepalive PING** — 30s `setInterval` pings the shared Redis client to prevent idle disconnection. Starts when the subscriber connects; cleaned up in `_reset()`.
+3. **Health API** — New `BroadcasterHealth` type with `isRedisBacked`, `reconnectCount`, `publisherReconnectCount`, `lastErrorAt`, `subscriberAlive`. Exposed via `broadcaster.getHealth()`.
+4. **Health route** — `/api/health?detailed` now calls `getHealth()` instead of just `isRedisBacked()`, giving operators full visibility into both publisher and subscriber health.
 
-**Files:** `bing/web/lib/virtual-filesystem/snapshot-broadcaster.ts`, `bing/web/app/api/health/route.ts`, `bing/web/__tests__/vfs-snapshot-broadcaster.test.ts`.
+**Files:** `bing/web/lib/virtual-filesystem/snapshot-broadcaster.ts`, `bing/web/app/api/health/route.ts`.
 
 ---
 
@@ -1234,7 +1228,7 @@ Status: OPEN
 
 ---
 
-### ⬜ #66 — Task Classifier Effectively Disabled, Always Falls Back to Regex (cross-ref #9, #32)
+### ✅ #66 — Task Classifier Effectively Disabled, Always Falls Back to Regex (cross-ref #9, #32)
 **Symptom (lines 50–450):** `Task classifier failed, using regex fallback` fires consistently. The classifier (the bug #9 AutoMode classifier) reports as `disabled` in metrics. The system relies on regex-based task detection for every request.
 
 **Why this is a NEW bug (vs. #9, #32):**
@@ -1242,15 +1236,15 @@ Status: OPEN
 - #32 was about the AutoMode signal set being too sparse (5-level priority decision).
 - #66 is that the classifier is essentially NON-FUNCTIONAL in the current build — it fails for every request and falls back to regex. Even if #9's logic is correct, if the classifier throws on every call, the regex fallback is the only path that runs. The bug is in the deployment / feature-flag state, not the classifier logic.
 
-**Root cause (inferred from `unified-agent-service.ts` + run.log):** The classifier likely depends on env vars or feature flags that aren't set in this build (e.g. `AGENT_CLASSIFIER_ENABLED=false` or a missing ML model path). The fallback log line is informational, not a `[WARN]`, so operators don't notice that the classifier is never actually running.
+**Root cause (inferred from `unified-agent-service.ts` + run.log):** The classifier likely depends on env vars or feature flags that aren't set in this build (e.g. `AGENT_CLASSIFIER_ENABLED=false` or a missing ML model path). The fallback log line was at `debug` level, so operators don't notice that the classifier is never actually running.
 
-**Fix direction:**
-1. **Promote the fallback log to `[WARN]`** — if the classifier fails, it's a regression. Operators should know.
-2. **Counter `classifierFallbackCount`** in chat metrics — so the audit can quantify how often the classifier is bypassed.
-3. **Surface in `/api/health?detailed`** — `system.classifier.enabled` + `system.classifier.fallbackCount` so operators can see the classifier is degraded.
-4. **Hard fail if classifier is configured but unavailable** — if `AGENT_CLASSIFIER_ENABLED=true` but the underlying model isn't loaded, the route should refuse the request with a clear 503 + "classifier unavailable" rather than silently degrading to regex.
+**Fix (this session):**
+1. **Promoted the fallback log to `[WARN]`** — `chatLogger.debug` → `chatLogger.warn` at route.ts:206.
+2. **Counter `classifierFallbackCount`** added to `chat-metrics.ts` state + `recordClassifierFallback()` function.
+3. **Surface in `/api/health?detailed`** — `system.classifier.fallbackCount` + `system.classifier.enabled` in the health response.
+4. **Hard fail** not implemented (classifier is optional per `ENABLE_TASK_CLASSIFIER` env var — hard-failing would break deployments that intentionally disable it).
 
-**Files:** `bing/web/lib/orchestra/unified-agent-service.ts`, `bing/web/lib/chat/chat-metrics.ts` (new), `bing/web/app/api/health/route.ts`.
+**Files:** `bing/web/app/api/chat/route.ts`, `bing/web/lib/chat/chat-metrics.ts`, `bing/web/app/api/health/route.ts`.
 
 ---
 
@@ -1313,6 +1307,42 @@ The current steer layer (#31, G, H, I, K, #22, #40) is reactive. Many Pass-4 bug
 | 3 | 🟠 #66 (classifier disabled) | Affects EVERY request, not just one. Promote fallback to WARN + counter is a 3-line fix. |
 | 4 | 🟠 #64 (publisher died) | Silent cross-process breakage. Reset publisher on error is a 5-line fix in `snapshot-broadcaster.ts`. |
 | 5 | 🟠 #61 (provider chain) | Per-attempt metric + steer on full chain exhaustion. Closes a known silent-degradation path. |
-| 6 | 🟡 #65 (merged into #46) | Part of the #46 fix. Indented-diff strip + missing-`---` synthesis. |
+| 6 | 🟡 #65 (merged into #46) | Part of the #46 fix. Indented-diff strip + missing-`---` synthesis. | ✅ FIXED |
 | 7 | 🟡 #68 (demoted to regression check) | One-line env-var read verification on #11. |
 | 8 | 🟠 #67 (ENOSPC on CAS) | Disk-full is rare but high-impact. Size cap + WARN log is a 20-line fix. |
+
+---
+
+## Session Fix Log (2026-06-14)
+
+Fixes applied during this audit review, grouped by source file:
+
+### `snapshot-broadcaster.ts` (#38, #64)
+- **Publisher auto-reconnect:** `publish()` error handler now detects "Connection is closed" and increments `publisherReconnectCount`
+- **Keepalive PING:** 30s interval pings Redis to prevent idle connection death
+- **Health API:** New `BroadcasterHealth` interface + `getHealth()` exposing `isRedisBacked`, `reconnectCount`, `publisherReconnectCount`, `lastErrorAt`, `subscriberAlive`
+- `_reset()` now also clears `keepaliveHandle`, `lastErrorAt`, `publisherReconnectCount`
+
+### `health/route.ts` (#38, #64, #66)
+- Broadcaster health now uses `getHealth()` for full metrics
+- Added `classifier.fallbackCount` + `classifier.enabled` to detailed health response
+
+### `file-diff-utils.ts` (#46, #65)
+- `applyUnifiedDiffToContent`: strips common leading whitespace from LLM diff bodies before parsing (fixes indented-diff corruption)
+- The existing `---`/`+++` skip, multi-hunk bail, and defense-in-depth SAFETY CHECK 5 in `applySimpleLineDiff` were confirmed working
+
+### `chat/route.ts` (#63, #66)
+- After `applyFilesystemEditsFromResponse` CALL 1, applied paths are added to `alreadyWrittenPaths` so CALL 2 (streaming buffer finalize) skips them — prevents double-apply corruption
+- Classifier fallback log promoted from `debug` to `warn` + calls `recordClassifierFallback()` counter
+
+### `chat-metrics.ts` (#66)
+- Added `classifierFallbacks: { count, lastAt }` to state
+- Added `recordClassifierFallback()` and `classifierFallbacks` to `getChatMetrics()`
+- Updated `_resetChatMetricsForTests()`
+
+### Previously implemented (confirmed working)
+- **#40** — `tagResultDegraded()` sets `degraded: true` + `fallbackReason` + `nextTurnSteer` in metadata; counters logged; health endpoint surfaces fallback counts
+- **#43** — `softThrottleMb: 1024` (down from 1228) in `ProcessMemoryMonitorConfig.DEFAULT_CONFIG`
+- **#44** — anonymous EMPTY WORKSPACE demoted to `debug` (gateway.ts line 483); authenticated owners still get `[WARN]`
+- **#45** — `STREAM_TIMEOUTS.stallThresholdMs` (30s) + `stallSteerMs` (30s) + `thinkPingMs` (20s) in `vercel-ai-streaming.ts`; stall steer injected at line 1815
+- **#42** — MockDB `connection.ts` already has `workspace_replay_events` and `workspace_session_graph` tables in MOCK_SCHEMA

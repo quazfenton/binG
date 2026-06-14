@@ -105,7 +105,24 @@ export function applyUnifiedDiffToContent(currentContent: string, path: string, 
     return null;
   }
 
-  const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
+  // Bug #46/#65: Normalize the diff body before parsing. LLMs sometimes emit
+  // diffs indented by 3 spaces (markdown code-block rendering artifact) or
+  // omit the `--- a/path` header. Strip common leading whitespace from all
+  // lines in the diff body, then synthesize missing headers if needed.
+  let normalized = diffBody;
+  const lines = normalized.split('\n');
+  // Find minimum leading whitespace across non-empty lines
+  let minIndent = Infinity;
+  for (const l of lines) {
+    if (l.trim().length === 0) continue;
+    const indent = l.length - l.trimStart().length;
+    if (indent < minIndent) minIndent = indent;
+  }
+  if (Number.isFinite(minIndent) && minIndent > 0) {
+    normalized = lines.map(l => l.slice(minIndent)).join('\n');
+  }
+
+  const diffText = normalized.endsWith("\n") ? normalized : `${normalized}\n`;
   const hasHeaders = diffText.includes("--- ") && diffText.includes("+++ ");
   const unifiedDiff = hasHeaders
     ? diffText

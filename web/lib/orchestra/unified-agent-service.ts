@@ -1543,7 +1543,7 @@ export async function processUnifiedAgentRequest(
     });
     // Attempt fallback on error
     const triedModes = new Set<string>([mode]);
-    const fallbackResult = await attemptFallback(config, mode, error, triedModes);
+    const fallbackResult = await attemptFallback(config, mode, triggerFromError(error, config.provider, mode), triedModes);
 
     if (fallbackResult) {
       log.info('[UnifiedAgent] ✓ FALLBACK SUCCEEDED', {
@@ -3556,10 +3556,10 @@ async function runV1ApiWithTools(
     let response = '';
 
     try {
-      log.info('[V1-API-WITH-TOOLS] Calling streamWithVercelAI...');
-      const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
+      log.info('[V1-API-WITH-TOOLS] Calling streamWithConcurrentFallback...');
+      const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
 
-      for await (const chunk of streamWithVercelAI({
+      for await (const chunk of streamWithConcurrentFallback({
         provider: providerName,
         model: modelForProvider,
         messages: llmMessages,
@@ -3680,11 +3680,11 @@ Based on what you have learned, continue working on the original task. Take the 
         ];
 
         try {
-          const { streamWithVercelAI: streamAI } = await import('../chat/vercel-ai-streaming');
+          const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
           let contContent = '';
           const toolsBeforeContinuation = toolInvocations.length;
 
-          for await (const chunk of streamAI({
+          for await (const chunk of streamWithConcurrentFallback({
             provider: providerName,
             model: modelForProvider,
             messages: contMessages as any,
@@ -4003,8 +4003,8 @@ Based on what you have learned, continue working on the original task. Take the 
 
         let contResponse = '';
         try {
-          const { streamWithVercelAI: streamAI } = await import('../chat/vercel-ai-streaming');
-          for await (const chunk of streamAI({
+          const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+          for await (const chunk of streamWithConcurrentFallback({
             provider: providerName,
             model: modelForProvider,
             messages: continuationMessages as any,
@@ -4819,7 +4819,7 @@ async function runV1Orchestrated(
         // Try broader fallback chain before giving up
         try {
           const triedModes = new Set<string>(['v1-agent-loop', 'v1-api']);
-          const chainResult = await attemptFallback(config, 'v1-agent-loop', fbError, triedModes);
+          const chainResult = await attemptFallback(config, 'v1-agent-loop', triggerFromError(fbError, config.provider, 'v1-api'), triedModes);
           if (chainResult) {
             log.info('[runV1Orchestrated] attemptFallback chain succeeded after budget exhaustion + v1-api failure');
             return {
@@ -5062,7 +5062,7 @@ async function runV1ApiCompletion(
         }
       } catch { /* model-ranker unavailable, proceed */ }
 
-      const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
+      const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
 
       let content = '';
       const fileEdits: Array<{ path: string; content: string; action?: string }> = [];
@@ -5070,17 +5070,17 @@ async function runV1ApiCompletion(
       const streamOpts = {
         provider: providerName,
         model: modelForProvider,
-        messages: messages as any[],
+        messages: messages as import("../providers/llm-providers").LLMMessage[],
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 4096,
         maxRetries: 0,
         maxSteps: 12,  // Allow tool execution
-        tools: config.tools?.length ? config.tools : undefined,
+        tools: (config.tools?.length ? config.tools : undefined) as Record<string, any> | undefined,
       };
 
       if (config.onStreamChunk) {
-        log.debug('[ORCHESTRATOR] Passing tools to streamWithVercelAI:', config.tools?.map((t: any) => t.name));
-        for await (const chunk of streamWithVercelAI(streamOpts as any)) {
+        log.debug('[ORCHESTRATOR] Passing tools to streamWithConcurrentFallback:', config.tools?.map((t: any) => t.name));
+        for await (const chunk of streamWithConcurrentFallback(streamOpts)) {
           if (chunk.content) {
             content += chunk.content;
             config.onStreamChunk(chunk.content);
@@ -5095,7 +5095,7 @@ async function runV1ApiCompletion(
           }
         }
       } else {
-        for await (const chunk of streamWithVercelAI(streamOpts as any)) {
+        for await (const chunk of streamWithConcurrentFallback(streamOpts)) {
           if (chunk.content) {
             content += chunk.content;
           }
@@ -5354,10 +5354,68 @@ return {
  * - Complex tasks: StatefulAgent → OpenCode Engine → V1 API
  * - Simple tasks: OpenCode Engine → V1 API
  */
+/**
+ * Discriminated trigger for attemptFallback. The fallback chain can be
+ * entered for two distinct reasons:
+ *   - 'error'   — the primary mode threw an exception (HTTP 5xx, abort,
+ *                 provider crash, etc.)
+ *   - 'timeout' — the primary mode was silent for firstTokenTimeoutMs
+ *                 (the TTFT/stream-level timeout in vercel-ai-streaming.ts
+ *                 fires and surfaces as a timeout-shaped error)
+ *
+ * Decoupling the trigger from the error object lets the fallback path
+ * apply different telemetry, different fall-back ordering, and different
+ * reasoning in metadata.fallbackReason. The downstream caller (e.g.
+ * tagResultDegraded) reads trigger.kind to decide whether to label the
+ * response as a timeout-induced degradation vs an error-induced one.
+ */
+export type FallbackTrigger =
+  | { kind: 'error'; error: unknown; provider?: string; mode?: string }
+  | { kind: 'timeout'; timeoutMs: number; provider?: string; mode?: string };
+
+/**
+ * Classify an error as timeout-shaped by substring match. Mirrors the
+ * check in `markClientDisconnected()` — the TTFT/idle timeout in
+ * vercel-ai-streaming.ts surfaces as an Error whose message contains
+ * one of these tokens.
+ */
+function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes('timeout') ||
+    msg.includes('no response') ||
+    msg.includes('no activity') ||
+    msg.includes('first-token') ||
+    msg.includes('time-to-first-token')
+  );
+}
+
+/**
+ * Build a FallbackTrigger from a raw error. Extracts the timeout
+ * window from the error message if present, otherwise falls back to
+ * the LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS env var (default 30000).
+ */
+function triggerFromError(
+  error: unknown,
+  provider?: string,
+  mode?: string,
+): FallbackTrigger {
+  if (isTimeoutError(error)) {
+    const msg = (error as Error).message;
+    const match = msg.match(/(\d+)\s*ms/);
+    const timeoutMs = match
+      ? parseInt(match[1], 10)
+      : parseInt(process.env.LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS || '30000', 10);
+    return { kind: 'timeout', timeoutMs, provider, mode };
+  }
+  return { kind: 'error', error, provider, mode };
+}
+
 async function attemptFallback(
   config: UnifiedAgentConfig,
   failedMode: string,
-  error: any,
+  trigger: FallbackTrigger,
   triedModes: Set<string> = new Set()
 ): Promise<UnifiedAgentResult | null> {
   // Track tried modes to prevent infinite loops
@@ -5374,7 +5432,10 @@ async function attemptFallback(
 
   log.info('[Fallback] ┌─ ATTEMPTING FALLBACK ──────────────────');
   log.info('[Fallback] │ failedMode:', failedMode);
-  log.info('[Fallback] │ error:', error instanceof Error ? error.message : String(error));
+  const errorMsg = trigger.kind === 'error'
+    ? (trigger.error instanceof Error ? trigger.error.message : String(trigger.error))
+    : `timeout after ${trigger.timeoutMs}ms`;
+  log.info('[Fallback] │ error:', errorMsg);
   log.info('[Fallback] │ visitedModes:', Array.from(visitedModes));
   log.info('[Fallback] └───────────────────────────────────────────');
 

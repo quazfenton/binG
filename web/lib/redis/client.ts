@@ -27,12 +27,15 @@ import Redis from 'ioredis';
 // Default is OFF. Set IOREDIS_DEBUG=true to opt in to verbose
 // per-command logging (useful for local debugging of pub/sub).
 // ioredis's TS types don't expose setDebug, so we cast through `any`.
-const __RedisCtor = Redis as unknown as { setDebug: (enabled: boolean) => void };
-if (process.env.IOREDIS_DEBUG === 'true' || process.env.IOREDIS_DEBUG === '1') {
-  __RedisCtor.setDebug(true);
-} else {
-  __RedisCtor.setDebug(false);
-}
+// `setDebug` is optional: older / mocked / shimmed Redis constructors may
+// not have it, and calling a missing static method throws at module-eval
+// time and cascades through every importer (snapshot-broadcaster → VFS →
+// CodePreviewPanel poll). Optional-chaining the call makes the
+// debug-silencing best-effort instead of a hard dependency.
+const __RedisCtor = Redis as unknown as { setDebug?: (enabled: boolean) => void };
+const __ioredisDebugEnabled =
+  process.env.IOREDIS_DEBUG === 'true' || process.env.IOREDIS_DEBUG === '1';
+__RedisCtor.setDebug?.(__ioredisDebugEnabled);
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Redis:Client');

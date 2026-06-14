@@ -203,7 +203,12 @@ async function classifyRequest(
     };
   } catch (error: any) {
     // FALLBACK: Use legacy regex detection
-    chatLogger.debug('Task classifier failed, using regex fallback', { error: error.message });
+    // Bug #66: promote to warn so operators know the classifier is degraded
+    chatLogger.warn('Task classifier failed, using regex fallback', { error: error.message });
+    // Bug #66: increment counter for health endpoint visibility
+    import('@/lib/chat/chat-metrics').then(({ recordClassifierFallback }) => {
+      recordClassifierFallback();
+    }).catch(() => {});
 
     let isCodeRequest = false;
     if (STRONG_CODE_PATTERN.test(content)) {
@@ -1448,6 +1453,16 @@ const config: UnifiedAgentConfig = {
                     });
 
                     await flushVFSBatchMode(filesystemOwnerId);
+
+                    // Bug #63: track paths applied by this call so subsequent
+                    // applyFilesystemEditsFromResponse calls skip them instead
+                    // of re-applying (which can cause file corruption when the
+                    // second parse produces truncated/partial content).
+                    if (appliedEditsResult?.applied?.length) {
+                      for (const edit of appliedEditsResult.applied) {
+                        alreadyWrittenPaths.add(edit.path);
+                      }
+                    }
 
                     // Emit applied file edit events so UI shows status: 'applied'
                     if (appliedEditsResult?.applied?.length) {

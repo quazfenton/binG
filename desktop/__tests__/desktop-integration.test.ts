@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi, beforeAll, afterAll } from 'vitest';
 import * as fs from 'fs-extra';
+import type { Dirent } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -255,8 +256,8 @@ describe('Desktop Integration Tests', () => {
     it('should list with file types', async () => {
       const entries = await fs.readdir(workspaceRoot, { withFileTypes: true });
       
-      const fileEntry = entries.find(e => e.name === 'test.txt');
-      const dirEntry = entries.find(e => e.name === 'src');
+      const fileEntry = entries.find((e: Dirent) => e.name === 'test.txt');
+      const dirEntry = entries.find((e: Dirent) => e.name === 'src');
       
       expect(fileEntry?.isFile()).toBe(true);
       expect(dirEntry?.isDirectory()).toBe(true);

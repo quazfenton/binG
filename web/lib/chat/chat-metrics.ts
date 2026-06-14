@@ -21,6 +21,7 @@ interface ChatMetricsState {
   doubleWriteBlocked: { count: number; paths: string[] };
   incompleteResponses: { count: number; lastAt: number | null };
   injectedSteers: { count: number; byKind: Record<string, number> };
+  classifierFallbacks: { count: number; lastAt: number | null };
 }
 
 declare global {
@@ -35,6 +36,7 @@ function getState(): ChatMetricsState {
       doubleWriteBlocked: { count: 0, paths: [] },
       incompleteResponses: { count: 0, lastAt: null },
       injectedSteers: { count: 0, byKind: {} },
+      classifierFallbacks: { count: 0, lastAt: null },
     };
   }
   return globalThis.__chatMetrics__;
@@ -92,11 +94,24 @@ export function recordSteerInjected(kind: string): void {
   }
 }
 
+export function recordClassifierFallback(): void {
+  try {
+    const state = getState();
+    state.classifierFallbacks.count += 1;
+    state.classifierFallbacks.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordClassifierFallback] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 export function getChatMetrics(): {
   orchestrationFallbacks: OrchestrationFallbackRecord;
   doubleWriteBlocked: { count: number; paths: string[] };
   incompleteResponses: { count: number; lastAt: number | null };
   injectedSteers: { count: number; byKind: Record<string, number> };
+  classifierFallbacks: { count: number; lastAt: number | null };
 } {
   const s = getState();
   return {
@@ -104,6 +119,7 @@ export function getChatMetrics(): {
     doubleWriteBlocked: { count: s.doubleWriteBlocked.count, paths: [...s.doubleWriteBlocked.paths] },
     incompleteResponses: { ...s.incompleteResponses },
     injectedSteers: { count: s.injectedSteers.count, byKind: { ...s.injectedSteers.byKind } },
+    classifierFallbacks: { ...s.classifierFallbacks },
   };
 }
 
@@ -113,5 +129,6 @@ export function _resetChatMetricsForTests(): void {
     globalThis.__chatMetrics__.doubleWriteBlocked = { count: 0, paths: [] };
     globalThis.__chatMetrics__.incompleteResponses = { count: 0, lastAt: null };
     globalThis.__chatMetrics__.injectedSteers = { count: 0, byKind: {} };
+    globalThis.__chatMetrics__.classifierFallbacks = { count: 0, lastAt: null };
   }
 }
