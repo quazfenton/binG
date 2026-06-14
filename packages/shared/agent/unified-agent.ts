@@ -191,7 +191,8 @@ export class UnifiedAgent {
         log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(
           `Failed to initialize sandbox: ${error.message}. ` +
-          `Check that provider "${this.config.provider}" is properly configured.`
+          `Check that provider "${this.config.provider}" is properly configured.`,
+          { cause: error }
         )
       }
 
@@ -577,7 +578,7 @@ export class UnifiedAgent {
   /**
    * Click at position
    */
-  async desktopClick(opts: { 
+  async desktopClick(opts: {
     x: number
     y: number
     button?: 'left' | 'right' | 'middle'
@@ -585,6 +586,13 @@ export class UnifiedAgent {
     const handle = this.desktopHandle;
     if (!handle) {
       throw new Error('Desktop not initialized')
+    }
+
+    if (typeof opts.x !== 'number' || typeof opts.y !== 'number' || opts.x < 0 || opts.y < 0) {
+      throw new Error('Invalid coordinates: x and y must be non-negative numbers')
+    }
+    if (opts.button !== undefined && !['left', 'right', 'middle'].includes(opts.button)) {
+      throw new Error(`Invalid button value: ${opts.button}. Must be 'left', 'right', or 'middle'`)
     }
 
     if (opts.button === 'right') await handle.rightClick(opts.x, opts.y)
@@ -599,6 +607,10 @@ export class UnifiedAgent {
     const handle = this.desktopHandle;
     if (!handle) {
       throw new Error('Desktop not initialized')
+    }
+
+    if (typeof opts.x !== 'number' || typeof opts.y !== 'number' || opts.x < 0 || opts.y < 0) {
+      throw new Error('Invalid coordinates: x and y must be non-negative numbers')
     }
 
     await handle.moveMouse(opts.x, opts.y)

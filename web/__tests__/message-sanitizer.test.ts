@@ -37,30 +37,19 @@ describe('message-sanitizer', () => {
     expect(out[1].role).toBe('assistant');
   });
 
-<<<<<<< Updated upstream
   it('converts tool plain-string content to tool-result part', () => {
     const msgs = [
       { role: 'user', content: 'write a file' },
       { role: 'tool', content: 'File written successfully', tool_call_id: 'call1' },
-=======
-  it('converts tool plain-string content to array format', () => {
-    const msgs = [
-      { role: 'user', content: 'write a file' },
-      { role: 'tool', content: 'File written successfully' },
->>>>>>> Stashed changes
     ];
     const out = sanitizeMessages(msgs);
     expect(out).toHaveLength(2);
     expect(out[1].role).toBe('tool');
     expect(Array.isArray(out[1].content)).toBe(true);
-<<<<<<< Updated upstream
     const part = (out[1].content as any[])[0];
     expect(part.type).toBe('tool-result');
     expect(part.toolCallId).toBe('call1');
     expect(part.output).toEqual({ type: 'text', value: 'File written successfully' });
-=======
-    expect((out[1].content as any[])[0]).toEqual({ type: 'text', text: 'File written successfully' });
->>>>>>> Stashed changes
   });
 
   it('preserves already-array tool content', () => {
@@ -73,7 +62,6 @@ describe('message-sanitizer', () => {
     expect((out[0].content as any[])[0].type).toBe('tool-result');
   });
 
-<<<<<<< Updated upstream
   it('normalizes OpenAI wire-format tool_calls to CoreToolCall on assistant messages', () => {
     const toolCalls = [{ id: 'call1', type: 'function', function: { name: 'read_file', arguments: '{"path":"test.txt"}' } }];
     const msgs = [
@@ -164,8 +152,6 @@ describe('message-sanitizer', () => {
     expect(out).toHaveLength(0);
   });
 
-=======
->>>>>>> Stashed changes
   it('filters out messages with no role at all', () => {
     const msgs = [
       { role: 'user', content: 'hello' },

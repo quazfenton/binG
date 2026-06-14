@@ -47,6 +47,10 @@ declare module '@tauri-apps/plugin-fs' {
     baseDir?: BaseDirectory;
     recursive?: boolean;
   }
+  export interface CopyFileOptions {
+    fromPathBaseDir?: BaseDirectory;
+    toPathBaseDir?: BaseDirectory;
+  }
   export function readTextFile(path: string, options?: FsOptions): Promise<string>;
   export function readBinaryFile(path: string, options?: FsOptions): Promise<Uint8Array>;
   export function writeTextFile(path: string, content: string, options?: FsOptions): Promise<void>;
@@ -54,7 +58,7 @@ declare module '@tauri-apps/plugin-fs' {
   export function mkdir(path: string, options?: FsOptions): Promise<void>;
   export function remove(path: string, options?: FsOptions): Promise<void>;
   export function exists(path: string, options?: FsOptions): Promise<boolean>;
-  export function copyFile(src: string, dest: string, options?: FsOptions): Promise<void>;
+  export function copyFile(src: string, dest: string, options?: CopyFileOptions): Promise<void>;
   export function readDir(path: string, options?: FsOptions): Promise<{ name: string; isDirectory: boolean; size?: number }[]>;
 }
 

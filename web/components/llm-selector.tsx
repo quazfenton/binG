@@ -78,13 +78,8 @@ export const LLMSelector: React.FC<{
           })
         : provider.models;
       setModels(subFiltered);
-<<<<<<< Updated upstream
       if (subFiltered.length > 0) {
         setSelectedModel(subFiltered[0]);
-=======
-      if (filteredModels.length > 0) {
-        setSelectedModel(filteredModels[0]);
->>>>>>> Stashed changes
       } else {
         setSelectedModel('');
       }

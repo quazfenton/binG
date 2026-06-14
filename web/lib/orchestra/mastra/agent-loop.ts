@@ -267,11 +267,7 @@ export class AgentLoop {
 
       // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-<<<<<<< Updated upstream
       const messages: any[] = this.context.conversationHistory
-=======
-      const messages: CoreMessage[] = this.context.conversationHistory
->>>>>>> Stashed changes
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role,
@@ -410,11 +406,7 @@ export class AgentLoop {
 
       // Build messages with system prompt (passed via system param, not messages array)
       const systemPrompt = this.buildSystemPrompt();
-<<<<<<< Updated upstream
       const messages: any[] = this.context.conversationHistory
-=======
-      const messages: CoreMessage[] = this.context.conversationHistory
->>>>>>> Stashed changes
         .filter(m => m.role !== 'system')
         .map(m => ({
           role: m.role,
@@ -1364,11 +1356,7 @@ export class AgentLoop {
       
       // Build messages with tool results (system is handled by streamWithVercelAI's convertMessages)
       const systemPrompt = this.buildSystemPrompt();
-<<<<<<< Updated upstream
       const continuationMessages: any[] = [
-=======
-      const messages: CoreMessage[] = [
->>>>>>> Stashed changes
         { role: 'system', content: systemPrompt },
         ...this.context.conversationHistory
           .filter(m => m.role !== 'system')

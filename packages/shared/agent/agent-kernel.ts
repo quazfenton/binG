@@ -884,9 +884,13 @@ export class AgentKernel extends EventEmitter {
       }
 
       const payload = workPayload as { taskType?: string; description?: string; params?: Record<string, unknown> } | undefined;
-      const taskType = payload?.taskType || 'automate';
-      const description = payload?.description || agent.config.goal;
-      const params = payload?.params || {};
+      if (!payload || typeof payload.taskType !== 'string' || typeof payload.description !== 'string') {
+        logger.warn('Nullclaw payload invalid, using fallback');
+        return this.runDefaultAgent(agent, workPayload);
+      }
+      const taskType = payload.taskType || 'automate';
+      const description = payload.description || agent.config.goal;
+      const params = payload.params || {};
 
       const result = await executeNullclawTask(
         taskType as 'message' | 'browse' | 'automate' | 'api' | 'schedule',

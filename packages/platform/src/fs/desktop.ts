@@ -126,7 +126,7 @@ class DesktopFs implements FsAdapter {
       const srcBaseDir = this.getBaseDir(src, BaseDirectory);
       const destBaseDir = this.getBaseDir(dest, BaseDirectory);
 
-      await copyFile(src, dest);
+      await copyFile(src, dest, { fromPathBaseDir: srcBaseDir, toPathBaseDir: destBaseDir });
     } catch (err) {
       throw new Error(`Failed to copy file from ${src} to ${dest}: ${err instanceof Error ? err.message : String(err)}`);
     }
