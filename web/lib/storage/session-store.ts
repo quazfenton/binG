@@ -124,6 +124,31 @@ const memCheckpoints = new Map<string, StoredSessionCheckpoint>()
 function initCheckpointStorage() {
   if (!useSqlite || !db) return
 
+  // Bug #35 (Pass-5 audit REGRESSING) — singleton/persistence guard.
+  // The prior fix called initCheckpointStorage() unconditionally at module
+  // load, which re-ran 4× per hour under Next.js hot-reload. Each re-run
+  // re-prepared all 4 SQL statements against the same DB connection,
+  // leaking native Statement objects and inflating heap pressure.
+  //
+  // Fix: persist an "already initialized" flag on `globalThis` so hot-
+  // reload module re-evaluation skips the full init path. A per-process
+  // counter (`__sessionStoreReinitCount__`) tracks how many redundant
+  // init calls were suppressed — operators see `[WARN] Checkpoint storage
+  // re-init suppressed (N times)` once N > 0, which is the regression
+  // signal the audit asked for. PID check ensures worker restarts
+  // (different process) get a fresh init.
+  const reinitMarker = (globalThis as unknown as Record<string, { pid: number; at: number; suppressed: number }>).__sessionStoreInitialized__;
+  if (reinitMarker && reinitMarker.pid === process.pid) {
+    reinitMarker.suppressed += 1;
+    if (reinitMarker.suppressed === 1 || reinitMarker.suppressed % 10 === 0) {
+      log.warn(
+        `[session-store] Checkpoint storage re-init suppressed ` +
+        `(${reinitMarker.suppressed} times in this process — likely Next.js hot-reload)`,
+      );
+    }
+    return;
+  }
+
   try {
     db.exec(`
       CREATE TABLE IF NOT EXISTS session_checkpoints (
@@ -158,6 +183,17 @@ function initCheckpointStorage() {
 
     stmtDeleteCheckpoint = db.prepare(`DELETE FROM session_checkpoints WHERE checkpointId = ?`)
 
+    // Use a typed local variable to avoid tsc inferring the globalThis
+    // property type from the surrounding module scope (which has
+    // `Statement` types from better-sqlite3). The `as unknown as Record<...>`
+    // cast on the globalThis side makes the property assignment
+    // unambiguous. Mirrors the read-side cast above.
+    const initMarker: { pid: number; at: number; suppressed: number } = {
+      pid: process.pid,
+      at: Date.now(),
+      suppressed: 0,
+    };
+    (globalThis as unknown as Record<string, { pid: number; at: number; suppressed: number }>).__sessionStoreInitialized__ = initMarker;
     log.info('[session-store] Checkpoint storage initialized')
   } catch (err) {
     log.warn('[session-store] Failed to init checkpoint storage:', err)

@@ -201,6 +201,68 @@ export function assertScopePathMatchesSessionId(
 }
 
 /**
+ * Bug #72: fall-back recovery path for scopePath/sessionId mismatch.
+ *
+ * Unlike `assertScopePathMatchesSessionId` (which throws on mismatch to
+ * refuse the operation), this function returns a corrected ownerId that
+ * matches the scopePath's sessionId. Use this when you'd rather recover
+ * from the path-drift bug than fail the operation.
+ *
+ * Returns `{ ownerId, recovered: true }` if the ownerId was re-derived
+ * from the scopePath; `{ ownerId, recovered: false }` if no recovery
+ * was needed (match, no session, or root scope).
+ *
+ * The recovery is best-effort: it only fires when BOTH the ownerId and
+ * the scopePath have extractable sessions, AND they differ. All other
+ * cases (missing ownerId session, missing scopePath session, root scope,
+ * match) pass through unchanged.
+ */
+export function reconcileScopePathWithSessionId(
+  ownerId: string,
+  scopePath: string | undefined,
+): { ownerId: string; recovered: boolean } {
+  if (!scopePath) return { ownerId, recovered: false };
+  const normalized = normalizeScopePath(scopePath);
+  if (normalized === 'workspace') return { ownerId, recovered: false };
+
+  const scopeSession = extractSessionIdFromPath(normalized);
+  const ownerSession = extractSessionIdFromOwnerId(ownerId);
+  if (!ownerSession || !scopeSession) return { ownerId, recovered: false };
+
+  if (scopeSession === ownerSession) return { ownerId, recovered: false };
+
+  // Mismatch detected — log a warning (not CRITICAL) and attempt recovery
+  // by re-deriving the ownerId from the scopePath's sessionId.
+  logger.warn(
+    withDetectionTerms(
+      `[WARN] Session id mismatch recovered: scopePath "${normalized}" refers to ` +
+        `"${scopeSession}" but ownerId encodes "${ownerSession}". ` +
+        `Falling back to scopePath-derived owner.`,
+      DETECTION_TERMS.drift,
+      DETECTION_TERMS.mismatch,
+    ),
+    { ownerId, scopePath: normalized, scopeSession, ownerSession },
+  );
+
+  const recoveredOwnerId = reconstructOwnerIdWithSession(ownerId, scopeSession);
+  return { ownerId: recoveredOwnerId, recovered: true };
+}
+
+/**
+ * Bug #72: reconstruct an ownerId by replacing its session segment with
+ * `newSessionId`. OwnerId format is `<prefix>$<sessionId>` for composite
+ * ids (e.g. `1$001`) or `<prefix>` for simple ids (e.g. `default`).
+ *
+ * If the ownerId has no `$` separator, it's returned unchanged (no
+ * session to replace).
+ */
+function reconstructOwnerIdWithSession(ownerId: string, newSessionId: string): string {
+  const lastDollar = ownerId.lastIndexOf('$');
+  if (lastDollar < 0) return ownerId;
+  return ownerId.substring(0, lastDollar + 1) + newSessionId;
+}
+
+/**
  * Quick boolean check: does the given path look like a valid session-scoped
  * VFS path? Use this for non-throwing validation (e.g. UI guards, logs).
  */

@@ -23,7 +23,7 @@ import type { ToolExecutionContext, ToolExecutionResult, LatencyBudget } from '.
 import { getToolManager } from './index';
 import { getArcadeService } from '../integrations/arcade-service';
 import { getNangoService } from '../integrations/nango-service';
-import { assertScopePathMatchesSessionId } from '../virtual-filesystem/session-path-guard';
+import { reconcileScopePathWithSessionId } from '../virtual-filesystem/session-path-guard';
 import { resolveScopePathFromOwnerId } from '../virtual-filesystem/scope-utils';
 import { wireToolResultFalseSteer, wireCapabilityNotFoundSteer, wireToolNameAliasRewriteSteer, safeSteer } from '../orchestra/steer-service';
 // Pass-2 cross-cutting theme: record tool-name misnamings, capability-not-found,
@@ -377,16 +377,17 @@ class VFSProvider implements CapabilityProvider {
     // request has no scopePath or when the ownerId has no extractable
     // session, so it doesn't affect non-session workflows.
     const scopePath = (input as any)?.scopePath || (context as any)?.scopePath;
-    try {
-      // Resolve the default-fallback scopePath to the ownerId's encoded session
-      // before invoking the guard. Prevents false-positive SessionPathMismatchError
-      // on app open when the scopePath is 'workspace/sessions/000' (the sentinel)
-      // but the ownerId encodes a real session.
-      const resolvedScopePath = resolveScopePathFromOwnerId(ownerId, scopePath);
-      assertScopePathMatchesSessionId(ownerId, resolvedScopePath);
-    } catch (err: any) {
-      return { success: false, error: err?.message ?? String(err) };
-    }
+    // Resolve the default-fallback scopePath to the ownerId's encoded session
+    // before invoking the guard. Prevents false-positive SessionPathMismatchError
+    // on app open when the scopePath is 'workspace/sessions/000' (the sentinel)
+    // but the ownerId encodes a real session.
+    const resolvedScopePath = resolveScopePathFromOwnerId(ownerId, scopePath);
+    // Bug #72: derive the reconciled ownerId (local const since router's
+    // ownerId is a function param and can't be reassigned) so the
+    // downstream handler operates on the correct session folder.
+    // The reconciliation doesn't throw (it logs + returns), so no try/catch
+    // is needed here. The handler invocation below still has its own try/catch.
+    const reconciledOwnerId = reconcileScopePathWithSessionId(ownerId, resolvedScopePath).ownerId;
 
     const handler = this.methods[capabilityId];
     if (!handler) {
@@ -394,7 +395,7 @@ class VFSProvider implements CapabilityProvider {
     }
 
     try {
-      const output = await handler(ownerId, input, context);
+      const output = await handler(reconciledOwnerId, input, context);
       // #22/#29 fix: surface the reason when a handler returns success:false
       // so the LLM (and run.log) can see WHY the call failed instead of a bare
       // {success:false}. Also emit a [STEER] hint via wireToolResultFalseSteer

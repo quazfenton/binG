@@ -45,6 +45,21 @@ export function isModelSchemaError(error: unknown): boolean {
 }
 
 /**
+ * Check if an error is an AI SDK "Invalid JSON response" error.
+ * This occurs when the provider returns a non-JSON response (HTML error page,
+ * empty body, malformed payload) instead of valid JSON. These errors are
+ * thrown by the AI SDK's provider layer (inside generateText) and are NOT
+ * schema validation errors, but retrying + plain-text fallback is still
+ * the correct recovery path.
+ */
+function isInvalidJsonError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = (error as any).message;
+  if (typeof message !== 'string') return false;
+  return message.includes('Invalid JSON');
+}
+
+/**
  * Redact tool args for safe logging.
  * - Replaces large or sensitive fields (content, body) with <redacted>
  * - Preserves file paths / names when present
@@ -956,7 +971,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         // and no tool_calls, or a system-role message appearing AFTER an
         // assistant turn (which newer providers reject). Re-sanitize the
         // history (idempotent for already-clean messages) and retry once.
-        if (isModelSchemaError(error) && attempt < MAX_ATTEMPTS - 1) {
+        if ((isModelSchemaError(error) || isInvalidJsonError(error)) && attempt < MAX_ATTEMPTS - 1) {
           log.warn(
             'callLLM: schema validation error, sanitizing history and retrying',
             { provider, model, error: error.message },
@@ -976,9 +991,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     // system prompt and the user's prompt as a bare message. This
     // sacrifices tool-calling ability but ensures the user gets a
     // response instead of a crash.
-    if (isModelSchemaError(lastError)) {
+    if (isModelSchemaError(lastError) || isInvalidJsonError(lastError)) {
       log.warn(
-        'callLLM: both retries failed with schema errors, falling back to plain-text call',
+        'callLLM: both retries failed with schema/JSON errors, falling back to plain-text call',
         { provider, model, error: lastError?.message },
       );
 

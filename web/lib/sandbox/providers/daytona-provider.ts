@@ -137,7 +137,7 @@ export class DaytonaProvider implements SandboxProvider {
     // Build sandbox creation params
     const createParams: any = {
       image: image,
-      autoStopInterval: config.autoStopInterval ?? 60,
+      autoStopInterval: config.autoStopInterval ?? 15,
       resources: config.resources ?? { cpu: 2, memory: 4 },
       envVars: {
         TERM: 'xterm-256color',
@@ -181,10 +181,45 @@ export class DaytonaProvider implements SandboxProvider {
       return new DaytonaSandboxHandle(sandbox, this.client)
     } catch (error: any) {
       logger.error(`[Daytona] ✗ Failed to create sandbox:`, error.message)
-      logger.error(`[Daytona] Error details:`, {
-        name: error.name,
-        message: error.message,
-      })
+
+      // When creation fails with a concurrent-sandbox limit error (Daytona
+      // returns "Total disk limit exceeded" when the account has too many
+      // running sandboxes), proactively list and destroy the oldest idle
+      // sandboxes to free quota, then retry once.
+      const errMsg = (error?.message || '').toLowerCase()
+      const isLimitError =
+        errMsg.includes('disk limit') ||
+        errMsg.includes('limit exceeded') ||
+        errMsg.includes('too many') ||
+        errMsg.includes('quota')
+
+      if (isLimitError) {
+        logger.warn(`[Daytona] Concurrent sandbox limit reached — cleaning up stale sandboxes to free quota`)
+        try {
+          const existing = await this.listSandboxes()
+          // Sort by state: "stopped" first, then "running" (oldest first where possible).
+          // We have no creation timestamp from the list endpoint, so we destroy
+          // stopped sandboxes first (they're consuming quota without being useful).
+          const stopped = existing.filter(s => s.state?.toLowerCase() === 'stopped')
+          const running = existing.filter(s => s.state?.toLowerCase() !== 'stopped')
+          const toDestroy = [...stopped, ...running].slice(0, 3)
+
+          if (toDestroy.length > 0) {
+            logger.info(`[Daytona] Destroying ${toDestroy.length} stale sandbox(es) to free concurrent-sandbox quota: ${toDestroy.map(s => s.id).join(', ')}`)
+            await Promise.allSettled(toDestroy.map(s => this.destroySandbox(s.id)))
+            // Retry creation after cleanup
+            const retrySandbox = await this.client.create(createParams)
+            logger.info(`[Daytona] ✓ Created sandbox ${retrySandbox.id} after quota cleanup (image: ${image})`)
+            await retrySandbox.process.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
+            return new DaytonaSandboxHandle(retrySandbox, this.client)
+          } else {
+            logger.warn(`[Daytona] No stale sandboxes found to destroy — throwing original error`)
+          }
+        } catch (cleanupError: any) {
+          logger.error(`[Daytona] Cleanup/retry failed: ${cleanupError.message}`)
+        }
+      }
+
       throw error
     }
   }

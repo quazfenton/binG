@@ -17,7 +17,9 @@ import type {
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';;;
-import { assertScopePathMatchesSessionId, DETECTION_TERMS, withDetectionTerms } from './session-path-guard';
+import { reconcileScopePathWithSessionId, DETECTION_TERMS, withDetectionTerms } from './session-path-guard';
+// Bug #72 review fix: removed dead assertScopePathMatchesSessionId import
+// (both call sites in this file now use the recovery variant).
 import { getSnapshotBroadcaster } from './snapshot-broadcaster';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
@@ -272,7 +274,12 @@ export class VirtualFilesystemService {
     // folder. The check is a no-op for non-session paths (workspace root
     // reads, etc.) so it doesn't affect existing non-session workflows.
     const resolvedFilePath = resolveFilePathScopeFromOwnerId(ownerId, filePath);
-      assertScopePathMatchesSessionId(ownerId, resolvedFilePath);
+      // Bug #72: rebind ownerId to the scopePath-derived value when a
+      // path-drift mismatch is detected, so the actual read targets the
+      // correct session folder. The recovery is logged at WARN level
+      // by reconcileScopePathWithSessionId itself (includes the original
+      // ownerId in the log payload for traceability).
+      ownerId = reconcileScopePathWithSessionId(ownerId, resolvedFilePath).ownerId;
 
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
@@ -342,7 +349,12 @@ export class VirtualFilesystemService {
     // session. Same rationale as readFile above — catch path drift before
     // we silently write to the wrong folder.
     const resolvedFilePath = resolveFilePathScopeFromOwnerId(ownerId, filePath);
-      assertScopePathMatchesSessionId(ownerId, resolvedFilePath);
+      // Bug #72: rebind ownerId to the scopePath-derived value when a
+      // path-drift mismatch is detected, so the actual read targets the
+      // correct session folder. The recovery is logged at WARN level
+      // by reconcileScopePathWithSessionId itself (includes the original
+      // ownerId in the log payload for traceability).
+      ownerId = reconcileScopePathWithSessionId(ownerId, resolvedFilePath).ownerId;
 
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {

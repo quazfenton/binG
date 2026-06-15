@@ -11,6 +11,7 @@ import { createLogger } from '@/lib/utils/logger'
 import { withRetryAndTimeout } from '@/lib/utils/retry'
 import { isDesktopMode } from '@bing/platform/env'
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync'
+import { autoSuspendService } from './auto-suspend-service'
 
 const log = createLogger('SandboxService')
 
@@ -202,6 +203,16 @@ export class SandboxService {
 
       this.sandboxProviderById.set(handle.id, provider)
       quotaManager.recordUsage(provider.name)
+
+      // Register provider and track sandbox with auto-suspend service so idle
+      // sandboxes are proactively destroyed (or suspended if the provider supports
+      // it). Without this registration, Daytona and other providers that lack a
+      // suspend method would pile up concurrent sandboxes until the account limit
+      // is reached.
+      try {
+        autoSuspendService.registerProvider(provider.name, provider as any)
+        autoSuspendService.trackActivity(handle.id)
+      } catch { /* non-critical */ }
 
       // Start VFS sync for bidirectional file sync between VFS database and sandbox
       try {

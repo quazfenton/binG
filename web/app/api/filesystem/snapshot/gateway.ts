@@ -601,7 +601,7 @@ export async function GET(req: NextRequest) {
       }
     } else if (files.length === 0 && snapshot.files.length > 0) {
       logWarn(`[${requestId}] PATH MISMATCH: workspace has ${snapshot.files.length} files but none match path="${pathFilter}"`);
-      log(`[${requestId}] Workspace file paths:`, snapshot.files.map(f => f.path));
+      logger.info(`[${requestId}] Workspace file paths: ${snapshot.files.map(f => f.path).join(', ')}`);
       logWarn(`[${requestId}] Hint: requested prefix="${pathFilter}" — ensure files are written under "${pathFilter}/" scope`);
     }
 

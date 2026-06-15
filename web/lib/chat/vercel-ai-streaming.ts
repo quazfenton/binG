@@ -1152,6 +1152,11 @@ export async function* streamWithVercelAI(
   // Time-to-first-token timeout: only cancels if NO content arrives within timeoutMs
   // Once first token arrives, timeout is cleared to allow long legitimate streams
   let ttftTimeoutId: NodeJS.Timeout | null = null;
+  // Hard deadline guard: fires after TTFT * 2 when speculative fallback is active.
+  // The TTFT warning at `_effectiveFirstTokenTimeoutMs` does NOT abort anything —
+  // it lets the speculative-fallback race decide. This hard deadline is the safety
+  // net for the case where BOTH primary and fallback are silent for too long.
+  let hardDeadlineTimeoutId: NodeJS.Timeout | null = null;
   let timeoutController: AbortController | null = null;
   let firstTokenReceived = false;
   
@@ -1194,12 +1199,19 @@ export async function* streamWithVercelAI(
     // explicitly widened the window is not silently cut back. The outer
     // condition must be `_ttftOverrideMs !== null` ONLY (not a direction
     // check) so the stricter case (override < caller) is also handled.
+    //
+    // Implementation note: we use a local `let` (`_effectiveFirstTokenTimeoutMs`)
+    // instead of reassigning the destructured `firstTokenTimeoutMs` because
+    // the destructuring pattern (with default value) creates a const binding
+    // in TypeScript's strict mode. The local let is captured by both the
+    // setTimeout delay and its callback.
+    let _effectiveFirstTokenTimeoutMs = firstTokenTimeoutMs;
     {
       const _ttftOverrideMs = getModelFirstTokenTimeoutMs(modelName);
       if (_ttftOverrideMs !== null) {
-        const newTtft = Math.min(firstTokenTimeoutMs, _ttftOverrideMs);
-        if (newTtft !== firstTokenTimeoutMs) {
-          firstTokenTimeoutMs = newTtft;
+        const newTtft = Math.min(_effectiveFirstTokenTimeoutMs, _ttftOverrideMs);
+        if (newTtft !== _effectiveFirstTokenTimeoutMs) {
+          _effectiveFirstTokenTimeoutMs = newTtft;
           chatLogger.info('[TTFT-OVERRIDE] per-model firstTokenTimeoutMs applied', {
             provider,
             model: modelName,
@@ -1217,11 +1229,15 @@ export async function* streamWithVercelAI(
         chatLogger.warn('[TIMEOUT-TTFT] No first token received', {
           provider,
           model: modelName,
-          firstTokenTimeoutMs,
+          firstTokenTimeoutMs: _effectiveFirstTokenTimeoutMs,
           ttftLatencyMs,
           timeoutCategory: 'NO_INITIAL_TOKEN',
           startTime,
           healthCheckPassed: true,
+          speculativeFallbackActive: speculativeFallbackMs > 0,
+          action: speculativeFallbackMs > 0
+            ? 'not_aborting_primary_race_will_decide'
+            : 'aborting_primary_no_fallback',
         });
         // Pass-2 cross-cutting theme: record the mid-stream stall so the
         // degradation chain shows the silent failure. The sessionId is
@@ -1235,13 +1251,40 @@ export async function* streamWithVercelAI(
             { kind: 'ttft', provider, model: modelName, ttftLatencyMs },
           );
         } catch { /* best-effort */ }
-        timeoutController?.abort(new Error(
-          `No response within ${firstTokenTimeoutMs}ms (time-to-first-token timeout). ` +
-          `Provider=${provider}, model=${modelName}, elapsed=${ttftLatencyMs}ms. ` +
-          `Possible causes: provider outage, incorrect API key, model unavailability, or network issue.`
-        ));
+
+        if (speculativeFallbackMs > 0) {
+          // Speculative fallback is active — the race between primary and
+          // fallback (started at speculativeFallbackMs) will decide the
+          // winner. Do NOT abort the primary here; let the race complete.
+          // Instead, set a hard-deadline guard so we don't hang forever
+          // if BOTH streams silently fail.
+          const hardDeadlineMs = _effectiveFirstTokenTimeoutMs * 2;
+          hardDeadlineTimeoutId = setTimeout(() => {
+            if (!firstTokenReceived && timeoutController && !timeoutController.signal.aborted) {
+              chatLogger.error('[TTFT-HARD-DEADLINE] No first token from primary or fallback within hard deadline', {
+                provider,
+                model: modelName,
+                originalTTFTMs: _effectiveFirstTokenTimeoutMs,
+                hardDeadlineMs,
+                totalWaitMs: Date.now() - startTime,
+              });
+              timeoutController.abort(new Error(
+                `No response from primary or fallback within ${hardDeadlineMs}ms ` +
+                `(hard deadline after TTFT timeout). Provider=${provider}, ` +
+                `model=${modelName}, elapsed=${Date.now() - startTime}ms.`
+              ));
+            }
+          }, hardDeadlineMs - _effectiveFirstTokenTimeoutMs);
+        } else {
+          // No fallback configured — abort the primary as before
+          timeoutController?.abort(new Error(
+            `No response within ${_effectiveFirstTokenTimeoutMs}ms (time-to-first-token timeout). ` +
+            `Provider=${provider}, model=${modelName}, elapsed=${ttftLatencyMs}ms. ` +
+            `Possible causes: provider outage, incorrect API key, model unavailability, or network issue.`
+          ));
+        }
       }
-    }, firstTokenTimeoutMs);
+    }, _effectiveFirstTokenTimeoutMs);
   }
 
   // Bug fix: wire the internal timeoutController into the provider's HTTP
@@ -1268,6 +1311,10 @@ export async function* streamWithVercelAI(
       if (ttftTimeoutId) {
         clearTimeout(ttftTimeoutId);
         ttftTimeoutId = null;
+      }
+      if (hardDeadlineTimeoutId) {
+        clearTimeout(hardDeadlineTimeoutId);
+        hardDeadlineTimeoutId = null;
       }
       // Bug #17: Start the 'model thinking' client-ping interval now that
       // the first token has arrived. Long thinking pauses (tool execution,
@@ -1828,6 +1875,25 @@ export async function* streamWithVercelAI(
       );
     }
 
+    // Pre-check: if this provider-model combo was recently rate-limited
+    // (429), skip the API call entirely and let the fallback chain handle it.
+    try {
+      const { isRateLimited } = await import('@/lib/providers/model-ranker');
+      if (isRateLimited(provider, modelName)) {
+        chatLogger.warn('[RATE-LIMIT-PRE] Skipping rate-limited provider-model', {
+          provider,
+          model: modelName,
+          action: 'fallback will be used',
+        });
+        throw new Error(
+          `Rate limit active for ${provider}/${modelName}. Skipping to fallback provider.`
+        );
+      }
+    } catch (err: any) {
+      // Re-throw rate-limit errors; swallow import failures (model-ranker best-effort)
+      if (err.message?.includes('Rate limit active')) throw err;
+    }
+
     const result = streamText(streamOptions);
 
     // ── Speculative fallback race ─────────────────────────────────────────
@@ -2367,7 +2433,17 @@ while (thinkPingQueue.length > 0) {
             });
           } else {
             const errorObj = toolResult?.error;
-            const errorMsg = typeof errorObj === 'string' ? errorObj : errorObj?.message || 'Unknown error';
+            const resultKeys = toolResult ? Object.keys(toolResult) : [];
+            let errorMsg: string;
+            if (typeof errorObj === 'string') {
+              errorMsg = errorObj;
+            } else if (errorObj?.message) {
+              errorMsg = errorObj.message;
+            } else {
+              errorMsg = toolResult
+                ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}]${errorObj ? `, error type: ${typeof errorObj}` : ', no error field'}`
+                : `Unknown error — tool result is ${typeof toolResult}`;
+            }
             const isEmptyArgs = !finalArgs || Object.keys(finalArgs).length === 0;
 
             chatLogger.error('[TOOL-RESULT] ✗ Tool failed', {
@@ -2430,12 +2506,21 @@ while (thinkPingQueue.length > 0) {
         }
 
         case 'error': {
+          const errMsg = (chunk as any).error?.message || String((chunk as any).error);
           chatLogger.error('Stream error chunk', {
             requestId,
             provider,
             model: modelName,
-            error: (chunk as any).error?.message || String((chunk as any).error),
+            error: errMsg,
           });
+          // Record 429 rate-limit errors immediately so subsequent requests
+          // skip this provider-model combo via model-ranker's isRateLimited check.
+          if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.toLowerCase().includes('rate_limit')) {
+            try {
+              const { recordRateLimitError } = await import('@/lib/providers/model-ranker');
+              recordRateLimitError(provider, modelName);
+            } catch { /* best-effort */ }
+          }
           throw (chunk as any).error;
         }
 
@@ -2460,6 +2545,7 @@ while (thinkPingQueue.length > 0) {
 }
 } finally {
   if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+  if (hardDeadlineTimeoutId) clearTimeout(hardDeadlineTimeoutId);
   if (idleTimeoutId) clearTimeout(idleTimeoutId);
   stopThinkPingInterval();
 }

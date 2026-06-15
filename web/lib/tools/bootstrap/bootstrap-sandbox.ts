@@ -25,20 +25,16 @@ import { providerAttemptLogger } from '../../sandbox/provider-attempt-log';
 const logger = createLogger('Tools:Sandbox-Bootstrap');
 
 // Bug #79 (Pass-5 audit) — per-process idempotency guard for sandbox
-// provider registration. Persisted on Symbol.for() so it survives
-// hot-reload and is shared across all module instances in a single
-// Node process. The slot stores { count, providers, pid } so we can
+// provider registration. A module-scoped variable stores the state so
+// it survives hot-reload within the same Node process across module
+// instances. The slot stores { count, providers, pid } so we can
 // tell the operator WHICH providers were already registered and on
 // WHICH process.
-const SANDBOX_BOOTSTRAP_KEY = Symbol.for('bing.sandbox-bootstrap-ran');
 type SandboxBootstrapState = { count: number; providers: string[]; pid: number; lastAt: number };
-const _getSandboxBootstrapState = (): SandboxBootstrapState | null => {
-  const sym = Symbol.for('bing.sandbox-bootstrap-state') as unknown as { value?: SandboxBootstrapState };
-  return sym.value ?? null;
-};
-const _setSandboxBootstrapState = (state: SandboxBootstrapState): void => {
-  (Symbol.for('bing.sandbox-bootstrap-state') as unknown as { value: SandboxBootstrapState }).value = state;
-};
+let _sandboxBootstrapState: SandboxBootstrapState | null = null;
+let _sandboxBootstrapRan = false;
+const _getSandboxBootstrapState = (): SandboxBootstrapState | null => _sandboxBootstrapState;
+const _setSandboxBootstrapState = (state: SandboxBootstrapState): void => { _sandboxBootstrapState = state; };
 let _sandboxBootstrapCallCount = 0;
 
 /**
@@ -88,7 +84,7 @@ export async function registerSandboxTools(registry: ToolRegistry, config: Boots
     providersUsed.push('codesandbox');
   }
 
-  // Bug #79 — cache the bootstrap result on the Symbol.for() slot so
+  // Bug #79 — cache the bootstrap result in the module-level variable so
   // subsequent calls in the same process are no-ops. The PID check above
   // makes this safe across worker restarts (a new PID resets the guard).
   _setSandboxBootstrapState({
@@ -100,7 +96,7 @@ export async function registerSandboxTools(registry: ToolRegistry, config: Boots
   // Mark the well-known "this process has run bootstrap" flag too, so
   // other modules (e.g. diagnostic tools) can detect a re-run without
   // touching the state slot directly.
-  (SANDBOX_BOOTSTRAP_KEY as unknown as { value: boolean }).value = true;
+  _sandboxBootstrapRan = true;
 
   return count;
 }

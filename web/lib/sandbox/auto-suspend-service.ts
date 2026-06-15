@@ -246,15 +246,24 @@ export class AutoSuspendService extends EventEmitter {
         }
       }
 
-      // Try provider-specific suspension first, fallback to shutdown
+      // Try provider-specific suspension first, fallback to shutdown, then destroy.
+      // Providers like Daytona that lack suspend/shutdown MUST be destroyed to
+      // release their concurrent-sandbox quota, otherwise they pile up and new
+      // sandbox creation fails with "Total disk limit exceeded" (Daytona's way
+      // of saying "too many concurrent sandboxes").
       try {
         if ('suspendSandbox' in provider && typeof provider.suspendSandbox === 'function') {
           await provider.suspendSandbox(sandboxId);
         } else if ('shutdownSandbox' in provider && typeof provider.shutdownSandbox === 'function') {
           await provider.shutdownSandbox(sandboxId);
         } else {
-          logger.warn(`[AutoSuspend] Provider ${providerName} has no suspension method`);
-          return false;
+          // No suspend/shutdown — destroy the sandbox to free the concurrent slot.
+          // State was already captured above (if preserveState enabled), so we can
+          // recreate it on resume from captured state + VFS sync.
+          logger.info(`[AutoSuspend] Provider ${providerName} has no suspend/shutdown — destroying sandbox ${sandboxId} to release concurrent-sandbox quota`);
+          await provider.destroySandbox(sandboxId);
+          // Record as suspended (from tracking perspective) even though it's destroyed.
+          // The resume path will recreate it from captured state + VFS sync.
         }
       } catch (suspendError: any) {
         logger.error(`[AutoSuspend] Suspension failed for ${sandboxId}:`, suspendError.message);

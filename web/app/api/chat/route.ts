@@ -50,6 +50,7 @@ import {
 } from '@/lib/chat/file-edit-parser';
 import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
+import type { FilesystemEditSummary } from './filesystem-edits';
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
@@ -599,7 +600,7 @@ export async function POST(request: NextRequest) {
             });
           }
         } catch (error: unknown) {
-          chatLogger.warn('Failed to select retry model, using original', error);
+          chatLogger.warn('Failed to select retry model, using original', { error: error instanceof Error ? error.message : String(error) });
         }
       }
 
@@ -1032,9 +1033,9 @@ export async function POST(request: NextRequest) {
                   scopePath: requestedScopePath,
                   lastUserMessage: '',
                   attachedPaths: [],
-                  responseContent: gwResponse,
-                  preParsedEdits: null,
-                  alreadyWrittenPaths,
+              responseContent: gwResponse,
+              preParsedEdits: undefined,
+              alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1093,9 +1094,9 @@ export async function POST(request: NextRequest) {
                   scopePath: requestedScopePath,
                   lastUserMessage: '',
                   attachedPaths: [],
-                  responseContent: v2Response,
-                  preParsedEdits: null,
-                  alreadyWrittenPaths,
+              responseContent: v2Response,
+              preParsedEdits: undefined,
+              alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1291,7 +1292,7 @@ const config: UnifiedAgentConfig = {
       parameters: t.function.parameters,
     }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId, requestedScopePath);
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId ?? '', requestedScopePath ?? '');
       return {
         success: result.success,
         output: result.output,
@@ -1577,7 +1578,7 @@ const config: UnifiedAgentConfig = {
                       }
                       chatLogger.info('Agentic path: filesystem edits applied to VFS', {
                         editCount: appliedEditsResult.applied.length,
-                        paths: appliedEditsResult.applied.map(e => e.path).join(', '),
+                        paths: appliedEditsResult.applied.map((e: { path: string }) => e.path).join(', '),
                       });
                     } else if (appliedEditsResult?.errors?.length) {
                       chatLogger.warn('Agentic path: VFS write errors', {
@@ -2004,9 +2005,8 @@ const config: UnifiedAgentConfig = {
             });
 
             chatLogger.debug('[FILE-EDIT-DEBUG] appliedEdits', {
-              writes: appliedEdits?.writes?.length,
-              patches: appliedEdits?.patches?.length,
               applied: appliedEdits?.applied?.length,
+              pending: appliedEdits?.pendingEdits?.length,
               errors: appliedEdits?.errors?.length,
             });
 
@@ -2365,7 +2365,6 @@ const config: UnifiedAgentConfig = {
                   ...(((unifiedResponse.data as any)?.toolInvocations as any[]) || []),
                   ...(agentToolResults.toolInvocations || []),
                 ],
-                agentToolResults,
               };
               if (!rawResponseContent.trim() && agentToolResults.message) {
                 unifiedResponse.content = agentToolResults.message;
@@ -2518,7 +2517,7 @@ const config: UnifiedAgentConfig = {
         const codeArtifacts = filesystemEdits.applied
           .filter((edit) => edit.operation !== 'delete')
           .map((edit) => {
-            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            const requestedFile = filesystemEdits?.requestedFiles.find(f => f.path === edit.path);
             return {
               path: edit.path,
               operation: edit.operation,
@@ -2552,7 +2551,7 @@ const config: UnifiedAgentConfig = {
             return true;
           })
           .map((edit) => {
-            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            const requestedFile = filesystemEdits?.requestedFiles.find(f => f.path === edit.path);
             // Determine what to send:
             // - If edit.diff exists and looks like unified diff, send it
             // - Otherwise send full content (EnhancedDiffViewer will auto-detect)
@@ -2582,7 +2581,7 @@ const config: UnifiedAgentConfig = {
               status: filesystemEdits.status,
               applied: filesystemEdits.applied,
               errors: filesystemEdits.errors,
-              requestedFiles: filesystemEdits.requestedFiles,
+              requestedFiles: filesystemEdits?.requestedFiles ?? [],
               scopePath: filesystemEdits.scopePath,
               workspaceVersion: filesystemEdits.workspaceVersion,
               commitId: filesystemEdits.commitId,
@@ -3238,7 +3237,7 @@ const config: UnifiedAgentConfig = {
                       // ROBUSTNESS: Don't assume WRITE=content, PATCH=diff
                       // LLM may return diffs in <file_edit> tags or full content for existing files
                       // Let EnhancedDiffViewer detect format using isDiffFormat()
-                      const fileEdits = allEdits.applied
+                      const fileEdits: FilesystemEditSummary[] = allEdits.applied
                         .filter((edit) => {
                           // Skip invalid paths
                           if (!isValidFilePath(edit.path)) return false;
@@ -3249,7 +3248,7 @@ const config: UnifiedAgentConfig = {
                           return true;
                         })
                         .map((edit) => {
-                          const requestedFile = allEdits.requestedFiles.find(f => f.path === edit.path);
+                          const requestedFile = allEdits?.requestedFiles.find(f => f.path === edit.path);
                           // Determine what to send:
                           // - If edit.diff exists and looks like unified diff, send it
                           // - Otherwise send full content (EnhancedDiffViewer will auto-detect format)
@@ -3373,15 +3372,15 @@ const config: UnifiedAgentConfig = {
 
                   // Build enhanced content including actual file edits
                   let enhancedContent = streamingContentBuffer;
-                  if (effectiveEdits?.applied?.length > 0) {
-                    const fileEditsContent = effectiveEdits.applied
-                      .filter(e => e.content || e.diff)
-                      .map(e => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n${e.content || e.diff || ''}\n>>>\n\`\`\``)
+                  if ((effectiveEdits?.applied?.length ?? 0) > 0) {
+                    const fileEditsContent = (effectiveEdits?.applied ?? [] as Array<{ path: string; content?: string; diff?: string }>)
+                      .filter((e: { content?: string; diff?: string }) => e.content || e.diff)
+                      .map((e: { path: string; content?: string; diff?: string }) => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n${e.content || e.diff || ''}\n>>>\n\`\`\``)
                       .join('\n\n');
                     if (fileEditsContent) {
                       enhancedContent = streamingContentBuffer + '\n\n' + fileEditsContent;
                       chatLogger.debug('Including file edits in spec amplification', {
-                        fileCount: effectiveEdits.applied.length,
+                        fileCount: effectiveEdits?.applied?.length ?? 0,
                         additionalContentLength: fileEditsContent.length,
                       });
                     }
@@ -3521,7 +3520,7 @@ const config: UnifiedAgentConfig = {
               pendingEvents.splice(0, pendingEvents.length);
 
               const cleanup = () => {
-                encoderRef = null;
+                encoderRef = null as unknown as TextEncoder;
                 emitRef.current = null;
                 acceptDeferredEvents = false;
               };
@@ -4015,7 +4014,7 @@ const config: UnifiedAgentConfig = {
           filesystemEdits &&
           (filesystemEdits.applied.length > 0 ||
             filesystemEdits.errors.length > 0 ||
-            filesystemEdits.requestedFiles.length > 0)
+            (filesystemEdits?.requestedFiles?.length ?? 0) > 0)
         ) {
           const filesystemEvent = `event: filesystem\ndata: ${JSON.stringify({
             requestId: streamRequestId,
@@ -4023,7 +4022,7 @@ const config: UnifiedAgentConfig = {
             status: filesystemEdits.status,
             applied: filesystemEdits.applied,
             errors: filesystemEdits.errors,
-            requestedFiles: filesystemEdits.requestedFiles,
+            requestedFiles: filesystemEdits?.requestedFiles ?? [],
             scopePath: filesystemEdits.scopePath,
             workspaceVersion: filesystemEdits.workspaceVersion,
             commitId: filesystemEdits.commitId,
@@ -4035,7 +4034,7 @@ const config: UnifiedAgentConfig = {
         // Bug #9 Fix: hasFilesystemEdits should be true only when there are actual filesystem write events
         // Not just when the function ran (enableFilesystemEdits was true)
         const hasActualFilesystemEdits = filesystemEdits &&
-          (filesystemEdits.applied.length > 0 || filesystemEdits.requestedFiles.length > 0);
+          (filesystemEdits.applied.length > 0 || (filesystemEdits?.requestedFiles?.length ?? 0) > 0);
         chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
           eventsCount: events.length,
           hasFilesystemEdits: hasActualFilesystemEdits,
@@ -4050,7 +4049,7 @@ const config: UnifiedAgentConfig = {
 
         // Cleanup function for resource management (defined here for cancel callback access)
         const cleanup = () => {
-          encoderRef = null;
+          encoderRef = null as unknown as TextEncoder;
           emitRef.current = null;
           if (refinementTimeoutId) {
             clearTimeout(refinementTimeoutId);
@@ -4723,7 +4722,15 @@ async function handleGatewayStreaming(params: {
 
   const readableStream = new ReadableStream({
     async start(controller) {
-      const reader = streamResponse.body.getReader();
+      const reader = streamResponse.body?.getReader();
+  if (!reader) {
+    // Bug #X: signal a stream error via controller.error() instead of throwing.
+    // Throwing inside ReadableStream.start() crashes the stream without
+    // surfacing the error to the client. controller.error() closes the
+    // stream with a visible error that the client can detect.
+    controller.error(new Error('No response body reader available from gateway stream'));
+    return;
+  }
 
       try {
         while (true) {
@@ -4839,7 +4846,7 @@ async function buildWorkspaceSessionContext(
         contextPack.bundle,
       ].filter(Boolean).join('\n');
     } catch (error: unknown) {
-      chatLogger.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
+      chatLogger.warn('[Chat] Context pack generation failed, falling back to basic context:', { error: error instanceof Error ? error.message : String(error) });
       // Fall through to enhanced context with key file contents
     }
   }
@@ -6127,7 +6134,7 @@ async function applyFilesystemEditsFromResponse(input: {
         }
       } catch (commitError) {
         // Non-fatal: edits were applied even if commit fails
-        chatLogger.error('[Chat] Auto-commit failed:', commitError);
+        chatLogger.error('[Chat] Auto-commit failed:', { error: commitError instanceof Error ? commitError.message : String(commitError) });
       }
     }
   }
@@ -6205,7 +6212,7 @@ export async function GET(request: NextRequest) {
         timestamp: Date.now(),
       });
     } catch (error) {
-      chatLogger.error("Chat API warmup error:", error);
+      chatLogger.error("Chat API warmup error:", { error: error instanceof Error ? error.message : String(error) });
       return NextResponse.json(
         { success: false, error: "Warmup failed" },
         { status: 500 }

@@ -224,7 +224,8 @@ export async function POST(request: NextRequest) {
         // to prevent cookies from being sent over HTTP. Check x-forwarded-proto as fallback.
         secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
         sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 // 7 days
+        maxAge: 7 * 24 * 60 * 60, // 7 days
+        path: '/',
       });
     }
 
