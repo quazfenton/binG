@@ -60,6 +60,7 @@ import {
   MessageCircle,
   Copy,
   Search,
+  Globe,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -79,6 +80,7 @@ import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
 import PluginMarketplace from "./plugins/plugin-marketplace";
 import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
+import IPTVStreamPlayer from "./plugins/iptv-stream-player";
 import { MonacoVFSEditor } from "./monaco-vfs-editor";
 import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
 import { MCPStore } from "@/components/mcp/mcp-store";
@@ -623,6 +625,7 @@ const TAB_DEFS: TabDef[] = [
   { value: "zine-display", label: "Zine", icon: Palette },
   { value: "mcp", label: "MCP Store", icon: Puzzle },
   { value: "movies", label: "Movies", icon: Film },
+  { value: "iptv", label: "IPTV", icon: Globe },
 ];
 
 // ---------------------------------------------------------------------------
@@ -929,7 +932,7 @@ export default function TopPanel() {
       }
     }
     // Default visible tabs: News, Music Hub, Plugins, Marketplace, Immersive, Monaco Editor, Events, Prompt Lab, Workflows, Movies
-    return ['news', 'music-hub', 'plugins', 'marketplace', 'immersive', 'monaco-editor', 'events', 'prompt-lab', 'workflows', 'movies'];
+    return ['news', 'music-hub', 'plugins', 'marketplace', 'immersive', 'monaco-editor', 'events', 'prompt-lab', 'workflows', 'movies', 'iptv'];
   });
 
   // Save visible tabs to localStorage whenever they change
@@ -1325,6 +1328,11 @@ export default function TopPanel() {
                         <PStreamEmbedPlugin onClose={closeTopPanel} />
                       </TabErrorBoundary>
                     </TabsContent>
+                    <TabsContent value="iptv" className="flex-1 mt-0 min-h-0 overflow-hidden">
+                      <TabErrorBoundary tabName="IPTV">
+                        <IPTVStreamPlayer onClose={closeTopPanel} />
+                      </TabErrorBoundary>
+                    </TabsContent>
                     <TabsContent value="experience" className="flex-1 mt-0 min-h-0 overflow-hidden">
                       <TabErrorBoundary tabName="Experience">
                         <ExperiencePanel />
@@ -1634,6 +1642,12 @@ export default function TopPanel() {
                   <TabsContent value="movies" className="flex-1 mt-0 min-h-0 overflow-hidden">
                     <TabErrorBoundary tabName="Movies">
                       <PStreamEmbedPlugin onClose={closeTopPanel} />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="iptv" className="flex-1 mt-0 min-h-0 overflow-hidden">
+                    <TabErrorBoundary tabName="IPTV">
+                      <IPTVStreamPlayer onClose={closeTopPanel} />
                     </TabErrorBoundary>
                   </TabsContent>
 

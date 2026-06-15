@@ -10,6 +10,9 @@ import { EventEmitter } from 'node:events'
 import WebSocket from 'ws'
 import * as MCPTypes from './types'
 import { createNDJSONParser, type NDJSONParser } from '@/lib/utils/ndjson-parser';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('MCPClient');
 
 const {
   MCP_PROTOCOL_VERSION,
@@ -400,7 +403,7 @@ export class MCPClient extends EventEmitter {
               this.handleNotification(message as MCPNotification);
             }
           } catch (error) {
-            console.error('[MCPClient] Error processing final message:', error);
+            log.error('Error processing final message:', error);
           }
         }
         this.ndjsonParser = undefined;
@@ -421,7 +424,7 @@ export class MCPClient extends EventEmitter {
       }
       this.pendingRequests.clear()
     } catch (error) {
-      console.error('[MCPClient] Disconnect error:', error)
+      log.error('Disconnect error:', error)
     } finally {
       this.updateState('disconnected')
       this.emitEvent({ type: 'disconnected', timestamp: new Date() })
@@ -669,7 +672,7 @@ export class MCPClient extends EventEmitter {
       })
 
       this.process.stderr?.on('data', (data: Buffer) => {
-        console.error('[MCPClient] stderr:', data.toString())
+        log.error('stderr:', data.toString())
       })
 
       this.process.on('error', (error) => {
@@ -709,19 +712,19 @@ export class MCPClient extends EventEmitter {
   private scheduleReconnect(): void {
     this.reconnectAttempts++
     const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1)
-    console.log(`[MCPClient] Scheduling reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`)
+    log.info(`[MCPClient] Scheduling reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`)
 
     setTimeout(async () => {
       try {
         await this.connect(this.config.timeout || 10000)
-        console.log(`[MCPClient] Reconnected successfully after ${this.reconnectAttempts} attempt(s)`)
+        log.info(`[MCPClient] Reconnected successfully after ${this.reconnectAttempts} attempt(s)`)
         this.reconnectAttempts = 0
       } catch (error) {
-        console.error(`[MCPClient] Reconnect attempt failed:`, error)
+        log.error(`Reconnect attempt failed:`, error)
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
           this.scheduleReconnect()
         } else {
-          console.error(`[MCPClient] Max reconnection attempts reached`)
+          log.error(`Max reconnection attempts reached`)
         }
       }
     }, delay)
@@ -745,7 +748,7 @@ export class MCPClient extends EventEmitter {
 
         let isConnected = false;
         eventSource.onopen = () => {
-          console.log(`[MCPClient] SSE connection opened to ${url}`);
+          log.info(`[MCPClient] SSE connection opened to ${url}`);
           isConnected = true;
           resolve();
         };
@@ -757,7 +760,7 @@ export class MCPClient extends EventEmitter {
             return;
           }
           // Stream error after successful connection — just warn (server may reconnect)
-          console.warn('[MCPClient] SSE stream error — will attempt reconnect');
+          log.warn('[MCPClient] SSE stream error — will attempt reconnect');
         };
 
         // Listen for the MCP 'endpoint' event which tells us where to POST
@@ -773,7 +776,7 @@ export class MCPClient extends EventEmitter {
               } catch {
                 this.sseEndpoint = endpointUrl;
               }
-              console.log(`[MCPClient] SSE endpoint discovered: ${this.sseEndpoint}`);
+              log.info(`[MCPClient] SSE endpoint discovered: ${this.sseEndpoint}`);
             }
           }
         });
@@ -806,12 +809,12 @@ export class MCPClient extends EventEmitter {
         const ws = new WebSocket(this.config.wsUrl!);
 
         ws.onopen = () => {
-          console.log(`[MCPClient] WebSocket connection opened to ${this.config.wsUrl}`);
+          log.info(`[MCPClient] WebSocket connection opened to ${this.config.wsUrl}`);
           resolve();
         };
 
         ws.onerror = (error) => {
-          console.error('[MCPClient] WebSocket error:', error);
+          log.error('WebSocket error:', error);
           reject(new Error(`WebSocket connection failed`));
         };
 
@@ -998,7 +1001,7 @@ export class MCPClient extends EventEmitter {
             this.handleNotification(typedMessage as MCPNotification)
           }
         } catch (error) {
-          console.error('[MCPClient] Failed to process message:', error)
+           log.error('Failed to process message:', error)
         }
       }
     }
@@ -1070,7 +1073,7 @@ export class MCPClient extends EventEmitter {
         try {
           listener(event)
         } catch (error) {
-          console.error('[MCPClient] Event listener error:', error)
+          log.error('Event listener error:', error)
         }
       }
     }

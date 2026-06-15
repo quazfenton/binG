@@ -1620,3 +1620,35 @@ export const dbOps = new DatabaseOperations();
 // Database connections will be cleaned up automatically by the runtime
 
 export default getDatabase;
+
+/**
+ * Returns true if the database is available (better-sqlite3 can be loaded AND
+ * its native binding works). Use this to skip DB-dependent code paths when
+ * running in environments where the native module cannot be loaded
+ * (e.g., Edge Runtime, missing native deps, or a broken native binding).
+ *
+ * The result is cached at module level — the check instantiates an in-memory
+ * database to verify the native binding works, which is expensive to repeat.
+ *
+ * IMPORTANT: This check is more than just `require('better-sqlite3')` — the
+ * require can succeed even when the native binding is broken (the .node file
+ * is present in node_modules but cannot be loaded by Node.js). We must
+ * actually instantiate the database to catch native binding failures.
+ */
+export function isDatabaseAvailable(): boolean {
+  if (_dbAvailable !== null) return _dbAvailable;
+  try {
+    const Database = require('better-sqlite3');
+    const testDb = new Database(':memory:');
+    testDb.close();
+    _dbAvailable = true;
+    return true;
+  } catch {
+    _dbAvailable = false;
+    return false;
+  }
+}
+
+// Module-level cache for isDatabaseAvailable() to avoid repeated native-binding
+// instantiation on every call. null = not yet checked, true/false = cached result.
+let _dbAvailable: boolean | null = null;

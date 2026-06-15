@@ -1534,6 +1534,7 @@ export async function callMCPToolFromAI_SDK(
         const result = await bashTool.execute(args || {}, {
           messages: [],
           toolCallId: crypto.randomUUID(),
+          threadId: sessionId,
         } as any);
 
         return {

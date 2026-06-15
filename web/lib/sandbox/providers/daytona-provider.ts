@@ -2,15 +2,19 @@ import { Daytona } from '@daytonaio/sdk'
 import { createLogger } from '@/lib/utils/logger';
 import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
+import { enable as enableDebug } from 'debug';
 
-// Suppress verbose HTTP request logging from axios/got/follow-redirects internals
-// follow-redirects logs full request options (including auth headers) via debug("follow-redirects")
+// Suppress verbose HTTP request logging from axios/got/follow-redirects internals.
+// follow-redirects logs full request options (including auth headers) via debug("follow-redirects").
+// debug caches the enabled-set at construction; calling enable() forces a re-read
+// after we strip sensitive namespaces from process.env.DEBUG.
 if (process.env.DEBUG) {
   const sensitiveNamespaces = ['http', 'axios', 'daytona', 'follow-redirects', 'needle'];
   const debugVal = process.env.DEBUG;
   const hasSensitive = sensitiveNamespaces.some(ns => debugVal.includes(ns));
-  if (hasSensitive && debugVal.split(',').length > 1) {
-    process.env.DEBUG = debugVal.split(',').filter(ns => !sensitiveNamespaces.includes(ns.trim())).join(',');
+  if (hasSensitive) {
+    process.env.DEBUG = debugVal.split(',').filter(ns => !sensitiveNamespaces.includes(ns.trim())).join(',') || '';
+    enableDebug(process.env.DEBUG);
   }
 }
 

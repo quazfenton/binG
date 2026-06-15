@@ -3,20 +3,29 @@ packages:
   - "packages/*"
   - "web"
   - "backend"
-allowBuilds:
-  '@google/genai': set this to true or false
-  '@matrix-org/matrix-sdk-crypto-nodejs': set this to true or false
-  '@smithery/cli': set this to true or false
-  agent-browser: set this to true or false
-  better-sqlite3: set this to true or false
-  bufferutil: set this to true or false
-  cbor-extract: set this to true or false
-  cpu-features: set this to true or false
-  es5-ext: set this to true or false
-  esbuild: set this to true or false
-  msgpackr-extract: set this to true or false
-  node-pty: set this to true or false
-  protobufjs: set this to true or false
-  sharp: set this to true or false
-  ssh2: set this to true or false
-  utf-8-validate: set this to true or false
+
+# pnpm 9+ native-binding allowlist. Replaces the deprecated pnpm 8 `allowBuilds` map
+# (which used placeholder string values, causing the install scripts of these
+# native-binding packages — including `better-sqlite3` — to be silently skipped in
+# CI/production builds). With this array, pnpm 9+ approves the install script of
+# each listed package so `prebuild-install` / `node-gyp rebuild` actually runs
+# and the `.node` binding lands in `node_modules/<pkg>/build/Release/`.
+#
+# If a new native-binding package is added to the workspace, append it here too.
+onlyBuiltDependencies:
+  - "@google/genai"
+  - "@matrix-org/matrix-sdk-crypto-nodejs"
+  - "@smithery/cli"
+  - agent-browser
+  - better-sqlite3
+  - bufferutil
+  - cbor-extract
+  - cpu-features
+  - es5-ext
+  - esbuild
+  - msgpackr-extract
+  - node-pty
+  - protobufjs
+  - sharp
+  - ssh2
+  - utf-8-validate"

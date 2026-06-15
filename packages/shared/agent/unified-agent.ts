@@ -270,24 +270,24 @@ export class UnifiedAgent {
               break
 
             default:
-              console.warn(`[UnifiedAgent] Unknown capability: ${capability}`)
+              log.warn(`Unknown capability: ${capability}`)
               initResults[capability] = false
           }
         } catch (error: any) {
-          console.error(`[UnifiedAgent] Failed to initialize capability ${capability}:`, error.message)
+          log.error(`Failed to initialize capability ${capability}:`, error.message)
           this.initializationErrors.set(capability, error)
           initResults[capability] = false
           
           // Don't fail entire initialization for non-critical capabilities
           if (['desktop', 'mcp', 'git'].includes(capability)) {
-            console.warn(`[UnifiedAgent] Continuing without ${capability} capability`)
+            log.warn(`Continuing without ${capability} capability`)
           }
         }
       }
 
       const initDuration = Date.now() - initStartTime
-      console.log(
-        `[UnifiedAgent] Session initialized: ${this.session.sessionId} ` +
+      log.info(
+        `Session initialized: ${this.session.sessionId} ` +
         `(${initDuration}ms). Capabilities: ${JSON.stringify(initResults)}`
       )
 
@@ -299,7 +299,7 @@ export class UnifiedAgent {
       return this.session
 
     } catch (error: any) {
-      console.error('[UnifiedAgent] Initialization failed:', error.message)
+      log.error('Initialization failed:', error.message)
       throw error
     }
   }

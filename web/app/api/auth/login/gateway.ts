@@ -61,7 +61,7 @@ export async function POST(request: NextRequest) {
         const { logLoginFailure } = await import('@/lib/auth/auth-audit-logger');
         await logLoginFailure(email, 'invalid_credentials', request);
       } catch (auditError) {
-        console.warn('[Login] Audit log failed:', auditError);
+        logger.warn('Audit log failed:', auditError);
       }
       return NextResponse.json(
         { success: false, error: result.error },
@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
       // Fail-open would let a DB/query outage bypass MFA enforcement, which
       // is unacceptable for a security control. Invalidate the session we
       // just created and return a retryable 503 so the client can retry.
-      console.error('[Login] MFA check failed, login blocked (fail-closed):', mfaError);
+      logger.error('MFA check failed, login blocked (fail-closed):', mfaError);
       if (result.sessionId) {
         // Bound the cleanup with the module-scope timeout so a hanging DB
         // can't stall the 503 response. The logout promise is kept alive
@@ -143,7 +143,7 @@ export async function POST(request: NextRequest) {
               .update(result.sessionId)
               .digest('hex')
               .substring(0, 16);
-            console.warn('[Login] MFA-fail-closed: session cleanup failed (non-fatal)', {
+            logger.warn('MFA-fail-closed: session cleanup failed (non-fatal)', {
               sessionIdHash,
               error: err instanceof Error ? err.message : String(err),
             });
@@ -207,7 +207,7 @@ export async function POST(request: NextRequest) {
       const { logLoginSuccess } = await import('@/lib/auth/auth-audit-logger');
       await logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });
     } catch (auditError) {
-      console.warn('[Login] Audit log failed:', auditError);
+      logger.warn('Audit log failed:', auditError);
     }
 
     // Set session cookie
@@ -259,7 +259,7 @@ export async function POST(request: NextRequest) {
     return response;
 
   } catch (error) {
-    console.error('Login API error:', error);
+    logger.error('Login API error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal server error' },
       { status: 500 }

@@ -1177,6 +1177,21 @@ export class SandboxConnectionManager {
     }
 
     const errMsg = error?.message || 'Unknown error'
+    const status = error?.status ?? error?.response?.status
+    const isAuthError =
+      status === 401 ||
+      status === 403 ||
+      /authentication required|please sign in|requires auth/i.test(errMsg)
+
+    // For auth failures, route to the dedicated handler that shows a clear
+    // "please sign in" message and stays in local mode, rather than silently
+    // falling back to a broken sandbox-cmd mode that will fail on every input.
+    if (isAuthError) {
+      logger.warn(`[Terminal] Auth required for sandbox terminal: ${errMsg}`)
+      this.handleAuthRequired()
+      return
+    }
+
     logger.error(`[Terminal] Connection failed — falling back to command-mode: ${errMsg}`)
     this.updateTerminalState({
       sandboxInfo: { status: 'error' },

@@ -460,10 +460,20 @@ class SandboxFilesystemSync {
     try {
       entries = await sandboxBridge.listDirectory(sandboxId, workspaceDir);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       logger.warn(
         `[SandboxSync] Cannot list sandbox ${sandboxId} directory:`,
-        err instanceof Error ? err.message : err,
+        message,
       );
+      // If the sandbox itself no longer exists (destroyed, expired, or never
+      // started) or is inaccessible (security exception), stop the sync interval
+      // so we don't spam the same warning on every poll. We require both
+      // "sandbox" and "not found" in the message to avoid false positives from
+      // transient errors like "directory not found" during sandbox startup.
+      if (/sandbox.*not found|not found.*sandbox|security.*exception|exception.*security/i.test(message)) {
+        this.stopSync(sandboxId);
+        logger.info(`[SandboxSync] Stopped sync for removed/inaccessible sandbox ${sandboxId}`);
+      }
       return;
     }
 

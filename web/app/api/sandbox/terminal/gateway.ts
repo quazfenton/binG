@@ -183,7 +183,7 @@ export async function POST(req: NextRequest) {
       throw createError;
     }
   } catch (error) {
-    console.error('[Terminal] Create error:', error);
+    logger.error('Create error:', error);
     return NextResponse.json({ error: 'Failed to create terminal session' }, { status: 500 });
   }
 }

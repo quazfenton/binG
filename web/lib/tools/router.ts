@@ -496,7 +496,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
     try {
         // Defensive: if scopePath is missing, VFS operations will write to wrong workspace
         if (!context.scopePath) {
-          console.warn('[MCPFilesystemProvider] Missing scopePath in tool context — VFS files may be written to wrong workspace. Ensure createCapabilityToolExecutor passes a valid scopePath.');
+          logger.warn('[MCPFilesystemProvider] Missing scopePath in tool context — VFS files may be written to wrong workspace. Ensure createCapabilityToolExecutor passes a valid scopePath.');
         }
         // Inject sessionId from context so trackMcpFileEdit stores the edit for SSE event emission
         const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
@@ -1001,7 +1001,7 @@ class NullclawProvider implements CapabilityProvider {
               }
             } catch (error: any) {
               // Fall through to DuckDuckGo fallback
-              console.warn('[web.search] SearXNG failed, falling back to DuckDuckGo:', error.message);
+              logger.warn('[web.search] SearXNG failed, falling back to DuckDuckGo:', error.message);
             }
           }
 

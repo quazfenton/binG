@@ -16,6 +16,9 @@
 
 import { oauthService } from '@/lib/auth/oauth-service'
 import type { OAuthConnection } from '@/lib/auth/oauth-service'
+import { createLogger } from '@/lib/utils/logger'
+
+const log = createLogger('RouterTokenStore')
 
 export interface RouterTokenResult {
   accessToken: string
@@ -58,7 +61,7 @@ export async function getUserRouterTokens(
       connectionId: connection.providerAccountId, // 9Router connection ID
     }
   } catch (error) {
-    console.error(`[RouterTokenStore] Failed to get tokens for user ${userId}:`, error)
+    log.error(`Failed to get tokens for user ${userId}:`, error)
     return null
   }
 }
@@ -73,7 +76,7 @@ export async function getUserRouterConnections(userId: string): Promise<OAuthCon
     const conns = await oauthService.getUserConnections(userId)
     return Array.isArray(conns) ? conns : []
   } catch (error) {
-    console.error(`[RouterTokenStore] Failed to get connections for user ${userId}:`, error)
+    log.error(`Failed to get connections for user ${userId}:`, error)
     return []
   }
 }
@@ -96,7 +99,7 @@ export async function revokeUserRouterConnection(
 
     return await oauthService.revokeConnection(connections[0].id, userId)
   } catch (error) {
-    console.error(`[RouterTokenStore] Failed to revoke connection for user ${userId}:`, error)
+    log.error(`Failed to revoke connection for user ${userId}:`, error)
     return false
   }
 }

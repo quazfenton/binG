@@ -18,7 +18,7 @@ import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { LLMMessage } from '@/lib/providers/llm-providers';
 import { createRequire } from 'node:module';
-import { generateId, generateText, tool as createTool } from 'ai';
+import { generateId, generateText, stepCountIs, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
 import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 
@@ -1028,6 +1028,7 @@ export class AgentLoop {
       this.toolLoopAgent = new ToolLoopAgent({
         model: vercelModel,
         maxIterations: this.maxIterations,
+        stopWhen: stepCountIs(this.maxIterations),
         tools: sdkTools,
       });
 

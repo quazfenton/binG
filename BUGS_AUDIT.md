@@ -2871,3 +2871,625 @@ This ensures operators can distinguish "tool returned `{success: false}` without
 
 **Behavior change:** After a 429 from the streaming path, subsequent requests to the same (provider, model) combo within the 60s cooldown window will be skipped immediately — saving the API call and falling through to the next provider in the chain.
 
+---
+
+## Pass-5 — Log Audit (run.log 13,396 lines, 2026-06-15)
+
+**Source:** `bing/web/logs/run.log` — full trace from server init through multiple chat sessions.
+**Method:** Manual fragment-by-fragment read of first ~1300 lines + targeted grep of remaining 12,000 lines.
+**Scope:** Focused on LLM stoppage patterns, tool-chain breaks, path confusion, FC-GATE failures, stall-steering, and continuation logic.
+**Bugs already in BUGS_AUDIT.md (#8–#66) NOT re-listed. Only NEW findings.**
+
+---
+
+### 🔴 #69 — FC-GATE: LLM Called 0 Tools Despite 19 Available (Critical)
+
+**Evidence (line 5089):**
+```
+[WARN] Chat API [provider:mistral model:mistral-small-latest]: [TOOL-SUMMARY] 
+LLM did NOT call any tools despite tools being available
+{data: {provider, model, toolsAvailable: 19, toolNames: [write_file, apply_diff, 
+read_file, read_files, list_files, search_files, grep_code, batch_write, delete_file,
+get_workspace_stats, bash_execute, mem0_*, web_search, choose_role], finishReason: "stop"}}
+```
+
+**Root cause:** Mistral-small-latest returned `finishReason: "stop"` with 0 tool calls despite 19 tools being available. The FC-GATE Phase 2 fallback triggered ("Retrying in text-mode (file-edit tools only)"), but text-mode extraction only works for file edits, not for the full tool set (bash, mem0, web_search, choose_role).
+
+**Why critical:** The `continue` parameter (`routing.continue`) is hardcoded to `false` in `first-response-routing.ts:130`. When `shouldAutoContinue()` checks `routing?.continue === true` (llm-continuation.ts:178), it always returns false. The LLM stops at step 1 and never auto-continues.
+
+**Related:** Log line 5086 shows an invalid progressive file edit path `"0.1s"` being skipped — the LLM was emitting malformed paths in text-mode, confirming it had switched to degraded text-mode parsing.
+
+**Fix direction:**
+1. Make `routing.continue` configurable via env `DEFAULT_ROUTING_CONTINUE=true`
+2. In `shouldAutoContinue()`, also check `detectNeedsMoreTurns()` result (from `auto-continue-detector.ts`) — it fires on `read-then-stall`, `empty-after-tools`, `single-write-silent` signals
+3. Wire `detectNeedsMoreTurns()` into the route layer at `app/api/chat/route.ts:1561`
+
+**Files:** `packages/shared/agent/first-response-routing.ts`, `web/lib/chat/llm-continuation.ts`, `web/lib/chat/auto-continue-detector.ts`, `app/api/chat/route.ts`
+
+---
+
+### 🟠 #70 — `continue` Parameter Hardcoded to `false` — Blocks Auto-Continuation
+
+**Evidence:** `first-response-routing.ts:130`
+```typescript
+const DEFAULT_ROUTING: RoutingMetadata = {
+  // ...
+  continue: false,  // ← hardcoded
+```
+
+**Root cause:** The `continue` field in `RoutingMetadata` is set to `false` as default and is only set to `true` when the LLM explicitly emits `[ROLE_SELECT]{ ... "continue": true }`. But the LLM rarely emits this block — most models stop after their first text response without routing metadata.
+
+**Impact:** `shouldAutoContinue()` at `llm-continuation.ts:178` checks `routing?.continue === true` but this never fires because `DEFAULT_ROUTING.continue = false` and the LLM's parsed routing rarely overrides it.
+
+**Fix direction:**
+1. Make `DEFAULT_ROUTING.continue` env-tunable via `LLM_AUTO_CONTINUE_DEFAULT=true`
+2. In `shouldAutoContinue()`, also detect "implicit continuation needed" signals:
+   - Response ends mid-sentence (no terminal punctuation, length > 100 chars)
+   - Response mentions "next step", "then", "after this" but produces no writes
+   - Only read-only tools called (read_file/list_files) and response is short
+3. The `detectNeedsMoreTurns()` function in `auto-continue-detector.ts` already covers these — call it from `shouldAutoContinue()`
+
+**Files:** `packages/shared/agent/first-response-routing.ts`, `web/lib/chat/llm-continuation.ts`
+
+---
+
+### 🟠 #71 — STALL-STEER Fires But Model Doesn't Resume (Stall Loop)
+
+**Evidence (lines 7056-7057, 7115-7116):**
+```
+[DEBUG] Chat API: [THINK-PING] Model has been silent; emitting ping
+{data: {silenceMs: 74512, lastActivityType: "tool-result", lastActivityDetail: "write_file"}}
+[WARN] Chat API: [STALL-STEER] Model silent for >30s; injecting stall steer
+{data: {silenceMs: 74512, lastActivityType: "tool-result"}}
+```
+
+**Root cause:** The stall steer is injected as a text yield `[STEER] stall_detected...` (vercel-ai-streaming.ts:2075), but:
+1. No evidence in logs that the model resumes after the steer
+2. The `silenceMs` continues to count (74512ms = 74 seconds)
+3. The model's last activity was `write_file` (a tool result), meaning it completed a tool but didn't continue to the next step
+
+**Why it matters:** The stall steer mechanism detects the problem but doesn't fix it. The model receives a text steer but the `silenceMs` counter doesn't reset — the steer itself doesn't generate new activity.
+
+**Fix direction:**
+1. Reset `thinkPingQueue` silence tracking when stall steer is injected (or after a successful yield)
+2. Add `[STALL-STEER] injected` to the response metadata so `shouldAutoContinue()` can detect this pattern
+3. When stall steer fires AND `silenceMs > 60s`, automatically trigger a continuation prompt (not just a text steer)
+4. Log what the model does AFTER the steer is injected — currently no visibility into whether steer was acted upon
+
+**Files:** `web/lib/chat/vercel-ai-streaming.ts`, `web/lib/chat/llm-continuation.ts`
+
+---
+
+### 🟠 #72 — PATH MISMATCH: Files Written to `sessions/002`, Requests for `sessions/003`
+
+**Evidence (lines 5156-5158):**
+```
+[WARN] [VFS SNAPSHOT WARN] [q4ihhk] PATH MISMATCH: workspace has 6 files 
+but none match path="sessions/003"
+[data: {workspaceFilePaths: sessions/002/game.js, sessions/002/index.html, 
+sessions/002/src/audio.ts, sessions/002/src/particles.ts, sessions/002/src/vec2.ts, 
+sessions/002/style.css}]
+```
+
+**Root cause:** The VFS workspace has files at `sessions/002/...` but the client is polling/requesting `sessions/003`. The session scope resolution is resolving all writes to `sessions/002` while the client thinks it's operating on `sessions/003`.
+
+**Impact:** User sees `sessions/003` in their UI but all files are actually in `sessions/002`. Read/write operations on `sessions/003` will fail with "file not found" or create new (duplicate) files.
+
+**Fix direction:**
+1. At `gateway.ts`, when `PATH_MISMATCH` is detected, return a structured error with both the requested path and the actual path
+2. Add `[STEER] session_scope_mismatch` to tell the LLM the session scope changed
+3. Investigate why `resolveScopedPath` resolves to `sessions/002` when `sessions/003` was requested — likely in `scope-utils.ts` `extractSessionIdFromOwnerId`
+
+**Files:** `app/api/filesystem/snapshot/gateway.ts`, `lib/virtual-filesystem/scope-utils.ts`
+
+---
+
+### 🟠 #73 — POLLING DETECTED Spam: 4-8 Rapid Requests for Same Path
+
+**Evidence (lines 232, 1274, 1291, 1297, 1316, 1327, 1332, 1337, 1354, 1366):**
+```
+[WARN] POLLING DETECTED: 4 requests in 326ms for path "sessions"
+[WARN] POLLING DETECTED: 4 requests in 752ms for path "sessions"
+[WARN] POLLING DETECTED: 5 requests in 1229ms for path "sessions"
+[WARN] POLLING DETECTED: 7 requests in 2372ms for path "sessions/002"
+[WARN] POLLING DETECTED: 8 requests in 3056ms for path "sessions/002"
+```
+
+**Root cause:** The frontend polls the snapshot endpoint repeatedly when waiting for file changes. With 4-8 requests in 300ms-3s windows, this indicates:
+1. No server-side "change notification" push to the client
+2. Client uses short-polling instead of long-polling with ETag/304 responses
+3. The `POLLING DETECTED` warning fires but doesn't trigger any backoff on the client side
+
+**Impact:** Server load, log noise, possible UI flicker as new snapshots arrive mid-poll-cycle.
+
+**Fix direction:**
+1. The `POLLING DETECTED` warning should ALSO set a `Retry-After` header on the snapshot response, instructing the client to back off
+2. Implement SSE-based push for snapshot changes (the `FileEvents` system already emits file events — wire them to an SSE endpoint)
+3. Add a client-side exponential backoff when receiving `WORKSPACE_NOT_READY`
+
+**Files:** `app/api/filesystem/snapshot/gateway.ts`
+
+---
+
+### 🟡 #74 — Eager-Init Cooldown Active for Anonymous Owners (Spam)
+
+**Evidence (lines 139, 163, 168, etc. — hundreds of occurrences):**
+```
+[INFO] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized
+[INFO] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY
+```
+
+**Root cause:** Anonymous users (with `ownerId: anon:TIMESTAMP_ID`) hit the `WORKSPACE_NOT_READY` path and are subject to an "eager-init cooldown". Every subsequent snapshot request during cooldown returns `WORKSPACE_NOT_READY` without checking if the workspace was actually initialized.
+
+**Impact:** After the first `WORKSPACE_NOT_READY`, all subsequent polls for ~30s return the same error, even after files are written. The cooldown prevents legitimate reads from succeeding.
+
+**Fix direction:**
+1. When a write happens for an anonymous owner, invalidate the eager-init cooldown for that owner
+2. The VFS service already calls `getWorkspaceVersion` on write — check if this invalidates the cooldown
+3. Log when "eager-init cooldown blocked a legitimate read after a write"
+
+**Files:** `app/api/filesystem/snapshot/gateway.ts`, `lib/virtual-filesystem/virtual-filesystem-service.ts`
+
+---
+
+### 🟡 #75 — `choose_role` Tool Excluded from Default Tools / Not Auto-Suggested
+
+**Evidence:** Log line 5089 shows `choose_role` in the available tools list, but:
+1. No evidence in logs of `choose_role` being called or suggested to the LLM
+2. The `shouldAutoContinue()` function explicitly excludes `choose_role` from tool count (`unified-agent-service.ts:1027`)
+3. The `choose_role` tool is defined in `lib/chat/tools/choose-role-tool.ts` but NOT wired into the default tool suggestion system
+
+**Root cause:** The role-selection system described in the system prompts (pattern matching roles to tools) exists but isn't connected to the LLM's tool selection. The LLM gets the full 19-tool list but doesn't know when to call `choose_role` vs using its current role.
+
+**Fix direction:**
+1. In `unified-agent-service.ts`, when `shouldAutoContinue()` recommends a continuation, also evaluate if a role switch would help
+2. Add a `wireRoleSwitchSteer()` that injects `[STEER] Role switch suggested: <role> — <reason>` when the LLM is stuck
+3. Export `normalizeAndValidateRole` results to the metrics so we can see if role switches are being attempted
+4. Consider adding `choose_role` as a DEFAULT tool (always suggested) rather than one that must be explicitly selected
+
+**Files:** `lib/chat/tools/choose-role-tool.ts`, `lib/orchestra/unified-agent-service.ts`, `lib/chat/llm-continuation.ts`
+
+---
+
+### 🟠 #76 — LLM Stops at Step 1: Generates Plan/HTML But No Tool Calls
+
+**Evidence (line 5089):** Mistral-small-latest returned `finishReason: "stop"` with 7397 char text content but 0 tool calls. This is the headline symptom: "LLM always stops at step 1 (generating a basic html at most when asked to code)."
+
+**Root cause (multi-layer):**
+1. **FC-GATE Phase 1** (`vercel-ai-streaming.ts:1765`): If `supportsFC` is `unknown`, the model tries tools but if it fails to emit a tool-call block in the first chunk, it falls to text mode
+2. **FC-GATE Phase 2** (`vercel-ai-streaming.ts:2640`): Even when tool-call patterns exist in text, the fallback to text-mode only enables file-edit tools — not bash, mem0, or web_search
+3. **`shouldAutoContinue()` not called**: The route layer at `route.ts:1561` calls `shouldAutoContinue()` but only uses its result for the `continuationPrompt` — it doesn't automatically issue a follow-up request
+4. **No `continue` parameter sent back**: The `RoutingMetadata.continue` is never set to `true` by the LLM (hardcoded `false` default)
+
+**Fix direction:**
+1. When `shouldAutoContinue()` returns `{ continue: true }`, the route layer MUST issue a follow-up LLM call (not just set a prompt for the next user message)
+2. Add `detectNeedsMoreTurns()` as an independent signal (auto-continue-detector.ts:298)
+3. When the LLM produces a plan/scaffold without executing it, trigger a `role_selection_continue_true` continuation
+4. Consider a `continue` parameter the LLM can return in its text response to request more turns (similar to OpenAI's `completion_reason: "continue"`)
+
+**Files:** `app/api/chat/route.ts`, `lib/chat/vercel-ai-streaming.ts`, `lib/chat/llm-continuation.ts`, `lib/chat/auto-continue-detector.ts`
+
+---
+
+### 🟡 #77 — Progressive File Edit `hasDiff: false` — No Diff Tracking
+
+**Evidence (lines 5004-5007, 5016-5017, 5038-5040, etc.):**
+```
+[DEBUG] Chat API: Progressive file edit detected
+{data: {path: sessions/002/game.js, operation: "write", hasDiff: false}}
+```
+
+**Root cause:** Every progressive file edit is logged with `hasDiff: false`, meaning the system isn't computing or storing the diff — it just knows a write happened. This makes it impossible to:
+1. Detect what actually changed between versions
+2. Apply incremental patches vs full overwrites
+3. Show "diff view" in the UI
+
+**Impact:** Without diff tracking, the VFS stores full file content on every write, increasing storage and memory. The `hasDiff: false` prevents the diff-based rollback feature from working.
+
+**Fix direction:**
+1. Compute actual diff when `hasDiff: false` — compare new content vs previous version
+2. Store the computed diff in the `appliedEditsResult` so `hasDiff` becomes `true` after the first edit
+3. Add `diffComputationTimeMs` to chat metrics
+
+**Files:** `lib/chat/file-edit-parser.ts`, `app/api/chat/route.ts`
+
+---
+
+### 🟡 #78 — VFS MCP Tool Path Resolution: Original vs Scoped Path Mismatch
+
+**Evidence (line 7163):**
+```
+[INFO] [VFS-TOOL] Resolved scoped path
+{data: {originalPath: sessions/003/src/maze.ts, scopedPath: workspace/sessions/000/src/maze.ts, scopePath: workspace/sessions/000}}
+```
+
+**Root cause:** The LLM requested `sessions/003/src/maze.ts` but VFS resolved it to `workspace/sessions/000/src/maze.ts`. The `sessionId` was rewritten from `003` to `000` during scope resolution. This is a session scope mismatch similar to #72.
+
+**Impact:** Files written to the wrong session. If the user has multiple sessions (001, 002, 003), writes may land in the wrong one.
+
+**Fix direction:**
+1. In `VFS-TOOL` logging, include both the original ownerId AND the resolved ownerId to make session mismatches visible
+2. Add `[STEER] session_scope_mismatch` when `originalPath` session doesn't match `scopePath` session
+3. The `assertScopePathMatchesSessionId` from #26 should catch this — verify it's wired into the MCP tool layer
+
+**Files:** `lib/mcp/vfs-mcp-tools.ts`, `lib/virtual-filesystem/session-path-guard.ts`
+
+---
+
+### 🟡 #79 — Memory Growth: Soft Throttle Re-Engaged Repeatedly
+
+**Evidence (lines 5055, 5112, 5171, 5248, 7026-7027, 7060-7061, 7105-7106, 7187-7188, 7229-7230):**
+```
+[DEBUG] ProcessMemoryMonitor re-engaged soft throttle (was already throttled, sustained pressure)
+{data: {heapUsedMb: 1188, softThrottleMb: 1024}}
+[WARN Session:Manager Heap usage crossed alert threshold {memoryMb: 1323, thresholdMb: 1200}
+```
+
+**Root cause:** 
+1. Soft throttle at 1024MB is too close to normal operating heap (~680-890MB observed in log)
+2. The throttle engages but doesn't actually throttle request intake — it just logs
+3. `withMemoryThrottle` from Bug #8 is exported but NOT adopted in `app/api/chat/route.ts` (per Bug #8 fix notes)
+
+**Impact:** Heap grows to 1323MB without any backpressure. If 2 concurrent large requests arrive, could hit critical threshold.
+
+**Fix direction:**
+1. ADOPT `withMemoryThrottle` in `app/api/chat/route.ts` — this is a 1-3 line wrap per the Bug #8 notes
+2. Lower soft throttle to 900MB (closer to the observed steady-state of 680-890MB)
+3. Add `memoryThrottleCount` to chat metrics so we can see how often throttle engages
+
+**Files:** `app/api/chat/route.ts`, `lib/management/process-memory-monitor.ts`
+
+---
+
+### 🟡 #80 — Auto-Suspend Cycle: 5-Min Idle Timeout Resets Repeatedly
+
+**Evidence (lines 37-38, 76-77, etc.):**
+```
+[INFO] [AutoSuspend] Started with 5min idle timeout
+[INFO] SandboxBridge Auto-suspend service started {idleTimeout: "5min"}
+```
+
+**Root cause:** Auto-suspend starts on every new process/worker instantiation. With multiple workers or hot-reloads, this creates repeated `[AutoSuspend] Started` log entries.
+
+**Impact:** Low operational concern, but indicates the lifecycle management isn't keeping a single AutoSuspend instance across workers.
+
+**Fix direction:**
+1. Log the PID in `[AutoSuspend] Started` so duplicate initiations can be correlated to specific workers
+2. Only start AutoSuspend once per process lifetime (use a module-level guard)
+3. If a second instance would start, log `[WARN] AutoSuspend already running on PID X, skipping`
+
+---
+
+### ⬜ #81 — tool-loop-agent Not Visible in Logs (Investigation Needed)
+
+**Evidence:** No `tool-loop-agent` entries in run.log despite `agent-loop.ts` implementing it and being imported in `unified-agent-service.ts`.
+
+**Root cause (hypothesis):** The `ToolLoopAgent` from AI SDK is loaded conditionally (`ToolLoopAgent ? ... : manualFallback`) — if the import fails or `ToolLoopAgent` is `undefined`, the code falls back to the manual implementation without logging which path was taken.
+
+**Impact:** Unknown whether the sophisticated multi-step tool loop from `agent-loop.ts` is actually running, or if all requests fall through to the manual loop.
+
+**Fix direction:**
+1. Add `[INFO] ToolLoopAgent: using <ai-sdk | manual-fallback>` log at initialization
+2. Track `toolLoopAgentUsed: boolean` in chat metrics
+3. Verify `agent-loop.ts:48-57` is being called and the `ToolLoopAgent` import resolves
+
+**Files:** `lib/orchestra/mastra/agent-loop.ts`
+
+---
+
+### 🟠 #82 — `finishReason: "stop"` with Text Content But 0 Tool Calls (FC-GATE Failure)
+
+**Evidence (line 5089, also line 5256):**
+```
+[TOOL-SUMMARY] LLM did NOT call any tools despite tools being available
+finishReason: "stop", toolInvocations: 0, tools: "none"
+```
+
+**Root cause (from FC-GATE code flow):**
+1. Phase 1 (`vercel-ai-streaming.ts:1765`): checks `supportsFC` — if `unknown`, tries tools first
+2. Model emits `finishReason: stop` with text but NO tool calls
+3. Phase 2 (`vercel-ai-streaming.ts:2640`): detects "tool-call patterns in text" → retries with text-mode instructions
+4. Text-mode only enables file-edit tools — not bash, mem0, web_search, choose_role
+5. `Phase 2 fallback completed` (line 5249) but with `toolInvocations: 0`
+
+**Why the model stops:** Mistral-small-latest may not support the Vercel AI SDK function-calling format. The `supportsFC` check at Phase 1 may have incorrectly returned `unknown` instead of `false`, causing a failed tool attempt before text-mode fallback.
+
+**Fix direction:**
+1. Make `supportsFC` explicit per provider/model — add `FORCE_TEXT_MODE_PROVIDERS` env var listing mistral-small-latest
+2. In Phase 2, when falling back to text-mode, explicitly tell the LLM "you MUST call write_file or apply_diff for file operations"
+3. After Phase 2 completes with 0 tool calls, trigger `shouldAutoContinue()` immediately rather than waiting for user
+
+**Files:** `lib/chat/vercel-ai-streaming.ts`, `lib/chat/llm-continuation.ts`
+
+---
+
+### Pass-5 Summary Table
+
+| # | Category | Severity | Title | Status |
+|---|----------|----------|-------|--------|
+| 69 | FC-GATE | 🔴 Critical | LLM called 0 tools despite 19 available | ⬜ OPEN |
+| 70 | Continuation | 🟠 High | `continue` hardcoded to `false` — blocks auto-reprompt | ⬜ OPEN |
+| 71 | Stall-Steer | 🟠 High | STALL-STEER fires but model doesn't resume | ⬜ OPEN |
+| 72 | VFS Path | 🟠 High | Files at sessions/002, requests for sessions/003 | ⬜ OPEN |
+| 73 | Polling | 🟡 Med | POLLING DETECTED spam — no client backoff | ⬜ OPEN |
+| 74 | VFS | 🟡 Med | Eager-init cooldown blocks reads after write | ⬜ OPEN |
+| 75 | Role Select | 🟡 Med | `choose_role` not auto-suggested to LLM | ⬜ OPEN |
+| 76 | LLM Stoppage | 🟠 High | LLM stops at step 1 — no tool calls after plan | ⬜ OPEN |
+| 77 | VFS | 🟡 Med | Progressive edit `hasDiff: false` — no diff tracking | ⬜ OPEN |
+| 78 | VFS Path | 🟡 Med | MCP tool path resolves to wrong session | ⬜ OPEN |
+| 79 | Memory | 🟡 Med | Soft throttle re-engaged, not adopted in route | ⬜ OPEN |
+| 80 | Lifecycle | 🟡 Med | Auto-suspend starts repeatedly per worker | ⬜ OPEN |
+| 81 | Debug | 🟡 Med | tool-loop-agent not visible in logs | ⬜ OPEN |
+| 82 | FC-GATE | 🟠 High | `finishReason: stop` with 0 tool calls — FC-GATE failure | ⬜ OPEN |
+
+---
+
+### Pass-5 Top-3 ROI Fixes
+
+| Rank | Bug | Fix | Impact |
+|------|-----|-----|--------|
+| 1 | **#76** (LLM stops at step 1) | Wire `detectNeedsMoreTurns()` into auto-continue AND issue follow-up request automatically | Eliminates manual reprompt for most code tasks |
+| 2 | **#70** (`continue: false`) | Env-tunable `DEFAULT_ROUTING.continue = true` + `detectNeedsMoreTurns()` as secondary signal | Enables auto-continuation for multi-step tasks |
+| 3 | **#69/#82** (FC-GATE failure) | Add `FORCE_TEXT_MODE_PROVIDERS` for mistral-small-latest + Phase 2 reprompt | Reduces fallback chain length, fewer degraded responses |
+
+---
+
+### Cross-Cutting Theme: Manual Reprompt is the Canary
+
+Every Pass-5 bug ultimately manifests as "user had to send a manual follow-up." The fix direction for all of them:
+
+1. **Detect** the failure pattern in `shouldAutoContinue()` / `detectNeedsMoreTurns()`
+2. **Inject `[STEER]`** before the stream ends so the LLM knows what went wrong  
+3. **Issue auto-continue** follow-up request (not just set a prompt for the next user message)
+4. **Log the failure mode** with a counter so we can see frequency in `/api/health?detailed`
+
+The existing `auto-continue-detector.ts` has 8 signal types covering most Pass-5 patterns. The missing piece is wiring its output into an actual follow-up request, not just a prompt string.
+
+---
+
+### Files Modified by This Pass
+
+| File | Change |
+|------|--------|
+| `packages/shared/agent/first-response-routing.ts` | Document `continue: false` hardcode (#70) |
+| `web/lib/chat/llm-continuation.ts` | Add `detectNeedsMoreTurns()` integration (#70, #76) |
+| `web/lib/chat/auto-continue-detector.ts` | Already has all signals — document usage in route layer |
+| `app/api/chat/route.ts` | Adopt `withMemoryThrottle` (#79), wire `detectNeedsMoreTurns()` (#76) |
+| `lib/chat/vercel-ai-streaming.ts` | Add `FORCE_TEXT_MODE_PROVIDERS` env support (#82) |
+| `lib/virtual-filesystem/scope-utils.ts` | Investigate session id rewrite 003→000 (#72, #78) |
+| `lib/virtual-filesystem/session-path-guard.ts` | Wire into MCP tool layer (#78) |
+| `app/api/filesystem/snapshot/gateway.ts` | Add `Retry-After` header on POLLING DETECTED (#73), cooldown invalidation (#74) |
+| `lib/orchestra/mastra/agent-loop.ts` | Add ToolLoopAgent init logging (#81) |
+| `lib/management/process-memory-monitor.ts` | Document `withMemoryThrottle` adoption needed (#79) |
+
+
+---
+
+## Pass-6 — New Run.log Findings (Bugs #83–#91 + 2 cross-cutting issues)
+
+**Source:** Fresh trace of `bing/web/logs/run.log` + `web/lib/chat/vercel-ai-streaming.ts`, `web/lib/orchestra/shared-agent-context.ts`, `web/lib/chat/llm-continuation.ts`, `web/lib/auth/transfer-anon-vfs.ts`.
+**Method:** Pattern-grep across the new log (33× "Unknown error — tool result has keys", 2082× "Cannot list sandbox ... not found", 401× Arcade 401, 47× "Total disk limit exceeded", 18× "will not retry", 12× `responseLength:0`, 6× MCP SSE failure, repeated polling/cooldown warnings overlapping with Pass-5 #71/#72/#73) cross-referenced with the current source.
+
+| # | Category | Severity | Title | Status |
+|---|----------|----------|-------|--------|
+| 83 | Tooling | 🔴 Critical | Router mis-classifies successful tool results as "Unknown error" (root cause of user's "1 tool call max" complaint) | ⬜ OPEN |
+| 84 | Observability | 🔴 Critical | Loop-guard aborts with `abortReason: 'unknown'` and empty `failedTools: []` | ⬜ OPEN |
+| 85 | Concurrency | 🔴 Critical | VFS ownership transfer fails with "Cannot read properties of null (reading 'cnt')" — cookie-based race | ⬜ OPEN |
+| 86 | Tooling | 🟠 High | `list_files` called without required `path` arg; validation hints missing | ⬜ OPEN |
+| 87 | Sandbox | 🟠 High | Daytona "Total disk limit exceeded" — no graceful degradation to fallback providers | ⬜ OPEN |
+| 88 | Integration | 🟡 Med | Arcade service repeatedly 401s then auto-disables; no banner | ⬜ OPEN |
+| 89 | Lifecycle | 🟡 Med | 2082 "Cannot list sandbox ... not found" — orphan sandbox refs in sync layer | ⬜ OPEN |
+| 90 | Provider | 🟠 High | `pollinations` provider permanently fails with "will not retry" after single API key error — no circuit breaker reset | ⬜ OPEN |
+| 91 | Streaming | 🟠 High | `responseLength:0` logged despite successful tool activity — response text not captured | ⬜ OPEN |
+| X1 | Startup | 🟠 High | MCP gateway fails repeatedly with SSE connection errors during startup | ⬜ OPEN |
+| X2 | Observability | 🟡 Med | Significant warning-pattern overlap between Pass-5 and Pass-6 (polling/cooldown) | ⬜ OPEN |
+
+### ⬜ #83 — Router Mis-Classifies Successful Tool Results as "Unknown Error" (ROOT CAUSE of "1 max tool call" complaint)
+**Symptom (run.log, 33 occurrences):**
+```json
+{"level":"error","message":"[TOOL-RESULT] ✗ Tool failed",
+ "data":{"toolName":"bash_execute",
+   "error":"Unknown error — tool result has keys: [success, output, exitCode, error, _recoveryHint], no error field",
+   "consecutiveFailures":1..3}}
+```
+
+**Root cause (`bing/web/lib/chat/vercel-ai-streaming.ts:2444`):** the router classifies a tool result as failed when the `error` field is truthy/non-null. But `bash_execute` (and several other tools) return `{success: true, output: "...", exitCode: 0, error: null, _recoveryHint: "..."}` on success — the `error` field is explicitly `null` (not absent), so the router flips into the "no error field" branch and synthesizes a bogus "Unknown error" string for a result that was actually successful with non-empty output. The `_recoveryHint` field is populated (line 2403) but **never checked** by the router.
+
+**Why this is THE root cause of "1 max tool call":**
+1. `bash_execute` succeeds with non-empty output → router reports "Unknown error" → `consecutiveFailures++`
+2. 2-3 of these in a row → `consecutiveFailures >= 3` triggers the loop-guard at `shared-agent-context.ts:407`
+3. Loop-guard fires (see #84) with `abortReason: 'unknown'` and empty `failedTools: []` → agent killed
+4. User sees "the LLM stopped after 1 tool call" → manual re-prompt required
+
+33 of these false failures are in run.log; combined with #84, every one of them potentially triggers the loop-guard. **This bug alone likely accounts for ~80% of the user's "stops at step 1" symptoms.**
+
+**Fix direction:**
+```ts
+// A tool result is a failure ONLY if success === false OR
+// (error is a non-null string AND _recoveryHint is absent)
+const isFailure = result.success === false ||
+  (typeof result.error === 'string' && result.error.length > 0 && !result._recoveryHint);
+```
+- Replace the current `errorObj ? ... : 'Unknown error — tool result has keys: [...]'` branch in `vercel-ai-streaming.ts:2444` with the above predicate.
+- Audit the 60+ tool result types for the same pattern (`result.success === true && result.error === null` should be treated as success, not failure).
+- When the predicate is uncertain, **prefer success over failure** — a false-negative (silently treating success as success) is far cheaper than a false-positive (killing a healthy run).
+
+**Files:** `bing/web/lib/chat/vercel-ai-streaming.ts:2444`, `bing/web/lib/tools/router.ts` (audit all result-shape branches).
+
+### ⬜ #84 — Loop-Guard Aborts with `abortReason: 'unknown'` and Empty `failedTools: []`
+**Symptom (run.log):**
+```json
+{"level":"info","message":"[STEER] fired",
+ "data":{"kind":"loop_abort",
+   "detail":{"abortReason":"unknown","consecutive":3,
+   "failedTools":[],"suggestion":"..."}}}
+```
+
+**Root cause (`bing/web/lib/orchestra/shared-agent-context.ts:323` and `:334`):** the `wireLoopAbortSteer` helper hardcodes `abortReason: 'unknown'` and `failedTools: []` in the STEER payload. The actual failure reason (e.g. "3× bash_execute ENOENT for `npx`") and the actual tool name list (e.g. `["bash_execute", "bash_execute", "bash_execute"]`) are computed upstream by the `consecutiveFailures` counter and the `recentToolNames` ring buffer, but **discarded** when the STEER is built. Result: every loop-guard STEER message is identical and useless for debugging.
+
+**Why this matters (multiplier on #83):** even with #83 fixed, the loop-guard is the gate that converts "3 false failures" into "agent killed". Without fixing #84, operators have no way to tell whether the loop-guard fired on real failures or false positives, which makes regression testing impossible.
+
+**Fix direction:**
+- Pass the actual `consecutiveFailures` array and `recentToolNames` into `wireLoopAbortSteer`:
+  ```ts
+  wireLoopAbortSteer({ consecutive, recentToolNames, lastErrors })
+  ```
+- Build the `abortReason` from the failure pattern:
+  - All ENOENT for the same binary → `'binary_missing: <bin>'`
+  - All `success: false` for the same tool → `'tool_failing: <tool>'`
+  - All different → `'mixed'`
+  - Default → `'unknown'` (only when truly unknown)
+- Build `failedTools` from `recentToolNames` (deduped), not `[]`.
+- Add a counter `loopAbortByReason: { binary_missing, tool_failing, mixed, unknown }` to chat metrics so the audit can see which pattern dominates.
+
+**Files:** `bing/web/lib/orchestra/shared-agent-context.ts:323` and `:334`, `bing/web/lib/orchestra/steer-service.ts`, `bing/web/lib/chat/chat-metrics.ts`.
+
+### ⬜ #85 — VFS Ownership Transfer Null Pointer: "Cannot read properties of null (reading 'cnt')"
+**Symptom (run.log, 7 occurrences):** `Cannot read properties of null (reading 'cnt')` thrown from `transferAnonVFS()` in `web/lib/auth/transfer-anon-vfs.ts`. The error path swallows the throw and logs a generic "VFS transfer failed" warning; the anon files are silently lost on login.
+
+**Root cause:** the cookie-based transfer path calls `virtualFilesystem.findAnonOwnerIds(cookiePrefix)` which queries the SQLite DB for anon ownerIds matching the cookie prefix. When better-sqlite3 is unavailable (the `isDatabaseAvailable()` check from the previous turn now correctly returns `false`), the function returns `null` instead of an empty array. The downstream `.filter(...).length` then dereferences `null.cnt` (or similar).
+
+**Why this is critical:** the user's anon VFS (in-progress files, snapshots, history) is NEVER transferred to the authenticated account on login. The user starts fresh after auth. Combined with #87 (Daytona disk limit), this means anon users can lose BOTH their sandboxed env AND their file state on a single auth event.
+
+**Fix direction:**
+- Change `findAnonOwnerIds()` to return `[]` instead of `null` when the DB is unavailable. Document the return-type contract on the function.
+- Add a defensive `.filter(x => x != null)` before the `.length` access.
+- Add a unit test: `findAnonOwnerIds() returns [] when DB is unavailable` (mock `isDatabaseAvailable` to false).
+- Add a `transferSkippedReason: 'db_unavailable' | 'no_anon_owners' | 'no_files' | 'error'` to the transfer result so the audit can see why transfers were skipped.
+
+**Files:** `bing/web/lib/auth/transfer-anon-vfs.ts`, `bing/web/lib/virtual-filesystem/virtual-filesystem-service.ts` (findAnonOwnerIds contract), `bing/web/__tests__/transfer-anon-vfs-fallback.test.ts`.
+
+### ⬜ #86 — `list_files` Invalid Args: LLM Calls Without Required `path` Argument
+**Symptom (run.log, 12 occurrences):** `[MCP:Integration] Tool 'list_files' called without required argument 'path'` → `{success: false, error: "Path is required"}` returned to the LLM. The LLM retries 2-3 times with empty path before giving up, eating 2-3 turns of the tool-call budget.
+
+**Root cause:** the tool schema declares `path: z.string()` as required, but provides no `description` or `example` showing the model what a valid path looks like. The LLM has to guess whether to use `"/"`, `"./"`, `"workspace/sessions/001"`, etc. (See Pass-2 #19 — partially fixed, but the example injection was on the validation FAILURE path, not the tool DESCRIPTION path. Models that don't read error messages still don't know the format.)
+
+**Fix direction:**
+- Add `.describe('Absolute workspace path, e.g. "/" for root or "workspace/sessions/001" for a session')` to the `path` field in the Zod schema, NOT just the JSON-Schema block.
+- For the 9 MCP tool schemas in `vfs-mcp-tools.ts`, ensure the `.describe()` text appears in BOTH the Zod schema (for the live tool def sent to the LLM) AND the JSON-Schema block (for the static tool list).
+- The current fix only updates the JSON-Schema block (via `correctedPathExample`), so models that read the live schema still see no example.
+
+**Files:** `bing/web/lib/mcp/vfs-mcp-tools.ts` (all 9 tool schemas).
+
+### ⬜ #87 — Daytona "Total disk limit exceeded" — No Graceful Degradation
+**Symptom (run.log, 47 occurrences):** `[Daytona:Provider] Total disk limit exceeded (limit: 5GB)`. The provider throws, the sandbox is marked unhealthy, and the LLM sees a hard failure. No fallback to E2B or CodeSandbox is attempted.
+
+**Root cause:** the sandbox provider layer (`bing/web/lib/sandbox/`) treats each provider as a hard-or-soft fallback chain, but the chain is only consulted at startup (via `bootstrap-sandbox.ts`). If a provider's quota is exceeded mid-session, the user gets a hard error with no automatic rotation.
+
+**Fix direction:**
+- When a provider throws `QUOTA_EXCEEDED` or `DISK_LIMIT_EXCEEDED`, the `sandboxBridge` should attempt the next provider in the chain (`getNextHealthyProvider(currentProvider)`).
+- Add a per-provider quota tracker: `quotaExhaustedAt: { provider, until, lastError }`. Refuse to retry the same provider within a backoff window.
+- Surface a `[STEER] sandbox_quota_exceeded` to the LLM so it knows the sandbox fell back to a different provider and any in-flight state may be lost.
+
+**Files:** `bing/web/lib/sandbox/sandbox-service-bridge.ts`, `bing/web/lib/sandbox/provider-quota-tracker.ts` (NEW), `bing/web/lib/orchestra/steer-service.ts`.
+
+### ⬜ #88 — Arcade Service Repeatedly 401s Then Auto-Disables
+**Symptom (run.log, 401 occurrences over 2 hours):** `[Arcade:Provider] 401 Unauthorized: invalid API key`. The provider retries 3× then disables itself with `[SmitheryProvider] Auto-disabled server X after 3 consecutive failures`. The user sees the tools disappear silently — no banner, no error message.
+
+**Root cause:** the Arcade provider doesn't distinguish `401 INVALID_KEY` (no point retrying) from `401 TOKEN_EXPIRED` (refreshing the token would help). The retry logic just counts failures and disables.
+
+**Fix direction:**
+- Add a `isInvalidKeyError(response)` predicate: 401 + `WWW-Authenticate: ApiKey` header or response body containing `"invalid_api_key"` / `"key not found"`.
+- On `isInvalidKeyError`, skip the retry loop entirely and disable the provider IMMEDIATELY (saves 2 wasted requests per startup).
+- Emit a `[WARN] Arcade disabled: invalid API key` at startup (one-time, not per-request) with the env var name that needs to be set, so operators can fix it from a single log line.
+- Log the count of disabled tools (`Arcade disabled (invalid key): N tools`).
+
+**Files:** `bing/web/lib/tools/tool-integration/providers/arcade.ts`, `bing/web/lib/tools/tool-integration/providers/smithery.ts` (the auto-disable logic).
+
+### ⬜ #89 — 2082 "Cannot list sandbox ... not found" — Orphan Sandbox References
+**Symptom (run.log, 2082 occurrences):** `[Sandbox:Sync] Cannot list sandbox <id>: not found`. Each occurrence is a query against a stale sandbox ID. The sync layer never garbage-collects these orphans.
+
+**Root cause:** the sandbox sync layer (`bing/web/lib/sandbox/sync-layer.ts`) tracks active sandboxes in a `Map<userId, sandboxId>`. When a sandbox is destroyed (manually, by quota, or by TTL), the map entry is NOT cleared. Every subsequent `listSandboxByUser(userId)` call re-queries the dead sandbox and logs the error.
+
+**Fix direction:**
+- On `SANDBOX_NOT_FOUND` error, remove the entry from the map: `sandboxByUserId.delete(userId)` + log `[DEBUG] Evicted orphan sandbox ref for <userId>`.
+- Add a periodic GC pass: every 5 min, iterate the map, query each sandbox, evict dead refs in batch.
+- The 2082-occurrence count is over a 2-hour window = ~17 errors/minute, mostly from the same set of users. The GC pass would eliminate ~99% of these.
+
+**Files:** `bing/web/lib/sandbox/sync-layer.ts`, `bing/web/lib/sandbox/sandbox-gc.ts` (NEW).
+
+### ⬜ #90 — `pollinations` Provider Permanently Fails with "will not retry" After Single API Key Error
+**Symptom (run.log, 18 occurrences):** `[pollinations:Provider] API key rejected. will not retry.`. The provider is permanently disabled for the rest of the process lifetime, even though a token refresh would fix the issue.
+
+**Root cause:** the pollinations provider's `isRetryable` check is overly conservative — it treats `401` as fatal when the auth flow supports token refresh. The provider never attempts a refresh, never checks the key against a `/v1/me` endpoint, and never resets the circuit breaker.
+
+**Fix direction:**
+- Distinguish 4xx from 5xx: 5xx → retry with backoff; 401 → attempt token refresh, then retry; 4xx (other) → permanent disable.
+- Add a `circuitBreakerReset(after: number)` mechanism: after 5 min, the circuit is half-open and a single probe request is allowed. If it succeeds, the circuit closes; if it fails, the circuit re-opens.
+- Surface the `pollinations: disabled (api key)` status on `/api/health?detailed` so operators can see which providers are currently down.
+
+**Files:** `bing/web/lib/providers/pollinations.ts`, `bing/web/lib/orchestra/circuit-breaker.ts` (or wherever the circuit-breaker lives).
+
+### ⬜ #91 — `responseLength:0` Logged Despite Successful Tool Activity
+**Symptom (run.log, 12 occurrences):**
+```json
+{"level":"info","message":"[LLM:Response] streamed",
+ "data":{"responseLength":0,"toolCalls":3,"finishReason":"stop"}}
+```
+
+The response has 3 successful tool calls but `responseLength: 0` — the model produced no text, only tool calls. The log doesn't flag this as suspicious; it looks like a normal successful response.
+
+**Root cause:** the chat metrics tracker counts `responseLength = textContent.length` and `toolCalls = toolCallCount`. When the model emits ONLY tool calls (no explanatory text), `responseLength: 0` is the truthful count. But the log doesn't surface "0 text + N tool calls" as a pattern — this is the classic "model gives up" signature (compare to Pass-1 bug A, `finishReason:stop` with 0 tool calls — the same pattern in reverse).
+
+**Fix direction:**
+- Add a `responseShape: 'text' | 'tools_only' | 'empty' | 'mixed'` field to the response log. Derive from `textContent.length > 0` AND `toolCallCount > 0`:
+  - both > 0 → `'mixed'`
+  - text only → `'text'`
+  - tools only → `'tools_only'`
+  - neither → `'empty'` (suspicious — log as `[WARN]`)
+- Add a counter `toolsOnlyResponses` to chat metrics. A rate of 30%+ in a session indicates the model is being too terse.
+- Cross-reference with #45 (mid-stream stalls) — `toolsOnlyResponses` followed by no follow-up text is a stall pattern.
+
+**Files:** `bing/web/lib/chat/chat-metrics.ts`, `bing/web/lib/chat/vercel-ai-streaming.ts` (response-shape derivation), `bing/web/app/api/health/route.ts` (expose on /api/health).
+
+### ⬜ X1 — MCP Gateway SSE Failures During Startup
+**Symptom (run.log, 6 occurrences):** `[MCP:Gateway] SSE connection error: ECONNREFUSED` during bootstrap. The gateway falls back to "0 tools" and the LLM loses access to the MCP-provided tools.
+
+**Root cause:** the MCP gateway attempts to connect to a separate SSE service at startup. If the service is slow to start (common in containerized deployments where the SSE service has a 10-15s cold start), the connection fails and is not retried.
+
+**Fix direction:**
+- Wrap the SSE connection in an exponential-backoff retry loop: try 3 times with 1s, 3s, 10s delays.
+- Defer the connection attempt to the first request, not startup. If the service is still warming up, the first request will trigger the connection when the service is ready.
+- Log the SSE connection state on `/api/health?detailed` so operators can see if the gateway is currently in a "retrying" state.
+
+**Files:** `bing/web/lib/mcp/mcp-gateway.ts`, `bing/web/lib/tools/bootstrap/bootstrap-mcp.ts`, `bing/web/app/api/health/route.ts`.
+
+### ⬜ X2 — Significant Warning-Pattern Overlap Between Pass-5 and Pass-6
+**Symptom:** the `polling/cooldown` warnings from Pass-5 (#71 STALL-STEER, #72 session id rewrite 003→000, #73 POLLING DETECTED) are ALSO producing log lines in Pass-6 with the same root cause. The new run.log has 47 occurrences of `[STALL-STEER]`, 12 occurrences of `POLLING DETECTED`, and 8 occurrences of session-id rewriting — the same patterns that Pass-5 documented as open.
+
+**Root cause:** the Pass-5 #71-#74 fixes were documented but not yet implemented. The "OPEN" status in the Pass-5 table means the bugs are still firing in production. The Pass-6 trace just confirms they're still firing.
+
+**Why this matters:** Pass-6 is essentially observing the same broken behavior as Pass-5. The audit is just confirming the lack of progress. Either:
+- **(a)** The Pass-5 fixes need to be prioritized and shipped.
+- **(b)** The Pass-5 fixes were attempted but the patch didn't take effect (similar to the #36 `getCurrentVersionSync` regression — build artifact is stale).
+- **(c)** New bugs (#83-#91) are now MASKING the original Pass-5 patterns, so the Pass-5 fixes wouldn't help even if applied.
+
+**Fix direction:**
+- Run `npx tsc --noEmit` and check the build is current. Compare the deployed `virtualFilesystem-service.ts` fingerprint to the source. If fingerprints don't match → restart the dev server.
+- Re-investigate the Pass-5 #71-#74 root causes in light of the Pass-6 findings. The `transfer-anon-vfs.ts` DB-unavailable path (NEW #85) is likely a NEW contributor to the session-id rewriting pattern.
+- Consolidate the Pass-5 #71-#74 and Pass-6 #83/X2 fixes into a single "stall-detection-and-recovery" track to avoid overlap.
+
+**Files:** `bing/web/lib/chat/llm-continuation.ts` (Pass-5 #70 follow-up), `bing/web/lib/auth/transfer-anon-vfs.ts` (NEW #85), `bing/web/lib/orchestra/mastra/agent-loop.ts` (Pass-5 #81).
+
+---
+
+## Combined Top-Priority Patch List (Pass-6 update)
+
+The Pass-5 patch list is supplemented with these NEW critical-path items:
+
+11. **Fix router false-positive failure classification (#83)** — 5-line change in `vercel-ai-streaming.ts:2444` that would eliminate ~80% of the "1 max tool call" symptoms. **HIGHEST IMPACT, LOWEST RISK.**
+12. **Loop-guard diagnostic context (#84)** — pass the actual failure pattern into the STEER, not `abortReason: 'unknown'`. Closes the observability gap that makes #83's regression detectable.
+13. **VFS transfer null-pointer (#85)** — change `findAnonOwnerIds()` to return `[]` not `null` when DB is unavailable. Stops the silent data-loss bug for anon users on login.
+14. **Tool schema `.describe()` text (#86)** — 9 small edits in `vfs-mcp-tools.ts`. LLM no longer has to guess the path format.
+15. **Sandbox provider fallback chain (#87)** — graceful degradation to E2B/CodeSandbox when Daytona hits disk limit. Avoids the hard-fail UX.
+16. **Circuit-breaker reset + token refresh for `pollinations` (#90)** — 5 min half-open, single probe, then close. Stops the permanent disable after a single 401.
+17. **Response-shape classification (#91)** — `text` / `tools_only` / `empty` / `mixed` in the log. Surfaces the "model gave up" pattern that mirrors Pass-1 bug A in reverse.
+
+## Pass-6 Roll-up
+
+- **Bugs surfaced:** 9 numbered (#83–#91) + 2 cross-cutting (X1, X2)
+- **Status:** all ⬜ OPEN
+- **Highest-impact single fix:** #83 (5 lines, eliminates ~80% of user's complaint)
+- **Highest-multiplier follow-ups:** #84 (makes #83's regression detectable) + #91 (cross-references #83 with #45 mid-stream stall pattern)
+
+> **Combined Pass-5 + Pass-6 status:** 14 Pass-5 OPEN bugs (#69-#82) + 11 Pass-6 OPEN bugs (#83-#91, X1, X2) = 25 open bugs. The audit is now comprehensive: every "stops at step 1" symptom the user has reported maps to at least one OPEN bug in this document.

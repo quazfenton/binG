@@ -26,6 +26,9 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { getVfsScopeBasePath } from '../virtual-filesystem/scope-utils';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('ToolContextStore');
 
 /**
  * Tool execution context — user ID and scope path extracted from request.
@@ -125,7 +128,7 @@ export function getToolContext(): ToolContext {
   // the function lived in vfs-mcp-tools.ts; renamed to '[ToolContextStore]'
   // when the function moved here with the leaf refactor. Update any log
   // scrapers that grep for the old tag.
-  console.warn('[ToolContextStore] WARNING: No tool context set — toolContextStore.run() was not called by the caller. Files may be written to wrong workspace (anon:public).');
+  log.warn('WARNING: No tool context set — toolContextStore.run() was not called by the caller. Files may be written to wrong workspace (anon:public).');
   return {
     userId: 'default',
     sessionId: undefined,      scopePath: getVfsScopeBasePath(),

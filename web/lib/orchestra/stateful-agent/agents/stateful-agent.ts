@@ -580,7 +580,7 @@ export class StatefulAgent {
     const synthesized = reflectionEngine.synthesizeReflections(reflections);
     
     if (synthesized.overallScore < 0.7) {
-      console.log('[StatefulAgent] Reflection identified improvements needed:', synthesized.prioritizedImprovements);
+      log.info('[StatefulAgent] Reflection identified improvements needed:', synthesized.prioritizedImprovements);
       // Could trigger additional fix cycle here
     }
   }
@@ -795,7 +795,7 @@ Return a JSON object:
         this.currentPlan = { task: userMessage, files: [], execution_order: [] };
       }
     } catch (error) {
-      console.error('[StatefulAgent] Planning error:', error);
+      log.error('[StatefulAgent] Planning error:', error);
       this.currentPlan = { task: userMessage, files: [], execution_order: [] };
     }
 
@@ -847,9 +847,9 @@ Respond with valid JSON matching this schema:
         status: 'pending' as const,
       };
 
-      console.log('[StatefulAgent] Task decomposition complete:', this.taskGraph.tasks.length, 'tasks');
+      log.info('[StatefulAgent] Task decomposition complete:', this.taskGraph.tasks.length, 'tasks');
     } catch (error: any) {
-      console.warn('[StatefulAgent] Task decomposition failed, using simple plan:', error.message);
+      log.warn('[StatefulAgent] Task decomposition failed, using simple plan:', error.message);
       // Fallback to single task
       this.taskGraph = {
         id: `taskgraph-${Date.now()}`,
@@ -1118,12 +1118,12 @@ Use 'createFile' for new files.`;
         // Attempt self-healing if under limit
         if (this.retryCount < this.maxSelfHealAttempts) {
           this.retryCount++;
-          console.log(`[StatefulAgent] Attempting self-heal ${this.retryCount}/${this.maxSelfHealAttempts}`);
+          log.info(`[StatefulAgent] Attempting self-heal ${this.retryCount}/${this.maxSelfHealAttempts}`);
           await this.runEditingPhase(`Fix the following syntax errors:\n${result.output}`);
         }
       }
     } catch (err: any) {
-      console.error('[StatefulAgent] Verification failed:', err);
+      log.error('[StatefulAgent] Verification failed:', err);
     }
     
     this.steps++;

@@ -12,7 +12,7 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
+import { generateText, stepCountIs, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { normalizeSchemaForAI } from '../tool-schema';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
@@ -942,12 +942,11 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
             '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
             'Use these tools to inspect and verify workspace health before and after making changes.',
-          // Note: AI SDK v6 removed `maxSteps` from generateText options (it is
-          // ignored at runtime and fails the type check). Multi-step execution
-          // is handled by this orchestrator's own plan-step loop, so a single
-          // generation per call is intentional here.
           maxOutputTokens: 4000,
           temperature: 0.2,
+          // Allow multiple tool calls per LLM call so the orchestrator can
+          // process a batch of calls in one iteration instead of one-at-a-time.
+          stopWhen: stepCountIs(this.validatedConfig.maxIterations),
         });
 
         // Extract tool calls from the result

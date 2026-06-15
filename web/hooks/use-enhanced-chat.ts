@@ -1847,7 +1847,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           : msg
                       ));
                     }
-                  }
 
                   // Streaming complete (all background tasks finished) - ONLY if not retrying
                   clearTimeout(timeoutRef.current);

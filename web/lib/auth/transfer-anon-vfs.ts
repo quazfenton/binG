@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 
 import { createLogger } from '@/lib/utils/logger';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { isDatabaseAvailable } from '@/lib/database/connection';
 
 const logger = createLogger('Auth:TransferAnonVFS');
 
@@ -145,56 +146,103 @@ async function transferAnonVFS(
   // plausibly belong to this browser. The findAnonOwnerIds call is
   // bounded to the last 7 days (default) to limit blast radius.
   if (totalTransferred === 0 && cookiePrefix) {
-    logger.debug('VFS transfer entered DB fallback', {
-      cookieDerivedOwnerId,
+    totalTransferred += await tryDbFallback({
       cookiePrefix,
+      cookieDerivedOwnerId,
+      newOwnerId,
+      tryTransfer,
     });
-    // Wrap the scan in its own try/catch so a DB failure during the
-    // fallback degrades to "no fallback" rather than losing the
-    // fast-path result. The fast path (cookie-derived transfer) is
-    // already done; we just skip the DB recovery if the scan throws.
-    let recentAnonOwnerIds: string[] = [];
-    try {
-      recentAnonOwnerIds = await virtualFilesystem.findAnonOwnerIds();
-    } catch (err) {
-      logger.warn('VFS transfer: findAnonOwnerIds scan failed (non-fatal)', {
-        error: err instanceof Error ? err.message : String(err),
-        cookieDerivedOwnerId,
-      });
-      // Fall through with empty candidates \u2014 transfer still returns
-      // whatever the fast path got.
-    }
-    // Scope to ownerIds whose session-id portion starts with the
-    // same timestamp prefix as the cookie. ownerId format is
-    // "anon:<sessionId>" where sessionId was originally derived
-    // from the cookie's "anon_<timestamp>_<random>".
-    const candidates = cookiePrefix
-      ? recentAnonOwnerIds.filter((id) => {
-          const sessionPart = id.startsWith('anon:') ? id.slice(5) : id;
-          return (
-            sessionPart.startsWith(`${cookiePrefix}_`) ||
-            sessionPart.startsWith(`${cookiePrefix}-`)
-          );
-        })
-      : recentAnonOwnerIds;
-    for (const anonOwnerId of candidates) {
-      const moved = await tryTransfer(anonOwnerId, 'fallback');
-      totalTransferred += moved;
-      if (moved > 0) {
-        // Warn when the fallback actually moved files — these are
-        // orphan anon files recovered via prefix matching, and ops
-        // should be able to see this in the logs.
-        logger.warn('VFS transfer: orphan anon files recovered via DB fallback', {
-          from: anonOwnerId,
-          to: newOwnerId,
-          transferredFiles: moved,
-          cookiePrefix,
-        });
-      }
-    }
   }
 
   return { transferredFiles: totalTransferred };
+}
+
+/**
+ * DB fallback: scan the VFS for anon ownerIds whose timestamp prefix
+ * matches the cookie's, then transfer each. Extracted from
+ * `transferAnonVFS` to keep the outer function linear.
+ *
+ * Non-fatal: any failure (DB unavailable, scan throws, individual
+ * transfers fail) is logged and the function returns 0. The caller
+ * still gets whatever the fast path got.
+ *
+ * Returns the number of files transferred via the fallback.
+ */
+async function tryDbFallback(params: {
+  cookiePrefix: string;
+  cookieDerivedOwnerId: string;
+  newOwnerId: string;
+  tryTransfer: (fromOwnerId: string, source: 'cookie' | 'fallback') => Promise<number>;
+}): Promise<number> {
+  const { cookiePrefix, cookieDerivedOwnerId, newOwnerId, tryTransfer } = params;
+
+  // isDatabaseAvailable() can re-throw unexpected errors (OOM, perms).
+  // Wrap it so the transfer stays non-fatal — a broken availability
+  // check should never block the auth flow, matching the original
+  // contract (see "Non-fatal" in transferAnonVFS).
+  let dbAvailable = false;
+  let dbCheckError: string | null = null;
+  try {
+    dbAvailable = isDatabaseAvailable();
+  } catch (err) {
+    dbCheckError = err instanceof Error ? err.message : String(err);
+  }
+  if (!dbAvailable) {
+    logger.warn('VFS transfer: DB fallback skipped', {
+      cookieDerivedOwnerId,
+      cookiePrefix,
+      reason: dbCheckError ?? 'better-sqlite3 unavailable',
+    });
+    return 0;
+  }
+
+  logger.debug('VFS transfer entered DB fallback', {
+    cookieDerivedOwnerId,
+    cookiePrefix,
+  });
+
+  // Scan bounded to last 7 days (default). A scan failure degrades to
+  // "no fallback" rather than losing the fast-path result.
+  let recentAnonOwnerIds: string[] = [];
+  try {
+    recentAnonOwnerIds = await virtualFilesystem.findAnonOwnerIds();
+  } catch (err) {
+    logger.warn('VFS transfer: findAnonOwnerIds scan failed (non-fatal)', {
+      error: err instanceof Error ? err.message : String(err),
+      cookieDerivedOwnerId,
+    });
+    return 0;
+  }
+
+  // Scope to ownerIds whose session-id portion starts with the same
+  // timestamp prefix as the cookie. ownerId format is "anon:<sessionId>"
+  // where sessionId was originally derived from the cookie's
+  // "anon_<timestamp>_<random>".
+  const candidates = recentAnonOwnerIds.filter((id) => {
+    const sessionPart = id.startsWith('anon:') ? id.slice(5) : id;
+    return (
+      sessionPart.startsWith(`${cookiePrefix}_`) ||
+      sessionPart.startsWith(`${cookiePrefix}-`)
+    );
+  });
+
+  let movedTotal = 0;
+  for (const anonOwnerId of candidates) {
+    const moved = await tryTransfer(anonOwnerId, 'fallback');
+    movedTotal += moved;
+    if (moved > 0) {
+      // Warn when the fallback actually moved files — these are
+      // orphan anon files recovered via prefix matching, and ops
+      // should be able to see this in the logs.
+      logger.warn('VFS transfer: orphan anon files recovered via DB fallback', {
+        from: anonOwnerId,
+        to: newOwnerId,
+        transferredFiles: moved,
+        cookiePrefix,
+      });
+    }
+  }
+  return movedTotal;
 }
 
 /**

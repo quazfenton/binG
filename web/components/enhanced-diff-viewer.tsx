@@ -295,7 +295,7 @@ export function EnhancedDiffViewer({
   useEffect(() => {
     // Capture path at effect setup time to avoid stale closures
     const filePath = path;
-    const fileName = filePath.split('/').pop() || '';
+    const fileName = filePath ? filePath.split('/').pop() || '' : '';
     
     const unlisten = onFilesystemUpdated((event: CustomEvent<FilesystemUpdatedDetail>) => {
       const change = event.detail;

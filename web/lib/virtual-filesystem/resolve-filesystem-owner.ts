@@ -76,8 +76,14 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
   const rawSessionId = req.cookies.get('anon-session-id')?.value;
 
   if (rawSessionId) {
-    // Strip 'anon_' prefix if present (from generateSecureId format)
-    const rawId = rawSessionId.startsWith('anon_') ? rawSessionId.slice(5) : rawSessionId;
+    // Strip BOTH 'anon_' (from generateSecureId format) AND 'anon:' (legacy
+    // double-prefix from a previous cookie round-trip) before sanitizing.
+    // Without stripping 'anon:' the sanitizer would replace ':' with '_',
+    // producing a double prefix (e.g. 'anon:foo' -> 'anon:anon_foo') which
+    // breaks cookie round-trip stability. Minimal fix: try both prefixes.
+    let rawId = rawSessionId;
+    if (rawId.startsWith('anon:')) rawId = rawId.slice(5);
+    else if (rawId.startsWith('anon_')) rawId = rawId.slice(5);
     const sessionId = sanitizeSessionId(rawId);
     return {
       ownerId: `anon:${sessionId}`,

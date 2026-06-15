@@ -27,6 +27,9 @@ const FEATURE_FLAGS = {
   VPS_DEFAULT_REGION: process.env.VPS_DEFAULT_REGION || 'us-east-1',
   VPS_DEFAULT_SIZE: process.env.VPS_DEFAULT_SIZE || 't3.medium',
 };
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('CloudStorage');
 import { createClient } from 'webdav';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -90,7 +93,7 @@ class NextcloudStorageService implements CloudStorageService {
 
       return `${this.baseUrl}/${fullPath}`;
     } catch (error) {
-      console.error('Nextcloud upload failed:', error);
+      log.error('Nextcloud upload failed:', error);
       throw new Error(`Failed to upload file to Nextcloud: ${(error as Error).message}`);
     }
   }
@@ -106,7 +109,7 @@ class NextcloudStorageService implements CloudStorageService {
       const response = await this.client.getFileContents(fullPath, { format: 'blob' });
       return response as Blob;
     } catch (error) {
-      console.error('Nextcloud download failed:', error);
+      log.error('Nextcloud download failed:', error);
       throw new Error(`Failed to download file from Nextcloud: ${(error as Error).message}`);
     }
   }
@@ -132,7 +135,7 @@ class NextcloudStorageService implements CloudStorageService {
 
       await this.client.deleteFile(fullPath);
     } catch (error) {
-      console.error('Nextcloud delete failed:', error);
+      log.error('Nextcloud delete failed:', error);
       throw new Error(`Failed to delete file from Nextcloud: ${(error as Error).message}`);
     }
   }
@@ -150,7 +153,7 @@ class NextcloudStorageService implements CloudStorageService {
         .filter((item: any) => item.type === 'file')
         .map((item: any) => item.filename.replace(fullPrefix, '').replace(/^\//, ''));
     } catch (error) {
-      console.error('Nextcloud list failed:', error);
+      log.error('Nextcloud list failed:', error);
       throw new Error(`Failed to list files from Nextcloud: ${(error as Error).message}`);
     }
   }
@@ -170,7 +173,7 @@ class NextcloudStorageService implements CloudStorageService {
       url.password = this.password;
       return url.toString();
     } catch (error) {
-      console.error('Nextcloud signed URL failed:', error);
+      log.error('Nextcloud signed URL failed:', error);
       throw new Error(`Failed to generate signed URL: ${(error as Error).message}`);
     }
   }
@@ -188,7 +191,7 @@ class NextcloudStorageService implements CloudStorageService {
         limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES,
       };
     } catch (error) {
-      console.error('Nextcloud usage check failed:', error);
+      log.error('Nextcloud usage check failed:', error);
       throw new Error(`Failed to get usage: ${(error as Error).message}`);
     }
   }
@@ -250,7 +253,7 @@ class S3StorageService implements CloudStorageService {
 
       return `https://${this.bucketName}.s3.amazonaws.com/${fullPath}`;
     } catch (error) {
-      console.error('S3 upload failed:', error);
+      log.error('S3 upload failed:', error);
       throw new Error(`Failed to upload file to S3: ${(error as Error).message}`);
     }
   }
@@ -275,7 +278,7 @@ class S3StorageService implements CloudStorageService {
 
       return response.Body as Blob;
     } catch (error) {
-      console.error('S3 download failed:', error);
+      log.error('S3 download failed:', error);
       throw new Error(`Failed to download file from S3: ${(error as Error).message}`);
     }
   }
@@ -310,7 +313,7 @@ class S3StorageService implements CloudStorageService {
 
       await this.client.send(command);
     } catch (error) {
-      console.error('S3 delete failed:', error);
+      log.error('S3 delete failed:', error);
       throw new Error(`Failed to delete file from S3: ${(error as Error).message}`);
     }
   }
@@ -333,7 +336,7 @@ class S3StorageService implements CloudStorageService {
         .map(obj => obj.Key?.replace(fullPrefix, '').replace(/^\//, ''))
         .filter(Boolean) as string[];
     } catch (error) {
-      console.error('S3 list failed:', error);
+      log.error('S3 list failed:', error);
       throw new Error(`Failed to list files from S3: ${(error as Error).message}`);
     }
   }
@@ -353,7 +356,7 @@ class S3StorageService implements CloudStorageService {
 
       return await getSignedUrl(this.client, command, { expiresIn });
     } catch (error) {
-      console.error('S3 signed URL failed:', error);
+      log.error('S3 signed URL failed:', error);
       throw new Error(`Failed to generate signed URL: ${(error as Error).message}`);
     }
   }
@@ -371,7 +374,7 @@ class S3StorageService implements CloudStorageService {
         limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES,
       };
     } catch (error) {
-      console.error('S3 usage check failed:', error);
+      log.error('S3 usage check failed:', error);
       throw new Error(`Failed to get usage: ${(error as Error).message}`);
     }
   }
@@ -437,7 +440,7 @@ class MinIOStorageService implements CloudStorageService {
 
       return `${this.endpoint}/${this.bucketName}/${fullPath}`;
     } catch (error) {
-      console.error('MinIO upload failed:', error);
+      log.error('MinIO upload failed:', error);
       throw new Error(`Failed to upload file to MinIO: ${(error as Error).message}`);
     }
   }
@@ -462,7 +465,7 @@ class MinIOStorageService implements CloudStorageService {
 
       return response.Body as Blob;
     } catch (error) {
-      console.error('MinIO download failed:', error);
+      log.error('MinIO download failed:', error);
       throw new Error(`Failed to download file from MinIO: ${(error as Error).message}`);
     }
   }
@@ -497,7 +500,7 @@ class MinIOStorageService implements CloudStorageService {
 
       await this.client.send(command);
     } catch (error) {
-      console.error('MinIO delete failed:', error);
+      log.error('MinIO delete failed:', error);
       throw new Error(`Failed to delete file from MinIO: ${(error as Error).message}`);
     }
   }
@@ -520,7 +523,7 @@ class MinIOStorageService implements CloudStorageService {
         .map(obj => obj.Key?.replace(fullPrefix, '').replace(/^\//, ''))
         .filter(Boolean) as string[];
     } catch (error) {
-      console.error('MinIO list failed:', error);
+      log.error('MinIO list failed:', error);
       throw new Error(`Failed to list files from MinIO: ${(error as Error).message}`);
     }
   }
@@ -540,7 +543,7 @@ class MinIOStorageService implements CloudStorageService {
 
       return await getSignedUrl(this.client, command, { expiresIn });
     } catch (error) {
-      console.error('MinIO signed URL failed:', error);
+      log.error('MinIO signed URL failed:', error);
       throw new Error(`Failed to generate signed URL: ${(error as Error).message}`);
     }
   }
@@ -558,7 +561,7 @@ class MinIOStorageService implements CloudStorageService {
         limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES,
       };
     } catch (error) {
-      console.error('MinIO usage check failed:', error);
+      log.error('MinIO usage check failed:', error);
       throw new Error(`Failed to get usage: ${(error as Error).message}`);
     }
   }
@@ -625,7 +628,7 @@ class StorjStorageService implements CloudStorageService {
       if (userId) userStorageUsage[userId] = (userStorageUsage[userId] || 0) + file.size;
       return `${this.endpoint}/${this.bucketName}/${fullPath}`;
     } catch (error) {
-      console.error('Storj upload failed:', error);
+      log.error('Storj upload failed:', error);
       throw new Error(`Failed to upload file to Storj: ${(error as Error).message}`);
     }
   }
@@ -638,7 +641,7 @@ class StorjStorageService implements CloudStorageService {
       if (!response.Body) throw new Error('No file content received');
       return response.Body as Blob;
     } catch (error) {
-      console.error('Storj download failed:', error);
+      log.error('Storj download failed:', error);
       throw new Error(`Failed to download file from Storj: ${(error as Error).message}`);
     }
   }
@@ -655,7 +658,7 @@ class StorjStorageService implements CloudStorageService {
       }
       await this.client.send(new DeleteObjectCommand({ Bucket: this.bucketName, Key: fullPath }));
     } catch (error) {
-      console.error('Storj delete failed:', error);
+      log.error('Storj delete failed:', error);
       throw new Error(`Failed to delete file from Storj: ${(error as Error).message}`);
     }
   }
@@ -667,7 +670,7 @@ class StorjStorageService implements CloudStorageService {
       const response = await this.client.send(new ListObjectsV2Command({ Bucket: this.bucketName, Prefix: fullPrefix }));
       return (response.Contents || []).map(obj => obj.Key?.replace(fullPrefix, '').replace(/^\//, '')).filter(Boolean) as string[];
     } catch (error) {
-      console.error('Storj list failed:', error);
+      log.error('Storj list failed:', error);
       throw new Error(`Failed to list files from Storj: ${(error as Error).message}`);
     }
   }
@@ -678,7 +681,7 @@ class StorjStorageService implements CloudStorageService {
     try {
       return await getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucketName, Key: fullPath }), { expiresIn });
     } catch (error) {
-      console.error('Storj signed URL failed:', error);
+      log.error('Storj signed URL failed:', error);
       throw new Error(`Failed to generate signed URL for Storj: ${(error as Error).message}`);
     }
   }
@@ -788,7 +791,7 @@ class R2StorageService implements CloudStorageService {
 
       return this.getPublicUrl(fullPath);
     } catch (error) {
-      console.error('R2 upload failed:', error);
+      log.error('R2 upload failed:', error);
       throw new Error(`Failed to upload file to R2: ${(error as Error).message}`);
     }
   }
@@ -813,7 +816,7 @@ class R2StorageService implements CloudStorageService {
 
       return response.Body as Blob;
     } catch (error) {
-      console.error('R2 download failed:', error);
+      log.error('R2 download failed:', error);
       throw new Error(`Failed to download file from R2: ${(error as Error).message}`);
     }
   }
@@ -848,7 +851,7 @@ class R2StorageService implements CloudStorageService {
 
       await this.client.send(command);
     } catch (error) {
-      console.error('R2 delete failed:', error);
+      log.error('R2 delete failed:', error);
       throw new Error(`Failed to delete file from R2: ${(error as Error).message}`);
     }
   }
@@ -871,7 +874,7 @@ class R2StorageService implements CloudStorageService {
         .map(obj => obj.Key?.replace(fullPrefix, '').replace(/^\//, ''))
         .filter(Boolean) as string[];
     } catch (error) {
-      console.error('R2 list failed:', error);
+      log.error('R2 list failed:', error);
       throw new Error(`Failed to list files from R2: ${(error as Error).message}`);
     }
   }
@@ -891,7 +894,7 @@ class R2StorageService implements CloudStorageService {
 
       return await getSignedUrl(this.client, command, { expiresIn });
     } catch (error) {
-      console.error('R2 signed URL failed:', error);
+      log.error('R2 signed URL failed:', error);
       throw new Error(`Failed to generate signed URL for R2: ${(error as Error).message}`);
     }
   }
@@ -907,7 +910,7 @@ class R2StorageService implements CloudStorageService {
         limit: FEATURE_FLAGS.CLOUD_STORAGE_PER_USER_LIMIT_BYTES,
       };
     } catch (error) {
-      console.error('R2 usage check failed:', error);
+      log.error('R2 usage check failed:', error);
       throw new Error(`Failed to get usage: ${(error as Error).message}`);
     }
   }
@@ -1175,7 +1178,7 @@ class PCloudStorageService implements CloudStorageService {
       const fileId = data.metadata?.[0]?.id;
       return fileId ? `pcloud://${userId}/${fileId}/${fileName}` : `pcloud://${userId}/unknown/${fileName}`;
     } catch (error) {
-      console.error('pCloud upload failed:', error);
+      log.error('pCloud upload failed:', error);
       throw new Error(`Failed to upload file to pCloud: ${(error as Error).message}`);
     }
   }
@@ -1217,7 +1220,7 @@ class PCloudStorageService implements CloudStorageService {
 
       return await response.blob();
     } catch (error) {
-      console.error('pCloud download failed:', error);
+      log.error('pCloud download failed:', error);
       throw new Error(`Failed to download file from pCloud: ${(error as Error).message}`);
     }
   }
@@ -1250,7 +1253,7 @@ class PCloudStorageService implements CloudStorageService {
       const usage = await this.getUsage(userId);
       userStorageUsage[userId] = usage.used;
     } catch (error) {
-      console.error('pCloud delete failed:', error);
+      log.error('pCloud delete failed:', error);
       throw new Error(`Failed to delete file from pCloud: ${(error as Error).message}`);
     }
   }
@@ -1273,7 +1276,7 @@ class PCloudStorageService implements CloudStorageService {
         .filter((item) => !item.folder && !item.isfolder)
         .map((item) => item.name);
     } catch (error) {
-      console.error('pCloud list failed:', error);
+      log.error('pCloud list failed:', error);
       throw new Error(`Failed to list files from pCloud: ${(error as Error).message}`);
     }
   }
@@ -1307,7 +1310,7 @@ class PCloudStorageService implements CloudStorageService {
       const host = linkData.hosts?.[0] || this.apiHost;
       return `https://${host}${linkData.path}`;
     } catch (error) {
-      console.error('pCloud signed URL failed:', error);
+      log.error('pCloud signed URL failed:', error);
       throw new Error(`Failed to generate pCloud download URL: ${(error as Error).message}`);
     }
   }
@@ -1327,7 +1330,7 @@ class PCloudStorageService implements CloudStorageService {
 
       return { used, limit };
     } catch (error) {
-      console.error('pCloud usage check failed:', error);
+      log.error('pCloud usage check failed:', error);
       // Fall back to in-memory tracking
       return {
         used: userStorageUsage[userId] || 0,
@@ -1364,13 +1367,13 @@ class GCPStorageService implements CloudStorageService {
       const mockUrl = `https://storage.googleapis.com/${this.bucketName}/${fullPath}`;
 
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
-        console.log(`[DEV] Would upload ${file.name} to ${mockUrl}`);
+        log.info(`[DEV] Would upload ${file.name} to ${mockUrl}`);
         await new Promise(resolve => setTimeout(resolve, 1000));
         userStorageUsage[userId || 'anonymous'] = currentUsage + file.size;
       }
       return mockUrl;
     } catch (error) {
-      console.error('Upload failed:', error);
+      log.error('Upload failed:', error);
       throw new Error(`Failed to upload file to cloud storage: ${(error as Error).message}`);
     }
   }
@@ -1391,7 +1394,7 @@ class GCPStorageService implements CloudStorageService {
       
       throw new Error('Download not implemented in production');
     } catch (error) {
-      console.error('Download failed:', error);
+      log.error('Download failed:', error);
       throw new Error(`Failed to download file from cloud storage: ${(error as Error).message}`);
     }
   }
@@ -1405,11 +1408,11 @@ class GCPStorageService implements CloudStorageService {
       const fullPath = this.getFullPath(path, userId);
       
       if (FEATURE_FLAGS.IS_DEVELOPMENT) {
-        console.log(`[DEV] Would delete ${fullPath}`);
+        log.info(`[DEV] Would delete ${fullPath}`);
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     } catch (error) {
-      console.error('Delete failed:', error);
+      log.error('Delete failed:', error);
       throw new Error(`Failed to delete file from cloud storage: ${(error as Error).message}`);
     }
   }
@@ -1434,7 +1437,7 @@ class GCPStorageService implements CloudStorageService {
       
       throw new Error('List not implemented in production');
     } catch (error) {
-      console.error('List failed:', error);
+      log.error('List failed:', error);
       throw new Error(`Failed to list files from cloud storage: ${(error as Error).message}`);
     }
   }
@@ -1448,7 +1451,7 @@ class GCPStorageService implements CloudStorageService {
       const fullPath = this.getFullPath(path, userId);
       return `https://storage.googleapis.com/${this.bucketName}/${fullPath}?mock=true`;
     } catch (error) {
-      console.error('Signed URL failed:', error);
+      log.error('Signed URL failed:', error);
       throw new Error(`Failed to generate signed URL: ${(error as Error).message}`);
     }
   }
