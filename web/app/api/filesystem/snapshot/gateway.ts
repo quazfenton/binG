@@ -129,7 +129,12 @@ if (!globalThis.__snapshotListenerRegistered__) {
    * the cross-process Redis pub/sub subscriber — both paths converge
    * here so the eviction logic is in exactly one place.
    */
-  function invalidateForOwner(ownerId: string, version: number, source: string): void {
+  function invalidateForOwner(
+    ownerId: string,
+    version: number,
+    source: string,
+    reason: string = 'version-bump',
+  ): void {
     const currentMax = latestSeenVersion.get(ownerId) || 0;
     if (version <= currentMax) {
       return; // already seen a newer or equal version
@@ -150,14 +155,21 @@ if (!globalThis.__snapshotListenerRegistered__) {
       }
     }
     if (evicted > 0) {
-      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source });
+      // Bug #97 (Pass-7 audit) — include the invalidation `reason` so
+      // operators can distinguish "newer write came in" from "stale
+      // version evicted" from "size-limit cleanup". Without the reason,
+      // a chronic over-invalidation storm looks identical to a normal
+      // write-driven invalidation in the logs, masking the "cache that
+      // doesn't cache" anti-pattern. The `source` is preserved for
+      // backward-compat with existing log parsers.
+      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source, reason });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }
 
   // Local in-process listener: fires when this process writes via VFS.
   virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
-    invalidateForOwner(ownerId, version, 'local');
+    invalidateForOwner(ownerId, version, 'local', 'in-process write');
   });
 
   // Cross-process listener: fires when ANOTHER worker writes via VFS.
@@ -166,7 +178,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
   // snapshot. The broadcaster is a no-op if Redis is unavailable, so
   // this subscribe() is safe to call in any environment.
   getSnapshotBroadcaster().subscribe((msg: SnapshotChangedMessage) => {
-    invalidateForOwner(msg.ownerId, msg.version, `pubsub:${msg.source}`);
+    invalidateForOwner(msg.ownerId, msg.version, `pubsub:${msg.source}`, 'cross-process write via pubsub');
   });
 }
 

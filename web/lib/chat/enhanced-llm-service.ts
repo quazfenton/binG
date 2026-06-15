@@ -1121,8 +1121,15 @@ export class EnhancedLLMService {
         // wasted). Pass concurrentFallbackMs: 0 to fall back to the legacy
         // in-place speculative fallback inside streamWithVercelAI.
         const baseStream = streamWithConcurrentFallback({
-          provider: vercelProvider,
-          model: llmRequest.model || 'default',
+          ...({
+            provider: vercelProvider,
+            model: llmRequest.model || 'default',
+            // Pass the class-bound findCompatibleModel so the fallback
+            // handle resolves a model ID the fallback provider can serve.
+            // findCompatibleModelFn is not in VercelStreamOptions, so we
+            // spread through a cast object.
+            findCompatibleModelFn: this.findCompatibleModel.bind(this),
+          } as any),
           messages: processedMessages,
           system: systemPrompt || undefined,
           temperature: llmRequest.temperature || 0.7,
@@ -2554,6 +2561,15 @@ export async function* streamWithConcurrentFallback(
     /** Override the fallback chain (e.g. for tests). */
     fallbackChain?: string[];
   },
+  /**
+   * Optional cross-provider model resolver. When provided, the fallback
+   * handle uses this to pick a model ID that the fallback provider's
+   * catalog can actually serve (instead of the original model, which may
+   * not be supported by the fallback provider). Passed in by the caller
+   * because streamWithConcurrentFallback is a standalone function with no
+   * `this` binding to the EnhancedLLMService class.
+   */
+  findCompatibleModelFn?: (requestedModel: string, availableModels: string[]) => string | null,
 ): AsyncGenerator<import('../providers/llm-providers').StreamingResponse> {
   const {
     concurrentFallbackMs = 20000,
@@ -2574,9 +2590,28 @@ export async function* streamWithConcurrentFallback(
     const mergedSignal = rest.signal
       ? AbortSignal.any([rest.signal, controller.signal])
       : controller.signal;
+    // Cross-provider model resolution: if the caller passed a
+    // findCompatibleModel function (EnhancedLLMService does this), use
+    // it to pick a model ID that the fallback provider's catalog can
+    // actually serve. Without this, a stalled primary can launch a
+    // fallback with an unsupported model ID and fail immediately,
+    // turning the rescue into a no-op on exactly the cross-provider
+    // case this feature exists for. When no resolver is provided
+    // (e.g. from tests or external callers), fall through to the
+    // original model ID.
+    const modelForHandle = providerOverride && findCompatibleModelFn
+      ? findCompatibleModelFn(
+          options.model,
+          ((PROVIDERS as any)[providerOverride]?.models || []).map((m: any) =>
+            typeof m === 'string' ? m : m.id,
+          ),
+        ) || options.model
+      : options.model;
     const gen = streamWithVercelAI({
       ...rest,
-      ...(providerOverride ? { provider: providerOverride } : {}),
+      ...(providerOverride
+        ? { provider: providerOverride, model: modelForHandle }
+        : {}),
       signal: mergedSignal,
       speculativeFallbackMs: 0,
     } as any);

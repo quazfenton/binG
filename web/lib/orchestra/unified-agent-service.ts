@@ -179,6 +179,43 @@ const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
 
+// Bug #108 (Pass-7 audit) — emit a structured env-var fingerprint at
+// module load so operators can verify which feature flags / routing
+// overrides are active in this process. Pass-7 noted that "env-var /
+// feature-flag mentions" were absent from logs entirely — a `v1-api`
+// selection in production was ambiguous because there was no single log
+// line listing the routing-relevant env vars. Tagged at INFO so it shows
+// up in every [INFO]-level dashboard filter. The list is intentionally
+// narrow (routing-affecting vars only) to avoid noise — auth keys are
+// not listed (those are secrets and go through their own audit).
+const _envFingerprint: Record<string, string> = {
+  AGENT_EXECUTION_ENGINE: process.env.AGENT_EXECUTION_ENGINE || 'auto (default)',
+  DISABLE_V2_MODE: process.env.DISABLE_V2_MODE || '(default)',
+  DEFAULT_MODEL: process.env.DEFAULT_MODEL || '(default)',
+  LLM_PROVIDER: process.env.LLM_PROVIDER || '(default)',
+  AGENT_CLASSIFIER_RICH_TOOLING_THRESHOLD:
+    process.env.AGENT_CLASSIFIER_RICH_TOOLING_THRESHOLD || '0.6 (default)',
+  AGENT_CLASSIFIER_AGENTIC_VERB_THRESHOLD:
+    process.env.AGENT_CLASSIFIER_AGENTIC_VERB_THRESHOLD || '0.25 (default)',
+  INCOMPLETE_RESPONSE_CONFIDENCE_THRESHOLD:
+    process.env.INCOMPLETE_RESPONSE_CONFIDENCE_THRESHOLD || '0.4 (default)',
+  LLM_STREAM_IDLE_TIMEOUT_MS: process.env.LLM_STREAM_IDLE_TIMEOUT_MS || '75000 (default)',
+  LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS: process.env.LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS || '30000 (default)',
+  LLM_STREAM_STALL_STEER_MS: process.env.LLM_STREAM_STALL_STEER_MS || '30000 (default)',
+  VFS_CONCURRENT_MODIFICATION_MULTIPLIER:
+    process.env.VFS_CONCURRENT_MODIFICATION_MULTIPLIER || '2 (default)',
+  VFS_SNAPSHOT_STALE_THRESHOLD_MS: process.env.VFS_SNAPSHOT_STALE_THRESHOLD_MS || '60000 (default)',
+  MEMORY_SOFT_THROTTLE_MB: process.env.MEMORY_SOFT_THROTTLE_MB || '1024 (default)',
+  MEMORY_CRITICAL_MB: process.env.MEMORY_CRITICAL_MB || '1843 (default)',
+  MEMORY_GROWTH_REPORT_MB: process.env.MEMORY_GROWTH_REPORT_MB || '8 (default)',
+  MEMORY_SHRINK_REPORT_MB: process.env.MEMORY_SHRINK_REPORT_MB || '4 (default)',
+  ENABLE_STATEFUL_AGENT: process.env.ENABLE_STATEFUL_AGENT || '(default; enabled)',
+  ENABLE_MASTRA_WORKFLOWS: process.env.ENABLE_MASTRA_WORKFLOWS || '(default; enabled)',
+  OPENCODE_SDK_URL: process.env.OPENCODE_SDK_URL || '(default; uses OPENCODE_HOSTNAME:OPENCODE_PORT)',
+  NODE_ENV: process.env.NODE_ENV || '(default)',
+};
+log.info('[UnifiedAgent] env-var fingerprint (routing-affecting)', _envFingerprint);
+
 // SelfHeal carry-forward cache: stores the provider+model that succeeded
 // on the most recent attempt so SelfHeal retries can skip dead providers.
 let _selfHealProvider: string | null = null;
@@ -699,7 +736,18 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   const engine = (process.env.AGENT_EXECUTION_ENGINE || 'auto').split('#')[0].trim();
 
   if (engine === 'v1-api') {
-    log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path');
+    // Bug #98 (Pass-7 audit) — include `engineSource` in the log so
+    // operators can distinguish an explicit user/admin override from a
+    // router/fallback-driven v1-api selection. The log line is the
+    // single source of truth for "why are we on v1-api right now?";
+    // without the source tag, a `v1-api` selection in production logs
+    // is ambiguous and the operator has to cross-reference env vars +
+    // classifier output + fallback chain. Tagged at info to match the
+    // other engine-override log lines in this block.
+    log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path', {
+      engineSource: 'env-override',
+      envVar: process.env.AGENT_EXECUTION_ENGINE,
+    });
     return { mode: 'v1-api' as const };
   }
   if (engine === 'v1-agent-loop') {
@@ -5071,11 +5119,21 @@ async function runV1ApiCompletion(
         provider: providerName,
         model: modelForProvider,
         messages: messages as import("../providers/llm-providers").LLMMessage[],
+        // runV1ApiCompletion is only reached when executeTool is unavailable,
+        // after runV1Api() has already folded system messages into
+        // config.systemPrompt. Preserve the resolved system prompt here so
+        // the simple/fallback completion path keeps its context.
+        ...(config.systemPrompt ? { system: config.systemPrompt } : {}),
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 4096,
         maxRetries: 0,
         maxSteps: 12,  // Allow tool execution
-        tools: (config.tools?.length ? config.tools : undefined) as Record<string, any> | undefined,
+        // Tool-free completion branch: this path cannot run tools (no
+        // executeTool handler in scope), so passing config.tools would
+        // invite the model to call tool functions that have no runnable
+        // handler. Force tools to undefined so the LLM completes in
+        // text mode only.
+        tools: undefined,
       };
 
       if (config.onStreamChunk) {

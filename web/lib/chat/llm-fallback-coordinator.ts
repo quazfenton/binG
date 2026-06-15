@@ -312,12 +312,12 @@ export async function* coordinateConcurrentFallback<T>(
 
   // Handle race errors.
   if (raceResult.kind === 'primary-error') {
-    // Primary errored. Try the fallback instead.
-    fallbackHandle.abort();
-    if (firstPrimaryResult && !firstPrimaryResult.done) {
-      yield firstPrimaryResult.value;
-    }
-    yield* drainIterator(primaryIt, signal);
+    // Primary errored after the fallback was launched. Keep the fallback
+    // alive — the only live stream is `fallbackIt`, so aborting the
+    // fallback and draining the already-failed primary would lose the
+    // only rescue path. (Pre-fix bug: the wrong handle was aborted.)
+    primaryHandle.abort();
+    yield* drainIterator(fallbackIt, signal);
     return;
   }
   if (raceResult.kind === 'fallback-error') {

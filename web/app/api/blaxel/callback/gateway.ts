@@ -6,6 +6,12 @@ import {
   parseBlaxelCallbackPayload,
 } from '@/lib/sandbox/providers/blaxel-callback-verify';
 import { blaxelExecutionManager } from '@/lib/sandbox/providers/blaxel-execution-manager';
+// Pass-7 #107: tag the timestamp-drift rejection with the canonical
+// `drift` and `skew` detection terms. The callback header's timestamp
+// has drifted past the allowed window — the user-facing term is
+// "drift" (state has diverged from authoritative) and the underlying
+// signal is "skew" (temporal alignment has slipped).
+import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
 
 const CALLBACK_SECRET = process.env.BLAXEL_CALLBACK_SECRET;
 const MAX_TIMESTAMP_DRIFT_S = 300; // 5 minutes
@@ -46,11 +52,18 @@ export async function POST(request: NextRequest) {
     }
     const drift = Math.abs(Date.now() / 1000 - tsSeconds);
     if (drift > MAX_TIMESTAMP_DRIFT_S) {
-      console.warn('[Blaxel Callback] Rejected timestamp with drift:', {
-        driftSeconds: drift,
-        maxAllowed: MAX_TIMESTAMP_DRIFT_S,
-        timestamp,
-      });
+      console.warn(
+        `${withDetectionTerms(
+          '[Blaxel Callback] Rejected timestamp with drift',
+          DETECTION_TERMS.drift,
+          DETECTION_TERMS.skew,
+        )}:`,
+        {
+          driftSeconds: drift,
+          maxAllowed: MAX_TIMESTAMP_DRIFT_S,
+          timestamp,
+        },
+      );
       return NextResponse.json({ error: 'Timestamp too old' }, { status: 401 });
     }
   } else {

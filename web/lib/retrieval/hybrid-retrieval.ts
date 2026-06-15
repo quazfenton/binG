@@ -37,6 +37,12 @@ const PROJECT_ANALYSIS_CACHE = new Map<string, CachedAnalysis>();
 const PROJECT_ANALYSIS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_PROJECT_ANALYSIS_CACHE = 50; // Maximum number of cached analyses
 
+// Bug #102 (Pass-7 audit) — module-scoped counter that rate-limits the
+// WARN log on the final-fallback path. Resets on hot-reload; this is fine
+// because the counter is only used to gate logging frequency, not to
+// compute metrics. See usage in `retrieveHybrid`.
+let finalFallbackCounter = 0;
+
 /**
  * Get cached workspace analysis or compute fresh value.
  * Cache key: `${userId}:${scopePath}` — only re-analyzes when scope changes.
@@ -404,7 +410,30 @@ export async function retrieveHybrid(
   // Uses cached analysis (keyed by userId + scopePath) — only re-analyzes when scope changes.
   const projectHint = await getCachedProjectAnalysis(opts.userId, opts.scopePath);
 
-  logger.debug('Hybrid retrieval: using final fallback (no relevant files)');
+  // Bug #102 (Pass-7 audit) — bump the final-fallback log from DEBUG to WARN
+  // so the "retrieval corpus is empty" condition is visible. Rate-limited
+  // (every 100th invocation, plus the first) to avoid log spam on long
+  // sessions. The metric is diagnostic — a sudden burst of final-fallbacks
+  // (e.g., after a deploy that broke the indexer) would otherwise be
+  // invisible in [INFO]-only dashboards. The reason field comes from the
+  // most recent warning in the upstream chain so operators can tell
+  // "vfs was empty" from "symbol retrieval returned 0 symbols" from
+  // "smart context returned empty bundle" without re-reading the code.
+  finalFallbackCounter += 1;
+  const lastWarning = warnings[warnings.length - 1] ?? 'no relevant files';
+  if (finalFallbackCounter === 1 || finalFallbackCounter % 100 === 0) {
+    logger.warn('Hybrid retrieval: using final fallback (no relevant files)', {
+      reason: lastWarning,
+      invocationCount: finalFallbackCounter,
+      userId: opts.userId,
+      promptPreview: opts.prompt.slice(0, 100),
+    });
+  } else {
+    logger.debug('Hybrid retrieval: using final fallback (no relevant files)', {
+      reason: lastWarning,
+      invocationCount: finalFallbackCounter,
+    });
+  }
   return {
     bundle: `--- WORKSPACE ---\nNo relevant files found for: "${opts.prompt}"${projectHint ? `\n\n${projectHint}` : ''}\n--- END WORKSPACE ---\n`,
     tree: '',

@@ -1250,6 +1250,16 @@ export async function callMCPToolFromAI_SDK(
   recentFailures?: string[],  // Recent tool execution errors (≥2 biases toward debugger in role_selection)
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
+    // Bug #37 (regression): canonicalize LLM-invented tool names (e.g.
+    // 'list_directory' → 'list_files') BEFORE any registry/cache lookup.
+    // This entry path bypasses normalizeToolCall, so without this the AI-SDK
+    // path failed with "Bare tool name not found in any MCP server".
+    const { canonicalizeMcpToolName } = await import('./vfs-mcp-tools');
+    const canonicalToolName = canonicalizeMcpToolName(toolName);
+    if (canonicalToolName !== toolName) {
+      logger.info(`[MCP] Tool name aliased: "${toolName}" → "${canonicalToolName}"`, { from: toolName, to: canonicalToolName });
+      toolName = canonicalToolName;
+    }
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
 
     // Tools that should never be cached but trigger invalidation

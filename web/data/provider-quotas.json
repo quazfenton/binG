@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "updatedAt": "2026-06-09T04:45:57.393Z",
+  "updatedAt": "2026-06-14T21:55:13.430Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
@@ -25,7 +25,7 @@
     },
     "daytona": {
       "monthlyLimit": 5000,
-      "currentUsage": 10,
+      "currentUsage": 15,
       "resetDate": "2026-07-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
@@ -75,7 +75,7 @@
     "google_imagen": {
       "monthlyLimit": 500,
       "currentUsage": 0,
-      "resetDate": "2026-06-10T00:00:00.000Z",
+      "resetDate": "2026-06-15T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "daily"
     }

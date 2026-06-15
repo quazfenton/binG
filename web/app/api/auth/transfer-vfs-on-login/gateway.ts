@@ -60,10 +60,29 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Read the anon cookie from the SAME request so the transfer uses
-    // the anon session id that was persisted to the user's browser.
-    // The cookie is httpOnly, so the client cannot send it explicitly.
-    const result = await transferVFSOnLogin(request, { id: auth.userId });
+    // Accept anonymousSessionId from the request body as a fallback when
+    // the anon-session-id cookie is missing or rotated. The client captures
+    // the localStorage value before clearing it and includes it in the POST
+    // body so the recovery path has an identifier to migrate even when the
+    // cookie never reached the server or was rotated. The helper prefers
+    // this explicit override over the cookie, so we pass it through the
+    // options parameter instead of cloning the request to inject a fake
+    // cookie header.
+    // `.json()` throws on non-JSON or empty bodies; the `.catch` collapses
+    // the throw path to "no body" so the cookie-only fallback applies. The
+    // outer try/catch isn't needed for rejection handling but is kept to
+    // guard against synchronous throws from the property access below.
+    let bodyAnonymousSessionId: string | undefined;
+    const body = await request.json().catch(() => ({}));
+    if (body && typeof body === 'object' && typeof (body as any).anonymousSessionId === 'string') {
+      bodyAnonymousSessionId = (body as any).anonymousSessionId;
+    }
+
+    const result = await transferVFSOnLogin(
+      request,
+      { id: auth.userId },
+      bodyAnonymousSessionId ? { anonymousSessionId: bodyAnonymousSessionId } : undefined,
+    );
 
     logger.info('Client-triggered VFS transfer on login', {
       userId: auth.userId,
@@ -71,10 +90,22 @@ export async function POST(request: NextRequest) {
       transferredFiles: result.transferredFiles,
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       transferredFiles: result.transferredFiles,
     });
+    // Clear anonymous session cookie so subsequent requests don't present
+    // a stale anonymous workspace identity and re-trigger fallback behavior.
+    // Mirrors the same cookie clear in /api/auth/login/gateway.ts and
+    // /api/auth/register/gateway.ts for the non-fallback transfer path.
+    response.cookies.set('anon-session-id', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 0,
+      path: '/',
+    });
+    return response;
   } catch (error) {
     logger.error('Transfer VFS on login error', error as Error);
     return NextResponse.json(

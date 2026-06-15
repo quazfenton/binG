@@ -15,14 +15,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../providers/provider-fallback-chains', () => ({
+vi.mock('@/lib/providers/provider-fallback-chains', () => ({
   getConfiguredFallbackChain: vi.fn((provider: string) => {
     if (provider === 'primary') return ['fallbackA', 'fallbackB'];
     return [];
   }),
 }));
 
-vi.mock('../utils/logger', () => ({
+vi.mock('@/lib/utils/logger', () => ({
   createLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -65,13 +65,24 @@ function makeControllable<T>(): {
   let ended = false;
   let failed: unknown = null;
   let pending: Deferred<IteratorResult<T>> | null = null;
+  // Buffer for items pushed before the consumer starts iterating. Without
+  // this, multiple push() calls before next() would overwrite `pending`
+  // and lose all but the first item. With this, items enqueue FIFO and
+  // are returned one-per-next() call.
+  let buffer: T[] = [];
 
   const gen = (async function* () {
     while (true) {
       if (failed !== null) throw failed;
-      // Always wait on a pending resolved-by-push promise; if push was
-      // called before the consumer started iterating, the deferred was
-      // pre-resolved and resolves immediately on await.
+      // Drain any buffered items first. The push() function enqueues
+      // here when no consumer is waiting, and end() pushes a sentinel.
+      if (buffer.length > 0) {
+        const item = buffer.shift()!;
+        if (item === undefined) return; // end() sentinel
+        yield item;
+        continue;
+      }
+      // No buffered items — wait for the next push()/end().
       if (pending) {
         const d = pending;
         pending = null;
@@ -89,26 +100,33 @@ function makeControllable<T>(): {
       yield r.value;
     }
   })();
-
   const handle = {
     gen,
     abort: () => {},
     aborted: false as boolean,
     push: (item: T) => {
-      const d = deferred<IteratorResult<T>>();
-      d.resolve({ value: item, done: false });
-      pending = d;
+      if (pending) {
+        // Consumer is waiting — hand the item to it directly.
+        const d = pending;
+        pending = null;
+        d.resolve({ value: item, done: false });
+        return;
+      }
+      // No consumer is waiting yet — buffer the item for the next next() call.
+      buffer.push(item);
     },
     end: () => {
       ended = true;
       if (pending) {
-        pending.resolve({ value: undefined as any, done: true });
+        // Consumer is waiting — close the stream immediately.
+        const d = pending;
         pending = null;
-      } else {
-        const d = deferred<IteratorResult<T>>();
         d.resolve({ value: undefined as any, done: true });
-        pending = d;
+        return;
       }
+      // No consumer waiting — stash a "done" marker that the next next()
+      // call will observe (via `ended`) and return done:true.
+      buffer.push(undefined as any); // sentinel: when we see this, return done
     },
     fail: (err: unknown) => {
       failed = err;
@@ -276,9 +294,15 @@ describe('coordinateConcurrentFallback', () => {
 
       await vi.advanceTimersByTimeAsync(60);
 
+      // The first iter.next() call already consumes the only emitted
+      // chunk here (7). The subsequent for-await starts at the second
+      // item, so the first yield must be captured from firstP and
+      // prepended to the results — otherwise `results` can never
+      // contain 7 even though the test expects it to.
+      const first = await firstP;
       const results: number[] = [];
+      if (first.value !== undefined) results.push(first.value);
       for await (const item of iter) results.push(item);
-      await firstP;
 
       expect(results).toEqual([7]);
     } finally {

@@ -480,7 +480,9 @@ class MCPFilesystemProvider implements CapabilityProvider {
       'file.write': 'write_file',
       'file.append': 'append_file',
       'file.delete': 'delete_file',
-      'file.list': 'list_directory',
+      // Bug #37: the registered MCP tool is `list_files`, not `list_directory`.
+      // The old value caused "Invalid qualified tool name: list_directory".
+      'file.list': 'list_files',
       'file.batch_write': 'batch_write',
       'file.str_replace': 'str_replace',
     };

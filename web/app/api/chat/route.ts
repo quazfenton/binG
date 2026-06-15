@@ -276,6 +276,41 @@ const PATH_SCSS_VAR_RE = /[\/\\]\$/  // Matches "/$" or "\$" (SCSS variable)
 const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
+/**
+ * Bug #48 / cross-pass dedup helper: insert a path into the dedup Set
+ * in BOTH the resolved and parser-relative forms so a later parse that
+ * emits either form finds the dedup hit. The parser can emit either
+ * "workspace/sessions/002/src/foo.ts" or "src/foo.ts" depending on how
+ * the LLM wrote the edit, so storing only one form lets the other pass
+ * through and re-apply. Storing both closes the cross-pass re-apply gap.
+ *
+ * Symmetric: if input is parser-relative, the resolved form is added;
+ * if input is resolved, the parser-relative form is added. This handles
+ * the v1 pre-populate and tool-call sites where the input could be
+ * either form (the streaming site always sees resolved paths).
+ *
+ * Top-level (not a closure) so there's no TDZ dependency on the
+ * request-scoped `requestedScopePath` `let` declaration.
+ */
+function addWrittenPath(
+  set: Set<string>,
+  path: string | undefined | null,
+  scopePath: string,
+): void {
+  if (!path) return;
+  set.add(path);
+  if (path.startsWith(scopePath + '/')) {
+    set.add(path.slice(scopePath.length + 1));
+  } else if (!path.startsWith('/')) {
+    // Skip absolute paths (not under scopePath) to avoid producing
+    // double-slash entries like `workspace/sessions/002//etc/foo` when
+    // the input is an absolute filesystem path. Unlikely in practice
+    // since paths are normalized upstream, but the skip is cheap and
+    // keeps the dedup set free of clearly-malformed entries.
+    set.add(`${scopePath}/${path}`);
+  }
+}
+
 export async function POST(request: NextRequest) {
   // Phase B: stash the X-UI-Source header value on the AsyncLocalStorage
   // scope so any downstream `emitFileEvent()` call in this request can
@@ -290,6 +325,7 @@ export async function POST(request: NextRequest) {
   // call sites so the text-mode parser skips these paths instead of overwriting
   // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
   const alreadyWrittenPaths = new Set<string>();
+
   // Bug #43: memory-pressure throttle. If the heap is above the soft
   // threshold, return 503 Retry-After before any processing starts.
   try {
@@ -1457,10 +1493,12 @@ const config: UnifiedAgentConfig = {
                     // Bug #63: track paths applied by this call so subsequent
                     // applyFilesystemEditsFromResponse calls skip them instead
                     // of re-applying (which can cause file corruption when the
-                    // second parse produces truncated/partial content).
+                    // second parse produces truncated/partial content). Uses
+                    // addWrittenPath so the canonical (parser-relative) form is
+                    // also stored — see the helper's docstring for why.
                     if (appliedEditsResult?.applied?.length) {
                       for (const edit of appliedEditsResult.applied) {
-                        alreadyWrittenPaths.add(edit.path);
+                        addWrittenPath(alreadyWrittenPaths, edit.path, requestedScopePath);
                       }
                     }
 
@@ -1874,22 +1912,22 @@ const config: UnifiedAgentConfig = {
         // (V2 gateway/local fallback paths use different code paths entirely).
         if (result.success && result.response) {
           for (const fe of (result.fileEdits || [])) {
-            if (fe?.path) alreadyWrittenPaths.add(fe.path);
+            addWrittenPath(alreadyWrittenPaths, fe?.path, requestedScopePath);
           }
           for (const s of (result.steps || [])) {
             const toolName = s?.toolName;
             if (!toolName) continue;
             if (toolName === 'file.batch_write' || toolName === 'batch_write') {
               for (const f of (s.args?.files || [])) {
-                if (f?.path) alreadyWrittenPaths.add(f.path);
+                addWrittenPath(alreadyWrittenPaths, f?.path, requestedScopePath);
               }
             } else if (toolName === 'file.write' || toolName === 'write_file' ||
                        toolName === 'file.str_replace' || toolName === 'file.append') {
-              if (s.args?.path) alreadyWrittenPaths.add(s.args.path);
+              addWrittenPath(alreadyWrittenPaths, s.args?.path, requestedScopePath);
             }
           }
           for (const wp of ((result as any)._writtenPaths || [])) {
-            if (wp) alreadyWrittenPaths.add(wp);
+            addWrittenPath(alreadyWrittenPaths, wp, requestedScopePath);
           }
         }
 
@@ -2896,11 +2934,11 @@ const config: UnifiedAgentConfig = {
                             if (Array.isArray(output)) {
                               for (const item of output) {
                                 if (item && typeof item === 'object' && item.path && item.success !== false) {
-                                  alreadyWrittenPaths.add(item.path);
+                                  addWrittenPath(alreadyWrittenPaths, item.path, requestedScopePath);
                                 }
                               }
                             } else if (output && typeof output === 'object' && output.path && output.success !== false) {
-                              alreadyWrittenPaths.add(output.path);
+                              addWrittenPath(alreadyWrittenPaths, output.path, requestedScopePath);
                             }
                           }
 

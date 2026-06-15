@@ -70,7 +70,8 @@ export async function getUserRouterTokens(
 export async function getUserRouterConnections(userId: string): Promise<OAuthConnection[]> {
   try {
     const { oauthService } = await import('@/lib/auth/oauth-service')
-    return await oauthService.getUserConnections(userId)
+    const conns = await oauthService.getUserConnections(userId)
+    return Array.isArray(conns) ? conns : []
   } catch (error) {
     console.error(`[RouterTokenStore] Failed to get connections for user ${userId}:`, error)
     return []

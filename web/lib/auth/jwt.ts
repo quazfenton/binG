@@ -1,5 +1,10 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '../utils/logger';
+// Pass-7 #107: tag the token-version-mismatch log with the canonical
+// `mismatch` detection term so the meta-monitor can grep on a single
+// token. The DB's token_version has drifted past the JWT's encoded
+// version (typically a password change or admin revocation).
+import { DETECTION_TERMS, withDetectionTerms } from '../virtual-filesystem/session-path-guard';
 
 const logger = createLogger('Auth:JWT');
 
@@ -204,11 +209,17 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
       try {
         const dbTokenVersion = getUserTokenVersion(decoded.userId);
         if (dbTokenVersion !== null && tokenVersion < dbTokenVersion) {
-          logger.warn('Token version mismatch — token revoked by password change or admin action', {
-            userId: decoded.userId,
-            tokenVersion,
-            dbTokenVersion,
-          });
+          logger.warn(
+            withDetectionTerms(
+              'Token version mismatch — token revoked by password change or admin action',
+              DETECTION_TERMS.mismatch,
+            ),
+            {
+              userId: decoded.userId,
+              tokenVersion,
+              dbTokenVersion,
+            },
+          );
           return { success: false, error: 'Token has been revoked' };
         }
       } catch (versionError) {

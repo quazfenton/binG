@@ -55,7 +55,10 @@ export class GitManager {
       throw new Error(`Git status failed: ${result.output}`);
     }
 
-    const lines = result.output.split('\n');
+    const lines = (result.output ?? '').split('\n');
+    if (!lines[0]) {
+      throw new Error('Unexpected git status output: missing branch information');
+    }
     const branchLine = lines[0].replace('## ', '');
     const files: GitFileInfo[] = [];
 

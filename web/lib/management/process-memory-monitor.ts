@@ -71,6 +71,23 @@ export interface ProcessMemoryMonitorConfig {
    */
   hysteresisRatio: number;
   /**
+   * Pass-7 #109 — minimum heap delta (in MB) per tick to emit a
+   * `heap growth observed` debug breadcrumb. Default 8 MB: catches
+   * chronic drift (a 1 MB/s leak is +10 MB per 10s tick) while filtering
+   * out the natural ~5 MB jitter from a single allocation. Set higher
+   * for noisier environments, lower to surface smaller leaks.
+   * Env-tunable via `MEMORY_GROWTH_REPORT_MB`.
+   */
+  growthReportMb: number;
+  /**
+   * Pass-7 #109 — minimum negative heap delta (in MB) per tick to emit
+   * a `heap shrink observed` debug breadcrumb. Default 4 MB: a healthy
+   * GC pass typically drops the heap by more than this, while the
+   * natural ~2 MB shrink from internal cleanup is filtered out.
+   * Env-tunable via `MEMORY_SHRINK_REPORT_MB`.
+   */
+  shrinkReportMb: number;
+  /**
    * When true, the monitor auto-starts on first `shouldThrottle()` / `getStatus()`
    * call if it hasn't been started explicitly. Useful in serverless / Next.js
    * route handlers that don't have a clean module-init hook. Set to false in
@@ -90,6 +107,8 @@ const DEFAULT_CONFIG: ProcessMemoryMonitorConfig = {
   tickIntervalMs: 10_000,     // 10 s
   snapshotCooldownMs: 300_000, // 5 min
   hysteresisRatio: 0.9,
+  growthReportMb: 8,          // Pass-7 #109: chronic-leak detector (1 MB/s × 10s = 10 MB fires)
+  shrinkReportMb: 4,          // Pass-7 #109: healthy GC pass detector
   autoStart: true,
   snapshotDir: './heap-snapshots',
 };
@@ -107,6 +126,10 @@ function readEnvOverrides(): Partial<ProcessMemoryMonitorConfig> {
   if (Number.isFinite(cooldown) && cooldown >= 0) out.snapshotCooldownMs = cooldown;
   const hys = Number.parseFloat(process.env.MEMORY_HYSTERESIS_RATIO ?? '');
   if (Number.isFinite(hys) && hys >= 0 && hys < 1) out.hysteresisRatio = hys;
+  const growth = Number.parseInt(process.env.MEMORY_GROWTH_REPORT_MB ?? '', 10);
+  if (Number.isFinite(growth) && growth >= 0) out.growthReportMb = growth;
+  const shrink = Number.parseInt(process.env.MEMORY_SHRINK_REPORT_MB ?? '', 10);
+  if (Number.isFinite(shrink) && shrink >= 0) out.shrinkReportMb = shrink;
   if (process.env.MEMORY_AUTO_START === 'false') out.autoStart = false;
   if (process.env.MEMORY_SNAPSHOT_DIR) out.snapshotDir = process.env.MEMORY_SNAPSHOT_DIR;
   return out;
@@ -192,6 +215,15 @@ export class ProcessMemoryMonitor extends EventEmitter {
   private tickCount = 0;
   private startedAtMs: number | null = null;
   private explicitStart = false;
+  // Bug #109 (Pass-7 audit) — memory/heap growth detection. Pass-7 noted
+  // that despite the HEAP hysteresis events from #96, no log line ever
+  // showed the actual growth curve (e.g. "+18 MB over 10 s"). Operators
+  // couldn't tell whether the heap was slowly drifting up or spiking on
+  // a single request. Track the previous sample so each tick can report
+  // the delta. Persisted on the instance so hot-reload preserves the
+  // baseline across a module re-evaluation.
+  private lastSampleHeapMb: number | null = null;
+  private lastSampleAtMs: number | null = null;
 
   constructor(configOverrides: Partial<ProcessMemoryMonitorConfig> = {}) {
     super();
@@ -253,24 +285,81 @@ export class ProcessMemoryMonitor extends EventEmitter {
       const heapUsedMb = Math.round(mu.heapUsed / 1024 / 1024);
       const rssMb = Math.round(mu.rss / 1024 / 1024);
       const externalMb = Math.round(mu.external / 1024 / 1024);
+      // Bug #109 (Pass-7 audit) — emit a `growth` event on every tick so
+      // operators can see the actual delta (e.g. "+18 MB over 10 s").
+      // Threshold: only log when the delta exceeds 8 MB OR when the heap
+      // shrank by more than 4 MB (a useful "heap recovered" signal).
+      // Below that, the tick noise drowns out the signal in long runs.
+      // Tagged at DEBUG (not WARN) so production logs stay clean; the
+      // threshold-crossing WARN logs from fireAlert() remain the
+      // user-facing signal.
+      const nowMs = Date.now();
+      if (this.lastSampleHeapMb !== null && this.lastSampleAtMs !== null) {
+        const deltaMb = heapUsedMb - this.lastSampleHeapMb;
+        const elapsedMs = nowMs - this.lastSampleAtMs;
+        if (deltaMb >= this.config.growthReportMb || deltaMb <= -this.config.shrinkReportMb) {
+          const trend = deltaMb >= this.config.growthReportMb ? 'growth' : 'shrink';
+          logger.debug(`[ProcessMemoryMonitor] heap ${trend} observed`, {
+            heapUsedMb,
+            deltaMb,
+            elapsedMs,
+            rate: elapsedMs > 0 ? Math.round((deltaMb * 1000) / elapsedMs) : 0,
+            softThrottleMb: this.config.softThrottleMb,
+            criticalMb: this.config.criticalMb,
+            growthReportMb: this.config.growthReportMb,
+            shrinkReportMb: this.config.shrinkReportMb,
+          });
+        }
+      }
+      this.lastSampleHeapMb = heapUsedMb;
+      this.lastSampleAtMs = nowMs;
 
       // 1. Critical takes priority over soft.
       if (heapUsedMb >= this.config.criticalMb) {
+        const wasThrottled = this.throttled;
         const alert = this.fireAlert('critical', mu.heapUsed, heapUsedMb, this.config.criticalMb);
         // Try to capture a heap snapshot (best-effort, never throws out).
         this.trySnapshot(alert).catch(() => {
           // trySnapshot already swallows; this is belt-and-suspenders.
         });
         this.throttled = true;
+        // Bug #96 (Pass-7 audit) — log the re-engagement explicitly so
+        // operators can distinguish "first crossing" from "re-engagement
+        // after a prior clear". The hysteresis log only fires on the
+        // clear path; without this, a thrash loop (clear→engage→clear)
+        // produces one clear log but N engages that are invisible as
+        // "re-engagements" — the alertCount increments but you can't tell
+        // from the log whether alerts are clustered or distributed.
+        if (wasThrottled) {
+          logger.debug('[ProcessMemoryMonitor] re-engaged critical throttle after prior clear', {
+            heapUsedMb,
+            criticalMb: this.config.criticalMb,
+            alertCount: this.alertCount,
+          });
+        }
         return;
       }
 
       // 2. Soft threshold.
       if (heapUsedMb >= this.config.softThrottleMb) {
+        const wasThrottled = this.throttled;
         if (!this.throttled) {
           this.fireAlert('warning', mu.heapUsed, heapUsedMb, this.config.softThrottleMb);
         }
         this.throttled = true;
+        // Bug #96 (Pass-7 audit) — symmetric re-engagement log. Without
+        // this, a heap that oscillates around the soft threshold (e.g.
+        // steady 1100 MB on a 1024 MB soft threshold) would clear and
+        // re-engage the throttle indefinitely with no visibility into
+        // the oscillation. Tagged at DEBUG (not WARN) because the
+        // fireAlert() above already produces the user-facing warning —
+        // this is just a debug breadcrumb for the re-engagement transition.
+        if (wasThrottled) {
+          logger.debug('[ProcessMemoryMonitor] re-engaged soft throttle (was already throttled, sustained pressure)', {
+            heapUsedMb,
+            softThrottleMb: this.config.softThrottleMb,
+          });
+        }
         return;
       }
 
@@ -360,6 +449,8 @@ export class ProcessMemoryMonitor extends EventEmitter {
     this.alertCount = 0;
     this.tickCount = 0;
     this.startedAtMs = null;
+    this.lastSampleHeapMb = null;
+    this.lastSampleAtMs = null;
   }
 
   // ── Private helpers ────────────────────────────────────────────────────

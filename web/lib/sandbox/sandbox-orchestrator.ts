@@ -10,6 +10,18 @@ import { createLogger } from '../utils/logger';
 import { providerRouter, type TaskContext } from './provider-router';
 import { sessionManager } from '../session/session-manager';
 import { resourceMonitor, type ResourceMetrics } from '../management/resource-monitor';
+// Pass-7 #92/#93: lifecycle observability — emits canonical [INITIALIZED]/
+// [DESTROYED] and [OPERATION STARTED/COMPLETED/FAILED] log events so
+// meta-monitoring can grep on a single vocabulary. The 1,885:0 init:teardown
+// ratio in run.log was a silent leak; the 4:2 sandbox start:end ratio
+// meant we couldn't tell when ops finished. Wire the markers at the
+// authoritative create/destroy sites below.
+import {
+  markInitialized,
+  markDestroyed,
+  markReleased,
+  trackOperation,
+} from '../management/lifecycle';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import {
   assessRisk,
@@ -615,6 +627,21 @@ export class SandboxOrchestrator {
       }
 
       const oldSessionId = session.sessionId;
+      // Pass-7 #92 (review feedback) — emit [DESTROYED] for the old
+      // handle BEFORE the reassignment so the lifecycle counter doesn't
+      // leak the old id as 'initialized' forever. Without this, cross-
+      // provider migrations would inflate the live-ids counter and the
+      // init:teardown ratio. The teardown term is `destroyed` (not
+      // `released`) because the old provider's sandbox is hard-killed
+      // as part of the migration; the new one gets a fresh
+      // [INITIALIZED] via createSandboxHandle's existing markInitialized.
+      markDestroyed('sandbox', oldSessionId, {
+        provider: fromProvider,
+        userId: session.userId,
+        conversationId: session.conversationId,
+        teardown: 'migrated',
+        toProvider,
+      });
       session.handle = newHandle;
       session.provider = toProvider;
       session.sessionId = newHandle.id;
@@ -685,7 +712,19 @@ export class SandboxOrchestrator {
     });
 
     this.sessions.delete(session.logicalId);
-    resourceMonitor.stopMonitoring(session.handle.id);
+    resourceMonitor.stopMonitoring(session.handle.id);      // Pass-7 #92: emit [RELEASED] for the idle-eviction path.
+      // markReleased (not markDestroyed) is the right term here because
+      // the sandbox is being returned to idle — the resource isn't
+      // necessarily gone, just no longer claimed. Operators grep
+      // separately on [RELEASED] vs [DESTROYED] for distinct bucket
+      // counts in the meta-monitor.
+    markReleased('sandbox', session.handle.id, {
+      provider: session.provider,
+      userId: session.userId,
+      conversationId: session.conversationId,
+      idleMs: Date.now() - session.lastActivityAt,
+      teardown: 'idle-evict',
+    });
 
     if (session.isWarm) {
       try {
@@ -838,6 +877,14 @@ export class SandboxOrchestrator {
           try {
             const suspended = await autoSuspendService.suspendSandbox(handle.id, 'idle');
             if (suspended) {
+              // Pass-7 #92: emit [RELEASED] for hibernation (state preserved,
+              // not fully destroyed). markDestroyed is reserved for hard-kill.
+              markDestroyed('sandbox', handle.id, {
+                provider: providerType,
+                userId: 'warm-pool',
+                ageMs: Date.now() - (createdAt || Date.now()),
+                teardown: 'suspended',
+              });
               logger.info('Hibernated idle warm sandbox (state preserved)', {
                 provider: providerType,
                 sandboxId: handle.id,
@@ -846,6 +893,12 @@ export class SandboxOrchestrator {
             } else if (provider) {
               // Fallback: provider doesn't support suspension, destroy instead
               await provider.destroySandbox(handle.id);
+              markDestroyed('sandbox', handle.id, {
+                provider: providerType,
+                userId: 'warm-pool',
+                ageMs: Date.now() - (createdAt || Date.now()),
+                teardown: 'destroyed',
+              });
               logger.info('Destroyed idle warm sandbox (hibernation not supported)', {
                 provider: providerType,
                 sandboxId: handle.id,
@@ -862,6 +915,12 @@ export class SandboxOrchestrator {
             if (provider) {
               try {
                 await provider.destroySandbox(handle.id);
+                markDestroyed('sandbox', handle.id, {
+                  provider: providerType,
+                  userId: 'warm-pool',
+                  ageMs: Date.now() - (createdAt || Date.now()),
+                  teardown: 'destroyed-after-hibernate-failure',
+                });
               } catch {
                 // Sandbox may already be dead
               }
@@ -1137,28 +1196,42 @@ export class SandboxOrchestrator {
     const secretBroker = getSecretBroker();
     const virtualEnv = secretBroker.virtualizeEnvVars(workspaceEnv, { ownerId: userId });
 
-    const handle = await provider.createSandbox({
-      workspaceDir,
-      language: 'typescript',
-      autoStopInterval: 3600,
-      envVars: {
-        // Virtualized workspace env (secrets replaced with placeholders)
-        ...virtualEnv,
-        USER_ID: userId,
-        CONVERSATION_ID: conversationId,
-        EXECUTION_POLICY: policy,
-        PREFERRED_PROVIDERS: preferredProviders.join(','),
-      },
-      labels: {
-        userId,
-        conversationId,
-        executionPolicy: policy,
-        createdBy: 'sandbox-orchestrator',
-      },
-      resources: {
-        cpu: policyConfig.resources?.cpu || 1,
-        memory: policyConfig.resources?.memory || 2,
-      },
+    const handle = await trackOperation(
+      'sandbox.create',
+      { userId, conversationId, provider: providerType, policy },
+      () => provider.createSandbox({
+        workspaceDir,
+        language: 'typescript',
+        autoStopInterval: 3600,
+        envVars: {
+          // Virtualized workspace env (secrets replaced with placeholders)
+          ...virtualEnv,
+          USER_ID: userId,
+          CONVERSATION_ID: conversationId,
+          EXECUTION_POLICY: policy,
+          PREFERRED_PROVIDERS: preferredProviders.join(','),
+        },
+        labels: {
+          userId,
+          conversationId,
+          executionPolicy: policy,
+          createdBy: 'sandbox-orchestrator',
+        },
+        resources: {
+          cpu: policyConfig.resources?.cpu || 1,
+          memory: policyConfig.resources?.memory || 2,
+        },
+      }),
+    );
+
+    // Pass-7 #92: emit the canonical [INITIALIZED] event so meta-monitoring
+    // can grep for it. Paired with markDestroyed in warm-pool-cleanup,
+    // evictSession, and migrateSession so the init:teardown ratio is
+    // visible in run.log.
+    markInitialized('sandbox', handle.id, {
+      provider: providerType,
+      userId,
+      conversationId,
     });
 
     const sandboxRoot = handle.workspaceDir || '/';

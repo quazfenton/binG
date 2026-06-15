@@ -307,6 +307,16 @@ interface OpenAICompatibleConfig {
  *
  * Per-provider tuning has been removed — replaced by the self-correcting
  * derank loop in `llm-provider-health.ts`.
+ *
+ * Pass-7 #103: the polling sampler can fire the idle-timeout abort 2-6ms
+ * AFTER the configured threshold (Node.js setTimeout slop). This is
+ * expected and intentional — aborting slightly late is safer than
+ * aborting early, and the server-side limits (Bug #104 overrides) are
+ * the real hard ceiling. Operators seeing `elapsed=75004ms` for
+ * `minimax-m2.7` should treat it as a clean 75s timeout, not a
+ * regression. The slop is bounded by the 1s polling tick of
+ * `setInterval` plus Node's timer coalescing; documented here so the
+ * 4ms question doesn't get re-asked.
  */
 export const STREAM_TIMEOUTS = {
   firstTokenTimeoutMs: parseInt(process.env.LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS || '30000', 10),
@@ -322,6 +332,70 @@ export const STREAM_TIMEOUTS = {
   // treated as effectively silent.
   stallThresholdMs: parseInt(process.env.LLM_STREAM_STALL_THRESHOLD_MS || '30000', 10),
 } as const;
+
+/**
+ * Bug #104 (Pass-7 audit) — per-model server-side timeout overrides.
+ *
+ * Some upstream providers enforce a hard timeout that is STRICTER than the
+ * global `idleTimeoutMs` above. If we wait the full idle window, the
+ * provider's own timeout fires first and returns an opaque error; we'd
+ * rather abort at the server-side limit so the operator can correlate
+ * the failure with the model name.
+ *
+ * Match policy: `endsWith('/<substring>')` OR `endsWith('<substring>')` on
+ * the last `/`-separated segment of the model id. This is more precise
+ * than naive `includes` (which would match `'some-finetune-deepseek-v4-flash'`
+ * as well as the real model). Model id format is `provider/model` in
+ * most providers; the segment check normalizes both shapes.
+ *
+ * Wired into `streamWithVercelAI` (Pass-7 #104 follow-up complete): the
+ * helper's result is min-clamped with the user-supplied `opts.idleTimeoutMs`
+ * just before the `IDLE_TIMEOUT_MS` constant is computed, so the model
+ * override acts as a HARD CEILING rather than a default. Both the raw
+ * requested value and the effective override are surfaced in the
+ * `[TIMEOUT]` log so operators can see why an abort fired at the
+ * model-specific value rather than the global default.
+ *
+ * Source: run.log traces from June 14, 2026 showed `elapsed=30006ms` and
+ * `elapsed=30002ms` for `deepseek-v4-flash` — the 2-6ms slop past 30000ms
+ * indicates a server-side limit, not client-side timeout drift. Similar
+ * for `minimaxai/minimax-m2.7` at 75000ms (Pass-7 #103).
+ */
+const MODEL_SERVER_TIMEOUT_OVERRIDES: ReadonlyArray<{ substring: string; timeoutMs: number }> = [
+  { substring: 'deepseek-v4-flash', timeoutMs: 30000 },
+  { substring: 'minimax-m2.7', timeoutMs: 75000 },
+];
+
+/**
+ * Bug #104 (Pass-7 audit) — look up the model-specific server-side
+ * timeout override for a given model id. Returns the override (a HARD
+ * CEILING) if the model id matches a known-stricter upstream limit,
+ * otherwise `null` (no override applies).
+ *
+ * **Contract: returns `null` when no override matches, NOT the global
+ * default.** The global default is not an "override" — it is the value
+ * already used by the caller as the floor. Returning it here would
+ * cause a `Math.min(callerTimeout, override)` to silently clamp a
+ * caller-supplied `opts.idleTimeoutMs` larger than the default, which
+ * is the opposite of what the caller asked for. The call site must
+ * treat `null` as "no override" and skip the clamp.
+ *
+ * Match is `endsWith` on the last `/`-separated segment of the model id
+ * (case-insensitive). This avoids false positives from `includes` on
+ * model ids like `'some-finetune-deepseek-v4-flash'` while still
+ * matching both `vercel/deepseek-v4-flash` and `deepseek-v4-flash`.
+ *
+ * @param modelId - The model id passed to streamText (e.g., "vercel/deepseek-v4-flash" or "minimaxai/minimax-m2.7")
+ * @returns The override timeout in ms, or `null` if no override applies
+ */
+export function getModelIdleTimeoutMs(modelId: string): number | null {
+  if (!modelId) return null;
+  const lastSegment = modelId.toLowerCase().split('/').pop() ?? '';
+  for (const { substring, timeoutMs } of MODEL_SERVER_TIMEOUT_OVERRIDES) {
+    if (lastSegment.endsWith(substring)) return timeoutMs;
+  }
+  return null;
+}
 
 /**
  * Configuration for all OpenAI-compatible providers.
@@ -1149,7 +1223,23 @@ export async function* streamWithVercelAI(
   // giving the model a much wider idle window (60–90s) for legitimate "thinking"
   // pauses (tool execution, multi-step reasoning, etc.).
   let idleTimeoutId: NodeJS.Timeout | null = null;
-  const IDLE_TIMEOUT_MS = idleTimeoutMs;
+  // Bug #104 (Pass-7 #104 follow-up — wired): honor per-model server-side
+  // timeout overrides by clamping the effective idle timeout to the MIN of
+  // the user-supplied `opts.idleTimeoutMs` and the model-specific value.
+  // The override is a HARD CEILING (matches the upstream provider's actual
+  // hard limit) — we never want to wait longer than that, even if the caller
+  // asked for a wider window. The user request's `idleTimeoutMs` is the
+  // FLOOR, not the ceiling; a value larger than the override is still cut
+  // at the override.
+  //
+  // When `getModelIdleTimeoutMs` returns `null` (no override for this
+  // model), the user's `idleTimeoutMs` is used as-is — a caller that
+  // explicitly widened the window (e.g. to 120s) is not silently cut
+  // back to the 75s global default. See `getModelIdleTimeoutMs` JSDoc
+  // for the contract.
+  const _modelOverrideMs = getModelIdleTimeoutMs(modelName);
+  const IDLE_TIMEOUT_MS =
+    _modelOverrideMs !== null ? Math.min(idleTimeoutMs, _modelOverrideMs) : idleTimeoutMs;
 
   // 'Model thinking' client-ping queue: an interval pushes a ping onto the
   // queue when the stream has been silent for `thinkPingMs`. The main iterator
@@ -1263,8 +1353,10 @@ export async function* streamWithVercelAI(
           toolResultSuccessCount,
           toolResultFailCount,
           extensionMultiplier: effectiveMultiplier,
-          effectiveTimeout,
-          idleTimeoutMs: IDLE_TIMEOUT_MS,
+          effectiveTimeout,                          // IDLE_TIMEOUT_MS × effectiveMultiplier
+          idleTimeoutMs: IDLE_TIMEOUT_MS,            // clamped (min of requested + override)
+          requestedIdleTimeoutMs: idleTimeoutMs,     // user-supplied (post-destructure default)
+          modelOverrideMs: _modelOverrideMs,         // per-model hard ceiling from getModelIdleTimeoutMs
         });
         // Pass-2 cross-cutting theme: record the idle-timeout stall.
         try {

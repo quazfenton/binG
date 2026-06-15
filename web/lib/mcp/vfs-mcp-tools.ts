@@ -312,21 +312,58 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   readfiles: 'read_files',
   // Bug #37: LLM-invented 'list_directory' is the most common misname for list_files.
   // Map both the bare-verb 'list' and the alternate 'list_directory' to the canonical name.
+  // NOTE: keys are matched after lowercasing AND after stripping non-alphanumerics
+  // (see canonicalizeMcpToolName), so both 'list_directory' and 'listdirectory' resolve.
+  list_directory: 'list_files',
   listdirectory: 'list_files',
   list_dir: 'list_files',
   listdir: 'list_files',
+  list: 'list_files',
   dir: 'list_files',
   listfiles: 'list_files',
   ls: 'list_files',
   searchfiles: 'search_files',
   search: 'search_files',
+  grep: 'grep_code',
+  grepcode: 'grep_code',
+  ripgrep: 'grep_code',
+  rg: 'grep_code',
   batchwrite: 'batch_write',
   write_files: 'batch_write',
   writefiles: 'batch_write',
   deletefile: 'delete_file',
   remove_file: 'delete_file',
+  bash: 'bash_execute',
+  shell: 'bash_execute',
+  exec: 'bash_execute',
+  run_command: 'bash_execute',
+  websearch: 'web_search',
+  search_web: 'web_search',
 
 };
+
+/**
+ * Canonicalize an LLM-supplied MCP tool name to one of our registered tool
+ * names (e.g. 'list_directory' / 'List_Directory' / 'listDirectory' → 'list_files').
+ *
+ * Bug #37 (regression): the AI-SDK execution path (`callMCPToolFromAI_SDK`)
+ * does not pass through `normalizeToolCall`, so it never resolved aliases and
+ * failed with "Bare tool name not found in any MCP server". This shared helper
+ * lets every entry path canonicalize names consistently.
+ *
+ * Matching is tolerant: case-insensitive, and falls back to an
+ * alphanumeric-only key so 'list-directory', 'list_directory', and
+ * 'listDirectory' all map identically.
+ */
+export function canonicalizeMcpToolName(rawName: string): string {
+  if (!rawName || typeof rawName !== 'string') return rawName;
+  const lower = rawName.trim().toLowerCase();
+  if (TOOL_NAME_ALIASES[lower]) return TOOL_NAME_ALIASES[lower];
+  // Fallback: strip non-alphanumerics (handles camelCase/kebab/snake variants)
+  const compact = lower.replace(/[^a-z0-9]/g, '');
+  if (compact !== lower && TOOL_NAME_ALIASES[compact]) return TOOL_NAME_ALIASES[compact];
+  return rawName;
+}
 
 /**
  * Central tool call normalization pipeline.
@@ -1293,8 +1330,29 @@ export const readFilesTool = (tool as any)({
       }));
 
       const successCount = results.filter((r: any) => r.success).length;
+      // Bug #77: when every path failed there was no top-level `error`, so the
+      // chat layer logged the opaque "Unknown error". Summarize the per-file
+      // failures into an actionable top-level error so the LLM can self-correct
+      // (fix the paths / call list_files) instead of blindly retrying.
+      let aggregateError: { code: string; message: string; retryable: boolean; suggestedNextAction: string } | undefined;
+      if (successCount === 0) {
+        const reasons = results
+          .map((r: any) => {
+            const msg = typeof r.error === 'string' ? r.error : r.error?.message;
+            return `${r.path}: ${msg || 'not found'}`;
+          })
+          .slice(0, 5)
+          .join('; ');
+        aggregateError = {
+          code: 'ALL_READS_FAILED',
+          message: `None of the ${paths.length} requested file(s) could be read. ${reasons}`,
+          retryable: true,
+          suggestedNextAction: 'Verify the paths with list_files on the parent directory; paths are relative to the session workspace (do not prefix with "workspace/sessions/...").',
+        };
+      }
       return {
         success: successCount > 0,
+        ...(aggregateError ? { error: aggregateError } : {}),
         files: results,
         totalRequested: paths.length,
         totalRead: successCount,

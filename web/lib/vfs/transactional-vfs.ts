@@ -29,6 +29,11 @@ import { createLogger } from '@/lib/utils/logger';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import type { VirtualFile } from '@/lib/virtual-filesystem/filesystem-types';
 import { VersionMismatchError, ConcurrentModificationError } from './errors';
+// Pass-7 #107: tag CAS-retry-exhaustion log with canonical detection terms
+// (mismatch + drift) so the meta-monitor can grep on a single token. The
+// file version drifted between read and write (the underlying cause) AND
+// the version token didn't match (the symptom).
+import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
 
 const logger = createLogger('VFS:TX');
 
@@ -214,6 +219,23 @@ export async function writeWithVersion(
       }
     }
 
+    // Pass-7 #107: log the retry exhaustion with canonical detection
+    // terms before throwing. The meta-monitor can grep on a single token
+    // (`mismatch` or `drift`) to find every CAS-exhaustion in run.log.
+    logger.warn(
+      withDetectionTerms(
+        `writeWithVersion: exhausted ${maxRetries} CAS attempts for ${filePath} ` +
+          `(last error: ${(lastError as Error)?.message ?? 'unknown'})`,
+        DETECTION_TERMS.mismatch,
+        DETECTION_TERMS.drift,
+      ),
+      {
+        filePath,
+        expectedVersion,
+        baselineVersion,
+        maxRetries,
+      },
+    );
     throw new VersionMismatchError(
       filePath,
       expectedVersion,
@@ -402,9 +424,19 @@ export class Transaction {
           failed++;
           // First failure → roll back the whole transaction. State is
           // currently 'committing' so rollback() will do the real work.
-          logger.warn(`[VFS:TX ${this.id}] Edit failed for ${edit.path}; rolling back`, {
-            error: errMsg,
-          });
+          logger.warn(
+            withDetectionTerms(
+              `[VFS:TX ${this.id}] Edit failed for ${edit.path}; rolling back`,
+              DETECTION_TERMS.mismatch,
+              DETECTION_TERMS.drift,
+            ),
+            {
+              error: errMsg,
+              errorName: errName,
+              txId: this.id,
+              path: edit.path,
+            },
+          );
           await this.rollback();
           return {
             success: false,

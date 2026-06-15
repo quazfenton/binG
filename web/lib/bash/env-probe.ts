@@ -267,6 +267,14 @@ export function resetMissingBinaryRetry(baseCmd: string): void {
  * MUST be called with a valid `sandboxId`. If the sandbox executeCommand
  * fails, falls back to the host probe so there's always SOME result.
  */
+// Conservative whitelist for binary names interpolated into a sandbox shell
+// command. The probe historically built the command via template literal
+// (`which ${bin} ...`), which is a shell-injection vector if a caller ever
+// passes an untrusted string. Restrict to the realistic set of characters
+// a binary name can contain: alphanumerics, dot, underscore, plus, hyphen.
+// Anything else is treated as "not found" without ever being spliced.
+const SAFE_BINARY_NAME_RE = /^[A-Za-z0-9._+-]+$/;
+
 export async function probeAvailableBinariesInSandbox(
   sandboxId: string,
   binaries?: readonly string[],
@@ -283,14 +291,30 @@ export async function probeAvailableBinariesInSandbox(
     return probeAvailableBinaries(list);
   }
 
+  // Probe every requested binary in parallel, but if a single
+  // executeCommand call rejects (sandbox session dead, transport gone,
+  // etc.), DO NOT just record per-binary nulls — the entire map would
+  // be useless to the prompt builder. Fall back to the host probe so
+  // the caller always gets a real result.
+  let sandboxFailed = false;
   await Promise.all(
     list.map(
       (bin) =>
         new Promise<void>(async (resolve) => {
+          // Validate `bin` before splicing it into the shell command.
+          // A caller-supplied list with a crafted entry (`bin=foo;rm -rf /`)
+          // would otherwise execute arbitrary shell inside the sandbox.
+          if (!SAFE_BINARY_NAME_RE.test(bin)) {
+            fresh.set(bin, null);
+            resolve();
+            return;
+          }
           try {
             const result = await sandboxBridge.executeCommand(
               sandboxId,
-              `which ${bin} 2>/dev/null || echo "__NOT_FOUND__"`,
+              // `which --` prevents a binary named `--help` (or any future
+              // hyphen-prefixed binary) from being interpreted as a flag.
+              `which -- ${bin} 2>/dev/null || echo "__NOT_FOUND__"`,
               '/workspace',
               3000,
             );
@@ -302,13 +326,25 @@ export async function probeAvailableBinariesInSandbox(
               fresh.set(bin, null);
             }
           } catch {
+            // Per-binary failures (timeouts, individual command errors) are
+            // expected for missing binaries. Mark the sandbox as failed
+            // ONLY if the bridge itself is missing or unusable — those are
+            // detected by the outer try/catch below, not here.
             fresh.set(bin, null);
           }
           resolve();
         }),
     ),
-  );
+  ).catch(() => {
+    // One of the per-binary promises rejected outright (rejected before the
+    // inner catch could run, e.g. the bridge call hung and the await threw
+    // past the try/catch boundary). Treat the whole probe as failed.
+    sandboxFailed = true;
+  });
 
+  if (sandboxFailed) {
+    return probeAvailableBinaries(list);
+  }
   return fresh;
 }
 

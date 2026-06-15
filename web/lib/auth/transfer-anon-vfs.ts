@@ -6,13 +6,15 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 const logger = createLogger('Auth:TransferAnonVFS');
 
 /**
- * Core transfer routine. Reads the `anon-session-id` cookie, sanitizes
- * it, and moves the anonymous workspace to the given user.
+ * Core transfer routine. Resolves the anonymous session id (from the
+ * `options.anonymousSessionId` override when provided, otherwise from
+ * the `anon-session-id` cookie), sanitizes it, and moves the anonymous
+ * workspace to the given user.
  *
  * Non-fatal — failures are logged but do not block the auth flow.
- * Idempotent: only runs if there's an anon-session-id cookie AND the
- * derived anonOwnerId differs from the new userId. Safe to call from
- * both register and login flows.
+ * Idempotent: only runs if there's an anon session id AND the derived
+ * anonOwnerId differs from the new userId. Safe to call from both
+ * register and login flows.
  *
  * Transfer strategy (two-tier):
  *   1. FAST PATH: derive the anon ownerId from the cookie using the
@@ -31,9 +33,13 @@ const logger = createLogger('Auth:TransferAnonVFS');
  * the auth flow.
  *
  * Used by:
- *   - /api/auth/register (after successful registration)
- *   - /api/auth/login (after successful login)
- *   - /api/auth/transfer-vfs-on-login (client-triggered, post-login)
+ *   - /api/auth/register (after successful registration; cookie-only)
+ *   - /api/auth/login (after successful login; cookie-only)
+ *   - /api/auth/mfa/challenge (after TOTP verification; cookie-only)
+ *   - /api/auth/transfer-vfs-on-login (client-triggered, post-login;
+ *     passes the body's anonymousSessionId via options when the cookie
+ *     is missing or rotated, so the recovery path has an identifier
+ *     to migrate even when the cookie never reached the server)
  *
  * NOTE for MFA: For MFA-enabled users, the login flow returns early
  * with `mfaRequired: true` and does NOT call this function. The MFA
@@ -44,8 +50,15 @@ const logger = createLogger('Auth:TransferAnonVFS');
 async function transferAnonVFS(
   request: NextRequest,
   user: { id: number | string } | undefined,
+  options?: { anonymousSessionId?: string },
 ): Promise<{ transferredFiles: number }> {
-  const anonCookie = request.cookies.get('anon-session-id')?.value;
+  // Prefer the explicit override (used by the client-side recovery path
+  // in /api/auth/transfer-vfs-on-login when the anon-session-id cookie
+  // is missing, rotated, or was never sent). Falls back to the cookie
+  // for the in-line login/register/mfa paths where the cookie is the
+  // authoritative source.
+  const anonCookie = options?.anonymousSessionId
+    ?? request.cookies.get('anon-session-id')?.value;
   if (!anonCookie || !user?.id) {
     return { transferredFiles: 0 };
   }
@@ -78,7 +91,13 @@ async function transferAnonVFS(
   // `withAnonSessionCookie` call site in
   // `@/lib/virtual-filesystem/resolve-filesystem-owner` is the
   // canonical cookie setter — update both together.
-  const cookiePrefix = sanitizedSessionId.split(/[_-]/)[0] || '';
+  // Accept only the expected anon session format: "<13-digit-ts>_<random>" or "<13-digit-ts>-<random>".
+  // A short crafted prefix can match many recent anon owners and transfer unrelated anon files
+  // into the authenticated account when the fast-path misses — see the fast-path note above.
+  // We require both a 13-digit millisecond timestamp (the established format) and a 6+ char
+  // random tail, so the only prefix we ever key on is a full 13-digit timestamp.
+  const prefixMatch = rawSessionId.match(/^(\d{13})[_-][A-Za-z0-9_-]{6,}$/);
+  const cookiePrefix = prefixMatch?.[1] ?? '';
 
   let totalTransferred = 0;
   const triedOwnerIds = new Set<string>();
@@ -152,7 +171,10 @@ async function transferAnonVFS(
     const candidates = cookiePrefix
       ? recentAnonOwnerIds.filter((id) => {
           const sessionPart = id.startsWith('anon:') ? id.slice(5) : id;
-          return sessionPart.startsWith(cookiePrefix);
+          return (
+            sessionPart.startsWith(`${cookiePrefix}_`) ||
+            sessionPart.startsWith(`${cookiePrefix}-`)
+          );
         })
       : recentAnonOwnerIds;
     for (const anonOwnerId of candidates) {
@@ -183,8 +205,9 @@ async function transferAnonVFS(
 export async function transferVFSFromAnonymous(
   request: NextRequest,
   user: { id: number | string } | undefined,
+  options?: { anonymousSessionId?: string },
 ): Promise<void> {
-  await transferAnonVFS(request, user);
+  await transferAnonVFS(request, user, options);
 }
 
 /**
@@ -202,9 +225,17 @@ export async function transferVFSFromAnonymous(
  * Returns the number of files transferred so the client can show a
  * confirmation (e.g. "Restored 12 files from your anonymous session").
  *
+ * @param options.anonymousSessionId Explicit override for the anon
+ *   session id, used by the client-side recovery path in
+ *   /api/auth/transfer-vfs-on-login when the `anon-session-id` cookie
+ *   is missing or rotated. When provided, takes precedence over the
+ *   cookie. When omitted, falls back to `request.cookies.get('anon-session-id')`.
+ *
  * Used by:
- *   - /api/auth/login (after successful login, alongside auth flow)
- *   - /api/auth/transfer-vfs-on-login (client-triggered explicit retry)
+ *   - /api/auth/login (after successful login, alongside auth flow; cookie-only)
+ *   - /api/auth/transfer-vfs-on-login (client-triggered explicit retry;
+ *     passes the body's anonymousSessionId via options when the cookie
+ *     is missing or rotated)
  *
  * NOTE for MFA: For MFA-enabled users, the login flow returns early
  * with `mfaRequired: true` and does NOT call this function. The MFA
@@ -215,6 +246,7 @@ export async function transferVFSFromAnonymous(
 export async function transferVFSOnLogin(
   request: NextRequest,
   user: { id: number | string } | undefined,
+  options?: { anonymousSessionId?: string },
 ): Promise<{ transferredFiles: number }> {
-  return transferAnonVFS(request, user);
+  return transferAnonVFS(request, user, options);
 }

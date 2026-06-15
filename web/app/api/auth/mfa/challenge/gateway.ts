@@ -196,7 +196,13 @@ export async function POST(request: NextRequest) {
     // below, otherwise the transfer can no longer derive the anon
     // ownerId from the request. Mirrors the pattern in
     // `app/api/auth/login/gateway.ts` for the non-MFA login path.
-    void transferVFSOnLogin(request, user);
+    void transferVFSOnLogin(request, user).catch((error) => {
+      logger.warn('VFS transfer on MFA challenge failed', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+        source: 'mfa-challenge-inline',
+      });
+    });
 
     // Set cookies and return
     const response = NextResponse.json({

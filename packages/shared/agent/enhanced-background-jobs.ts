@@ -512,7 +512,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
             logger.info('Job reached max executions - marking as completed', {
               jobId: job.jobId,
               executionCount: job.executionCount,
-              maxExecutions: job.maxExecutions,
+              maxExecutions: job.maxExecutions ?? this.DEFAULT_MAX_EXECUTIONS,
             });
             job.status = 'completed';
             this.emit('job:max-executions', job.jobId);
