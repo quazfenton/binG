@@ -335,6 +335,7 @@ import { buildApiHeaders } from '@/lib/utils/utils';
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
 import GitSourceControl from "@/components/git-source-control-tabs";
+import { UI_SOURCE } from "@/lib/http/ui-source-header";
 import { VoicePanel } from "@/components/voice-panel";
 import VNCConnectionTab from "@/components/vnc-connection-tab";
 import { NewsPanel } from "@/components/news-panel";
@@ -2290,7 +2291,7 @@ export function WorkspacePanel() {
       // Use new rename API with conflict detection
       const response = await fetch('/api/filesystem/rename', {
         method: 'POST',
-        headers: buildApiHeaders(),
+        headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.WORKSPACE_PANEL },
         body: JSON.stringify({
           oldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
           newPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
@@ -2310,7 +2311,7 @@ export function WorkspacePanel() {
             // Retry with overwrite=true
             const retryResponse = await fetch('/api/filesystem/rename', {
               method: 'POST',
-              headers: buildApiHeaders(),
+              headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.WORKSPACE_PANEL },
               body: JSON.stringify({
                 oldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
                 newPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
@@ -2388,7 +2389,7 @@ export function WorkspacePanel() {
       // Delete old file after rename
       await fetch('/api/filesystem/delete', {
         method: 'POST',
-        headers: buildApiHeaders(),
+        headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.WORKSPACE_PANEL },
         body: JSON.stringify({ path: resolveScopedPath(renamingFile, vfs?.currentPath || '/') }),
       });
 
@@ -2495,17 +2496,16 @@ export function WorkspacePanel() {
       return;
     }
 
-    try {
-      // Use new move API with conflict detection
-      const response = await fetch('/api/filesystem/move', {
-        method: 'POST',
-        headers: buildApiHeaders(),
-        body: JSON.stringify({
-          sourcePath: resolveScopedPath(sourcePath, vfs?.currentPath || '/'),
-          targetPath: resolveScopedPath(targetPath, vfs?.currentPath || '/'),
-          overwrite: false,
-        }),
-      });
+    try {        // Use new move API with conflict detection
+        const response = await fetch('/api/filesystem/move', {
+          method: 'POST',
+          headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.WORKSPACE_PANEL },
+          body: JSON.stringify({
+            sourcePath: resolveScopedPath(sourcePath, vfs?.currentPath || '/'),
+            targetPath: resolveScopedPath(targetPath, vfs?.currentPath || '/'),
+            overwrite: false,
+          }),
+        });
 
       if (response.status === 409) {
         // Conflict detected - show confirmation dialog
@@ -2518,7 +2518,7 @@ export function WorkspacePanel() {
             // Retry with overwrite=true
             const retryResponse = await fetch('/api/filesystem/move', {
               method: 'POST',
-              headers: buildApiHeaders(),
+              headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.WORKSPACE_PANEL },
               body: JSON.stringify({
                 sourcePath: resolveScopedPath(sourcePath, vfs?.currentPath || '/'),
                 targetPath: resolveScopedPath(targetPath, vfs?.currentPath || '/'),

@@ -220,6 +220,11 @@ function getMockDatabase() {
         hitl_audit_logs: [],
         // Workspace snapshot tables (from migration 025)
         workspace_snapshots: [],
+        // Replay & graph tables (from migrations 021, 023) —
+        // loaded by execSchemaFile for real DB, but MockDB needs them
+        // explicitly to avoid [MockDB] Table does not exist warnings.
+        workspace_replay_events: [],
+        workspace_session_graph: [],
       };
 
       // Initialize tables from schema immediately
@@ -246,7 +251,7 @@ function getMockDatabase() {
       /**
        * Parse a single SET pair like "col1 = ?" or "col2 = CURRENT_TIMESTAMP" or "col3 = 0"
        * Returns { col, value } where value is one of:
-       *   - '__PLACEHOLDER__' for ? (will be filled from params)
+       *   - '__SQL_PARAM__' for ? (will be filled from params)
        *   - '__CURRENT_TIMESTAMP__' for CURRENT_TIMESTAMP / datetime('now') / strftime(...)
        *   - '__EXPR__' for complex expressions like REPLACE(path, ...)
        *   - the literal value for simple literals (numbers, strings)
@@ -285,7 +290,7 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
         if (placeholderCount > 0) {
           // Return special marker so the caller counts all placeholders correctly
           // value = placeholderCount lets caller do setPlaceholderCount += count
-          return { col, value: '__PLACEHOLDER__', rawValue: valRaw };
+          return { col, value: '__SQL_PARAM__', rawValue: valRaw };
         }
         // CURRENT_TIMESTAMP, datetime('now'), strftime('%s', 'now') — all produce current time
         if (/^CURRENT_TIMESTAMP$/i.test(valRaw) || /^datetime\s*\(/i.test(valRaw) || /^strftime\s*\(/i.test(valRaw)) {
@@ -351,7 +356,7 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
           const stmt = {
             run: (...params: any[]) => {
               if (!tables[actualTable]) {
-                logger.warn(`[MockDB] Table '${actualTable}' does not exist`);
+                logger.debug(`[MockDB] Table '${actualTable}' does not exist in mock`);
                 return { lastInsertRowid: 1, changes: 0 };
               }
 
@@ -503,7 +508,7 @@ function parseSetPair(pair: string): { col: string; value: any; rawValue?: strin
                       let paramIdx = 0; // SET ? placeholders consume params from the start
                       for (const pair of setPairs) {
                         const colName = pair.col.toLowerCase();
-                        if (pair.value === '__PLACEHOLDER__') {
+                        if (pair.value === '__SQL_PARAM__') {
                           const newVal = params[paramIdx];
                           // COALESCE(a, b) semantics: if a is null/undefined, keep existing row value.
                           // The SET clause for chat_request_logs often uses COALESCE(actualParam, col)

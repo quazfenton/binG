@@ -30,6 +30,9 @@ export { isFullFileContent } from './file-diff-utils';
 export { stripHeredocBodies } from './bash-file-commands';
 import { tolerantJsonParse, findBalancedJsonObject as findBalancedJson } from '../utils/json-tolerant';
 import { stripJsonToolObjects } from './strip-json-tool-objects';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:FileEditParser');
 
 // Import for local use
 import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
@@ -2503,14 +2506,14 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
     const isRawGitDiff = /^diff --git/m.test(targetPath) || /^diff --git/m.test(diff);
 
     if (isRawGitDiff) {
-      console.warn('[extractFencedDiffEdits] Skipping raw git diff output (should use diff parser):', targetPath);
+      logger.warn('[extractFencedDiffEdits] Skipping raw git diff output (should use diff parser)', { targetPath });
       continue;
     }
 
     // CRITICAL FIX: Validate path to reject JSX/HTML fragments, CSS values, etc.
     // This prevents paths like "workspace/sessions/002/Input'" from being extracted
     if (!isValidExtractedPath(targetPath)) {
-      console.warn('[extractFencedDiffEdits] Skipping invalid path:', targetPath);
+      logger.warn('[extractFencedDiffEdits] Skipping invalid path', { targetPath });
       continue;
     }
 

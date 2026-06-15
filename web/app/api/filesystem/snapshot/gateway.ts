@@ -75,7 +75,7 @@ function startPeriodicCleanup() {
     }
 
     if (deleted > 0) {
-      logger.info('[VFS SNAPSHOT] Periodic cache cleanup:', deleted, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Periodic cache cleanup', { count: deleted });
     }
 
     // Also enforce max size - remove oldest entries if over limit
@@ -99,7 +99,7 @@ function startPeriodicCleanup() {
           latestSeenVersion.delete(ownerFromKey);
         }
       }
-      logger.info('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Size limit cleanup', { count: toDelete.length });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
@@ -150,14 +150,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
       }
     }
     if (evicted > 0) {
-      logger.info(
-        `[VFS SNAPSHOT] Cache invalidated (${evicted} entries) for owner:`,
-        ownerId,
-        'version:',
-        version,
-        'source:',
-        source
-      );
+      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }
@@ -216,7 +209,7 @@ function startRequestTrackerCleanup() {
     }
 
     if (deleted > 0 && DEBUG) {
-      logger.info('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
+      logger.info('[VFS SNAPSHOT] Request tracker cleanup', { count: deleted });
     }
   }, 120000).unref(); // Run every 2 minutes, unref to allow process exit
 }
@@ -470,7 +463,25 @@ export async function GET(req: NextRequest) {
     
     // Log if we're getting empty results - helps debug session ID mismatches
     if (files.length === 0 && snapshot.files.length === 0) {
-      logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+      // Bug #44: for anonymous users an empty workspace is EXPECTED (the
+      // WORKSPACE_NOT_READY path below handles it). Log at debug so operators
+      // don't think #14 is broken. For authenticated users (session cookie or
+      // JWT) it's genuinely suspicious and worth a warn.
+      //
+      // NOTE: `FilesystemOwnerResolution.source` is typed as
+      // `'anonymous' | 'session' | 'jwt'`. There is NO literal 'authenticated'
+      // value — "authenticated" in this code path is the union of 'session'
+      // and 'jwt' (i.e., anything that is not 'anonymous'). Comparing to the
+      // non-existent 'authenticated' string was a typecheck (TS2367) AND
+      // runtime bug (the warn branch was dead code — never executed because
+      // `owner.source` could never equal the literal 'authenticated'). Fixed
+      // by comparing to 'anonymous' instead, which correctly captures the
+      // "real user, not anonymous visitor" semantic.
+      if (owner.source !== 'anonymous') {
+        logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+      } else {
+        log(`[${requestId}] EMPTY WORKSPACE (expected): ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+      }
 
       // Bug #14 (audit) — when an anonymous user hits an empty
       // workspace, the LLM previously saw `{success: true, files: []}`
@@ -484,8 +495,88 @@ export async function GET(req: NextRequest) {
       // and either retry, ask the user to wait, or surface a clearer
       // UI message ("Session initializing, please wait…") instead of
       // acting on the empty list.
-      if (owner.source !== 'authenticated') {
-        log(`[${requestId}] Returning WORKSPACE_NOT_READY for ${owner.source} owner — workspace not yet initialized`);
+      if (owner.source === 'anonymous') {
+        // Bug #14 (audit) follow-up — eagerly initialize the workspace
+        // BEFORE returning WORKSPACE_NOT_READY. Without this, an anonymous
+        // user's first snapshot read returns 202, the client throws, the
+        // LLM never writes, and the workspace stays uninitialized forever
+        // — every subsequent snapshot repeats the same loop. With this,
+        // the gateway initializes the workspace (creating an empty
+        // WorkspaceState in the map + DB) and the NEXT read sees success
+        // with 0 files, breaking the loop.
+        try {
+          // 5s in-memory cooldown to prevent hammering the DB when the
+          // snapshot is polled faster than the init can complete. After
+          // the cooldown expires, the next request retries the init.
+          const initAttemptKey = `__vfsEagerInitAttempted__:${owner.ownerId}`;
+          const lastAttempt = (globalThis as any)[initAttemptKey] || 0;
+          const EAGER_INIT_COOLDOWN_MS = 5000;
+          if (Date.now() - lastAttempt < EAGER_INIT_COOLDOWN_MS) {
+            log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY`);
+            const cooldownResponse = NextResponse.json({
+              success: false,
+              error: 'Workspace not yet initialized. Please retry shortly.',
+              errorCode: 'WORKSPACE_NOT_READY',
+              retryable: true,
+              ownerId: owner.ownerId,
+              source: owner.source,
+            }, { status: 202 });
+            return withAnonSessionCookie(cooldownResponse, owner);
+          }
+          (globalThis as any)[initAttemptKey] = Date.now();
+          // `ensureWorkspace` is public on VirtualFileSystemService since
+          // the Bug #14 follow-up. The typeof guard is preserved as a
+          // defense-in-depth fallback in case the deployed build predates
+          // the change (matches the Bug #36 pattern).
+          if (typeof (virtualFilesystem as any).ensureWorkspace === 'function') {
+            await (virtualFilesystem as any).ensureWorkspace(owner.ownerId);
+            log(`[${requestId}] Eagerly initialized workspace for anonymous owner — breaking WORKSPACE_NOT_READY loop`);
+            // Re-export the now-initialized snapshot and return success
+            // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
+            // file edits on the very next read.
+            const initializedSnapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
+            const initializedFiles = initializedSnapshot.files.filter((file: any) => {
+              const prefix = `${pathFilter}/`;
+              return file.path === pathFilter || file.path.startsWith(prefix);
+            });
+            const initEtag = `"${initializedSnapshot.version}-${initializedSnapshot.updatedAt}"`;
+            snapshotCache.set(cacheKey, {
+              data: {
+                root: initializedSnapshot.root,
+                version: initializedSnapshot.version,
+                updatedAt: initializedSnapshot.updatedAt,
+                path: pathFilter,
+                files: initializedFiles,
+              },
+              timestamp: now,
+              etag: initEtag,
+              version: initializedSnapshot.version,
+            });
+            vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+            const initResponse = NextResponse.json({
+              success: true,
+              data: {
+                root: initializedSnapshot.root,
+                version: initializedSnapshot.version,
+                updatedAt: initializedSnapshot.updatedAt,
+                path: pathFilter,
+                files: initializedFiles,
+                justInitialized: true,
+              },
+              cached: false,
+            }, {
+              headers: {
+                'cache-control': 'private, no-store',
+                'vary': 'Authorization, Cookie',
+                etag: initEtag,
+              },
+            });
+            return withAnonSessionCookie(initResponse, owner);
+          }
+        } catch (initErr: any) {
+          logWarn(`[${requestId}] Eager workspace init failed (falling back to WORKSPACE_NOT_READY): ${initErr?.message}`);
+        }
+        log(`[${requestId}] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized`);
         const notReadyResponse = NextResponse.json({
           success: false,
           error: 'Workspace not yet initialized. Please retry shortly.',

@@ -17,7 +17,7 @@ import {
   type PreviewMode,
   type AppFramework,
   type PreviewRequest
-} from './lib/previews/live-preview-offloading';
+} from '../lib/previews/live-preview-offloading';
 
 function assert(condition: boolean, message: string) {
   if (!condition) throw new Error(`ASSERTION FAILED: ${message}`);

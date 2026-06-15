@@ -1,4 +1,4 @@
-import { extractFileEdits } from './lib/chat/file-edit-parser';
+import { extractFileEdits } from '../lib/chat/file-edit-parser';
 
 const content1 = 'I will create the file.\n\n<file_edit path="test.txt">\nHello World\n</file_edit>\n\nDone.';
 console.log('Test 1 - file_edit with newlines:');

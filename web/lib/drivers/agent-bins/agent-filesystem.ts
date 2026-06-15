@@ -227,18 +227,18 @@ class VfsAgentFs implements AgentFilesystem {
   }
 
   async readFile(path: string): Promise<string> {
-    const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+    const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
     const file = await virtualFilesystem.readFile(this.userId, path);
     return file.content || '';
   }
 
   async writeFile(path: string, content: string): Promise<void> {
-    const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+    const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
     await virtualFilesystem.writeFile(this.userId, path, content);
   }
 
   async listDirectory(path: string): Promise<DirEntry[]> {
-    const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+    const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
     const listing = await virtualFilesystem.listDirectory(this.userId, path);
     const entries = (listing.nodes || []).map(node => ({
       name: node.name,
@@ -253,7 +253,7 @@ class VfsAgentFs implements AgentFilesystem {
 
   async exists(path: string): Promise<boolean> {
     try {
-      const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+      const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
       await virtualFilesystem.readFile(this.userId, path);
       return true;
     } catch {

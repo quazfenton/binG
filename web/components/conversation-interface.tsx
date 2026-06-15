@@ -254,6 +254,30 @@ export default function ConversationInterface() {
   // Logged-in users get "12345$001" format - their data persists in the database
   useEffect(() => {
     let cancelled = false;
+
+    // FIX: When user changes (login/logout), check if the current compositeSessionId
+    // has the correct prefix for the current user. If not, clear it so the
+    // useEffect regenerates it with the new prefix on the next run.
+    // Without this, after login the compositeSessionId stays as `anon_xxx$001`
+    // because the `!compositeSessionId` guard below skips regeneration when
+    // the state is already populated.
+    if (compositeSessionId && typeof window !== 'undefined') {
+      const expectedPrefix = user?.id || getOrCreateAnonymousSessionId();
+      const currentPrefix = compositeSessionId.indexOf('$') !== -1
+        ? compositeSessionId.slice(0, compositeSessionId.indexOf('$'))
+        : compositeSessionId;
+      if (currentPrefix !== expectedPrefix) {
+        logger.info('[ConversationInterface] User changed, clearing stale compositeSessionId:', {
+          old: compositeSessionId,
+          expectedPrefix,
+          newUserId: user?.id,
+        });
+        setCompositeSessionId('');
+        sessionStorage.removeItem('current_composite_session_id');
+        return; // useEffect will re-run with empty compositeSessionId and regenerate below
+      }
+    }
+
     if (!compositeSessionId) {
       // Restore from sessionStorage to keep VFS files visible across page refreshes
       if (typeof window !== 'undefined') {
@@ -844,7 +868,7 @@ export default function ConversationInterface() {
       hasLoadedInitialMessagesRef.current = true;
       // Mark all existing messages as processed to prevent re-processing on page reload
       messages.forEach(m => processedMessageIdsRef.current.add(m.id));
-      logger.info('[ConversationInterface] Initial load - marked', messages.length, 'messages as processed');
+      logger.info('[ConversationInterface] Initial load marked messages as processed', { count: messages.length });
       return;
     }
 
@@ -1589,7 +1613,7 @@ export default function ConversationInterface() {
           readErrorMsg = null; // Clear error for 404 - it's expected for new files
         } else if (readResponse.status === 400 || readResponse.status === 429) {
           // Invalid path or rate limited - skip this file to prevent retry loop
-          logger.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
+          logger.warn('[applyDiffsToFilesystem] Skipping path due to server rejection', { path: resolvedPath, status: readResponse.status });
           // Mark as permanently rejected for 429 (rate limit) or 400 (invalid path)
           rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
           failed[entry.path] = failed[entry.path] || [];
@@ -1633,7 +1657,8 @@ export default function ConversationInterface() {
       const nextContent = patchResult.content;
 
       if (patchResult.strategy !== 'unified') {
-        logger.debug('[applyDiffsToFilesystem] Used strategy:', patchResult.strategy, {
+        logger.debug('[applyDiffsToFilesystem] Used strategy', {
+          strategy: patchResult.strategy,
           path: resolvedPath,
           confidence: patchResult.confidence,
           attempts: patchResult.attempts,

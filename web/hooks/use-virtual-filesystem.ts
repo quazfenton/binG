@@ -51,6 +51,12 @@ export interface SyncStatus {
 interface ApiResponse<T> {
   success: boolean;
   error?: string;
+  /** Bug #14 (audit) follow-up — structured error code (e.g. 'WORKSPACE_NOT_READY')
+   *  so the client can branch on retryable failures instead of throwing. */
+  errorCode?: string;
+  /** Bug #14 (audit) follow-up — server signals whether the client should retry
+   *  on this error (e.g. WORKSPACE_NOT_READY during eager-init). */
+  retryable?: boolean;
   data: T;
 }
 
@@ -774,14 +780,18 @@ export function useVirtualFilesystem(
     log(`request: ${method} ${url}`);
 
     const fetchStartTime = Date.now();
-    const response = await fetch(url, {
+    // Bug #14 (audit) follow-up — extract the fetch init into a named
+    // variable so the WORKSPACE_NOT_READY retry loop below can re-issue
+    // the same request with the same body/headers/credentials.
+    const fetchInit: RequestInit = {
       ...rest,
       headers: {
         ...buildApiHeaders({ json: includeJsonContentType }),
         ...(rest.headers || {}),
       },
       credentials: 'include',
-    });
+    };
+    const response = await fetch(url, fetchInit);
 
     // Sync session ID with server to prevent fragmentation
     syncAnonymousSessionId(response);
@@ -800,6 +810,35 @@ export function useVirtualFilesystem(
     }
 
     if (!response.ok || !payload?.success) {
+      // Bug #14 (audit) follow-up — WORKSPACE_NOT_READY means the gateway
+      // is mid-initialization (it returns 202 + this error code for the
+      // anonymous-user first-read case where the workspace hasn't been
+      // created yet). Retry up to 3 times with 200ms backoff so the user
+      // doesn't see a thrown error in the browser console — the gateway
+      // eagerly initializes on the first call, so the second call
+      // should succeed with success:true.
+      if (payload?.errorCode === 'WORKSPACE_NOT_READY' && payload?.retryable) {
+        const MAX_INIT_RETRIES = 3;
+        const RETRY_BACKOFF_MS = 200;
+        for (let attempt = 1; attempt <= MAX_INIT_RETRIES; attempt++) {
+          await new Promise(r => setTimeout(r, RETRY_BACKOFF_MS * attempt));
+          // Re-issue the same request with the same URL + init. The
+          // gateway's eager-init should have created the workspace by
+          // now, so this retry should return success:true with the
+          // initialized (empty) snapshot.
+          const retryResp = await fetch(url, fetchInit);
+          const retryPayload = await retryResp.json().catch(() => null);
+          // Check payload?.success (not retryResp.ok) because the
+          // gateway returns 202 for the still-not-ready case, and
+          // fetch's `ok` is false for 202. The success signal is in
+          // the payload, not the HTTP status.
+          if (retryPayload?.success) {
+            return retryPayload.data;
+          }
+        }
+        // All retries exhausted — fall through to the normal error path
+        // so the user still gets a clear message.
+      }
       const message = payload?.error || `Request failed (${response.status})`;
       logError(`request: failed - ${message}`);
       throw new Error(message);

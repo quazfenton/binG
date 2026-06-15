@@ -24,7 +24,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import { tool } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
+import { emitFileEvent, emitBatchFileEvents, FILE_EVENT_SOURCES } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
 import { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject } from '../utils/json-tolerant';
 import { resolveToScopedPath } from '../virtual-filesystem/path-normalizer';
@@ -33,6 +33,29 @@ import { onDependencyFileChanged } from '../sandbox/workspace-image-builder';
 import { syncFileChangeToSandbox } from '../virtual-filesystem/sandbox-file-sync-bridge';
 import { workspaceReplayService } from '../workspace/workspace-replay-service';
 import { workspaceSessionGraph } from '../workspace/workspace-session-graph';
+
+// Import the context plumbing from the leaf module for internal use
+// (the tool implementations below call getToolContext() / setToolContext()
+// / toolContextStore.getStore() throughout). The leaf breaks the
+// vfs-mcp-tools <-> file-events cycle — see tool-context-store.ts for
+// the full rationale.
+import {
+  toolContextStore,
+  setToolContext,
+  runWithToolContext,
+  getToolContext,
+} from './tool-context-store';
+
+// Re-export the same symbols (plus the ToolContext type) so existing
+// callers (`import { toolContextStore } from '@/lib/mcp/vfs-mcp-tools'`)
+// keep working unchanged.
+export {
+  toolContextStore,
+  setToolContext,
+  runWithToolContext,
+  getToolContext,
+} from './tool-context-store';
+export type { ToolContext } from './tool-context-store';
 
 // Re-export for backwards compatibility (other modules may import from here)
 export { tolerantJsonParse, sanitizeJsonString, findBalancedJsonObject };
@@ -457,45 +480,15 @@ export function parseBatchWriteFiles(files: unknown): Array<{ path: string; cont
 
 /**
  * Tool execution context - user ID and scope path extracted from request
+ *
+ * The `ToolContext` interface, `toolContextStore`, `setToolContext`,
+ * `runWithToolContext`, and `getToolContext` all live in
+ * `./tool-context-store` (a leaf module) to break the circular import
+ * with `lib/virtual-filesystem/file-events.ts`. They are re-exported
+ * from this file for backward compatibility — existing callers
+ * (`import { toolContextStore } from '@/lib/mcp/vfs-mcp-tools'`) keep
+ * working unchanged.
  */
-export interface ToolContext {
-  userId: string;
-  sessionId?: string;
-  scopePath: string;  // VFS scope path relative to workspace root (e.g., "workspace/sessions/001")
-}
-
-// Request-scoped context storage using AsyncLocalStorage.
-// This is SAFE for concurrent requests — each async execution chain gets
-// its own isolated context, preventing cross-user data leaks.
-export const toolContextStore = new AsyncLocalStorage<ToolContext>();
-
-/**
- * Set the tool execution context for the current async scope.
- * Unlike the old global mutable approach, this is request-scoped and
- * cannot be corrupted by concurrent requests.
- */
-export function setToolContext(context: ToolContext): void {
-  toolContextStore.enterWith(context);
-}
-
-/**
- * Get the current tool execution context.
- * Returns the request-scoped context or a safe fallback.
- * FALLBACK: Uses "workspace" as the default scope if none is set.
- */
-function getToolContext(): ToolContext {
-  const ctx = toolContextStore.getStore();
-  if (ctx) return ctx;
-  // Safe fallback — should only happen if tools are called outside
-  // of a toolContextStore.run() wrapper (which indicates a caller bug).
-  // Use mode-aware default session (desktop: 'workspace', web: 'workspace/sessions/000')
-  // BUG: If you see this in production, the tool caller did not wrap in toolContextStore.run()
-  console.warn('[VFS-MCP-TOOLS] WARNING: No tool context set — toolContextStore.run() was not called by the caller. Files may be written to wrong workspace (anon:public).');
-  return {
-    userId: 'default',
-    sessionId: undefined,      scopePath: getVfsScopeBasePath(),
-  };
-}
 
 /**
  * Resolve a file path relative to the session scope.
@@ -700,7 +693,7 @@ export const writeFileTool = (tool as any)({
     path: scopedPath,
     type: existed ? 'update' : 'create',
     content,
-    source: 'mcp-tool',
+    source: FILE_EVENT_SOURCES.MCP_TOOL,
   });
 
   // Sync file change to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
@@ -961,7 +954,7 @@ export const applyDiffTool = (tool as any)({
       type: 'update',
       content: newContent,
       previousContent: currentFile.content,
-      source: 'mcp-tool-diff-sar',
+      source: FILE_EVENT_SOURCES.MCP_TOOL_DIFF_SAR,
       metadata: { diff, appliedCount, failedSearches },
     });
 
@@ -1056,7 +1049,7 @@ export const applyDiffTool = (tool as any)({
     type: 'update',
     content: newContent,
     previousContent: currentFile.content,
-    source: 'mcp-tool-diff',
+    source: FILE_EVENT_SOURCES.MCP_TOOL_DIFF,
     metadata: { diff },
   });
 
@@ -1794,7 +1787,7 @@ export const batchWriteTool = (tool as any)({
     userId: context.userId,
     sessionId: context.sessionId,
     files: filesWithContent,
-    source: 'mcp-tool',
+    source: FILE_EVENT_SOURCES.MCP_TOOL,
   });
 
   // Sync batch file changes to attached sandbox (Phase 9: VFS→Sandbox auto-sync)
@@ -1908,7 +1901,7 @@ export const deleteFileTool = (tool as any)({
     sessionId: context.sessionId,
     path: scopedPath,
     type: 'delete',
-    source: 'mcp-tool',
+    source: FILE_EVENT_SOURCES.MCP_TOOL,
   });
 
   // Record file delete for workspace replay (Gap #8)

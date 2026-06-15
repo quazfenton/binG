@@ -85,7 +85,7 @@ export interface ProcessMemoryMonitorConfig {
 }
 
 const DEFAULT_CONFIG: ProcessMemoryMonitorConfig = {
-  softThrottleMb: 1228,       // 1.2 GB
+  softThrottleMb: 1024,       // 1 GB (Bug #43: down from 1228 — observed steady-state 890 MB)
   criticalMb: 1843,           // 1.8 GB
   tickIntervalMs: 10_000,     // 10 s
   snapshotCooldownMs: 300_000, // 5 min
@@ -425,9 +425,9 @@ export class ProcessMemoryMonitor extends EventEmitter {
   }
 
   /**
-   * Best-effort V8 heap snapshot capture. The `v8` module is built into
-   * Node and is always available, but the write can fail (disk full,
-   * permission denied). We log and swallow — never throw.
+   * Best-effort V8 heap snapshot capture at the critical threshold.
+   * Delegates to the shared writeHeapSnapshot helper in heap-snapshot.ts
+   * so the v8/fs/path dance is not duplicated with session-manager.
    *
    * Cooldown: at most one snapshot per `snapshotCooldownMs` to avoid
    * filling the disk during a sustained critical state.
@@ -437,31 +437,22 @@ export class ProcessMemoryMonitor extends EventEmitter {
     if (now - this.lastSnapshotAtMs < this.config.snapshotCooldownMs) {
       return;
     }
-    try {
-      // Dynamic import keeps this module lightweight for callers that only
-      // want shouldThrottle() (e.g. middleware) and avoids a hard dep.
-      const v8 = await import('node:v8');
-      const fs = await import('node:fs');
-      const path = await import('node:path');
-
-      // Ensure directory exists.
-      try {
-        fs.mkdirSync(this.config.snapshotDir, { recursive: true });
-      } catch { /* best effort */ }
-
-      const filename = `heap-${alert.timestamp}-${alert.heapUsedMb}MB.heapsnapshot`;
-      const fullPath = path.resolve(this.config.snapshotDir, filename);
-      v8.writeHeapSnapshot(fullPath);
-      this.lastSnapshotPath = fullPath;
+    // Dynamic import keeps this module lightweight for callers that only
+    // want shouldThrottle() (e.g. middleware) and avoids a hard dep on
+    // the snapshot helper for the common no-snapshot path.
+    const { writeHeapSnapshot } = await import('./heap-snapshot');
+    const result = writeHeapSnapshot('critical', this.config.snapshotDir, alert.heapUsedMb);
+    if (result) {
+      this.lastSnapshotPath = result.path;
       this.lastSnapshotAtMs = now;
-      alert.snapshotPath = fullPath;
+      alert.snapshotPath = result.path;
       logger.warn('[ProcessMemoryMonitor] heap snapshot captured', {
-        path: fullPath,
-        heapUsedMb: alert.heapUsedMb,
+        path: result.path,
+        heapUsedMb: result.heapUsedMb,
       });
-    } catch (err: any) {
+    } else {
       logger.error('[ProcessMemoryMonitor] heap snapshot failed', {
-        error: err?.message,
+        error: 'writeHeapSnapshot returned null',
         heapUsedMb: alert.heapUsedMb,
       });
     }

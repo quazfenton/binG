@@ -16,6 +16,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid';
+import { writeHeapSnapshot } from '../management/heap-snapshot';
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { predictivePrewarmer } from '@/lib/sandbox/predictive-prewarmer';
@@ -170,11 +171,18 @@ export class SessionManager {
   private readonly maxSessionsPerUser: number;
   private readonly defaultTimeout: number;
   private readonly enableQuotaEnforcement: boolean;
+  /** Retained-heap alert threshold in MB.  When the heartbeat observes
+   *  memoryMb at or above this value on the rising edge, it emits a single
+   *  warn-level log so slow leaks surface in run.log.  Default 1200 MB
+   *  (1.2 GB) matches the soft-throttle limit from Bug #8.  Override via
+   *  OPENCODE_HEAP_ALERT_MB. */
+  private readonly heapAlertMb: number;
 
   constructor() {
     this.maxSessionsPerUser = parseInt(process.env.OPENCODE_MAX_SESSIONS_PER_USER || '10', 10);
     this.defaultTimeout = parseInt(process.env.OPENCODE_DEFAULT_TIMEOUT || '300000', 10);
     this.enableQuotaEnforcement = process.env.OPENCODE_ENFORCE_QUOTA === 'true';
+    this.heapAlertMb = parseInt(process.env.OPENCODE_HEAP_ALERT_MB || '1200', 10);
 
     this.startCleanupTimer();
     this.startHeartbeat();
@@ -325,6 +333,12 @@ export class SessionManager {
             graph.status = 'cancelled';
             logger.debug(`Execution graph ${session.executionGraphId} marked as cancelled`);
           }
+          // CRITICAL (leak fix — BUGS_AUDIT.md #43): remove the graph from
+          // the engine's in-memory Map so it doesn't grow monotonically.
+          // Idempotent.  If deleteGraph throws after mark-cancelled succeeded,
+          // the graph stays in the map but is at least marked cancelled —
+          // a partial improvement over the previous state.
+          executionGraphEngine.deleteGraph(session.executionGraphId);
         } catch (error: any) {
           logger.warn(`Failed to cleanup execution graph:`, error.message);
         }
@@ -869,17 +883,52 @@ export class SessionManager {
   }
 
   private heartbeatTimer?: NodeJS.Timeout;
+  /** Latching flag: true once a heap-above-threshold crossing has fired
+   *  its warn log, reset only after heap drops below the recovery
+   *  threshold.  Ensures one warn per leak episode rather than one per
+   *  minute, and that warn/recovery don't thrash at the boundary. */
+  private heapAlertActive: boolean = false;
+  /** Timestamp (ms epoch) of the last shutdown heap snapshot.  Used to
+   *  enforce MEMORY_SNAPSHOT_COOLDOWN_MS so rapid HMR restarts in dev
+   *  don't fill ./heap-snapshots/ in minutes.  Shares the
+   *  MEMORY_SNAPSHOT_COOLDOWN_MS env var with process-memory-monitor, but
+   *  tracks its own timestamp — a critical-threshold snapshot and a
+   *  shutdown snapshot 1 min apart will both fire (each is rate-limited
+   *  by its own last-snapshot timestamp). */
+  private lastShutdownSnapshotAtMs: number = 0;
 
   /** Emit a periodic heartbeat log so we can distinguish normal idle from
    *  a premature/crash shutdown.  The run.log no longer showing heartbeats
-   *  means the process exited (normally or abnormally) around the last one. */
+   *  means the process exited (normally or abnormally) around the last one.
+   *  On the rising edge of memoryMb crossing heapAlertMb, a single warn log
+   *  is emitted so slow heap leaks surface above the per-minute info noise.
+   *  A 10% hysteresis gap on the recovery edge prevents warn-spam when
+   *  memoryMb oscillates right at the threshold. */
   private startHeartbeat(): void {
+    const heapRecoveryMb = Math.floor(this.heapAlertMb * 0.9);
     this.heartbeatTimer = setInterval(() => {
+      const stats = this.getStats();
+      const memoryMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+
+      if (!this.heapAlertActive && memoryMb >= this.heapAlertMb) {
+        logger.warn('Heap usage crossed alert threshold', {
+          memoryMb,
+          thresholdMb: this.heapAlertMb,
+          recoveryMb: heapRecoveryMb,
+          uptimeMs: Date.now() - globalThis.processStartTime,
+          sessions: stats.totalSessions,
+          activeSessions: stats.activeSessions,
+        });
+        this.heapAlertActive = true;
+      } else if (this.heapAlertActive && memoryMb < heapRecoveryMb) {
+        this.heapAlertActive = false;
+      }
+
       logger.info('Heartbeat — process alive', {
         uptimeMs: Date.now() - globalThis.processStartTime,
-        sessions: this.sessions.size,
-        activeSessions: this.sessionsById.size,
-        memoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        sessions: stats.totalSessions,
+        activeSessions: stats.activeSessions,
+        memoryMb,
       });
     }, 60_000);
     this.heartbeatTimer.unref();
@@ -1248,6 +1297,69 @@ export class SessionManager {
     }
 
     logger.info('Session manager shutdown complete');
+
+    // Postmortem: capture a V8 heap snapshot AFTER all known cleanup so the
+    // file shows what is still retained (i.e. the actual leak surface).
+    // Best-effort — never throws, never blocks shutdown.  Skipped in tests
+    // and when OPENCODE_SHUTDOWN_HEAP_SNAPSHOT=false to keep CI/dev quiet.
+    this.captureShutdownHeapSnapshot();
+  }
+
+  /**
+   * Write a heap snapshot to MEMORY_SNAPSHOT_DIR (default ./heap-snapshots,
+   * matching process-memory-monitor).  Runs synchronously so the file is
+   * fully written before the process exits.  Disabled in test envs and
+   * rate-limited by MEMORY_SNAPSHOT_COOLDOWN_MS (default 5 min) so rapid
+   * HMR restarts in dev don't fill the disk.
+   */
+  private captureShutdownHeapSnapshot(): void {
+    if (process.env.NODE_ENV === 'test') return;
+    if (process.env.OPENCODE_SHUTDOWN_HEAP_SNAPSHOT === 'false') return;
+
+    const now = Date.now();
+
+    // Cooldown: reuse the monitor's MEMORY_SNAPSHOT_COOLDOWN_MS env var so
+    // a shutdown snapshot taken minutes after a critical-threshold snapshot
+    // is suppressed.  Default 5 min matches process-memory-monitor.  NaN
+    // guard prevents a bad env var (e.g. 'abc') from silently disabling
+    // the cooldown (NaN comparisons are always false).
+    const parsedCooldown = parseInt(process.env.MEMORY_SNAPSHOT_COOLDOWN_MS || '300000', 10);
+    const cooldownMs = Number.isFinite(parsedCooldown) ? parsedCooldown : 300_000;
+    if (now - this.lastShutdownSnapshotAtMs < cooldownMs) {
+      return;
+    }
+
+    let memoryMb: number | null = null;
+    try {
+      // process.memoryUsage() can theoretically throw in low-memory or
+      // sandboxed runtimes (Node 18+); a throw here would skip both the
+      // snapshot and the success log.  Fall back to null so the snapshot
+      // still fires — the file is still useful even without a label, and
+      // the filename uses 'unknown' so an operator can tell at a glance
+      // that the memory API failed (vs. a real 0-MB heap).
+      memoryMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+    } catch (err: any) {
+      logger.warn('Shutdown heap snapshot: process.memoryUsage() threw — proceeding with unknown MB', {
+        error: err?.message,
+      });
+    }
+
+    // Delegate to shared helper (see BUGS_AUDIT #43, lib/management/heap-snapshot.ts).
+    // The helper handles mkdir + filename + v8.writeHeapSnapshot and never throws.
+    const dir = process.env.MEMORY_SNAPSHOT_DIR || './heap-snapshots';
+    const result = writeHeapSnapshot('shutdown', dir, memoryMb);
+    if (result) {
+      this.lastShutdownSnapshotAtMs = now;
+      logger.info('Shutdown heap snapshot captured', {
+        path: result.path,
+        heapUsedMb: result.heapUsedMb,
+        sessions: this.sessions.size,
+      });
+    } else {
+      // Helper swallowed the failure — surface it at warn so operators see
+      // it in run.log.  Never throw out of shutdown.
+      logger.warn('Shutdown heap snapshot failed', { error: 'writeHeapSnapshot returned null' });
+    }
   }
 }
 

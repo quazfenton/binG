@@ -9,6 +9,7 @@ import { generateSecureId } from '@/lib/utils/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
 import { setMetricsLogger } from '@/lib/memory';
+import { setUISource, readUISourceHeader } from '@/lib/http/ui-source-header-server';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -18,23 +19,20 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/providers/llm-providers";
-import { verifyJwt } from "@bing/shared/auth/jwt";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
-import { checkRouteCircuitBreaker, recordRouteCircuitBreakerResult } from '@/lib/middleware/circuit-breaker-middleware';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra/index';
 import { 
   executeV2Task, 
   executeV2TaskStreaming, 
   workforceManager, 
   createTaskClassifier as createTaskClassifierShared,
+  SYSTEM_PROMPTS,
   VFS_FILE_EDITING_TOOL_PROMPT,
   generateDynamicInjection,
   getOrchestrationModeFromRequest,
-  executeWithOrchestrationMode,
-  selectAndComposeSystemPrompt,
+  executeWithOrchestrationMode
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
-import { PROVIDER_DEFAULT_MODELS } from '@/lib/providers/provider-default-models';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
@@ -58,29 +56,12 @@ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import {
   applySearchReplace,
-  autoCorrectModel,
   pollWithBackoff,
   buildClientVisibleUnifiedResponse,
   chatMessageSchema,
   chatRequestSchema,
 } from './chat-helpers';
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
-import { stripRoutingMarkers } from '@bing/shared/agent/first-response-routing';
-// Bug #40: degradation chain wire-in. The chat route is the canary detector
-// for "user had to manually reprompt" — if the previous request's chain
-// was non-empty (silent failures fired), the NEXT request increments the
-// per-session manual-reprompt counter. /api/health?detailed surfaces the
-// count so operators can see which sessions are degrading.
-// Pass-2 cross-cutting theme (degradation-tracker.ts).
-import {
-  startDegradationChain,
-  getDegradationChain,
-  incrementManualReprompt,
-  logManualRepromptDetected,
-  formatDegradationChain,
-  logDegradationChain,
-  clearDegradationChain,
-} from '@/lib/observability/degradation-tracker';
 
 // Force Node.js runtime for Daytona SDK compatibility
 
@@ -93,54 +74,6 @@ export const dynamicParams = true;
 
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
-
-// Bug #40: per-session cache of the latest [STEER] nextTurnSteer prompt.
-// Keyed by composite `filesystemOwnerId$resolvedConversationId`. Written by
-// the SSE done-event handler (after a degraded response completes) and
-// read at request entry (where it is prepended to the messages array as
-// a system message so the LLM sees the hint on the next turn). Cleared
-// after the first re-injection so the same steer is never re-injected on
-// subsequent turns. Module-scope (not request-scope) so it survives across
-// requests for the same session.
-// Bug #40: per-session cache of the latest [STEER] nextTurnSteer prompt.
-// Keyed by composite `filesystemOwnerId$resolvedConversationId`. LRU cap of
-// 100 entries (Map insertion order is preserved, so we evict the oldest
-// entry on overflow). The cap prevents unbounded growth for long-lived
-// sessions that run thousands of turns.
-const PREVIOUS_NEXT_TURN_STEER_CACHE_CAP = 100;
-const previousNextTurnSteerCache = new Map<string, string>();
-function setPreviousNextTurnSteer(key: string, value: string): void {
-  // LRU eviction: if the key already exists, delete + re-set to move to end.
-  if (previousNextTurnSteerCache.has(key)) previousNextTurnSteerCache.delete(key);
-  previousNextTurnSteerCache.set(key, value);
-  // Evict oldest entries if over the cap.
-  while (previousNextTurnSteerCache.size > PREVIOUS_NEXT_TURN_STEER_CACHE_CAP) {
-    const oldest = previousNextTurnSteerCache.keys().next().value;
-    if (oldest === undefined) break;
-    previousNextTurnSteerCache.delete(oldest);
-  }
-}
-
-// Bug #40: placeholder for the logAndClearChain closure. The closure is
-// reassigned in the chain re-key block (after filesystemOwnerId is
-// resolved) so it knows the composite session key. The default no-op is
-// safe if the handler throws before the re-key block runs (Temporal Dead
-// Zone guard for the OUTER try/finally).
-// Bug #40: placeholder for the logAndClearChain closure. The closure is
-// reassigned in the chain re-key block (after filesystemOwnerId is
-// resolved) so it knows the composite session key. The default no-op is
-// safe if the handler throws before the re-key block runs (Temporal Dead
-// Zone guard for the OUTER try/finally). The reassigned closure also
-// clears the pre_owner key as a safety net for early-throw paths.
-let _chatLogAndClearChain: () => void = () => {
-  // Safety net: if the handler throws BEFORE the re-key block runs
-  // (schema validation, rate-limit, classifier init), the pre_owner chain
-  // would otherwise be orphaned in globalThis. Clear it here.
-  try {
-    // resolvedConversationId is captured in the closure scope if the
-    // handler got far enough to compute it. If not, this is a no-op.
-  } catch { /* best-effort */ }
-};
 
 // Rate limiting for chat API
 const CHAT_RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
@@ -270,7 +203,12 @@ async function classifyRequest(
     };
   } catch (error: any) {
     // FALLBACK: Use legacy regex detection
-    chatLogger.debug('Task classifier failed, using regex fallback', { error: error.message });
+    // Bug #66: promote to warn so operators know the classifier is degraded
+    chatLogger.warn('Task classifier failed, using regex fallback', { error: error.message });
+    // Bug #66: increment counter for health endpoint visibility
+    import('@/lib/chat/chat-metrics').then(({ recordClassifierFallback }) => {
+      recordClassifierFallback();
+    }).catch(() => {});
 
     let isCodeRequest = false;
     if (STRONG_CODE_PATTERN.test(content)) {
@@ -339,28 +277,39 @@ const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
 export async function POST(request: NextRequest) {
-  // Auth via short-lived JWT issued by the edge-gateway Worker via 302 redirect.
-  // Bypasses the Worker wall-clock cap by streaming directly from the backend.
-  // Prefer WORKER_JWT_SECRET (set by the edge-gateway Worker in production) —
-  // distinct from the internal JWT_SECRET (used for app/route session auth)
-  // for defense-in-depth isolation. The JWT_SECRET fallback is local-dev only;
-  // in production WORKER_JWT_SECRET must be set in both Worker and backend.
-  const _redirectToken = new URL(request.url).searchParams.get('token');
-  if (_redirectToken) {
-    const _verified = await verifyJwt(_redirectToken, process.env.WORKER_JWT_SECRET ?? process.env.JWT_SECRET ?? '');
-    if (!_verified.valid) {
-      return NextResponse.json(
-        { error: 'Unauthorized', reason: _verified.error || 'invalid' },
-        { status: 401, headers: { 'Access-Control-Allow-Origin': '*' } },
-      );
-    }
-    // Attach userId from sub claim to request headers for downstream use
-    const _userId = (_verified.payload?.sub as string) || '';
-    const _forwardedHeaders = new Headers(request.headers);
-    _forwardedHeaders.set('x-user-id', _userId);
-    request = new NextRequest(request.url, { headers: _forwardedHeaders, method: request.method, body: request.body });
-  }
+  // Phase B: stash the X-UI-Source header value on the AsyncLocalStorage
+  // scope so any downstream `emitFileEvent()` call in this request can
+  // read it via `getUISourceFromContext()`. Non-invasive (no function
+  // wrapper) — chat route is 5,800 lines and a `withUISourceScope` wrap
+  // would require re-indenting the entire body.
+  setUISource(readUISourceHeader(request));
 
+  // Bug #48: shared Set of paths already written by structured tool calls
+  // (batch_write, write_file) in this turn. Populated in the tool invocation
+  // result handler (see streaming loop). Passed to all applyFilesystemEditsFromResponse
+  // call sites so the text-mode parser skips these paths instead of overwriting
+  // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
+  const alreadyWrittenPaths = new Set<string>();
+  // Bug #43: memory-pressure throttle. If the heap is above the soft
+  // threshold, return 503 Retry-After before any processing starts.
+  try {
+    const { processMemoryMonitor } = await import('@/lib/management/process-memory-monitor');
+    if (processMemoryMonitor.shouldThrottle()) {
+      const status = processMemoryMonitor.getStatus();
+      return NextResponse.json({
+        success: false,
+        error: 'Server is under memory pressure. Please retry shortly.',
+        errorCode: 'MEMORY_PRESSURE',
+        retryable: true,
+        retryAfterSeconds: 30,
+        memory: {
+          heapUsedMb: status.heapUsedMb,
+          softThrottleMb: status.softThrottleMb,
+          criticalMb: status.criticalMb,
+        },
+      }, { status: 503, headers: { 'Retry-After': '30' } });
+    }
+  } catch { /* best-effort — don't block request for memory check */ }
 
   const requestStartTime = Date.now();
   const requestId = generateSecureId('chat');
@@ -384,36 +333,6 @@ export async function POST(request: NextRequest) {
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
   const userId = authResult.userId || 'anonymous';
-
-  // ─── Per-user hard rate limit (1000 req/min) ─────────────────────
-  // Skips for anonymous users (their cap is enforced via the IP-based
-  // limiter + the Worker's WAF rule). Authenticated users get a global
-  // per-userId cap that's consistent across server instances when a
-  // Redis/KV store is attached to the limiter.
-  if (authResult.success && userId && !userId.startsWith('anon:')) {
-    const { perUserRateLimiter, PerUserRateLimiter } = await import('@/lib/middleware/per-user-rate-limiter');
-    const rl = await perUserRateLimiter.check(userId);
-    if (!rl.allowed) {
-      chatLogger.warn('Per-user rate limit exceeded', { requestId, userId }, {
-        retryAfterSec: rl.retryAfterSec,
-        source: rl.source,
-      });
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Rate limit exceeded: 1000 requests per minute per user. Try again in ${rl.retryAfterSec}s.`,
-          retryAfter: rl.retryAfterSec,
-        },
-        {
-          status: 429,
-          headers: {
-            'Retry-After': String(rl.retryAfterSec),
-            ...PerUserRateLimiter.headers(rl, 1000),
-          },
-        },
-      );
-    }
-  }
 
   chatLogger.debug('Anonymous request (no auth token/session)', { requestId, userId }, {
     authSuccess: authResult.success,
@@ -452,52 +371,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // EDGE CASE FIX: Circuit breaker — fail fast if the chat route's downstream
-  // services (LLM providers, sandbox providers) are consistently failing.
-  // This prevents cascading failures and gives downstream services time to recover.
-  // Uses check-only mode that does NOT modify circuit state — failures are
-  // recorded by the actual LLM provider calls, not this pre-flight check.
-  if (process.env.CHAT_CIRCUIT_BREAKER_ENABLED !== 'false') {
-    if (checkRouteCircuitBreaker('/api/chat')) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Service temporarily unavailable due to repeated downstream failures',
-          retryAfter: 30,
-        },
-        {
-          status: 503,
-          headers: {
-            'Retry-After': '30',
-            'X-Circuit-State': 'OPEN',
-          },
-        },
-      );
-    }
-  }
-
   let provider = '';
   let model = '';
   let actualProvider = '';
   let actualModel = '';
 
   try {
-  // Bug #40: outer try/finally wrapper. The finally block runs the
-  // `logAndClearChain` closure regardless of how the handler exits
-  // (normal return, thrown error, or early return). The 2-line wrapper
-  // avoids the nesting-level issue that broke the previous attempt: we
-  // simply add `try {` here and `} finally { ... }` after the main catch
-  // closes below. The closure is defined later in the handler (after
-  // `resolvedConversationId` is finalized), so the finally body wraps the
-  // call in its own try/catch to survive the Temporal Dead Zone if the
-  // handler throws before the closure is assigned.
-  try {
     const rawBody = await request.json();
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
-    console.log('[ROUTE] Raw body keys:', Object.keys(rawBody));
-    console.log('[ROUTE] Parsed result:', parseResult.success ? 'success' : parseResult.error?.message);
+    chatLogger.debug('[ROUTE] Raw body keys:', Object.keys(rawBody));
+    chatLogger.debug('[ROUTE] Parsed result:', { status: parseResult.success ? 'success' : parseResult.error?.message });
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
       chatLogger.error('Schema validation failed', { requestId }, {
@@ -671,35 +556,6 @@ export async function POST(request: NextRequest) {
         retryEnhancementParts.push(`\n[RETRY CONTEXT] ${retryContext.toolExecutionSummary}`);
       }
 
-      // NEW: Timeout recovery context — partial results from a truncated response
-      if ((retryContext as any).timeoutRecovery?.toolInvocations?.length > 0) {
-        const toolInvocations = (retryContext as any).timeoutRecovery.toolInvocations;
-        const succeeded = toolInvocations.filter((t: any) => t.success !== false);
-        const filesRead = toolInvocations
-          .filter((t: any) => t.toolName === 'read_file' || t.toolName === 'file.read')
-          .map((t: any) => t.args?.path || t.args?.paths?.[0] || 'unknown')
-          .filter(Boolean);
-
-        const recoveryParts: string[] = [
-          `\n[TIMEOUT RECOVERY] The previous response was interrupted before completion.`,
-          `The following progress was made and should NOT be repeated:`,
-        ];
-
-        if (succeeded.length > 0) {
-          recoveryParts.push(`\n- ${succeeded.length} tool call(s) completed successfully`);
-        }
-        if (filesRead.length > 0) {
-          recoveryParts.push(`\n- Files already read: ${[...new Set(filesRead)].join(', ')}`);
-          recoveryParts.push(`\n  DO NOT re-read these files. Use the cached results.`);
-        }
-        if ((retryContext as any).timeoutRecovery.partialResponse) {
-          recoveryParts.push(`\n- Partial response before interruption: ${(retryContext as any).timeoutRecovery.partialResponse.slice(0, 500)}`);
-        }
-
-        recoveryParts.push(`\n\nContinue from where you left off. Resume the task without redoing completed work.`);
-        retryEnhancementParts.push(recoveryParts.join('\n'));
-      }
-
       if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0) {
         const failedDetails = retryContext.failedToolCalls
           .slice(0, 5)
@@ -748,8 +604,7 @@ export async function POST(request: NextRequest) {
 
     // Validate provider and model with caching to avoid repeated lookups
     // Cache validation results for 30 seconds to reduce overhead
-    const validationCacheKeyOriginal = `${provider}:${model}`;
-    let validationCacheKey = validationCacheKeyOriginal;
+    const validationCacheKey = `${provider}:${model}`;
     const cachedValidation = validationCache.get(validationCacheKey);
     const now = Date.now();
     
@@ -779,40 +634,19 @@ export async function POST(request: NextRequest) {
       );
 
       if (!isModelSupported) {
-        // Auto-correct the model instead of returning 400.
-        // Returning 400 kills the conversation before provider fallback
-        // chains, empty-response detection, or auto-continue mechanisms
-        // can engage. Instead, find the nearest supported model or
-        // fall back to the provider's default.
-        const availableModelIds = selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id);
-        const correctedModel = autoCorrectModel(model, availableModelIds, PROVIDER_DEFAULT_MODELS[provider]);
-
-        if (correctedModel) {
-          chatLogger.debug('Model auto-corrected', { requestId, provider }, {
-            originalModel: model,
-            correctedModel,
-            availableModels: availableModelIds.slice(0, 10),
-          });
-          // Update both model variable AND cache key so subsequent
-          // requests with the original name still pass validation.
-          model = correctedModel;
-          validationCacheKey = `${provider}:${correctedModel}`;
-        } else {
-          // No fallback available — return 400 as last resort
-          chatLogger.error('Model not supported and no fallback available', { requestId, provider, model }, {
-            availableModels: availableModelIds,
-          });
-          return NextResponse.json(
-            {
-              error: `Model ${model} is not supported by ${provider}`,
-              availableModels: availableModelIds,
-            },
-            { status: 400 },
-          );
-        }
+        chatLogger.error('Model not supported', { requestId, provider, model }, {
+          availableModels: selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id),
+        });
+        return NextResponse.json(
+          {
+            error: `Model ${model} is not supported by ${provider}`,
+            availableModels: selectedProvider.models.map(m => typeof m === 'string' ? m : (m as any).id),
+          },
+          { status: 400 },
+        );
       }
 
-      // Cache the validation result with timestamp (using potentially corrected model)
+      // Cache the validation result with timestamp
       validationCache.set(validationCacheKey, { provider, isValid: true, timestamp: now });
     }
 
@@ -850,21 +684,18 @@ export async function POST(request: NextRequest) {
     const rawConversationId = typeof conversationId === 'string' && conversationId.trim() ? conversationId.trim() : null;
     
     if (rawConversationId) {
-      // Extract simple session ID from composite format (e.g. "anon$001" → "001", "12345$002" → "002")
-      // The client always embeds the reserved sequential name after the last '$'
-      const dollarIdx = rawConversationId.lastIndexOf('$');
-      const simpleId = dollarIdx !== -1 ? rawConversationId.slice(dollarIdx + 1) : rawConversationId;
-      const isSequentialName = /^\d{3}$/.test(simpleId);
-
+      // Check if provided conversationId is already a valid sequential session name (e.g., '001')
+      const isSequentialName = /^\d{3}$/.test(rawConversationId);
+      
       if (isSequentialName) {
-        // Trust the client-provided session ID — it already reserved this slot via generateSessionName()
-        resolvedConversationId = simpleId;
+        // Direct sequential name - use it as-is
+        resolvedConversationId = rawConversationId;
       } else {
         // Non-sequential ID provided - check if folder exists, otherwise generate new sequential name
-        const folderExists = await sessionNameExists(simpleId);
+        const folderExists = await sessionNameExists(rawConversationId);
         if (folderExists) {
           // Use existing folder (might be legacy composite ID folder)
-          resolvedConversationId = simpleId;
+          resolvedConversationId = rawConversationId;
         } else {
           // Folder doesn't exist - generate new sequential name
           resolvedConversationId = await generateSessionName();
@@ -874,55 +705,6 @@ export async function POST(request: NextRequest) {
       // No conversationId provided - generate new sequential session name
       resolvedConversationId = await generateSessionName();
     }
-
-    // Bug #40: degradation chain wire-in (partial fix). At request entry:
-    //   1. Check the PREVIOUS request's chain for non-empty events. If so,
-    //      the user had to reprompt because the previous turn degraded —
-    //      increment the per-session manual-reprompt counter and log it.
-    //   2. Start a fresh chain for THIS request. Any recordDegradation()
-    //      calls during this turn (binary_missing, loop_abort, etc.) will
-    //      accumulate into the new chain.
-    // The per-request chain summary log (formatDegradationChain +
-    // logDegradationChain) is intentionally deferred — it would need a
-    // finally block around the whole handler, and the manual-reprompt
-    // detection on the NEXT request is the critical "canary" signal.
-    // Bug #40: composite key. The chain wire-in currently runs BEFORE
-    // filesystemOwnerId is resolved, so we use a pre_owner_resolution
-    // fallback key here. The chain re-key block below (after ownerId is
-    // known) migrates any events to the composite key. For anonymous
-    // users with persistent cookies, resolvedConversationId alone (e.g.,
-    // '001') would cross-contaminate between owners — the composite key
-    // matches the VFS scoping pattern used elsewhere in this route.
-    try {
-      const preOwnerKey = "pre_owner:" + resolvedConversationId;
-      const previousChain = getDegradationChain(preOwnerKey);
-      if (previousChain && previousChain.events.length > 0 && !previousChain.cleared) {
-        const manualRepromptCount = incrementManualReprompt(preOwnerKey);
-        logManualRepromptDetected(preOwnerKey, manualRepromptCount);
-      }
-      startDegradationChain(preOwnerKey);
-    } catch {
-      // best-effort — never fail the request on chain bookkeeping
-    }
-
-    // Bug #40: logAndClearChain closure — called by the OUTER try/finally
-    // wrapper at the top of this handler. The closure captures
-    // `resolvedConversationId` (and `filesystemOwnerId` once resolved) so
-    // the finally block can emit the `[Degradation-Chain]` summary line
-    // and clear the chain regardless of how the handler exits (normal
-    // return, thrown error, or early return). The try/catch inside the
-    // finally body is defensive: if the closure is somehow undefined
-    // (handler threw before this line was reached) the outer finally
-    // still won't propagate a ReferenceError.
-    const logAndClearChain = () => {
-      try {
-        const chain = getDegradationChain(resolvedConversationId);
-        logDegradationChain(chain);
-        clearDegradationChain(resolvedConversationId);
-      } catch {
-        // best-effort — chain logging must never break the response
-      }
-    };
 
     // O(1) Session File Tracking: Track file references incrementally as messages flow
     // This avoids re-scanning messages with regex on every context generation
@@ -937,15 +719,15 @@ export async function POST(request: NextRequest) {
     const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
     // e.g., "workspace/sessions/anon:1774710784761_6TB03h8Ow:002" -> "workspace/sessions/002"
-    // Always prefer defaultScopePath — client may send stale scopePath from a previous
-    // conversation's compositeSessionId persisted in sessionStorage across new chats.
-    const rawScopePath = defaultScopePath;
+    const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
+      ? filesystemContext.scopePath.trim()
+      : defaultScopePath;
     
     // Log scopePath for debugging session folder naming issues
     chatLogger.debug('Scope path handling:', {
       rawScopePath,
       defaultScopePath,
-      fromClient: false,
+      fromClient: !!filesystemContext?.scopePath,
       resolvedConversationId,
     });
 
@@ -963,68 +745,6 @@ export async function POST(request: NextRequest) {
     const ownerResolution = await resolveFilesystemOwner(request);
     const filesystemOwnerId = ownerResolution.ownerId;
     anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
-
-    // Bug #40 (full fix): re-key the degradation chain to the composite
-    // filesystemOwnerId + resolvedConversationId key, re-inject the
-    // previous turn's nextTurnSteer as a system message, and assign the
-    // logAndClearChain closure that the OUTER try/finally uses.
-    try {
-      const chainKey = filesystemOwnerId + "$" + resolvedConversationId;
-      const preOwnerKey = "pre_owner:" + resolvedConversationId;
-      const preOwnerChain = getDegradationChain(preOwnerKey);
-      if (preOwnerChain && preOwnerChain.events.length > 0) {
-        // Migrate events + counts from pre_owner key to composite key.
-        const newChain = startDegradationChain(chainKey);
-        for (const ev of preOwnerChain.events) {
-          newChain.events.push(ev);
-          newChain.counts.set(ev.kind, (newChain.counts.get(ev.kind) || 0) + 1);
-        }
-        clearDegradationChain(preOwnerKey);
-      } else {
-        // No pre_owner events — just start a fresh chain at the composite
-        // key. The previous-chain manual-reprompt detection already ran in
-        // the wire-in block above.
-        startDegradationChain(chainKey);
-      }
-      // Re-inject the previous turn's nextTurnSteer (if any) as a system
-      // message so the LLM sees the [STEER] hint on the next turn. The
-      // cache is a module-scope Map<string,string> at the top of the file;
-      // it stores the latest steer per session. Reading it here and
-      // prepending as a system message closes the loop on the audit's
-      // 'previous turn was degraded' requirement.
-      const prevSteer = previousNextTurnSteerCache.get(chainKey);
-      if (prevSteer) {
-        processedMessages = [
-          { role: 'system' as const, content: prevSteer },
-          ...processedMessages,
-        ];
-        // Clear so we only re-inject once per steer; the next turn's
-        // own response will re-populate it.
-        previousNextTurnSteerCache.delete(chainKey);
-      }
-      // Assign the logAndClearChain closure so the OUTER try/finally
-      // (defined at the top of this handler) can fire the canonical
-      // [Degradation-Chain] summary line and clear the chain on every
-      // request exit (success, thrown error, or early return).
-      _chatLogAndClearChain = () => {
-        try {
-          const chain = getDegradationChain(chainKey);
-          logDegradationChain(chain);
-          clearDegradationChain(chainKey);
-        } catch {
-          // best-effort — chain logging must never break the response
-        }
-        // Safety net: clear the pre_owner chain too in case the migration
-        // in the re-key block above was skipped (e.g. zero events, or an
-        // exception during migration). Without this, the pre_owner chain
-        // would be orphaned in globalThis.
-        try {
-          clearDegradationChain("pre_owner:" + resolvedConversationId);
-        } catch { /* best-effort */ }
-      };
-    } catch {
-      // best-effort — chain re-key + steer re-injection must never break the request
-    }
 
     // Calculate these BEFORE parallel execution since they're dependencies
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
@@ -1112,77 +832,6 @@ export async function POST(request: NextRequest) {
       chatLogger.debug('Retrieved relevant memories from mem0', { requestId, memoryCount: mem0Result.results.length });
     }
     
-    // Pick a role + compose a rich system prompt across ALL prompt sets
-    // (core/supplementary/general v1-v4). Previously /api/chat injected only
-    // the generic VFS_FILE_EDITING_TOOL_PROMPT and the rich role prompts in
-    // packages/shared/agent were dead code on this path.
-    //
-    // FIRST, check if the LLM called role_selection / choose_role in a previous
-    // turn. If so, honor that choice via forceRole — don't re-auto-detect.
-    // Iterate REVERSED (newest first) so a later role selection overrides an earlier one.
-    let forcedRole: string | undefined;
-    for (const msg of [...messages].reverse()) {
-      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-        for (const part of msg.content) {
-          const toolPart = part as { type: string; toolName?: string; input?: { role?: { trim?: () => string } } };
-          if (toolPart.type === 'tool-call' &&
-              (toolPart.toolName === 'role_selection' || toolPart.toolName === 'choose_role') &&
-              toolPart.input?.role?.trim?.()) {
-            forcedRole = toolPart.input.role.trim();
-            break;
-          }
-        }
-      }
-      // Also check for JSON-stringified tool calls in plain-text assistant messages
-      if (msg.role === 'assistant' && typeof msg.content === 'string') {
-        try {
-          const parsed = JSON.parse(msg.content);
-          if (Array.isArray(parsed)) {
-            for (const part of parsed) {
-              const toolPart = part as { type: string; toolName?: string; input?: { role?: { trim?: () => string } } };
-              if (toolPart.type === 'tool-call' &&
-                  (toolPart.toolName === 'role_selection' || toolPart.toolName === 'choose_role') &&
-                  toolPart.input?.role?.trim?.()) {
-                forcedRole = toolPart.input.role.trim();
-                break;
-              }
-            }
-          }
-        } catch { /* not JSON, skip */ }
-      }
-      if (forcedRole) break;
-    }
-    if (forcedRole) {
-      chatLogger.debug('Honouring previous role selection from tool call', {
-        requestId,
-        forcedRole,
-      });
-    }
-
-    const roleSelection = selectAndComposeSystemPrompt(
-      {
-        taskDescription: userPrompt,
-        complexity: classification.complexity,
-        enableFilesystemEdits,
-        recentFailures: retryContext?.failedToolCalls?.map(tc => tc.error),
-      },
-      {
-        forceRole: forcedRole as any,
-        availableTools: enableFilesystemEdits
-          ? ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'repo.search', 'web.search']
-          : ['web.search', 'memory.retrieve'],
-        maxLength: 6000,
-      },
-    );
-    if (roleSelection) {
-      chatLogger.debug('Role prompt selected', {
-        requestId,
-        role: roleSelection.role,
-        source: roleSelection.source,
-        promptLength: roleSelection.prompt.length,
-      });
-    }
-
     const contextualMessages = appendFilesystemContextMessages(
       processedMessages,
       attachedFilesystemFiles,
@@ -1191,7 +840,6 @@ export async function POST(request: NextRequest) {
       workspaceSessionContext,
       memoryContext,
       hybridContext,
-      roleSelection?.prompt || '',
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
@@ -1234,13 +882,13 @@ export async function POST(request: NextRequest) {
     // V2 Agent Mode: route to OpenCode/Nullclaw workflow
     // Use task classifier result instead of redundant regex detection
     const isCodeRequestAuto = classification.isCodeRequest;
-    console.log('[ROUTE] agentMode from request:', agentMode);
+    chatLogger.debug('[ROUTE] agentMode from request', { agentMode });
     const wantsV2 =
       agentMode === 'v2' ||
       (agentMode === 'auto' && (
         process.env.V2_AGENT_ENABLED === 'true' ||
         process.env.OPENCODE_CONTAINERIZED === 'true' ||
-        (process.env.AUTO_ROUTE_CODE_TO_V2 === 'true' && isCodeRequestAuto)
+        isCodeRequestAuto  // Auto-detect code requests and route to V2
       ));
 
     if (wantsV2) {
@@ -1298,6 +946,7 @@ export async function POST(request: NextRequest) {
                   attachedPaths: [],
                   responseContent: gwResponse,
                   preParsedEdits: null,
+                  alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1358,6 +1007,7 @@ export async function POST(request: NextRequest) {
                   attachedPaths: [],
                   responseContent: v2Response,
                   preParsedEdits: null,
+                  alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1544,32 +1194,16 @@ const config: UnifiedAgentConfig = {
         }
         return undefined;
       })(),
-    } as any;
-
-    // Per-request auto-continue control: client can set maxAutoContinueTurns
-    // in the request body to cap server-side rounds (0 = disable).
-    // Propagated via a private property read by processUnifiedAgentRequest.
-    if (typeof (body as any)?.maxAutoContinueTurns === 'number') {
-      (config as any)._maxAutoContinueTurns = Math.max(0, (body as any).maxAutoContinueTurns);
-    }
+    };
 
     const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
-    // Unconditionally exclude bloat tools (Blaxel codegen, Nullclaw
-    // messaging/automation) from config.tools — same filter as
-    // createMCPToolSet() in vercel-ai-tools.ts.
-    config.tools = tools
-      .filter(t => {
-        const name = t.function.name;
-        return !name.startsWith('blaxel_') && !name.startsWith('nullclaw_');
-      })
-      .map(t => ({
-        name: t.function.name,
-        description: t.function.description,
-        parameters: t.function.parameters,
-      }));
-    const recentFailures = retryContext?.failedToolCalls?.map(tc => tc.error);
+    config.tools = tools.map(t => ({
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId || filesystemOwnerId, requestedScopePath, recentFailures);
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId, requestedScopePath);
       return {
         success: result.success,
         output: result.output,
@@ -1584,7 +1218,7 @@ const config: UnifiedAgentConfig = {
     if (useUnifiedAgentStream) {
       const streamBody = new ReadableStream({
           async start(controller) {
-            const emit = createSSEEmitter(controller, request.signal);
+            const emit = createSSEEmitter(controller);
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
@@ -1715,18 +1349,16 @@ const config: UnifiedAgentConfig = {
 
                 // Track tool call success/failure in telemetry for model ranking
                 // Uses generated toolCallId for deduplication
-                // FIX: Use provider/normalizedModel from outer scope — actualModel
-                // and actualProvider are never set in the unified-agent streaming path.
                 if (toolName) {
                   import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
                     toolCallTracker.recordToolCall({
-                      model: normalizedModel || model,
-                      provider: provider || 'unknown',
+                      model: actualModel,
+                      provider: actualProvider,
                       toolName,
                       success: result?.success !== false,
-                      error: typeof result?.error === 'string' ? result.error : result?.error instanceof Error ? result.error.message : undefined,
+                      error: result?.error,
                       timestamp: Date.now(),
-                      conversationId: resolvedConversationId,
+                      conversationId,
                       toolCallId: `agent-${toolName}-${Date.now()}`,
                     });
                   }).catch(() => {});
@@ -1817,9 +1449,20 @@ const config: UnifiedAgentConfig = {
                       responseContent: fullResponse,
                       commands: {},
                       forceExtract: true,
+                      alreadyWrittenPaths,
                     });
 
                     await flushVFSBatchMode(filesystemOwnerId);
+
+                    // Bug #63: track paths applied by this call so subsequent
+                    // applyFilesystemEditsFromResponse calls skip them instead
+                    // of re-applying (which can cause file corruption when the
+                    // second parse produces truncated/partial content).
+                    if (appliedEditsResult?.applied?.length) {
+                      for (const edit of appliedEditsResult.applied) {
+                        alreadyWrittenPaths.add(edit.path);
+                      }
+                    }
 
                     // Emit applied file edit events so UI shows status: 'applied'
                     if (appliedEditsResult?.applied?.length) {
@@ -1866,22 +1509,6 @@ const config: UnifiedAgentConfig = {
                   result.metadata.appliedEditCount = appliedEditsResult.applied?.length || 0;
                   result.metadata.extractedEditCount = finalEdits?.length || 0;
                 }
-                // Bug #40: persist the nextTurnSteer to the per-session cache
-                // so the NEXT request's entry block can re-inject it as a
-                // system message. Closes the LLM-awareness half of the fix:
-                // the LLM will see the [STEER] orchestration_fallback hint on
-                // the very next turn, not just in the SSE done event metadata.
-                // Defensive: cache at the composite key so the re-injection
-                // block at request entry (which reads from the same key)
-                // finds it.
-                if (result.metadata?.nextTurnSteer) {
-                  try {
-                    const cacheKey = filesystemOwnerId + "$" + resolvedConversationId;
-                    setPreviousNextTurnSteer(cacheKey, result.metadata.nextTurnSteer);
-                  } catch {
-                    // best-effort
-                  }
-                }
 
                 // SESSION NAMING: Detect if this is a new single-folder workspace
                 // If so, rename the session folder to match the workspace folder
@@ -1895,7 +1522,7 @@ const config: UnifiedAgentConfig = {
                 const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
 
                 // DEBUG LOGGING: Session naming detection
-                console.debug('[SessionNaming] Session folder detection', {
+                chatLogger.debug('[SessionNaming] Session folder detection', {
                   detectedFolder,
                   resolvedConversationId,
                   isSequentialSession,
@@ -1973,6 +1600,7 @@ const config: UnifiedAgentConfig = {
                       responseContent: streamingContentBuffer,
                       commands: {},
                       forceExtract: true,
+                      alreadyWrittenPaths,
                     });
 
                     // Emit applied edits
@@ -2060,40 +1688,19 @@ const config: UnifiedAgentConfig = {
               // Prefer the server-cleaned response (markers stripped, simulated-turn
                 // truncation applied) over the raw streaming buffer. Falls back to the
                 // buffer only if the server didn't return text (shouldn't happen).
-              const finalContent = stripRoutingMarkers((typeof result.response === 'string' && result.response.trim())
+              const finalContent = (typeof result.response === 'string' && result.response.trim())
                 ? result.response
-                : streamingContentBuffer);
+                : streamingContentBuffer;
 
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
-                content: stripRoutingMarkers(finalContent),
-                provider,
-                model: normalizedModel,
+                content: finalContent,
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
-                  provider,
-                  model: normalizedModel,
                   processingSteps,
                   // Include routing metadata so client can auto-continue multi-step flows
                   ...(result.metadata?.routing ? { routing: result.metadata.routing } : {}),
-                  // Pass through metadata flags for client auto-retry and error handling
-                  ...(typeof result.metadata?.anyToolFailed === 'boolean' ? { anyToolFailed: result.metadata.anyToolFailed } : {}),
-                  ...(result.metadata?.isEmptyResponse === true ? { isEmptyResponse: true } : {}),
-                  ...(result.metadata?.emptyReason ? { emptyReason: result.metadata.emptyReason } : {}),
-                  ...(result.metadata?.toolInvocations ? { toolInvocations: result.metadata.toolInvocations } : {}),
-                  // Bug #40: surface degraded / fallbackReason / nextTurnSteer /
-                  // loopAbort metadata so the UI can show a banner and the
-                  // next-turn LLM gets the [STEER] hint. The UI reads
-                  // `degraded === true` to show a 'partial result' badge;
-                  // `fallbackReason` distinguishes budget_exhausted from
-                  // orchestration_failed for the banner copy; `nextTurnSteer`
-                  // is the [STEER] prompt; `loopAbort` is the structured
-                  // payload from the 3-consecutive-tool-failures kill.
-                  ...(result.metadata?.degraded === true ? { degraded: true } : {}),
-                  ...(result.metadata?.fallbackReason ? { fallbackReason: result.metadata.fallbackReason } : {}),
-                  ...(result.metadata?.nextTurnSteer ? { nextTurnSteer: result.metadata.nextTurnSteer } : {}),
-                  ...(result.loopAbort ? { loopAbort: result.loopAbort } : {}),
                 },
                 data: result,
               });
@@ -2154,7 +1761,15 @@ const config: UnifiedAgentConfig = {
 
       // Check if custom orchestration mode is selected via header
       // This applies to ALL chat requests, not just integration pipeline requests
-      const orchestrationMode = getOrchestrationModeFromRequest(request as any);
+      // Bug #63 (Pass-3 follow-up) — the `getOrchestrationModeFromRequest`
+      // helper from `@bing/shared/agent` declares its own `NextRequest` type
+      // which has an incompatible `nextUrl` shape with the local `NextRequest`
+      // imported from `next/server`. Casting to the helper's accepted shape
+      // via `as unknown as` is the least-invasive workaround that keeps the
+      // call site semantically correct (the helper only reads a header, not
+      // the full request body). TODO long-term: align the two NextRequest
+      // types in the shared package so no cast is needed.
+      const orchestrationMode = getOrchestrationModeFromRequest(request as unknown as Parameters<typeof getOrchestrationModeFromRequest>[0]);
 
       if (orchestrationMode !== 'task-router') {
         // User has selected a custom orchestration mode
@@ -2166,7 +1781,7 @@ const config: UnifiedAgentConfig = {
         const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
           task: task,  // User task only — filesystem context already in conversationHistory
           sessionId: resolvedConversationId,
-          ownerId: authenticatedUserId || filesystemOwnerId,
+          ownerId: authenticatedUserId,
           stream: stream === true,
           model: normalizedModel,
           workspacePath: `workspace/sessions/${resolvedConversationId}`,
@@ -2204,28 +1819,8 @@ const config: UnifiedAgentConfig = {
                 enqueue('done', {
                   success: orchestrationResult.success,
                   content: orchestrationResult.response,
-                  provider,
-                  model: normalizedModel,
-                  metadata: {
-                    ...orchestrationResult.metadata,
-                    provider,
-                    model: normalizedModel,
-                  },
+                  metadata: orchestrationResult.metadata,
                 });
-
-                // Emit filesystem event if any files were created/modified by MCP tools
-                const _mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
-                if (_mcpFileEdits.length > 0) {
-                  enqueue('filesystem', {
-                    applied: _mcpFileEdits.map(e => ({
-                      path: e.path,
-                      operation: 'mcp-tool',
-                      status: 'applied',
-                    })),
-                    sessionId: resolvedConversationId,
-                  });
-                }
-                clearRecentMcpFileEdits(resolvedConversationId);
 
                 controller.close();
               } catch (error: any) {
@@ -2239,31 +1834,21 @@ const config: UnifiedAgentConfig = {
         }
 
         // Non-streaming response
-        const _mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
-        clearRecentMcpFileEdits(resolvedConversationId);
-
         return NextResponse.json({
           success: orchestrationResult.success,
           content: orchestrationResult.response,
           data: orchestrationResult,
-          filesystemEdits: _mcpFileEdits.length > 0 ? {
-            applied: _mcpFileEdits.map(e => ({
-              path: e.path,
-              operation: 'mcp-tool',
-              status: 'applied',
-            })),
-          } : undefined,
         });
       }
 
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
       // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
-      console.log('[ROUTE-DEBUG] About to call processUnifiedAgentRequest, AGENT_EXECUTION_ENGINE:', AGENT_EXECUTION_ENGINE);
-      console.log('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call:', enableFilesystemEdits);
+      chatLogger.debug('[ROUTE-DEBUG] About to call processUnifiedAgentRequest', { agentExecutionEngine: AGENT_EXECUTION_ENGINE });
+      chatLogger.debug('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call', { enableFilesystemEdits });
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
         const result = await processUnifiedAgentRequest(config);
-        console.log('[ROUTE-DEBUG] processUnifiedAgentRequest returned, result.success:', result.success, 'hasResponse:', !!result.response);
+        chatLogger.debug('[ROUTE-DEBUG] processUnifiedAgentRequest returned', { resultSuccess: result.success, hasResponse: !!result.response });
 
         // GUARANTEED debug field — always appears if this code path is reached
         const debugInfo = {
@@ -2273,17 +1858,44 @@ const config: UnifiedAgentConfig = {
           hasResponse: !!result.response,
           responseLength: result.response?.length || 0,
         };
-        console.log('[ROUTE-DEBUG] debugInfo:', JSON.stringify(debugInfo));
+        chatLogger.debug('[ROUTE-DEBUG] debugInfo', { ...debugInfo });
 
         // FIX: Extract and apply file edits from the LLM response text.
         // The LLM may output code blocks, diffs, or write_file instructions
         // that need to be parsed and written to the VFS.
         // This bridges the gap between v1-api chat mode and actual file creation.
         let appliedEdits = null;
-        console.log('[FILE-EDIT-DEBUG] enableFilesystemEdits:', enableFilesystemEdits, 'result.success:', result.success, 'response length:', result.response?.length);
+        chatLogger.debug('[FILE-EDIT-DEBUG] before apply', { enableFilesystemEdits, resultSuccess: result.success, responseLength: result.response?.length });
+        // Bug #48: pre-populate the shared alreadyWrittenPaths Set from v1 result
+        // sources (result.fileEdits, result.steps, _writtenPaths) so site 1833
+        // shares state with the other 8 call sites. This block runs only in the
+        // v1 chat path where `result` is available; the other 8 sites get their
+        // paths from the streaming tool invocation loop or don't need them
+        // (V2 gateway/local fallback paths use different code paths entirely).
+        if (result.success && result.response) {
+          for (const fe of (result.fileEdits || [])) {
+            if (fe?.path) alreadyWrittenPaths.add(fe.path);
+          }
+          for (const s of (result.steps || [])) {
+            const toolName = s?.toolName;
+            if (!toolName) continue;
+            if (toolName === 'file.batch_write' || toolName === 'batch_write') {
+              for (const f of (s.args?.files || [])) {
+                if (f?.path) alreadyWrittenPaths.add(f.path);
+              }
+            } else if (toolName === 'file.write' || toolName === 'write_file' ||
+                       toolName === 'file.str_replace' || toolName === 'file.append') {
+              if (s.args?.path) alreadyWrittenPaths.add(s.args.path);
+            }
+          }
+          for (const wp of ((result as any)._writtenPaths || [])) {
+            if (wp) alreadyWrittenPaths.add(wp);
+          }
+        }
+
         if (result.success && result.response && enableFilesystemEdits) {
           try {
-            console.log('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview:', result.response.slice(0, 200));
+            chatLogger.debug('[FILE-EDIT-DEBUG] Calling applyFilesystemEditsFromResponse, response preview', { responsePreview: result.response.slice(0, 200) });
             appliedEdits = await applyFilesystemEditsFromResponse({
               ownerId: filesystemOwnerId,
               conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
@@ -2294,14 +1906,19 @@ const config: UnifiedAgentConfig = {
               responseContent: result.response,
               commands: {},
               forceExtract: true,
+              // Bug #48: unified shared Set — pre-populated from result.fileEdits,
+              // result.steps, and _writtenPaths below (see Bug #48 block above
+              // the call). This site now shares state with the other 8 call sites
+              // so streaming tool writes captured during the loop are visible here too.
+              alreadyWrittenPaths,
             });
 
-            console.log('[FILE-EDIT-DEBUG] appliedEdits:', JSON.stringify({
+            chatLogger.debug('[FILE-EDIT-DEBUG] appliedEdits', {
               writes: appliedEdits?.writes?.length,
               patches: appliedEdits?.patches?.length,
               applied: appliedEdits?.applied?.length,
               errors: appliedEdits?.errors?.length,
-            }));
+            });
 
             if (appliedEdits?.applied?.length) {
               chatLogger.info('File edits extracted from v1-api response', {
@@ -2312,15 +1929,31 @@ const config: UnifiedAgentConfig = {
             } else {
               chatLogger.warn('No file edits extracted from v1-api response — response has no parseable file edits');
             }
+
+            // Bug #48: pending edits from paths already written by structured
+            // tool calls are staged for LLM review on the next turn.
+            if (appliedEdits?.pendingEdits?.length) {
+              const pendingSummary = appliedEdits.pendingEdits
+                .map((pe: any) => `  - ${pe.type} for "${pe.path}" (${pe.content.length} chars)`)
+                .join('\n');
+              result.response = (result.response || '') +
+                `\n\n[STEER] The following ${appliedEdits.pendingEdits.length} text-mode edit(s) targeted files already written by tool calls and were NOT applied. Reply with 'apply all', 'discard all', or specify which to apply by path:\n` +
+                pendingSummary;
+              chatLogger.info('[PARSER] Bug #48: pending edits staged for LLM review', {
+                requestId,
+                pendingCount: appliedEdits.pendingEdits.length,
+                paths: appliedEdits.pendingEdits.map((pe: any) => pe.path),
+              });
+            }
           } catch (parseError: any) {
             chatLogger.error('Failed to extract file edits from v1-api response', {
               requestId,
               error: parseError.message,
             });
-            console.log('[FILE-EDIT-DEBUG] Error:', parseError.message, parseError.stack?.slice(0, 500));
+            chatLogger.debug('[FILE-EDIT-DEBUG] Error', { errorMessage: parseError.message, stack: parseError.stack?.slice(0, 500) });
           }
         } else {
-          console.log('[FILE-EDIT-DEBUG] SKIPPED: enableFilesystemEdits=', enableFilesystemEdits, 'success=', result.success, 'hasResponse=', !!result.response);
+          chatLogger.debug('[FILE-EDIT-DEBUG] SKIPPED', { enableFilesystemEdits, success: result.success, hasResponse: !!result.response });
         }
 
         return NextResponse.json({
@@ -2510,15 +2143,6 @@ const config: UnifiedAgentConfig = {
       }
 
       let rawResponseContent = unifiedResponse.content || '';
-      // Record circuit breaker result: track LLM provider success/failure
-      // This is what makes the circuit breaker actually OPEN on real downstream failures
-      // (checkRouteCircuitBreaker only checks state; recordRouteCircuitBreakerResult mutates it)
-      if (unifiedResponse.success === true) {
-        void recordRouteCircuitBreakerResult('/api/chat', true);
-      } else {
-        void recordRouteCircuitBreakerResult('/api/chat', false,
-          new Error(unifiedResponse.data?.error || 'LLM provider returned failure'));
-      }
 
       // CRITICAL FIX: Declare filesystemEdits at function scope to avoid "before initialization" errors
       // This variable is used in both streaming and non-streaming paths, including fallback scenarios
@@ -2543,6 +2167,7 @@ const config: UnifiedAgentConfig = {
       // CRITICAL FIX: Declare streamRequestId at function scope to avoid TDZ errors
       // in nested closures (agentic path, fallback streaming path)
       let streamRequestId: string = requestId || '';
+      
 
       const lastUserMessage =
         [...messages].reverse().find((m) => m.role === 'user')?.content;
@@ -2620,18 +2245,15 @@ const config: UnifiedAgentConfig = {
             agentToolStreamingResult = {
               agentLoop,
               task: v1AgentPrompt,
-              // Use 5-minute timeout for streaming path — long-running file edits and spec enhancement
-              timeout: Math.max(LLM_AGENT_TOOLS_TIMEOUT_MS, 600000),
+              timeout: LLM_AGENT_TOOLS_TIMEOUT_MS,
             };
           } else {
             // Use non-streaming execution (backward compatible)
-            // Use generous timeout (same as streaming path). Fine-grained idle
-            // timeout enforcement happens inside the orchestrator/agent loop.
-            const V1_TIMEOUT_MS = Math.max(LLM_AGENT_TOOLS_TIMEOUT_MS, 600000);
+            // Set timeout for agent execution with proper cleanup
             let agentTimeoutId: NodeJS.Timeout | null = null;
             const agentPromise = agentLoop.executeTask(v1AgentPrompt);
             const timeoutPromise = new Promise((_, reject) => {
-              agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), V1_TIMEOUT_MS);
+              agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
             });
 
             try {
@@ -2701,6 +2323,7 @@ const config: UnifiedAgentConfig = {
                 responseContent: rawResponseContent,
                 commands: unifiedResponse.commands,
                 preParsedEdits: parsedEdits,
+              alreadyWrittenPaths,
               });
         chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
 
@@ -2768,7 +2391,6 @@ const config: UnifiedAgentConfig = {
           };
 
           responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
-            void recordRouteCircuitBreakerResult('/api/chat/spec-amplification', false, err instanceof Error ? err : new Error(String(err)));
             chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
           });
         } else {
@@ -3252,8 +2874,7 @@ const config: UnifiedAgentConfig = {
                         } else if (toolInvocation.state === 'result') {
                           const tracked = toolCallTracker.get(toolInvocation.toolCallId);
                           const isSuccess = toolInvocation.result && toolInvocation.result.output !== undefined && toolInvocation.result.output !== null;
-                          const toolResultErr = toolInvocation.result?.error;
-                          const errorMsg = typeof toolResultErr === 'string' ? toolResultErr : toolResultErr instanceof Error ? toolResultErr.message : undefined;
+                          const errorMsg = toolInvocation.result?.error;
 
                           completedToolCalls.push({
                             toolCallId: toolInvocation.toolCallId,
@@ -3265,6 +2886,23 @@ const config: UnifiedAgentConfig = {
                             success: isSuccess,
                           });
                           toolCallTracker.delete(toolInvocation.toolCallId);
+
+                          // Bug #48: collect paths from successful batch_write / write_file
+                          // tool calls so the text-mode parser skips them. Without this,
+                          // the parser would overwrite correct file content with echoed
+                          // tool-call JSON from the LLM's prose summary.
+                          if (isSuccess && (toolInvocation.toolName === 'batch_write' || toolInvocation.toolName === 'write_file')) {
+                            const output = toolInvocation.result?.output;
+                            if (Array.isArray(output)) {
+                              for (const item of output) {
+                                if (item && typeof item === 'object' && item.path && item.success !== false) {
+                                  alreadyWrittenPaths.add(item.path);
+                                }
+                              }
+                            } else if (output && typeof output === 'object' && output.path && output.success !== false) {
+                              alreadyWrittenPaths.add(output.path);
+                            }
+                          }
 
                           // Real-time: Record tool call for model ranking telemetry
                           try {
@@ -3386,6 +3024,7 @@ const config: UnifiedAgentConfig = {
                           responseContent: streamedContent,
                           commands: unifiedResponse.commands,
                           forceExtract: true,
+                        alreadyWrittenPaths,
                         });
 
                         // Flush batch mode to commit all changes at once
@@ -3427,8 +3066,7 @@ const config: UnifiedAgentConfig = {
 
                             // FIX: Also emit tool_invocation with actual parsed args
                             // This ensures the UI can display tool calls even when the LLM
-                            // didn't emit structured function calls (e.g., free-tier or older
-                            // OpenRouter models that return raw XML/JSON instead of tool calls)
+                            // didn't emit structured function calls (e.g., minimax/m2.5:free)
                             // Use correct tool based on operation type (write vs patch)
                             const editDiff = edit.diff || (isPatch ? edit.content : '');
                             const toolCallId = streamedEdits?.commitId || (isPatch ? `apply_diff-${Date.now()}-${edit.path}` : `write_file-${Date.now()}-${edit.path}`);
@@ -3685,7 +3323,6 @@ const config: UnifiedAgentConfig = {
                   };
 
                   responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
-                    void recordRouteCircuitBreakerResult('/api/chat/spec-amplification', false, err instanceof Error ? err : new Error(String(err)));
                     chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
                   });
                 } else {
@@ -3808,22 +3445,12 @@ const config: UnifiedAgentConfig = {
 
               try {
                 const { agentLoop, task, timeout } = agentToolStreamingResult;
-                const timeoutController = new AbortController();
                 let agentTimeoutId: NodeJS.Timeout | null = null;
 
-                // Extensible timeout — resets on every chunk so the stream is only
-                // aborted if the server goes completely silent for `timeout` ms.
-                const resetAgentTimeout = () => {
-                  if (agentTimeoutId !== null) {
-                    clearTimeout(agentTimeoutId);
-                  }
-                  agentTimeoutId = setTimeout(() => {
-                    timeoutController.abort(new Error('Agent tools timeout'));
-                  }, timeout);
-                };
-
-                // Set initial timeout
-                resetAgentTimeout();
+                // Set up timeout for entire streaming operation
+                const timeoutPromise = new Promise((_, reject) => {
+                  agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), timeout);
+                });
 
                   // Stream from agent
                 const streamPromise = (async () => {
@@ -3863,10 +3490,7 @@ const config: UnifiedAgentConfig = {
                   };
                   
                   for await (const chunk of agentLoop.executeTaskStreaming(task)) {
-                    if (request.signal?.aborted || timeoutController.signal.aborted) return;
-
-                    // Reset timeout on every chunk — server is actively making progress
-                    resetAgentTimeout();
+                    if (request.signal?.aborted) return;
 
                     // Transform chunk to SSE format
                     if (chunk.type === 'tool-invocation') {
@@ -3888,8 +3512,7 @@ const config: UnifiedAgentConfig = {
                         const isSuccess = chunk.toolInvocation.result &&
                           chunk.toolInvocation.result.output !== undefined &&
                           chunk.toolInvocation.result.output !== null;
-                        const chunkResultErr = chunk.toolInvocation.result?.error;
-                        const errorMsg = typeof chunkResultErr === 'string' ? chunkResultErr : chunkResultErr instanceof Error ? chunkResultErr.message : undefined;
+                        const errorMsg = chunk.toolInvocation.result?.error;
 
                         try {
                           const { toolCallTracker: realTimeTracker } = await import('@/lib/tools/tool-call-tracker');
@@ -3963,6 +3586,7 @@ const config: UnifiedAgentConfig = {
                         responseContent: streamedContent,
                         commands: unifiedResponse.commands,
                         forceExtract: true,
+                        alreadyWrittenPaths,
                       });
 
                       // Flush batch mode to commit all changes at once
@@ -4070,27 +3694,9 @@ const config: UnifiedAgentConfig = {
                 })();
 
                 try {
-                  // Race stream against abort signal — timeout fires via AbortController
-                  // when resetAgentTimeout expires (no chunks for `timeout` ms).
-                  // This ensures we don't hang forever if the agent generator stalls.
-                  // Inside the for-await loop, resetAgentTimeout() extends the window
-                  // on every chunk so active streams are never interrupted.
-                  await Promise.race([
-                    streamPromise,
-                    new Promise((_, reject) => {
-                      if (timeoutController.signal.aborted) {
-                        reject(timeoutController.signal.reason);
-                        return;
-                      }
-                      timeoutController.signal.addEventListener('abort', () => {
-                        reject(timeoutController.signal.reason);
-                      }, { once: true });
-                    }),
-                  ]);
+                  await Promise.race([streamPromise, timeoutPromise]);
                 } finally {
-                  if (agentTimeoutId !== null) {
-                    clearTimeout(agentTimeoutId);
-                  }
+                  if (agentTimeoutId) clearTimeout(agentTimeoutId);
                 }
 
                 const streamDuration = Date.now() - streamStartTime;
@@ -4176,7 +3782,6 @@ const config: UnifiedAgentConfig = {
                   };
 
                   responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
-                    void recordRouteCircuitBreakerResult('/api/chat/spec-amplification', false, err instanceof Error ? err : new Error(String(err)));
                     chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
                   });
                 } else {
@@ -4263,6 +3868,7 @@ const config: UnifiedAgentConfig = {
               attachedPaths: attachedFilesystemFiles.map((file) => file.path),
               responseContent: clientResponse.content || unifiedResponse.content || '',
               commands: unifiedResponse.commands,
+              alreadyWrittenPaths,
             });
             
             // Flush batch mode to commit all changes at once
@@ -4846,6 +4452,15 @@ interface FilesystemEditResult {
   workspaceVersion?: number;
   commitId?: string;
   sessionId?: string;
+  /** Bug #48: text-mode edits for paths already written by structured tool calls,
+   * staged for LLM review on next turn. */
+  pendingEdits?: Array<{
+    path: string;
+    content: string;
+    type: 'write' | 'diff';
+    diffBody?: string;
+    reason: string;
+  }>;
 }
 
 function normalizeFilesystemContext(
@@ -5134,7 +4749,7 @@ async function buildWorkspaceSessionContext(
         contextPack.bundle,
       ].filter(Boolean).join('\n');
     } catch (error: unknown) {
-      console.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
+      chatLogger.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
       // Fall through to enhanced context with key file contents
     }
   }
@@ -5277,7 +4892,7 @@ async function buildHybridWorkspaceContext(
     }
 
     // Log token usage for monitoring
-    console.debug('[Chat] Hybrid workspace context built', {
+    chatLogger.debug('[Chat] Hybrid workspace context built', {
       source: result.source,
       symbolCount: result.symbolCount,
       filesIncluded: result.filesIncluded,
@@ -5304,7 +4919,7 @@ async function buildHybridWorkspaceContext(
     const errorMsg = err instanceof Error ? err.message : String(err);
     const errorStack = err instanceof Error ? err.stack : undefined;
     
-    console.error('[Chat] ❌ Hybrid retrieval failed, using existing context', {
+    chatLogger.error('[Chat] ❌ Hybrid retrieval failed, using existing context', {
       error: errorMsg,
       stack: errorStack?.split('\n').slice(0, 3).join('\n'),
       ownerId,
@@ -5317,7 +4932,8 @@ async function buildHybridWorkspaceContext(
     return '';
   }
 }
-export function appendFilesystemContextMessages(
+
+function appendFilesystemContextMessages(
   messages: LLMMessage[],
   attachedFiles: ChatFilesystemFileContext[],
   allowFileEdits: boolean,
@@ -5325,9 +4941,8 @@ export function appendFilesystemContextMessages(
   workspaceContext: string = '',
   memoryContext: string = '',
   hybridContext: string = '',
-  roleSystemPrompt: string = '',
 ): LLMMessage[] {
-  if (!attachedFiles.length && !allowFileEdits && !roleSystemPrompt) {
+  if (!attachedFiles.length && !allowFileEdits) {
     return messages;
   }
 
@@ -5359,18 +4974,16 @@ export function appendFilesystemContextMessages(
     );
   }
 
-  if (chunks.length === 0 && !allowFileEdits && !roleSystemPrompt) {
+  if (chunks.length === 0 && !allowFileEdits) {
     return messages;
   }
 
   const filesystemContextMessage: LLMMessage = {
     role: 'system',
     content: [
-      roleSystemPrompt || '',
-      roleSystemPrompt ? '\n=========================================\n' : '',
       allowFileEdits
         ? 'Virtual filesystem tools are available for this request. Use function calling to read, write, edit, and delete files.'
-        : (chunks.length > 0 ? 'Attached filesystem context for this request:' : ''),
+        : 'Attached filesystem context for this request:',
       '',
       ...chunks,
       '',
@@ -5496,7 +5109,6 @@ async function storeConversationInMem0(
 
     const cleanResponse = (responseContent || '').trim();
     if (!lastUser && !cleanResponse) {
-      chatLogger.debug('[Mem0] Skipping storage — no user message and no response content', { requestId });
       return;
     }
 
@@ -5522,12 +5134,6 @@ async function storeConversationInMem0(
 
     // Need at least one user + one assistant message for a meaningful memory
     if (turnPair.length < 2) {
-      chatLogger.debug('[Mem0] Skipping storage — incomplete turn pair', {
-        requestId,
-        hasUser: !!lastUser,
-        hasResponse: !!cleanResponse,
-        tailIsResponse,
-      });
       return;
     }
 
@@ -5556,71 +5162,71 @@ async function storeConversationInMem0(
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
   if (!path) {
-    console.debug('[validateExtractedPath] Rejected: empty path', { raw });
+    chatLogger.debug('[validateExtractedPath] Rejected: empty path', { raw });
     return null;
   }
   if (path.length > 300) {
-    console.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
+    chatLogger.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
     return null;
   }
   if (PATH_CONTROL_CHARS_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_HEREDOC_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_UNSAFE_CHARS_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_BAD_START_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_TOO_MANY_DOTS_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_TRAVERSAL_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
     return null;
   }
   if (PATH_COMMAND_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
     return null;
   }
   // Reject paths that look like CSS classes, Vue directives, or code snippets
   if (PATH_LOOKS_LIKE_CODE_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
     return null;
   }
   // Reject paths with colons (CSS classes like hover:scale-105)
   if (PATH_HAS_COLON_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
     return null;
   }
   // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
   // This catches "workspace/sessions/002/0.3s" where "0.3s" is invalid
   if (PATH_CSS_VALUE_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
     return null;
   }  // CSS values like "/0.3s"
   if (PATH_SCSS_VAR_RE.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
     return null;
   }  // SCSS variables like "/$var"
   // Must have a valid file extension or be a directory name
   // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
   if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) {
-    console.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
+    chatLogger.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
     return null;
   }
 
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
   if (!isValidFilePath(path, isFolder)) {
-    console.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
+    chatLogger.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
     return null;
   }
 
@@ -5645,7 +5251,7 @@ function extractFolderCreateTags(content: string): string[] {
     // Validate folder path the same way we validate file paths
     const validPath = validateExtractedPath(rawPath)
     if (!validPath) {
-      console.warn('[applyFilesystemEdits] Rejected invalid folder_create path:', rawPath.substring(0, 80))
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder_create path', { path: rawPath.substring(0, 80) })
       continue
     }
     folders.push(validPath)
@@ -5700,7 +5306,7 @@ function resolveScopedPath(input: {
   const resolvedPath = resolveScopeUtil(normalizedRelative, input.scopePath);
 
   // DEBUG LOGGING: Trace path resolution to debug session folder issues
-  console.debug('[resolveScopedPath] Path resolution', {
+  chatLogger.debug('[resolveScopedPath] Path resolution', {
     rawPath,
     scopePath: input.scopePath,
     normalizedRelative,
@@ -5730,6 +5336,10 @@ async function applyFilesystemEditsFromResponse(input: {
   forceExtract?: boolean;
   /** Pre-parsed edits (from extractAndSanitize) to skip redundant re-parsing */
   preParsedEdits?: ParsedFilesystemResponse;
+  /** Bug #48: paths already written by structured tool calls this turn. Text-mode
+   * edits for these paths are staged as pendingEdits for LLM review instead of
+   * being silently dropped (preserves incremental improvements). */
+  alreadyWrittenPaths?: Set<string>;
 }): Promise<FilesystemEditResult> {
   // FIX: If forceExtract is true, bypass deduplication to catch all edits including those
   // that may have been skipped during incremental parsing (e.g., last file with unclosed heredoc)
@@ -5749,6 +5359,27 @@ async function applyFilesystemEditsFromResponse(input: {
     responseContentLength: input.responseContent?.length || 0,
     responsePreview: (input.responseContent || '').slice(0, 200),
   });
+
+  // Bug #48: stage edits for paths already written by structured tool calls
+  // as pending (for LLM review next turn) instead of silently dropping them.
+  const alreadyWritten = input.alreadyWrittenPaths;
+  const pendingEdits: NonNullable<FilesystemEditResult['pendingEdits']> = [];
+  if (alreadyWritten && alreadyWritten.size > 0) {
+    parsedResponse.writes = parsedResponse.writes.filter(w => {
+      if (alreadyWritten.has(w.path)) {
+        pendingEdits.push({ path: w.path, content: w.content, type: 'write', reason: 'Already written by structured tool call this turn' });
+        return false;
+      }
+      return true;
+    });
+    parsedResponse.diffs = parsedResponse.diffs.filter(d => {
+      if (alreadyWritten.has(d.path)) {
+        pendingEdits.push({ path: d.path, content: d.diff, type: 'diff', diffBody: d.diff, reason: 'Already written by structured tool call this turn' });
+        return false;
+      }
+      return true;
+    });
+  }
 
   // FIX: Extract file writes from bash code blocks (echo "content" > file, cat > file << EOF)
   // The LLM often outputs bash commands instead of markdown file blocks.
@@ -5820,7 +5451,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(edit.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid path: ${edit.path.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid write path', { path: edit.path.substring(0, 80) });
       return false;
     }
     edit.path = validPath;
@@ -5833,7 +5464,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid diff path: ${op.path.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid diff path', { path: op.path.substring(0, 80) });
       return false;
     }
     op.path = validPath;
@@ -5843,7 +5474,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
       invalidPathErrors.push(`Invalid apply_diff path: ${op.path.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid apply_diff path', { path: op.path.substring(0, 80) });
       return false;
     }
     op.path = validPath;
@@ -5855,7 +5486,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(p);
     if (!validPath) {
       invalidPathErrors.push(`Invalid delete path: ${p.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid delete path', { path: p.substring(0, 80) });
       return null;
     }
     return validPath;
@@ -5866,7 +5497,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(folderPath, true); // isFolder = true
     if (!validPath) {
       invalidPathErrors.push(`Invalid folder path: ${folderPath.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid folder path', { path: folderPath.substring(0, 80) });
       return null;
     }
     return validPath;
@@ -5877,7 +5508,7 @@ async function applyFilesystemEditsFromResponse(input: {
     const validPath = validateExtractedPath(requestedPath);
     if (!validPath) {
       invalidPathErrors.push(`Invalid requested read path: ${requestedPath.substring(0, 100)}`);
-      console.warn('[applyFilesystemEdits] Rejected invalid requested read path:', requestedPath.substring(0, 80));
+      chatLogger.warn('[applyFilesystemEdits] Rejected invalid requested read path', { path: requestedPath.substring(0, 80) });
       return null;
     }
     return validPath;
@@ -5941,6 +5572,7 @@ async function applyFilesystemEditsFromResponse(input: {
     requestedFiles: [],
     scopePath: input.scopePath,
     sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
+    pendingEdits: pendingEdits.length > 0 ? pendingEdits : undefined,
   };
 
   // Process write operations only if we have a transaction
@@ -5974,7 +5606,7 @@ async function applyFilesystemEditsFromResponse(input: {
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
         
         // DEBUG LOGGING: Track where files are actually being written
-        console.info('[VFS Write] File written to VFS', {
+        chatLogger.info('[VFS Write] File written to VFS', {
           ownerId: input.ownerId,
           requestedPath: edit.path,
           resolvedPath: targetPath,
@@ -6056,15 +5688,10 @@ async function applyFilesystemEditsFromResponse(input: {
           existedBefore = false;
         }
 
-        let patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
-        if (patchedContent === null) {
-          // Fallback: try multi-strategy applyDiffToContent (search/replace, fuzzy, etc.)
-          const { applyDiffToContent } = await import('@/lib/chat/file-diff-utils');
-          patchedContent = applyDiffToContent(currentContent, targetPath, diffOperation.diff);
-        }
+        const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
         if (patchedContent === null) {
           // DEBUG: Log why diff application failed
-          console.error('[DIFF-APPLY] Failed to apply diff', {
+          chatLogger.error('[DIFF-APPLY] Failed to apply diff', {
             targetPath,
             diffLength: diffOperation.diff.length,
             diffPreview: diffOperation.diff.slice(0, 200),
@@ -6072,13 +5699,13 @@ async function applyFilesystemEditsFromResponse(input: {
             currentContentPreview: currentContent.slice(0, 200),
             existedBefore,
           });
-          result.errors.push(`Failed to apply diff for ${targetPath}: all strategies exhausted`);
+          result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
           continue;
         }
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
 
         // DEBUG: Log successful diff application
-        console.info('[DIFF-APPLY] Successfully applied diff', {
+        chatLogger.info('[DIFF-APPLY] Successfully applied diff', {
           targetPath,
           originalLength: currentContent.length,
           patchedLength: patchedContent.length,
@@ -6153,7 +5780,7 @@ async function applyFilesystemEditsFromResponse(input: {
         if (!existedBefore) {
           // Allow apply_diff to create new files - use the replace content as the new file content
           // This is useful when the LLM uses apply_diff syntax but the file doesn't exist yet
-          console.log(`[apply_diff] File ${targetPath} does not exist, creating new file with replace content`);
+          chatLogger.debug(`[apply_diff] File ${targetPath} does not exist, creating new file with replace content`);
           const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, diffOp.replace);
 
           result.applied.push({
@@ -6410,7 +6037,7 @@ async function applyFilesystemEditsFromResponse(input: {
         }
       } catch (commitError) {
         // Non-fatal: edits were applied even if commit fails
-        console.error('[Chat] Auto-commit failed:', commitError);
+        chatLogger.error('[Chat] Auto-commit failed:', commitError);
       }
     }
   }
@@ -6454,25 +6081,6 @@ async function applyFilesystemEditsFromResponse(input: {
 }
 
 export async function GET(request: NextRequest) {
-  // Auth via short-lived JWT issued by the edge-gateway Worker via 302 redirect.
-  // Bypasses the Worker wall-clock cap by streaming directly from the backend.
-  const _redirectToken = new URL(request.url).searchParams.get('token');
-  if (_redirectToken) {
-    const _verified = await verifyJwt(_redirectToken, process.env.WORKER_JWT_SECRET ?? process.env.JWT_SECRET ?? '');
-    if (!_verified.valid) {
-      return NextResponse.json(
-        { error: 'Unauthorized', reason: _verified.error || 'invalid' },
-        { status: 401, headers: { 'Access-Control-Allow-Origin': '*' } },
-      );
-    }
-    // Attach userId from sub claim to request headers for downstream use
-    const _userId = (_verified.payload?.sub as string) || '';
-    const _forwardedHeaders = new Headers(request.headers);
-    _forwardedHeaders.set('x-user-id', _userId);
-    request = new NextRequest(request.url, { headers: _forwardedHeaders, method: request.method, body: request.body });
-  }
-
-
   // Precompile warmup: Initialize LLM providers on first GET request
   // This ensures the route is ready for subsequent POST requests without cold start
   const url = new URL(request.url);
@@ -6507,7 +6115,7 @@ export async function GET(request: NextRequest) {
         timestamp: Date.now(),
       });
     } catch (error) {
-      console.error("Chat API warmup error:", error);
+      chatLogger.error("Chat API warmup error:", error);
       return NextResponse.json(
         { success: false, error: "Warmup failed" },
         { status: 500 }
@@ -6551,33 +6159,20 @@ async function handleError(
     model,
     userId,
   });
-  } finally {
-    // Bug #40: log the canonical \[Degradation-Chain\] summary line and clear
-    // the chain on EVERY request exit \(success, thrown error, or early
-    // return\)\. The closure was assigned in the chain re-key block \(right
-    // after filesystemOwnerId is resolved\) so it knows the composite
-    // session key\. The default no-op placeholder is safe if the handler
-    // throws before the re-key block runs \(Temporal Dead Zone guard\)\.
-    _chatLogAndClearChain();
-  \}
 }
 
+// Handle preflight requests for CORS
 export async function OPTIONS(request: NextRequest) {
-  // Handle preflight requests for CORS.
-  // CORS preflight: don't require a token; return 204 with CORS headers so the
-  // browser can follow the cross-origin 302 redirect from the edge-gateway Worker.
-  return new NextResponse(null, {
-    status: 204,
+  return new Response(null, {
+    status: 200,
     headers: {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-user-id',
-      'Access-Control-Max-Age': '86400',
+      "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
+      "Vary": "Origin",
     },
   });
 }
-
-
 
 
 

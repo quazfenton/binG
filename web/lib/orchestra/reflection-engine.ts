@@ -215,9 +215,9 @@ Provide specific, actionable improvements and rate your confidence (0-1).
 
       return {
         perspective: perspective.name,
-        improvements: result.object.improvements,
-        confidence: result.object.confidence * perspective.weight,
-        suggestedChanges: result.object.suggestedChanges,
+        improvements: result.output.improvements,
+        confidence: result.output.confidence * perspective.weight,
+        suggestedChanges: result.output.suggestedChanges,
       };
     } catch (llmError: any) {
       console.warn('[ReflectionEngine] LLM reflection failed, using fallback:', llmError.message);

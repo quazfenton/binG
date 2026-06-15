@@ -872,22 +872,27 @@ export class AgentKernel extends EventEmitter {
    * Run Nullclaw agent (messaging, automation)
    */
   private async runNullclawAgent(agent: Agent, workPayload?: unknown): Promise<unknown> {
-    let nullclaw: { isNullclawAvailable: () => boolean; executeNullclawTask: (...args: unknown[]) => Promise<unknown> };
+    let nullclawModule: typeof import('./nullclaw-integration');
     
     try {
-      nullclaw = await import('./nullclaw-integration');
+      nullclawModule = await import('./nullclaw-integration');
+      const { isNullclawAvailable, executeNullclawTask } = nullclawModule;
       
-      if (!nullclaw.isNullclawAvailable()) {
+      if (!isNullclawAvailable || !isNullclawAvailable()) {
         logger.warn('Nullclaw not available, using fallback');
         return this.runDefaultAgent(agent, workPayload);
       }
 
       const payload = workPayload as { taskType?: string; description?: string; params?: Record<string, unknown> } | undefined;
-      const taskType = payload?.taskType || 'automate';
-      const description = payload?.description || agent.config.goal;
-      const params = payload?.params || {};
+      if (!payload || typeof payload.taskType !== 'string' || typeof payload.description !== 'string') {
+        logger.warn('Nullclaw payload invalid, using fallback');
+        return this.runDefaultAgent(agent, workPayload);
+      }
+      const taskType = payload.taskType || 'automate';
+      const description = payload.description || agent.config.goal;
+      const params = payload.params || {};
 
-      const result = await nullclaw.executeNullclawTask(
+      const result = await executeNullclawTask(
         taskType as 'message' | 'browse' | 'automate' | 'api' | 'schedule',
         description,
         params,

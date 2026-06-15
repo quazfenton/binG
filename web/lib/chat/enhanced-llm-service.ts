@@ -15,6 +15,7 @@ import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhan
 import { wireFinishReasonSteer, incompleteConfidenceThreshold } from '../orchestra/steer-service';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
 import { PROVIDER_FALLBACK_CHAINS, getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
+import { coordinateConcurrentFallback } from './llm-fallback-coordinator';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
@@ -871,9 +872,6 @@ export class EnhancedLLMService {
     }
 
     try {
-      // NEW: Use Vercel AI SDK for unified streaming across all providers
-      const { streamWithVercelAI } = await import('./vercel-ai-streaming');
-
       // Map provider names to Vercel AI SDK identifiers.
       // - Direct Vercel AI SDK providers use their own name.
       // - OpenAI-compatible providers keep their own name — getVercelModel() resolves
@@ -982,7 +980,7 @@ export class EnhancedLLMService {
             // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
             // into the Vercel AI SDK tool set so the LLM can call them during streaming.
             try {
-              const { getVFSToolDefinitions, getVFSTool, toolContextStore } = await import('../mcp/vfs-mcp-tools');
+              const { getVFSToolDefinitions, getVFSTool, runWithToolContext } = await import('../mcp/vfs-mcp-tools');
               const { tool: createTool } = await import('ai');
               const vfsToolDefs = getVFSToolDefinitions();
               for (const toolDef of vfsToolDefs) {
@@ -1009,7 +1007,7 @@ export class EnhancedLLMService {
                         path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
                       });
 
-                      const result = await toolContextStore.run(
+                      const result = await runWithToolContext(
                         {
                           userId: request.userId || 'anonymous',
                           sessionId: sessionIdFromConv,
@@ -1116,7 +1114,13 @@ export class EnhancedLLMService {
 
         // Wrap with auto-continue support
         const { streamWithAutoContinue, streamWithServerAutoRePrompt } = await import('@/lib/virtual-filesystem/smart-context');
-        const baseStream = streamWithVercelAI({
+        // Use the concurrent-fallback wrapper: after 20s of silence on the
+        // primary, fires the next provider in the configured chain in
+        // parallel and races them on the first chunk. Cancels the loser
+        // (truly aborts the in-flight HTTP request so API credits aren't
+        // wasted). Pass concurrentFallbackMs: 0 to fall back to the legacy
+        // in-place speculative fallback inside streamWithVercelAI.
+        const baseStream = streamWithConcurrentFallback({
           provider: vercelProvider,
           model: llmRequest.model || 'default',
           messages: processedMessages,
@@ -1867,7 +1871,7 @@ export class EnhancedLLMService {
       const toolCallsDone = (result.steps || []).reduce(
         (n, s) => n + ((s as any).toolCalls || []).length, 0
       );
-      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5') || provider === 'mistral' || provider === 'qwen')) {
+      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5'))) {
         try {
           const hint = wireFinishReasonSteer({
             finishReason: 'stop',
@@ -1957,7 +1961,7 @@ export class EnhancedLLMService {
         content: result.content
       };
     } catch (error: any) {
-      console.error('Tool request processing error:', error);
+      chatLogger.error('Tool request processing error', { error: error?.message, stack: error?.stack });
       return {
         requiresAuth: false,
         toolCalls: [],
@@ -2198,7 +2202,7 @@ export class EnhancedLLMService {
     }
 
     if (dispatch.rejected.length > 0) {
-      console.warn('[EnhancedLLMService] Rejected tool calls during parser validation:', dispatch.rejected);
+      chatLogger.warn('[EnhancedLLMService] Rejected tool calls during parser validation', { rejectedCount: dispatch.rejected.length, rejected: dispatch.rejected });
     }
 
     return calls;
@@ -2262,6 +2266,9 @@ export class EnhancedLLMService {
 
       const result = await sandboxBridge.executeCommand(session.sandboxId, validatedCommand.command);
 
+      // Define model from request so the finishReason IIFE can reference it
+      const model = request.model || 'local';
+
       return {
         content: `Sandbox execution completed.\n\nOutput:\n${result.output || 'No output'}${result.exitCode !== undefined && result.exitCode !== 0 ? `\n\nExit code: ${result.exitCode}` : ''}`,
   tokensUsed: 0,
@@ -2269,7 +2276,7 @@ export class EnhancedLLMService {
     const sandboxToolCallsDone = (result.steps || []).reduce(
       (n: number, st: any) => n + ((st.toolCalls || []).length), 0
     );
-    return (result.success && sandboxToolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5')))
+    return (result.success && sandboxToolCallsDone === 0 && (model.includes('mistral-large') || model.includes('qwen3.5')))
       ? 'incomplete-response'
       : result.success ? 'stop' : 'error';
   })(),
@@ -2281,7 +2288,7 @@ export class EnhancedLLMService {
         }
       };
     } catch (error: any) {
-      console.error('Sandbox request processing error:', error);
+      chatLogger.error('Sandbox request processing error', { error: error?.message, stack: error?.stack });
       return {
         content: `Error executing in sandbox: ${error.message}`,
         tokensUsed: 0,
@@ -2518,3 +2525,75 @@ declare global {
 }
 
 export const enhancedLLMService = globalThis.__enhancedLLMService__ ?? (globalThis.__enhancedLLMService__ = new EnhancedLLMService());
+
+
+/**
+ * Concurrent-fallback wrapper around streamWithVercelAI.
+ *
+ * Runs the primary provider stream in parallel with the next provider in
+ * the configured fallback chain. After `silenceMs` of silence on the
+ * primary, the fallback is fired; whichever emits a chunk first wins, the
+ * loser's AbortController is fired (truly cancelling the in-flight HTTP
+ * request so API credits are not wasted).
+ *
+ * Pass `concurrentFallbackMs: 0` to disable the coordinator and fall back
+ * to the in-place single-fallback speculative race inside
+ * `streamWithVercelAI`. Default: 20000 (20s).
+ *
+ * The internal `streamWithVercelAI` speculative fallback is disabled via
+ * `speculativeFallbackMs: 0` to avoid double-fallback. The coordinator is
+ * the single source of truth for the parallel-fallback race.
+ *
+ * @see llm-fallback-coordinator.ts for the race algorithm
+ * @see vercel-ai-streaming.ts for the underlying stream factory
+ */
+export async function* streamWithConcurrentFallback(
+  options: import('./vercel-ai-streaming').VercelStreamOptions & {
+    /** Per-call override; 0 disables. Default 20000. */
+    concurrentFallbackMs?: number;
+    /** Override the fallback chain (e.g. for tests). */
+    fallbackChain?: string[];
+  },
+): AsyncGenerator<import('../providers/llm-providers').StreamingResponse> {
+  const {
+    concurrentFallbackMs = 20000,
+    fallbackChain,
+    ...rest
+  } = options;
+  const { streamWithVercelAI } = await import('./vercel-ai-streaming');
+
+  // Disabled: delegate so the internal speculative fallback runs as before.
+  if (concurrentFallbackMs <= 0) {
+    yield* streamWithVercelAI(options);
+    return;
+  }
+
+  // Helper: wrap streamWithVercelAI in a StreamHandle with an abort handle.
+  const wrapAsHandle = (providerOverride?: string) => {
+    const controller = new AbortController();
+    const mergedSignal = rest.signal
+      ? AbortSignal.any([rest.signal, controller.signal])
+      : controller.signal;
+    const gen = streamWithVercelAI({
+      ...rest,
+      ...(providerOverride ? { provider: providerOverride } : {}),
+      signal: mergedSignal,
+      speculativeFallbackMs: 0,
+    } as any);
+    return Promise.resolve({
+      gen,
+      abort: () => controller.abort(),
+    });
+  };
+
+  yield* coordinateConcurrentFallback({
+    primaryProvider: options.provider,
+    model: options.model,
+    fallbackChain,
+    silenceMs: concurrentFallbackMs,
+    signal: options.signal,
+    requestId: `ellm-${Date.now()}`,
+    createPrimaryStream: () => wrapAsHandle(),
+    createFallbackStream: (fbProvider) => wrapAsHandle(fbProvider),
+  });
+}

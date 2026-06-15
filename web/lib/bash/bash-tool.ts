@@ -70,6 +70,21 @@ import {
 } from '@/lib/context/rtk-integration';
 
 /**
+ * Extract the base command from a shell command string. Returns the first
+ * whitespace-delimited token, lowercased, or `null` if the input is empty/undefined.
+ *
+ * Used to identify the executable being run so retry-counter state and
+ * missing-binary warnings can be scoped per-command rather than globally.
+ *
+ * NOTE: This does NOT handle quoted executables like `"my tool"`. If/when that
+ * support is added, update this helper and all call sites will follow.
+ */
+function extractBaseCommand(command: string | undefined): string | null {
+  if (!command) return null;
+  return command.trim().split(/\s+/)[0]?.toLowerCase() ?? null;
+}
+
+/**
  * Re-export isCommandSafe for external consumers
  */
 export function isCommandSafe(command: string): boolean {
@@ -181,7 +196,7 @@ const DIRECT_COMMANDS = new Set([
  * Check if a command is a direct (simple, reliable) command that doesn't need self-healing.
  */
 export function isDirectCommand(command: string): boolean {
-  const base = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+  const base = extractBaseCommand(command) ?? '';
   // Direct commands: no pipes, redirects, or chaining
   if (base && !command.includes('|') && !command.includes('>') && !command.includes('&&') && !command.includes(';')) {
     return DIRECT_COMMANDS.has(base) || base.startsWith('./') || base.includes('/');
@@ -412,8 +427,12 @@ export async function executeBashCommand(
         // Pushed into executeBashCommand itself (not just the LLM tool) so ALL
         // bash entry points — direct callers, executeBashViaEvent, etc. —
         // benefit from the "blocked only while broken" recovery.
-        if (exitCode === 0) {
-          const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase();
+        // Guard: require BOTH `result.success` AND `exitCode === 0` to avoid
+        // over-resetting on signal kills (where spawn's exitCode may be 0 even
+        // though the process was killed) or on partial-failure states. Mirrors
+        // the LLM tool's postExecution check and the sandbox routing check.
+        if (result.success && exitCode === 0) {
+          const baseCmd = extractBaseCommand(command);
           if (baseCmd) resetMissingBinaryRetry(baseCmd);
         }
 
@@ -587,6 +606,96 @@ async function getVFSSnapshot(
 // ============================================================================
 
 /**
+ * Bug #47 — Sandbox-aware bash routing.
+ *
+ * Routes bash commands through an available sandbox when one exists.
+ * A pre-warmed sandbox pool (SandboxPoolService) maintains ready sandboxes
+ * at startup. When bash_execute runs and no sandbox session is mapped to
+ * this user, this function acquires a sandbox from the pool and registers
+ * it against the user's ID — so subsequent bash_execute calls reuse it.
+ *
+ * If the sandbox pool is unavailable (not initialized, no provider), falls
+ * through to local `child_process.spawn`. The `routed: false` signal tells
+ * the caller to proceed with local execution.
+ *
+ * Lazy-loads sandbox dependencies to keep bash-tool.ts import-light.
+ */
+async function trySandboxRoute(
+  agentId: string,
+  command: string,
+  workingDir: string,
+  timeout?: number,
+): Promise<{
+  routed: boolean;
+  sandboxId?: string;
+  result: BashExecutionResult;
+}> {
+  try {
+    const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
+    let session = sandboxBridge.getSessionByUserId(agentId);
+
+    // No existing session — ask sandboxBridge to get or create one.
+    // This bridges to the pre-warmed sandbox pool when available.
+    if (!session) {
+      try {
+        const newSession = await sandboxBridge.getOrCreateSession(agentId);
+        if (newSession && newSession.sandboxId) {
+          session = newSession;
+          logger.info('Bug #47: Sandbox session created/acquired for ' + agentId, {
+            sandboxId: newSession.sandboxId,
+          });
+        }
+      } catch (createErr: any) {
+        logger.debug('Bug #47: sandboxBridge.getOrCreateSession failed, falling through to local spawn', {
+          error: createErr?.message,
+        });
+      }
+    }
+
+    if (!session || !session.sandboxId) {
+      return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
+    }
+    const startTime = Date.now();
+    const execResult = await sandboxBridge.executeCommand(session.sandboxId, command, workingDir);
+    const duration = Date.now() - startTime;
+    // Map sandbox-provider result to BashExecutionResult shape.
+    // CRITICAL (review fix): do NOT short-circuit on truthy `success` — some
+    // sandbox providers return `{ success: true, exitCode: 1 }` for soft-fail
+    // states. Treat `success` as authoritative; fall back to exitCode only
+    // when `success` is undefined. Also default missing exitCode to -1 (not 0)
+    // so sandbox crashes are not silently masked as success.
+    const sx = (execResult as any) ?? {};
+    const hasSuccess = typeof sx.success === 'boolean';
+    const result: BashExecutionResult = {
+      success: hasSuccess ? Boolean(sx.success) : (typeof sx.exitCode === 'number' ? sx.exitCode === 0 : false),
+      stdout: typeof sx.stdout === 'string' ? sx.stdout : '',
+      stderr: typeof sx.stderr === 'string' ? sx.stderr : '',
+      exitCode: typeof sx.exitCode === 'number' ? sx.exitCode : -1,
+      duration,
+      command,
+      workingDir,
+    };
+    // Bug #39: clear the hard-block retry counter for this binary on success.
+    // Guard: require BOTH `result.success` AND `result.exitCode === 0` — the
+    // CRIT-1 review note above warns that some sandbox providers return
+    // `{ success: true, exitCode: 1 }` for soft-fail states. A bare
+    // `result.success` check would over-reset and let a persistently-broken
+    // sandbox binary slip through the hard-block. Matches the other 2 sites.
+    const baseCmd = extractBaseCommand(command);
+    if (result.success && result.exitCode === 0 && baseCmd) {
+      resetMissingBinaryRetry(baseCmd);
+    }
+    return { routed: true, sandboxId: session.sandboxId, result };
+  } catch (err: any) {
+    logger.debug('Bug #47: sandboxBridge unavailable or executeCommand failed, falling back to local spawn', {
+      error: err?.message,
+      agentId,
+    });
+    return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
+  }
+}
+
+/**
  * Create bash tool for LLM
  */
 export function createBashTool(config: Partial<BashToolConfig> = {}) {
@@ -594,7 +703,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
 
   return {
     bash_execute: tool({
-      description: 'Execute bash commands in the sandbox. Use for file operations (create, read, write, delete), navigating directories, running scripts, installing packages, and any shell task. Supports pipes, redirects, multi-line heredocs, and complex pipelines. Output is persisted to VFS.\n\nEXAMPLES:\n  Create files:  echo "content" > file.txt  |  cat > file.txt << EOF  |  mkdir -p src/components\n  Read files:    cat file.txt  |  grep pattern file.txt\n  Navigate:      mkdir -p src/components  |  cd src && pwd\n  Build/Test:    npm install  |  npm test  |  npx tsc --noEmit',
+      description: 'Execute bash commands. Routes to a sandbox environment when one is available (pre-warmed sandbox pool) for full runtime support including node, python3, npx, npm. Use for file operations (create, read, write, delete), navigating directories, running scripts, installing packages, and any shell task. Supports pipes, redirects, multi-line heredocs, and complex pipelines. Output is persisted to VFS.\n\nEXAMPLES:\n  Create files:  echo "content" > file.txt  |  cat > file.txt << EOF  |  mkdir -p src/components\n  Read files:    cat file.txt  |  grep pattern file.txt\n  Navigate:      mkdir -p src/components  |  cd src && pwd\n  Build/Test:    npm install  |  npm test  |  npx tsc --noEmit',
       inputSchema: z.object({
         command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern > output.txt")').optional(),
         code: z.string().describe('Bash command to execute (alias for command)').optional(),
@@ -621,6 +730,37 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         }
 
         const commandToUse = actualCommand;
+
+        // Bug #47: route through sandboxBridge when an active sandbox session
+        // exists for this user. Closes the gap where bash_execute always fell
+        // through to local `child_process.spawn`, causing ENOENT for sandbox-
+        // specific binaries (npx serve, etc.) and breaking tasks that need a
+        // development environment. Falls back to local spawn if no sandbox is
+        // active (e.g. dev mode without a sandbox provider configured).
+        const sandboxRoute = await trySandboxRoute(agentId, commandToUse, wd, timeout);
+        if (sandboxRoute.routed) {
+          logger.info('Bug #47: routed bash_execute through sandboxBridge', {
+            agentId,
+            sandboxId: sandboxRoute.sandboxId,
+            command: commandToUse.slice(0, 80),
+          });
+          if (persist) {
+            const decision = shouldPersistBashOutput(actualCommand, sandboxRoute.result, cfg);
+            if (decision.persist) {
+              const outputPath = await persistToVFS(cfg.persistToVFS, agentId, actualCommand, sandboxRoute.result);
+              if (outputPath) sandboxRoute.result.outputPath = outputPath;
+            }
+          }
+          return {
+            success: sandboxRoute.result.success,
+            output: sandboxRoute.result.stdout,
+            error: sandboxRoute.result.stderr,
+            exitCode: sandboxRoute.result.exitCode,
+            duration: sandboxRoute.result.duration,
+            outputPath: sandboxRoute.result.outputPath,
+            _routed: 'sandbox',
+          };
+        }
 
         if (!isCommandSafe(commandToUse)) {
           throw new Error(`Command blocked by safety filter: ${commandToUse.slice(0, 100)}`);
@@ -782,7 +922,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           // after the LLM / user fixed the underlying PATH issue. Matches
           // the loop-guard philosophy: "blocked only while broken".
           if (result.success && result.exitCode === 0) {
-            const baseCmd = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+            const baseCmd = extractBaseCommand(command) ?? '';
             if (baseCmd) {
               resetMissingBinaryRetry(baseCmd);
             }
@@ -853,6 +993,36 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           };
         } catch (error: any) {
           let errorMessage = error.message || 'Unknown error';
+
+          // Bug #39: If the command was blocked by the safety/router layer
+          // (routeDecision.mode === 'blocked' or 'confirm'), surface a
+          // structured BLOCKED_ENV code so the LLM's upstream logic can
+          // distinguish a safety-block from a generic crash. Without this,
+          // the LLM sees 'Tool failed Unknown error' and can't tell that
+          // the command was refused (not executed). Operators can also
+          // surface a banner with the remediation text.
+          // Null-guard: routeDecision is only assigned when getFilesystemState
+          // is set. If it's null, the command was never routed (default
+          // behavior) and we fall through to the env-error handling below.
+          if (routeDecision != null && (routeDecision.mode === 'blocked' || routeDecision.mode === 'confirm')) {
+            const blockCode = routeDecision.mode === 'blocked' ? 'BLOCKED_ENV' : 'BLOCKED_CONFIRM';
+            errorMessage = `[${blockCode}] ${routeDecision.reason || 'Command blocked by safety policy'}. ` +
+              `Remediation: use a different command, or use write_file/read_file for file operations.`;
+            logger.warn(`[Bash] ${blockCode} — structured denial`, {
+              command: commandToUse.slice(0, 100),
+              reason: routeDecision.reason,
+              code: blockCode,
+            });
+            return {
+              success: false,
+              output: '',
+              error: errorMessage,
+              exitCode: -1,
+              duration: 0,
+              _routed: routeDecision.mode,
+              _blockCode: blockCode,
+            };
+          }
 
           // Detect environment-level errors (ENOENT, EACCES, ENOEXEC, ENOSPC, …)
           // and give a clear diagnostic + [STEER] hint so the LLM stops

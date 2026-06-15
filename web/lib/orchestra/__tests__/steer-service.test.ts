@@ -120,6 +120,16 @@ describe('buildSteerPrompt — every trigger kind produces a [STEER] prompt', ()
           suggestion: 'Switch to write_file / read_file / apply_diff rather than bash_execute.',
         },
       },
+      orchestration_fallback: {
+        kind: 'orchestration_fallback',
+        detail: {
+          fromMode: 'plan_act_verify',
+          toMode: 'v1-api-text',
+          fallbackReason: 'orchestration_failed',
+          budgetExhausted: true,
+          suggestion: 'The previous turn ran in degraded text-mode. Do not retry complex multi-step plans.',
+        },
+      },
     };
 
     const prompt = buildSteerPrompt(samples[kind]);

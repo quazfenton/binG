@@ -105,7 +105,24 @@ export function applyUnifiedDiffToContent(currentContent: string, path: string, 
     return null;
   }
 
-  const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
+  // Bug #46/#65: Normalize the diff body before parsing. LLMs sometimes emit
+  // diffs indented by 3 spaces (markdown code-block rendering artifact) or
+  // omit the `--- a/path` header. Strip common leading whitespace from all
+  // lines in the diff body, then synthesize missing headers if needed.
+  let normalized = diffBody;
+  const lines = normalized.split('\n');
+  // Find minimum leading whitespace across non-empty lines
+  let minIndent = Infinity;
+  for (const l of lines) {
+    if (l.trim().length === 0) continue;
+    const indent = l.length - l.trimStart().length;
+    if (indent < minIndent) minIndent = indent;
+  }
+  if (Number.isFinite(minIndent) && minIndent > 0) {
+    normalized = lines.map(l => l.slice(minIndent)).join('\n');
+  }
+
+  const diffText = normalized.endsWith("\n") ? normalized : `${normalized}\n`;
   const hasHeaders = diffText.includes("--- ") && diffText.includes("+++ ");
   const unifiedDiff = hasHeaders
     ? diffText
@@ -191,10 +208,27 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   const diffLines = diffBody.split("\n");
   if (!diffLines.length) return null;
 
+  // Bug #46: If the diff body has structured `@@` hunk headers, this is
+  // a multi-hunk unified diff. The naive line-add/remove model below
+  // doesn't track hunk line numbers, so it would produce structurally
+  // broken output. Bail out and let the pipeline try `applyUnifiedDiffToContent`
+  // (which uses `parsePatch` + `applyPatch` and handles multi-hunk correctly).
+  const hunkHeaderCount = diffLines.filter(l => l.startsWith("@@")).length;
+  if (hunkHeaderCount > 1) {
+    return null;
+  }
+
   const resultLines: string[] = [];
   for (const line of diffLines) {
     // Skip @@ hunk headers (e.g., "@@ -1,5 +1,6 @@")
     if (line.startsWith('@@')) {
+      continue;
+    }
+
+    // Bug #46: Skip unified-diff file headers `--- a/path` and `+++ b/path`.
+    // Without this, the naive algorithm treats them as context lines and leaks
+    // them verbatim into the result, corrupting the output file.
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
       continue;
     }
 
@@ -225,6 +259,18 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   if (result === currentContent) {
     return currentContent;
   }
+
+  // Bug #46 defense-in-depth: reject if ANY result line starts with
+  // `--- ` or `+++ ` — indicates a diff-header leak that would corrupt
+  // the file. These should have been skipped in the main loop above.
+  // NOTE: must use the `m` (multiline) flag so the check applies to
+  // every line, not just the first. Without `m`, a header that leaked
+  // into a later line (e.g. after a correctly-stripped `+` line whose
+  // content happened to start with `--- `) would slip through.
+  if (/^(--- |\+\+\+ )/m.test(result)) {
+    return null;
+  }
+
   return result;
 }
 

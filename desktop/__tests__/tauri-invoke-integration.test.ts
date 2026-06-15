@@ -10,12 +10,12 @@
  * - Full workflow integration
  */
 
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi, Mock } from 'vitest';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 import * as os from 'os';
+import { invoke } from '@tauri-apps/api/core';
 
-// Mock Tauri runtime for testing
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
@@ -25,9 +25,6 @@ vi.mock('@bing/platform/env', () => ({
   isTauriRuntime: () => true,
 }));
 
-import { vi, Mock } from 'vitest';
-import { invoke } from '@tauri-apps/api/core';
-
 // ============================================================================
 // Health Endpoint Tests
 // ============================================================================
@@ -36,7 +33,7 @@ describe('Health Endpoint Integration Tests', () => {
   const mockInvoke = invoke as Mock;
 
   beforeEach(() => {
-    mockInvocation.resetMocks();
+    mockInvocation().resetMocks();
   });
 
   describe('Health Check', () => {
@@ -589,7 +586,8 @@ describe('Full Desktop Workflow Integration Tests', () => {
 
       // Create checkpoint
       const checkpointId = `checkpoint-${Date.now()}`;
-      const cpDir = path.join(checkpointDir, '.checkpoints', checkpointId);
+      const checkpointDir = path.join(testDir, '.checkpoints');
+      const cpDir = path.join(checkpointDir, checkpointId);
       await fs.ensureDir(cpDir);
       await fs.copy(filePath, path.join(cpDir, 'important.txt'));
 
@@ -698,7 +696,7 @@ describe('Full Desktop Workflow Integration Tests', () => {
       }
 
       const remaining = await fs.readdir(workspaceRoot);
-      const tempRemaining = remaining.filter(f => f.startsWith('temp'));
+      const tempRemaining = remaining.filter((f: string) => f.startsWith('temp'));
 
       expect(tempRemaining.length).toBe(0);
     });

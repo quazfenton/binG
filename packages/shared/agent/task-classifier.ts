@@ -377,7 +377,10 @@ Task: ${message.substring(0, 500)}`,
       maxOutputTokens: 200,
     });
 
-    const analysis = result.object;
+    const analysis = (result as any).output;
+    if (!analysis || typeof analysis.estimatedFiles !== 'number' || typeof analysis.estimatedSteps !== 'number' || typeof analysis.requiresResearch !== 'boolean' || typeof analysis.requiresTesting !== 'boolean' || !['low', 'medium', 'high'].includes(analysis.riskLevel)) {
+      throw new Error('Malformed LLM output');
+    }
     let score = 0.5;
     const factors: string[] = [];
 

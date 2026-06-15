@@ -252,7 +252,6 @@ describe('tagResultDegraded — direct unit tests', () => {
 
   it('c) increments the per-session counter for the given sessionId', () => {
     // tagResultDegraded is imported at the top of the file
-    const { getOrchestrationFallbackCount } = require('@/lib/observability/degradation-tracker');
     const result: any = {
       success: true, response: 'ok', mode: 'v1-api', metadata: {},
     };

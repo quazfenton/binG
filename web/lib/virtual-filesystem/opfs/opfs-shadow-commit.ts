@@ -220,7 +220,7 @@ export class OPFSShadowCommitManager {
 
       await this.saveMetadata();
 
-      logger.info('[OPFS ShadowCommit] Created commit:', commitId, filesChanged, 'files');
+      logger.info('[OPFS ShadowCommit] Created commit', { commitId, filesChanged });
 
       // Auto-sync to server if enabled
       if (options.autoSync) {
@@ -320,12 +320,12 @@ export class OPFSShadowCommitManager {
               restoredFiles++;
             }
           } catch (error: any) {
-            logger.warn('[OPFS ShadowCommit] Failed to restore file:', entry.name, error.message);
+            logger.warn('[OPFS ShadowCommit] Failed to restore file', { name: entry.name, error: error.message });
           }
         }
       }
 
-      logger.info('[OPFS ShadowCommit] Restored commit:', commitId, restoredFiles, 'files');
+      logger.info('[OPFS ShadowCommit] Restored commit', { commitId, restoredFiles });
 
       return {
         success: true,

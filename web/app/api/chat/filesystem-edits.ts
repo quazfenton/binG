@@ -49,6 +49,16 @@ export interface FilesystemEditResult {
   workspaceVersion?: number;
   commitId?: string;
   sessionId?: string;
+  /** Bug #48: text-mode edits for paths that were already written by structured
+   * tool calls in this turn. NOT applied — staged for LLM review on next turn
+   * so legitimate incremental edits aren't silently discarded. */
+  pendingEdits?: Array<{
+    path: string;
+    content: string;
+    type: 'write' | 'diff';
+    diffBody?: string;
+    reason: string;
+  }>;
 }
 
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
@@ -138,6 +148,11 @@ export async function applyFilesystemEditsFromResponse(input: {
   };
   forceExtract?: boolean;
   preParsedEdits?: ParsedFilesystemResponse;
+  /** Bug #48: set of file paths that were already written by structured tool
+   * calls (batch_write, write_file, create_file) in this turn. Text-mode
+   * parser will skip these paths to prevent overwriting correct file content
+   * with echoed/corrupted tool-call JSON from the LLM's prose summary. */
+  alreadyWrittenPaths?: Set<string>;
 }): Promise<FilesystemEditResult> {
   const parsedResponse = input.preParsedEdits
     ? input.preParsedEdits
@@ -154,6 +169,49 @@ export async function applyFilesystemEditsFromResponse(input: {
     responseContentLength: input.responseContent?.length || 0,
     responsePreview: (input.responseContent || '').slice(0, 200),
   });
+
+  // Bug #48: edits for paths already written by structured tool calls are
+  // STAGED as pending (not silently dropped) so legitimate incremental edits
+  // are preserved for LLM review on the next turn. The caller (route.ts)
+  // checks result.pendingEdits and prepends a [STEER] review prompt.
+  //
+  // IMPORTANT: `pendingEdits` is declared UP HERE (before the filtering loop
+  // below) so the Bug #48 filter block can populate it. The result object's
+  // `pendingEdits` field is then set from the same array at the bottom of
+  // the function. This was previously a TDZ bug (the filter ran before the
+  // declaration, causing a runtime `ReferenceError: Cannot access
+  // 'pendingEdits' before initialization`).
+  const pendingEdits: NonNullable<FilesystemEditResult['pendingEdits']> = [];
+  const alreadyWritten = input.alreadyWrittenPaths;
+  if (alreadyWritten && alreadyWritten.size > 0) {
+    const blockedWrites: typeof parsedResponse.writes = [];
+    parsedResponse.writes = parsedResponse.writes.filter(w => {
+      if (alreadyWritten.has(w.path)) {
+        blockedWrites.push(w);
+        return false;
+      }
+      return true;
+    });
+    const blockedDiffs: typeof parsedResponse.diffs = [];
+    parsedResponse.diffs = parsedResponse.diffs.filter(d => {
+      if (alreadyWritten.has(d.path)) {
+        blockedDiffs.push(d);
+        return false;
+      }
+      return true;
+    });
+    for (const w of blockedWrites) {
+      pendingEdits.push({ path: w.path, content: w.content, type: 'write', reason: 'Path already written by structured tool call in this turn' });
+      chatLogger.info('[PARSER] Bug #48: staged pending write for LLM review', { path: w.path, contentLength: w.content.length });
+    }
+    for (const d of blockedDiffs) {
+      // PatchEdit has { path, diff } — no `content` field. Surface the diff
+      // body in `diffBody` and the path under `path`; the LLM can re-issue
+      // the diff on the next turn if it wants to apply a follow-up edit.
+      pendingEdits.push({ path: d.path, content: d.diff, type: 'diff', diffBody: d.diff, reason: 'Path already written by structured tool call in this turn' });
+      chatLogger.info('[PARSER] Bug #48: staged pending diff for LLM review', { path: d.path, diffLength: d.diff.length });
+    }
+  }
 
   function extractBashFileWrites(content: string): Array<{ path: string; content: string }> {
     const writes: Array<{ path: string; content: string }> = [];
@@ -294,6 +352,10 @@ export async function applyFilesystemEditsFromResponse(input: {
       })
     : null;
 
+  // Bug #48: pending edits (blocked by alreadyWrittenPaths) are declared at
+  // the TOP of this function (above the filter block) so the filter can
+  // populate them, then attached to the result below.
+
   const result: FilesystemEditResult = {
     transactionId: transaction ? transaction.id : null,
     status: hasMutatingOperations ? 'auto_applied' : 'none',
@@ -302,6 +364,7 @@ export async function applyFilesystemEditsFromResponse(input: {
     requestedFiles: [],
     scopePath: input.scopePath,
     sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
+    pendingEdits: pendingEdits.length > 0 ? pendingEdits : undefined,
   };
 
   if (transaction) {

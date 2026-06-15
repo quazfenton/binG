@@ -15,6 +15,22 @@ export interface JwtPayload {
   [key: string]: unknown;
 }
 
+/**
+ * The subset of JwtPayload that callers must provide to signJwt().
+ * Exported as a separate type so auth.ts can re-export it without
+ * `Omit<JwtPayload, 'iat'>` confusing the type checker when the payload
+ * is later spread back into a full JwtPayload (TS can't prove that the
+ * omitted `iat` doesn't also drop the required `sub`/`exp` through the
+ * index signature). Forcing sub/exp to remain required keys here makes
+ * the spread type-safe.
+ */
+export type SignableJwtPayload = {
+  sub: string;
+  exp: number;
+  scope?: string;
+  [key: string]: unknown;
+};
+
 export interface VerifiedJwt {
   valid: boolean;
   payload: JwtPayload | null;
@@ -60,7 +76,7 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
  * Returns `${header}.${payload}.${signature}` in base64URL encoding.
  */
 export async function signJwt(
-  payload: Omit<JwtPayload, 'iat'>,
+  payload: SignableJwtPayload,
   secret: string,
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);

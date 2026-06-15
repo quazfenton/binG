@@ -442,7 +442,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
               job.sandboxId,
               job.command,
               job.args,
-              job.timeoutMs / 1000
+              (job.timeoutMs ?? 300000) / 1000
             );
           } else {
             // SECURITY: Removed child_process.spawn fallback to prevent arbitrary code execution
@@ -508,7 +508,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
           this.emit('job:executed', jobResult);
 
           // Check max executions
-          if (job.executionCount >= job.maxExecutions) {
+          if (job.executionCount >= (job.maxExecutions ?? this.DEFAULT_MAX_EXECUTIONS)) {
             logger.info('Job reached max executions - marking as completed', {
               jobId: job.jobId,
               executionCount: job.executionCount,
@@ -573,7 +573,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
         if (job.status === 'running') {
           logger.debug('Job sleeping until next interval', {
             jobId: job.jobId,
-            nextExecution: job.nextExecution.toISOString(),
+            nextExecution: job.nextExecution?.toISOString(),
             intervalMs: job.intervalMs,
           });
           await this.sleep(job.intervalMs);
@@ -753,7 +753,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
         ],
       });
 
-      return result.object.shouldStop;
+      return (result as any).output?.shouldStop ?? false;
     } catch (error) {
       logger.error('Failed to evaluate stop condition', { error });
       return false;

@@ -480,3 +480,39 @@ describe('Execution Graph — Timeline', () => {
     expect(timeline[0].duration).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('Execution Graph — deleteGraph (BUGS_AUDIT #43 leak fix)', () => {
+  it('removes a graph from the in-memory map', () => {
+    const g = executionGraphEngine.createGraph('test-session');
+    const id = g.id;
+
+    expect(executionGraphEngine.getGraph(id)).toBe(g);
+    expect(executionGraphEngine.deleteGraph(id)).toBe(true);
+    expect(executionGraphEngine.getGraph(id)).toBeNull();
+  });
+
+  it('is idempotent — returns false when graph is not in the map', () => {
+    expect(executionGraphEngine.deleteGraph('definitely-not-a-real-graph-id')).toBe(false);
+  });
+
+  it("caller's reference remains valid after delete", () => {
+    const g = executionGraphEngine.createGraph('test-session');
+    g.nodes.set('node-1', {
+      id: 'node-1',
+      type: 'agent_step',
+      name: 'Test',
+      dependencies: [],
+      status: 'pending',
+      retryCount: 0,
+      maxRetries: 3,
+      result: { big: 'payload' },
+    });
+
+    executionGraphEngine.deleteGraph(g.id);
+    // Engine no longer has the graph (proves the Map was actually mutated).
+    expect(executionGraphEngine.getGraph(g.id)).toBeNull();
+    // Local ref still holds the object — proves the test isn't accidentally
+    // checking a stale reference; the caller can still read its data.
+    expect(g.nodes.get('node-1')?.result).toEqual({ big: 'payload' });
+  });
+});

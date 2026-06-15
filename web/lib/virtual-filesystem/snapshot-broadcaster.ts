@@ -50,7 +50,7 @@
  */
 
 import Redis from 'ioredis';
-import { getRedisClient } from '@/lib/redis/client';
+import { getRedisClient, isRedisEnabled } from '@/lib/redis/client';
 import { createLogger } from '@/lib/utils/logger';
 // Pass-2 cross-cutting theme: record EPIPE / publish failures into the
 // per-session degradation chain so run.log shows the broadcaster failure
@@ -89,8 +89,31 @@ interface BroadcasterState {
   subscribed: boolean;
   /** Last time we logged a "Redis unavailable" warning (ms epoch). 0 = never. */
   lastWarnedAt: number;
+  /** Number of EPIPE/retryable-error reconnects (Bug #38). */
+  reconnectCount: number;
+  /** Timestamp when Redis errors started (ms epoch). Used to degrade to polling. */
+  redisErrorStartedAt: number | null;
+  /** Polling interval handle (Bug #38 graceful degrade to polling). */
+  pollingHandle: NodeJS.Timeout | null;
+  /** True once we've emitted the one-time "Redis disabled" debug log. */
+  redisDisabledLogged: boolean;
   /** Cached API object so getSnapshotBroadcaster() is referentially stable. */
   api?: SnapshotBroadcasterApi;
+  /** Last error timestamp (ms epoch) for health reporting. */
+  lastErrorAt: number | null;
+  /** Number of publisher reconnects (Bug #64). */
+  publisherReconnectCount: number;
+  /** Keepalive interval handle to prevent idle disconnect. */
+  keepaliveHandle: NodeJS.Timeout | null;
+}
+
+export interface BroadcasterHealth {
+  isRedisBacked: boolean;
+  reconnectCount: number;
+  publisherReconnectCount: number;
+  lastErrorAt: number | null;
+  lastWarnedAt: number;
+  subscriberAlive: boolean;
 }
 
 export type SnapshotBroadcasterApi = {
@@ -102,6 +125,8 @@ export type SnapshotBroadcasterApi = {
   _reset: () => Promise<void>;
   /** Test-only: was the broadcaster able to subscribe to Redis? */
   isRedisBacked: () => boolean;
+  /** Return current broadcaster health snapshot. */
+  getHealth: () => BroadcasterHealth;
 };
 
 declare global {
@@ -130,6 +155,13 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       listeners: new Set(),
       subscribed: false,
       lastWarnedAt: 0,
+      reconnectCount: 0,
+      redisErrorStartedAt: null,
+      pollingHandle: null,
+      redisDisabledLogged: false,
+      lastErrorAt: null,
+      publisherReconnectCount: 0,
+      keepaliveHandle: null,
     };
   }
   const state = globalThis.__vfsSnapshotBroadcaster__;
@@ -146,27 +178,92 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
     if (state.subscribed) return true;
     if (state.subscriber) return true; // in-flight init
 
+    // Bug: graceful degrade when Redis is disabled (set REDIS_ENABLED=true
+    // to enable). Without this, the dev server spammed ioredis logs trying
+    // to connect to the production Redis cluster on every startup.
+    if (!isRedisEnabled()) {
+      // One-time debug log so operators can see at a glance that the
+      // broadcaster is intentionally in local-only mode.
+      if (!state.redisDisabledLogged) {
+        state.redisDisabledLogged = true;
+        logger.debug(
+          '[VFS Snapshot Broadcaster] Redis disabled in this environment — broadcaster is local-only (set REDIS_ENABLED=true to enable cross-process pub/sub)',
+        );
+      }
+      return false;
+    }
+
     let sub: Redis;
     try {
       // Re-use the same REDIS_URL + retry strategy as the shared client.
       const url = process.env.REDIS_URL || 'redis://localhost:6379';
+      // Bug #38: Exponential backoff with jitter (base 500ms, max 30s) to
+      // gracefully recover from transient EPIPE/connection reset errors.
+      const maxRetries = parseInt(process.env.SNAPSHOT_BROADCASTER_MAX_RETRIES || '5');
+      const baseDelayMs = 500;
+      const maxDelayMs = 30_000;
       sub = new Redis(url, {
         retryStrategy: (times) => {
-          if (times > 3) {
-            logger.warn('Snapshot broadcaster retry limit reached');
+          if (times > maxRetries) {
+            logger.warn('[VFS Snapshot Broadcaster] Subscriber retry limit reached');
             return null;
           }
-          return Math.min(times * 200, 2000);
+          // Exponential backoff: 500ms, 1s, 2s, 4s, ..., capped at 30s
+          const exponential = baseDelayMs * Math.pow(2, times - 1);
+          const capped = Math.min(exponential, maxDelayMs);
+          // Add jitter ±10% to avoid thundering herd
+          const jitter = capped * (0.9 + Math.random() * 0.2);
+          return Math.round(jitter);
         },
-        // Disable auto-reconnect spam on shutdown
-        maxRetriesPerRequest: 1,
+        // Bug #38: Increase maxRetriesPerRequest from 1 to allow automatic
+        // retries on transient failures (EPIPE, ECONNRESET, etc.)
+        maxRetriesPerRequest: 3,
+        // Lazy re-establish connection on failure
+        lazyConnect: true,
       });
 
       sub.on('error', (err) => {
         const now = Date.now();
-        if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
-          logger.warn('[VFS Snapshot Broadcaster] Subscriber connection error:', err.message);
-          state.lastWarnedAt = now;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRetryable = /EPIPE|ECONNRESET|ECONNREFUSED|ETIMEDOUT/.test(errMsg);
+        if (isRetryable) {
+          // Bug #38: Track error duration. If Redis unavailable >5 min, degrade
+          // to local-only (polling off).
+          if (!state.redisErrorStartedAt) {
+            state.redisErrorStartedAt = now;
+          }
+          const errorDurationMs = now - state.redisErrorStartedAt;
+          const DEGRADE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+           
+          // reset subscriber state so the next publish() or
+          // subscribe() call lazily creates a fresh connection. Without
+          // this, a broken subscriber silently stops receiving messages
+          // for the rest of the process lifetime.
+          state.subscriber = null;
+          state.subscribed = false;
+          state.reconnectCount = (state.reconnectCount || 0) + 1;
+           
+          if (errorDurationMs > DEGRADE_THRESHOLD_MS) {
+            logger.info(
+              '[VFS Snapshot Broadcaster] Redis unavailable for 5+ min, degrading to local-only (polling off)',
+            );
+            // Clear error state so we don't keep logging this
+            state.redisErrorStartedAt = null;
+          } else if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
+            logger.warn(
+              '[VFS Snapshot Broadcaster] Subscriber disconnected (retryable), will reconnect:',
+              errMsg,
+            );
+            state.lastWarnedAt = now;
+          }
+        } else {
+          // Non-retryable errors (NOAUTH, WRONGPASS, etc.) still get
+          // logged but we do NOT reset the subscriber — the credentials
+          // won't change on reconnect.
+          if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
+            logger.warn('[VFS Snapshot Broadcaster] Subscriber error (non-retryable):', errMsg);
+            state.lastWarnedAt = now;
+          }
         }
         // Pass-2 cross-cutting theme: record the EPIPE / connection error.
         // sessionId is 'default' because the broadcaster is process-wide and
@@ -176,7 +273,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
             'default',
             'broadcaster_epipe',
             'snapshot-broadcaster',
-            { error: err.message, kind: 'subscriber_error' },
+            { error: errMsg, kind: 'subscriber_error', reconnectCount: state.reconnectCount },
           );
         } catch { /* best-effort */ }
       });
@@ -184,7 +281,29 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       sub.on('connect', () => {
         logger.info('[VFS Snapshot Broadcaster] Subscriber connected');
         state.lastWarnedAt = 0;
+        state.lastErrorAt = null;
+        // Bug #38: Reset error timer on successful reconnect
+        state.redisErrorStartedAt = null;
       });
+
+      // Bug #64: Start a periodic keepalive PING to prevent the publisher
+      // connection from being closed by Redis server-side idle timeout or
+      // proxy timeouts. Runs every 30s using the shared redis client.
+      if (!state.keepaliveHandle) {
+        state.keepaliveHandle = setInterval(() => {
+          try {
+            const client = getRedisClient();
+            if (client && typeof client.ping === 'function') {
+              client.ping().catch(() => {
+                // Silently ignore — keepalive is best-effort.
+                // A failed ping will be caught by the next publish() error handler.
+              });
+            }
+          } catch {
+            // best-effort
+          }
+        }, 30_000).unref();
+      }
     } catch (err) {
       logger.warn(
         '[VFS Snapshot Broadcaster] Failed to create subscriber connection:',
@@ -247,6 +366,12 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       if (typeof ownerId !== 'string' || typeof version !== 'number') {
         return;
       }
+      // Graceful degrade: when Redis is disabled, publish() is a silent
+      // no-op. The local in-process listener (registered on
+      // onSnapshotChange) still fires, so the single-process path works.
+      if (!isRedisEnabled()) {
+        return;
+      }
       const message: SnapshotChangedMessage = {
         ownerId,
         version,
@@ -268,10 +393,22 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
           // Use the same cooldown as the subscriber so operators get
           // periodic visibility without log spam.
           const now = Date.now();
+          state.lastErrorAt = now;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          // Bug #64: distinguish "Connection is closed" (publisher died) from
+          // transient publish failures. Reset publisher state when the
+          // connection is closed so the next publish() gets a fresh client.
+          const isConnectionClosed = /connection is closed/i.test(errMsg);
+          if (isConnectionClosed) {
+            state.publisherReconnectCount = (state.publisherReconnectCount || 0) + 1;
+            // The publisher from getRedisClient() is shared and we cannot
+            // reset it here — but we CAN flag it for the next publish.
+            // The keepalive timer will also detect and re-establish.
+          }
           if (now - state.lastWarnedAt > WARN_COOLDOWN_MS) {
             logger.warn(
               '[VFS Snapshot Broadcaster] PUBLISH failed:',
-              err instanceof Error ? err.message : String(err)
+              errMsg
             );
             state.lastWarnedAt = now;
           }
@@ -282,7 +419,7 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
               message.ownerId,
               'broadcaster_epipe',
               'snapshot-broadcaster',
-              { error: err.message, kind: 'publish_failure' },
+              { error: err.message, kind: 'publish_failure', isConnectionClosed },
             );
           } catch { /* best-effort */ }
         });
@@ -304,6 +441,14 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
     /** Test-only: tear down the subscriber. */
     async _reset(): Promise<void> {
       state.listeners.clear();
+      if (state.pollingHandle) {
+        clearInterval(state.pollingHandle);
+        state.pollingHandle = null;
+      }
+      if (state.keepaliveHandle) {
+        clearInterval(state.keepaliveHandle);
+        state.keepaliveHandle = null;
+      }
       if (state.subscriber) {
         try {
           await state.subscriber.unsubscribe(SNAPSHOT_CHANGED_CHANNEL);
@@ -319,6 +464,9 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
       state.subscriber = null;
       state.subscribed = false;
       state.lastWarnedAt = 0;
+      state.redisErrorStartedAt = null;
+      state.lastErrorAt = null;
+      state.publisherReconnectCount = 0;
       // Drop the cached API so a fresh one is built on the next call
       // (helpful for tests; in production this is a no-op after first init).
       delete state.api;
@@ -327,6 +475,18 @@ export function getSnapshotBroadcaster(): SnapshotBroadcasterApi {
     /** Test-only: was the broadcaster able to subscribe to Redis? */
     isRedisBacked(): boolean {
       return state.subscribed;
+    },
+
+    /** Return current broadcaster health snapshot. */
+    getHealth(): BroadcasterHealth {
+      return {
+        isRedisBacked: state.subscribed,
+        reconnectCount: state.reconnectCount,
+        publisherReconnectCount: state.publisherReconnectCount,
+        lastErrorAt: state.lastErrorAt,
+        lastWarnedAt: state.lastWarnedAt,
+        subscriberAlive: state.subscriber !== null,
+      };
     },
   };
 

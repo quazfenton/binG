@@ -17,6 +17,7 @@ import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { workspaceSessionGraph, type SessionGraphNode } from '@/lib/workspace/workspace-session-graph';
 import { formatSessionLabel } from '@/lib/workspace/session-label-utils';
 import { createLogger } from '@/lib/utils/logger';
+import { withUISourceScope } from '@/lib/http/ui-source-header-server';
 
 const logger = createLogger('API:WorkspaceSessionsReconnect');
 
@@ -24,7 +25,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ workspaceId: string }> },
 ) {
-  try {
+  return withUISourceScope(request, async () => {
+    try {
     // Authenticate user
     const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
     if (!authResult.success || !authResult.userId) {
@@ -119,13 +121,14 @@ export async function POST(
         reconnection: reconnectionDetails,
       },
     });
-  } catch (error: any) {
-    logger.error('Failed to reconnect session', { error: error.message });
-    return NextResponse.json(
-      { error: 'Failed to reconnect session' },
-      { status: 500 },
-    );
-  }
+    } catch (error: any) {
+      logger.error('Failed to reconnect session', { error: error.message });
+      return NextResponse.json(
+        { error: 'Failed to reconnect session' },
+        { status: 500 },
+      );
+    }
+  });
 }
 
 // ============================================================================

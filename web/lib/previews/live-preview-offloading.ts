@@ -117,6 +117,7 @@ export type AppFramework =
   | 'remix'        // Remix
   | 'qwik'         // Qwik
   // Python Frameworks
+  | 'python'       // Generic Python (no specific framework detected)
   | 'gradio'       // Gradio (ML UI)
   | 'streamlit'    // Streamlit
   | 'flask'        // Flask
@@ -130,7 +131,7 @@ export type AppFramework =
 /**
  * Bundler types
  */
-export type Bundler = 'webpack' | 'vite' | 'parcel' | 'rollup' | 'esbuild' | 'unknown';
+export type Bundler = 'webpack' | 'vite' | 'parcel' | 'rollup' | 'esbuild' | 'docker' | 'unknown';
 
 /**
  * Workspace detection result
@@ -221,33 +222,35 @@ export interface PreviewRequest {
  * Framework to Sandpack template mapping
  * Maps our AppFramework to CodeSandbox Sandpack templates
  */
-const FRAMEWORK_TO_TEMPLATE: Record<AppFramework, string> = {
+export const FRAMEWORK_TO_TEMPLATE: Record<AppFramework, string> = {
   // React-based
   react: 'react',
   'vite-react': 'react',
   next: 'nextjs',
   gatsby: 'react',
-  remix: 'vite-react',
+  remix: 'react',
   // Vue-based
   vue: 'vue',
-  nuxt: 'vite-vue',
+  nuxt: 'vue',
   // Other frameworks
   svelte: 'svelte',
   angular: 'angular',
   solid: 'solid',
   astro: 'astro',
+  qwik: 'vanilla',
   // Non-framework
   vite: 'vite',
   vanilla: 'vanilla',
-  node: 'vanilla',  // Node.js -> use vanilla template (WebContainer handles runtime)
-  unknown: 'vanilla',
+  node: 'node',  // Node.js template for backend preview
   // Python - use vanilla (Pyodide handles these separately)
+  python: 'vanilla',
   gradio: 'vanilla',
   streamlit: 'vanilla',
   flask: 'vanilla',
   fastapi: 'vanilla',
   django: 'vanilla',
-  qwik: 'vanilla',  // Qwik uses different template in Sandpack
+  // Fallback
+  unknown: 'vanilla',
 };
 
 /**
@@ -323,6 +326,9 @@ const FRAMEWORK_ENTRY_POINTS: Record<AppFramework, string[]> = {
   // Python
   gradio: [
     '/main.py', '/app.py', '/demo.py', '/serve.py'
+  ],
+  python: [
+    '/main.py', '/app.py', '/run.py', '/cli.py'
   ],
   streamlit: [
     '/main.py', '/app.py', '/streamlit_app.py'
@@ -1754,6 +1760,7 @@ export class LivePreviewOffloading {
       'flask': 'python',
       'fastapi': 'python',
       'django': 'python',
+      'python': 'python',
       'unknown': 'node',  // Default to Node.js template
     };
 

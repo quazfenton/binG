@@ -52,6 +52,7 @@ import { createDebugLogger } from "../.bing-infra-config/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session/session-naming";
 import { buildApiHeaders } from '@/lib/utils/utils';
+import { UI_SOURCE } from '@/lib/http/ui-source-header';
 import { usePanel } from "@/contexts/panel-context";
 import { clipboard } from "@bing/platform/clipboard";
 
@@ -64,9 +65,11 @@ import {
   type ProjectDetection,
   type PreviewMode,
   type AppFramework,
+  FRAMEWORK_TO_TEMPLATE,
 } from "@/lib/previews/live-preview-offloading";
 import { createLogger } from '@/lib/utils/logger';
 
+const logger = createLogger('UI:CodePreviewPanel');;
 // Import Preview Error Boundary
 import { PreviewErrorBoundary } from "./preview-error-boundary";
 
@@ -215,7 +218,7 @@ interface ProjectStructure {
     | "python"
     | "node"
     | "vanilla-ts";
-  bundler?: "webpack" | "vite" | "parcel" | "rollup" | "esbuild";
+  bundler?: "webpack" | "vite" | "parcel" | "rollup" | "esbuild" | "docker";
   packageManager?: "npm" | "yarn" | "pnpm" | "bun";
   entryFile?: string | null;
   previewModeHint?: string;
@@ -646,7 +649,7 @@ export default function CodePreviewPanel({
       // Use new rename API with conflict detection
       const response = await fetch('/api/filesystem/rename', {
         method: 'POST',
-        headers: buildApiHeaders(),
+        headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.CODE_PREVIEW_PANEL },
         body: JSON.stringify({
           oldPath: resolveScopedPath(oldPath, normalizedFilesystemPath),
           newPath: resolveScopedPath(newPath, normalizedFilesystemPath),
@@ -669,7 +672,7 @@ export default function CodePreviewPanel({
             // Retry with overwrite=true
             const retryResponse = await fetch('/api/filesystem/rename', {
               method: 'POST',
-              headers: buildApiHeaders(),
+              headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.CODE_PREVIEW_PANEL },
               body: JSON.stringify({
                 oldPath: resolveScopedPath(oldPath, normalizedFilesystemPath),
                 newPath: resolveScopedPath(newPath, normalizedFilesystemPath),
@@ -946,7 +949,7 @@ export default function CodePreviewPanel({
       // Use new move API with conflict detection
       const response = await fetch('/api/filesystem/move', {
         method: 'POST',
-        headers: buildApiHeaders(),
+        headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.CODE_PREVIEW_PANEL },
         body: JSON.stringify({
           sourcePath: resolveScopedPath(sourcePath, normalizedFilesystemPath),
           targetPath: resolveScopedPath(newPath, normalizedFilesystemPath),
@@ -969,7 +972,7 @@ export default function CodePreviewPanel({
             // Retry with overwrite=true
             const retryResponse = await fetch('/api/filesystem/move', {
               method: 'POST',
-              headers: buildApiHeaders(),
+              headers: { ...buildApiHeaders(), 'X-UI-Source': UI_SOURCE.CODE_PREVIEW_PANEL },
               body: JSON.stringify({
                 sourcePath: resolveScopedPath(sourcePath, normalizedFilesystemPath),
                 targetPath: resolveScopedPath(newPath, normalizedFilesystemPath),
@@ -1177,7 +1180,7 @@ export default function CodePreviewPanel({
                 const file = await readFilesystemFile(node.path);
                 files[relativePath] = file.content ?? '';
               } catch (err) {
-                logger.warn('Failed to load file:', node.path, err);
+                logger.warn('Failed to load file', { path: node.path, error: err });
               }
             }
           }
@@ -2445,7 +2448,7 @@ export default function CodePreviewPanel({
           zip.file(relativePath, file.content || '');
         }
         
-        logger.info('[Download] Added', vfsFiles.length, 'files from VFS');
+        logger.info('[Download] Added files from VFS', { count: vfsFiles.length });
       }
     } catch (err) {
       logger.warn('[Download] Failed to get VFS files, using fallback:', err);
@@ -2690,16 +2693,11 @@ Generated on: ${new Date().toLocaleString()}
       ? projectDetection.framework
       : useStructure?.framework || 'vanilla';
     
-    // Map framework to valid Sandpack template
-    const FRAMEWORK_SANDPACK_TEMPLATE: Record<string, string> = {
-      react: 'react', 'vite-react': 'vite-react', next: 'nextjs',
-      gatsby: 'gatsby', vue: 'vue', svelte: 'svelte',
-      angular: 'angular', solid: 'solid', astro: 'astro',
-      vite: 'vite', vanilla: 'vanilla', 'vanilla-ts': 'vanilla-ts',
-      node: 'node', parcel: 'parcel', static: 'static',
-    };
+    // Use framework-to-template mapping from live-preview-offloading module
+    // Valid Sandpack templates: react, vue, angular, svelte, solid, vanilla, vanilla-ts, node, nextjs, astro, static
+    // Non-Sandpack frameworks (python, gradio, streamlit, flask, fastapi, django) route to alternative modes
     const getSandpackTemplate = (framework: string) =>
-      FRAMEWORK_SANDPACK_TEMPLATE[framework] || 'vanilla';
+      FRAMEWORK_TO_TEMPLATE[framework as AppFramework] || 'vanilla';
 
     const sandpackDependencySourceFiles = useMemo(() => {
       if (useStructure?.files && Object.keys(useStructure.files).length > 0) {
@@ -3137,7 +3135,7 @@ createApp(App).mount('#app');` };
                 filesCopy["src/index.jsx"] = { code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
-const logger = createLogger('UI:CodePreviewPanel');
+
 
 function App() {
   return (

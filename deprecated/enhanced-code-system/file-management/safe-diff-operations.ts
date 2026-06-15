@@ -461,7 +461,7 @@ class SafeDiffOperations extends EventEmitter {
     } catch (error) {
       return {
         isValid: false,
-        errors: [`Pre-execution validation failed: ${error.message}`],
+        errors: [`Pre-execution validation failed: ${error instanceof Error ? error.message : String(error)}`],
         warnings: [],
         confidence: 0,
         suggestions: ['Manual review recommended']
@@ -669,7 +669,7 @@ class SafeDiffOperations extends EventEmitter {
             errors.push(applyResult.error || `Failed to apply diff: ${diff.description}`);
           }
         } catch (error) {
-          errors.push(`Error applying diff: ${error.message}`);
+          errors.push(`Error applying diff: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -707,7 +707,7 @@ class SafeDiffOperations extends EventEmitter {
       };
 
     } catch (error) {
-      errors.push(`Diff application with tracking failed: ${error.message}`);
+      errors.push(`Diff application with tracking failed: ${error instanceof Error ? error.message : String(error)}`);
       return {
         success: false,
         updatedContent: content,
@@ -769,7 +769,7 @@ class SafeDiffOperations extends EventEmitter {
       return {
         success: false,
         content,
-        error: error.message
+        error: error instanceof Error ? error.message : String(error)
       };
     }
   }
@@ -798,7 +798,7 @@ class SafeDiffOperations extends EventEmitter {
           try {
             JSON.parse(content);
           } catch (error) {
-            errors.push(`JSON syntax error: ${error.message}`);
+            errors.push(`JSON syntax error: ${error instanceof Error ? error.message : String(error)}`);
             confidence = 0;
           }
           break;
@@ -839,7 +839,7 @@ class SafeDiffOperations extends EventEmitter {
     } catch (error) {
       return {
         isValid: false,
-        errors: [`Syntax validation failed: ${error.message}`],
+        errors: [`Syntax validation failed: ${error instanceof Error ? error.message : String(error)}`],
         warnings: [],
         confidence: 0
       };
@@ -1440,7 +1440,7 @@ class SafeDiffOperations extends EventEmitter {
         id: `conflict_${fileId}_${Date.now()}`,
         fileId,
         type: 'semantic_conflict',
-        description: `Conflict detection failed: ${error.message}`,
+        description: `Conflict detection failed: ${error instanceof Error ? error.message : String(error)}`,
         affectedLines: [],
         conflictingDiffs: diffs,
         severity: 'medium',
@@ -2080,7 +2080,7 @@ class SafeDiffOperations extends EventEmitter {
         id: `syntax_error_${fileId}_${Date.now()}`,
         fileId,
         type: 'syntax_conflict',
-        description: `Syntax validation failed: ${error.message}`,
+        description: `Syntax validation failed: ${error instanceof Error ? error.message : String(error)}`,
         affectedLines: [],
         conflictingDiffs: diffs,
         severity: 'high',
@@ -2160,7 +2160,7 @@ class SafeDiffOperations extends EventEmitter {
         success: false,
         restoredContent: '',
         backupId,
-        errors: [`Rollback failed: ${error.message}`]
+        errors: [`Rollback failed: ${error instanceof Error ? error.message : String(error)}`]
       };
     }
   }
@@ -2197,7 +2197,7 @@ class SafeDiffOperations extends EventEmitter {
           
           this.emit('conflict_resolved', { fileId, conflictId: resolution.conflictId, resolution });
         } catch (error) {
-          errors.push(`Failed to resolve conflict ${resolution.conflictId}: ${error.message}`);
+          errors.push(`Failed to resolve conflict ${resolution.conflictId}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
@@ -2220,7 +2220,7 @@ class SafeDiffOperations extends EventEmitter {
         success: false,
         resolvedConflicts,
         remainingConflicts: activeConflicts,
-        errors: [`Conflict resolution failed: ${error.message}`]
+        errors: [`Conflict resolution failed: ${error instanceof Error ? error.message : String(error)}`]
       };
     }
   }

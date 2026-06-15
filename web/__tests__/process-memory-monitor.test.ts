@@ -47,19 +47,19 @@ describe('Bug #8: ProcessMemoryMonitor config', () => {
     // Each test uses a fresh monitor with autoStart:false so env from other
     // tests doesn't leak in.
     const m = createProcessMemoryMonitor({ autoStart: false });
-    expect(m.getConfig().softThrottleMb).toBe(1228);
+    expect(m.getConfig().softThrottleMb).toBe(1024);
     expect(m.getConfig().criticalMb).toBe(1843);
   });
 
   it('accepts per-instance config overrides', () => {
-    const m = createProcessMemoryMonitor({ softThrottleMb: 50, criticalMb: 100, autoStart: false });
-    expect(m.getConfig().softThrottleMb).toBe(50);
-    expect(m.getConfig().criticalMb).toBe(100);
+    const m = createProcessMemoryMonitor({ softThrottleMb: 512, criticalMb: 1024, autoStart: false });
+    expect(m.getConfig().softThrottleMb).toBe(512);
+    expect(m.getConfig().criticalMb).toBe(1024);
   });
 
   it('falls back to defaults when soft >= critical (invalid config)', () => {
-    const m = createProcessMemoryMonitor({ softThrottleMb: 200, criticalMb: 100, autoStart: false });
-    expect(m.getConfig().softThrottleMb).toBe(1228);
+    const m = createProcessMemoryMonitor({ softThrottleMb: 1843, criticalMb: 1024, autoStart: false });
+    expect(m.getConfig().softThrottleMb).toBe(1024);
     expect(m.getConfig().criticalMb).toBe(1843);
   });
 });
@@ -249,7 +249,7 @@ describe('Bug #8: getStatus() shape', () => {
       heapUsedMb: 500,
       rssMb: 600,
       externalMb: 50,
-      softThrottleMb: 1228,
+      softThrottleMb: 1024,
       criticalMb: 1843,
       throttled: false,
       lastAlertSeverity: null,
@@ -368,7 +368,7 @@ describe('Bug #8: singleton', () => {
     // We can't disable autoStart on the singleton directly, so just verify
     // the getStatus() shape is correct after a manual call.
     const status = processMemoryMonitor.getStatus();
-    expect(status.softThrottleMb).toBe(1228);
+    expect(status.softThrottleMb).toBe(1024);
     expect(status.criticalMb).toBe(1843);
   });
 });

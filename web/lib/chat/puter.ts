@@ -5,6 +5,9 @@
  */
 
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:Puter');
 
 type PuterModelRaw = {
   id?: string
@@ -29,7 +32,7 @@ export async function fetchPuterModels(baseURL: string = DEFAULT_BASE): Promise<
     const json = await r.json().catch(() => [])
     return Array.isArray(json) ? json : []
   } catch (err) {
-    console.warn('[puter] fetchModels error', (err as Error).message)
+    logger.warn('[puter] fetchModels error', { error: (err as Error).message })
     return []
   }
 }

@@ -91,15 +91,19 @@ export function parseWebhookPayload(body: string): WebhookPayload {
  * ```typescript
  * // app/api/webhooks/composio/route.ts
  * import { handleComposioWebhook } from '@/lib/integrations/composio/webhook-handler';
-import { createLogger } from '@/lib/utils/logger';
-
-const logger = createLogger('Integration:ComposioWebhook');
+ * import { createLogger } from '@/lib/utils/logger';
+ *
+ * const logger = createLogger('Integration:ComposioWebhook');
  *
  * export async function POST(request: NextRequest) {
  *   return handleComposioWebhook(request);
  * }
  * ```
  */
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Integration:ComposioWebhook');
+
 export async function handleComposioWebhook(request: NextRequest): Promise<NextResponse> {
   try {
     const body = await request.text();

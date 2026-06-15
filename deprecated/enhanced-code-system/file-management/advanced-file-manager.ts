@@ -113,7 +113,7 @@ class AdvancedFileManager extends EventEmitter {
   private fileStates: Map<string, FileState> = new Map();
   private workflowQueue: WorkflowStep[] = [];
   private autoTriggerRules: AutoTriggerRule[] = [];
-  private dmp: diff_match_patch;
+  private dmp: typeof diff_match_patch;
   private codePreviewState: CodePreviewPanelState;
   private sandpackState: SandpackEditorState;
   private changeHistory: Array<{
@@ -335,7 +335,7 @@ class AdvancedFileManager extends EventEmitter {
           errors.push(result.error || `Failed to apply diff: ${diff.description}`);
         }
       } catch (error) {
-        errors.push(`Error applying diff: ${error.message}`);
+        errors.push(`Error applying diff: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
@@ -423,7 +423,7 @@ class AdvancedFileManager extends EventEmitter {
       return {
         success: false,
         content,
-        error: error.message
+        error: error instanceof Error ? error.message : String(error)
       };
     }
   }
@@ -613,11 +613,12 @@ class AdvancedFileManager extends EventEmitter {
         this.emit('workflow_step_completed', { step, result });
 
       } catch (error) {
-        step.error = error.message;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        step.error = errorMessage;
         step.status = 'failed';
         failedSteps.push(step);
 
-        this.emit('workflow_step_failed', { step, error: error.message });
+        this.emit('workflow_step_failed', { step, error: errorMessage });
       }
     }
 
@@ -1309,7 +1310,7 @@ class AdvancedFileManager extends EventEmitter {
       this.emit('auto_trigger_error', {
         ruleId: rule.id,
         fileId,
-        error: error.message
+        error: error instanceof Error ? error.message : String(error)
       });
     }
   }

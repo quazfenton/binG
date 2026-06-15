@@ -16,6 +16,20 @@ import { logToolCount } from '../bootstrap-health';
 
 const logger = createLogger('Tools:Arcade-Bootstrap');
 
+// Bug #19: surface optional-infra degradation to the user. Emit a
+// structured warn + populate a cached capability list so the LLM can
+// see the degradation in its system prompt (not just run.log) and the
+// bootstrap layer can short-circuit Arcade lookups for the TTL window.
+// The cache is best-effort: if Arcade recovers on the next call, the
+// next refresh will repopulate the list. `declare global` MUST be at
+// module scope (TS1234 forbids it inside a function body).
+declare global {
+  // eslint-disable-next-line no-var
+  var __arcadeDegradedCache__:
+    | { degraded: boolean; reason: string; expiresAt: number; inFlight: boolean }
+    | undefined;
+}
+
 // Track if already initialized
 let arcadeInitialized = false;
 
@@ -47,6 +61,36 @@ export async function registerArcadeTools(registry: ToolRegistry, config: Bootst
 
   let count = 0;
 
+  // Bug #19: surface optional-infra degradation to the user. Short-circuit
+  // bootstrap when the cache is hot (degraded) or in-flight (another caller
+  // is already checking). The in-flight marker closes the race where
+  // concurrent bootstrap calls all see `degradedCache === undefined` and
+  // all hit the network.
+  const ARCADE_DEGRADED_CACHE_TTL_MS = parseInt(
+    process.env.ARCADE_DEGRADED_CACHE_TTL_MS || '60000',
+    10
+  );
+  const degradedCache = globalThis.__arcadeDegradedCache__;
+  if (degradedCache && degradedCache.expiresAt > Date.now()) {
+    if (degradedCache.inFlight) {
+      logger.debug('[Bug #19] Arcade bootstrap already in-flight, returning 0');
+      return 0;
+    }
+    if (degradedCache.degraded) {
+      logger.warn(
+        `[Bug #19] Arcade capability list cached as degraded (TTL remaining ${Math.round((degradedCache.expiresAt - Date.now()) / 1000)}s): ${degradedCache.reason}`
+      );
+      return 0;
+    }
+  }
+  // Mark in-flight so concurrent callers short-circuit.
+  globalThis.__arcadeDegradedCache__ = {
+    degraded: false,
+    reason: '',
+    expiresAt: Date.now() + ARCADE_DEGRADED_CACHE_TTL_MS,
+    inFlight: true,
+  };
+
   try {
     // Import Arcade service
     const { getArcadeService, isArcadeServiceDisabled } = await import('../../integrations/arcade-service');
@@ -58,8 +102,34 @@ export async function registerArcadeTools(registry: ToolRegistry, config: Bootst
           'Arcade service disabled due to 401 (invalid API key). ' +
           'Fix ARCADE_API_KEY and call reenableArcadeService() to retry, or restart the server.'
         );
+        // Bug #19: cache the 401-degraded state so subsequent bootstrap
+        // calls short-circuit and don't re-emit the warning on every call.
+        // isArcadeServiceDisabled() returns true WITHOUT throwing, so the
+        // catch block below never fires for this case — we have to set
+        // the cache here.
+        try {
+          globalThis.__arcadeDegradedCache__ = {
+            degraded: true,
+            reason: 'Arcade service disabled (401 invalid API key)',
+            expiresAt: Date.now() + ARCADE_DEGRADED_CACHE_TTL_MS,
+            inFlight: false,
+          };
+        } catch { /* best-effort */ }
       } else {
         logger.debug('Arcade service not available (not yet initialized or no key)');
+        // No key configured is NOT a degradation — it's the expected
+        // state. Clear any in-flight marker so the next call can re-evaluate.
+        try {
+          const cur = globalThis.__arcadeDegradedCache__;
+          if (cur && cur.inFlight) {
+            globalThis.__arcadeDegradedCache__ = {
+              degraded: false,
+              reason: '',
+              expiresAt: Date.now() + ARCADE_DEGRADED_CACHE_TTL_MS,
+              inFlight: false,
+            };
+          }
+        } catch { /* best-effort */ }
       }
       return 0;
     }
@@ -117,6 +187,42 @@ export async function registerArcadeTools(registry: ToolRegistry, config: Bootst
     logToolCount(logger, { registry: 'Arcade', count });
   } catch (error: any) {
     logger.error('Failed to register Arcade tools', error);
+    // Bug #19: cache the degradation for the TTL window so subsequent
+    // bootstrap calls short-circuit and the LLM sees a consistent
+    // 'degraded' signal in its system prompt.
+    try {
+      globalThis.__arcadeDegradedCache__ = {
+        degraded: true,
+        reason: error instanceof Error ? error.message : String(error),
+        expiresAt: Date.now() + ARCADE_DEGRADED_CACHE_TTL_MS,
+        inFlight: false,
+      };
+    } catch { /* best-effort */ }
+  }
+
+  // Bug #19: only cache as degraded if the underlying call signalled
+  // a real degradation (isArcadeServiceDisabled() === true from a 401).
+  // A legitimate empty result (no API key configured, or zero tools
+  // available) is NOT a degradation — it's the expected state. Clearing
+  // the cache on success allows a previously-degraded Arcade to be
+  // retried on the next bootstrap.
+  if (count > 0) {
+    try {
+      globalThis.__arcadeDegradedCache__ = undefined;
+    } catch { /* best-effort */ }
+  } else {
+    // Clear the in-flight marker so the next call can re-evaluate.
+    try {
+      const cur = globalThis.__arcadeDegradedCache__;
+      if (cur && cur.inFlight) {
+        globalThis.__arcadeDegradedCache__ = {
+          degraded: false,
+          reason: '',
+          expiresAt: Date.now() + ARCADE_DEGRADED_CACHE_TTL_MS,
+          inFlight: false,
+        };
+      }
+    } catch { /* best-effort */ }
   }
 
   return count;

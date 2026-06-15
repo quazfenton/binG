@@ -271,7 +271,19 @@ export interface MCPTransportConfig {
   // For SSE / HTTP transport
   url?: string
   apiKey?: string
+  /**
+   * Bearer token for authenticating SSE / HTTP requests.
+   * The HTTP-standard name; preferred over the legacy `authToken` alias.
+   * Used by `MCPClient.sendRequest/sendNotification` to set the
+   * `Authorization: Bearer …` header on SSE POSTs.
+   */
   bearerToken?: string
+  /**
+   * @deprecated Use `bearerToken` instead. Kept as a back-compat alias for
+   * existing server configs that pre-date the rename. If both are set,
+   * `bearerToken` wins. Remove in a future major version.
+   */
+  authToken?: string
   headers?: Record<string, string>
 
   // For websocket transport

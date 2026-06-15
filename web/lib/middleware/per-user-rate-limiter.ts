@@ -30,8 +30,8 @@ export interface CounterStore {
 }
 
 export interface PerUserRateLimitConfig {
-  windowMs: number;            // Sliding window size in ms (default 60_000)
-  maxRequests: number;         // Max requests per window (default 1000)
+  windowMs?: number;           // Sliding window size in ms (default 60_000)
+  maxRequests?: number;        // Max requests per window (default 1000)
   store?: CounterStore;        // Optional external store (Redis/KV) for cross-instance
   lruMaxSize?: number;         // Max entries in the in-memory LRU (default 10_000)
   keyPrefix?: string;          // Prefix for the cache key (default 'rl:user:')

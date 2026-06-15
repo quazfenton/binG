@@ -201,7 +201,7 @@ describe('Bug #41: recordStepAndCheckLoop → structured LoopDetectorResult', ()
     expect(r.abort!.autoRecoverTo).toBeUndefined();
   });
 
-  it('stores the real error in failedToolErrors and surfaces it in failedTools[].error', () => {
+  it('stores the real error in recentFailures and surfaces it in failedTools[].error', () => {
     const state = createLoopDetectorState();
     recordStepAndCheckLoop(state, 'execute_bash', { command: 'x' }, false, 'spawn /usr/local/bin/python3 ENOENT');
     recordStepAndCheckLoop(state, 'execute_bash', { command: 'y' }, false, 'spawn /usr/local/bin/python3 ENOENT');

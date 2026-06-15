@@ -206,11 +206,15 @@ class WindowControl {
         }
       }
       // Built-in Tauri fallback: open via <a> tag click simulation
-      const a = document.createElement('a');
-      a.href = url;
-      a.target = target;
-      a.rel = target === '_blank' ? 'noopener noreferrer' : undefined;
-      a.click();
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = target;
+        a.rel = target === '_blank' ? 'noopener noreferrer' : '';
+        a.click();
+      } catch (error) {
+        console.error('[WindowControl] Failed to open URL via <a> fallback:', error);
+      }
     } else {
       const openedWindow = window.open(url, target, 'noopener,noreferrer');
       if (openedWindow) {

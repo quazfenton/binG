@@ -253,6 +253,103 @@ export function resetMissingBinaryRetry(baseCmd: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Sandbox-aware probe
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the env probe inside a sandbox, using the sandbox's `which` command
+ * instead of the host's. Returns the same Map<bin, path|null> format.
+ *
+ * When a sandbox session is active, binaries available inside that sandbox
+ * (e.g. node, python3, npx) are reported as found — even if they are NOT
+ * installed on the host.
+ *
+ * MUST be called with a valid `sandboxId`. If the sandbox executeCommand
+ * fails, falls back to the host probe so there's always SOME result.
+ */
+export async function probeAvailableBinariesInSandbox(
+  sandboxId: string,
+  binaries?: readonly string[],
+): Promise<Map<string, string | null>> {
+  const list = binaries || DEFAULT_BINARIES;
+  const fresh = new Map<string, string | null>();
+
+  let sandboxBridge: any;
+  try {
+    const mod = await import('@/lib/sandbox/sandbox-service-bridge');
+    sandboxBridge = mod.sandboxBridge;
+  } catch {
+    // Sandbox module not available — fall through to host probe
+    return probeAvailableBinaries(list);
+  }
+
+  await Promise.all(
+    list.map(
+      (bin) =>
+        new Promise<void>(async (resolve) => {
+          try {
+            const result = await sandboxBridge.executeCommand(
+              sandboxId,
+              `which ${bin} 2>/dev/null || echo "__NOT_FOUND__"`,
+              '/workspace',
+              3000,
+            );
+            const stdout = (result as any)?.stdout || '';
+            const out = stdout.trim().split('\n')[0]?.trim() || '';
+            if (out && out !== '__NOT_FOUND__') {
+              fresh.set(bin, out);
+            } else {
+              fresh.set(bin, null);
+            }
+          } catch {
+            fresh.set(bin, null);
+          }
+          resolve();
+        }),
+    ),
+  );
+
+  return fresh;
+}
+
+/**
+ * Format the env probe result into a system-prompt fragment, with an
+ * optional sandbox hint that tells the LLM it's probing a sandbox.
+ */
+export function formatAvailableBinariesWithSource(
+  probe: Map<string, string | null>,
+  source: 'host' | 'sandbox',
+  sandboxId?: string,
+): string {
+  const header = source === 'sandbox'
+    ? `### Available Binaries (env probe — sandbox${sandboxId ? ` ${sandboxId.slice(0, 12)}` : ''} — do NOT call binaries not listed below as available)`
+    : '### Available Binaries (env probe — do NOT call binaries not listed below as available)';
+
+  const found: string[] = [];
+  const missing: string[] = [];
+
+  const sorted = Array.from(probe.entries()).sort(([a], [b]) => a.localeCompare(b));
+  for (const [bin, path] of sorted) {
+    if (path) {
+      found.push(`- ${bin} → ${path}`);
+    } else {
+      missing.push(`- ${bin} → NOT FOUND`);
+    }
+  }
+
+  const lines: string[] = [];
+  lines.push(header);
+  lines.push(...found);
+  if (missing.length > 0) {
+    lines.push('### Missing Binaries (env probe — these are NOT installed; do NOT call them)');
+    lines.push(...missing);
+    lines.push('');
+    lines.push('If a binary is in the missing list, do NOT call it. Use write_file / read_file / apply_diff for file operations, or use an alternative that IS in the available list.');
+  }
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Self-test
 // ---------------------------------------------------------------------------
 

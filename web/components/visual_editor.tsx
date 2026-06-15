@@ -6052,7 +6052,7 @@ export function VisualEditorMain({
         // Capture serialized nodes on every change (drag, drop, edit, delete)
         const serialized = query.getSerializedNodes() as Record<string, unknown>;
         craftJsonRef.current = serialized;
-        logger.info("[VisualEditor] Nodes changed:", Object.keys(serialized).length, "nodes");
+        logger.info("[VisualEditor] Nodes changed", { count: Object.keys(serialized).length });
       }}
     >
       <div

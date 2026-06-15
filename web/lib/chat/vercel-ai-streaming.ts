@@ -235,6 +235,8 @@ export interface VercelStreamOptions {
    * fallback chain can take over.
    */
   firstTokenTimeoutMs?: number;
+  /** Request timeout in milliseconds (default: 90000). */
+  timeoutMs?: number;
   /**
    * Rolling idle timeout in milliseconds.
    * Resets on every chunk after the first token. Fires when the stream goes
@@ -310,6 +312,15 @@ export const STREAM_TIMEOUTS = {
   firstTokenTimeoutMs: parseInt(process.env.LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS || '30000', 10),
   idleTimeoutMs: parseInt(process.env.LLM_STREAM_IDLE_TIMEOUT_MS || '75000', 10),
   thinkPingMs: parseInt(process.env.LLM_STREAM_THINK_PING_MS || '20000', 10),
+  // Bug #45: after this many ms of silence (no text, no tool call), inject
+  // a [STEER] stall_detected hint into the next-turn context. This MUST be
+  // > thinkPingMs and < idleTimeoutMs so the stall steer fires between the
+  // thinking ping and the hard idle abort.
+  stallSteerMs: parseInt(process.env.LLM_STREAM_STALL_STEER_MS || '30000', 10),
+  // Bug #45: mid-stream stall detection threshold. A stream that goes
+  // stallThresholdMs+ between chunks with no meaningful content is
+  // treated as effectively silent.
+  stallThresholdMs: parseInt(process.env.LLM_STREAM_STALL_THRESHOLD_MS || '30000', 10),
 } as const;
 
 /**
@@ -939,6 +950,26 @@ export async function* streamWithVercelAI(
   apiKey?: string,
   baseURL?: string
 ): AsyncGenerator<StreamingResponse> {
+  // Bug #45: mid-stream stall detection. If a stream goes 30s+ between
+  // chunks with no meaningful content, treat it as effectively silent and
+  // set the incomplete flag so the next iteration can surface an
+  // [INCOMPLETE-RESPONSE-FEEDBACK] to the LLM.
+  const STALL_THRESHOLD_MS = STREAM_TIMEOUTS.stallThresholdMs;
+  let firstChunkAt = 0;
+  let lastChunkAt = 0;
+  let totalChunks = 0;
+  let streamStalled = false;
+  function checkChunkStall(): boolean {
+    const now = Date.now();
+    if (firstChunkAt === 0) firstChunkAt = now;
+    if (lastChunkAt !== 0 && now - lastChunkAt > STALL_THRESHOLD_MS) {
+      streamStalled = true;
+    }
+    lastChunkAt = now;
+    totalChunks += 1;
+    return streamStalled;
+  }
+
   // Support both new options-object API and legacy positional API
   let opts: VercelStreamOptions;
   if (typeof optionsOrProvider === 'object') {
@@ -1075,7 +1106,22 @@ export async function* streamWithVercelAI(
     }, firstTokenTimeoutMs);
   }
 
-  const effectiveSignal = timeoutController?.signal || signal;
+  // Bug fix: wire the internal timeoutController into the provider's HTTP
+  // call via AbortSignal.any so firstTokenTimeoutMs / idleTimeoutMs actually
+  // abort the network request. The provider (and fetch) sees an aborted
+  // signal the moment we call timeoutController.abort(); without this
+  // merge, the SDK could keep reading the stream after the timeout fires.
+  //
+  // signal is optional (typed `signal?: AbortSignal`), so we can't pass
+  // it to AbortSignal.any unconditionally — that throws TypeError on
+  // `undefined`. Filter to defined sources only.
+  const primaryAbortSources: AbortSignal[] = [signal, timeoutController?.signal].filter(
+    (s): s is AbortSignal => !!s,
+  );
+  const effectiveSignal =
+    primaryAbortSources.length > 1
+      ? AbortSignal.any(primaryAbortSources)
+      : primaryAbortSources[0]; // single source: pass through unchanged
   
   // Helper to clear TTFT timeout once first token arrives
   const onFirstToken = () => {
@@ -1113,9 +1159,11 @@ export async function* streamWithVercelAI(
   // Bug #17: previously, a 60+ second thinking pause looked identical to a hung
   // stream to the client (no chunks, no progress). The think-ping fixes that
   // without changing abort semantics.
-  const thinkPingQueue: Array<{ type: 'thinking_ping'; elapsedMs: number; lastActivityType: string }> = [];
+  const thinkPingQueue: Array<{ type: 'thinking_ping' | 'stall_steer'; elapsedMs: number; lastActivityType: string }> = [];
   let thinkPingIntervalId: NodeJS.Timeout | null = null;
   const THINK_PING_MS = thinkPingMs;
+  const STALL_STEER_MS = STREAM_TIMEOUTS.stallSteerMs;
+  let stallSteerFiredThisSilence = false;
 
   const startThinkPingInterval = () => {
     if (thinkPingIntervalId || THINK_PING_MS <= 0) return;
@@ -1131,6 +1179,21 @@ export async function* streamWithVercelAI(
           silenceMs,
           lastActivityType,
           lastActivityDetail: lastActivityDetail.slice(0, 40),
+        });
+      }
+      // Bug #45: if silence exceeds the stall-steer threshold, inject a
+      // [STEER] stall_detected hint. Fires once per silence period; resets
+      // on any activity.
+      if (silenceMs >= STALL_STEER_MS && !stallSteerFiredThisSilence) {
+        stallSteerFiredThisSilence = true;
+        thinkPingQueue.push({
+          type: 'stall_steer',
+          elapsedMs: silenceMs,
+          lastActivityType: lastActivityType,
+        });
+        chatLogger.warn('[STALL-STEER] Model silent for >30s; injecting stall steer', {
+          silenceMs,
+          lastActivityType,
         });
       }
     }, THINK_PING_MS);
@@ -1239,6 +1302,22 @@ export async function* streamWithVercelAI(
           maxTokens: maxT,
           apiKey: key,
         })) {
+    if (checkChunkStall()) {
+        // Bug #45: surface a mid-stream stall signal via a real consumer.
+        // Logs the stall event AND calls recordDegradation so the per-stream
+        // stall counter is surfaced in run.log. Without a real consumer, a
+        // 5-min silent stream looks identical to a 1-sec success in run.log.
+        chatLogger.warn('[streaming] mid-stream stall detected (>30s without chunks)', {
+          totalChunks,
+          elapsedMs: Date.now() - firstChunkAt,
+        });
+        recordDegradation(
+          String(requestId ?? 'unknown'),
+          'mid_stream_stall',
+          'vercel-ai-streaming',
+          { totalChunks, elapsedMs: Date.now() - firstChunkAt, thresholdMs: STALL_THRESHOLD_MS }
+        );
+      }
           if (effectiveSignal?.aborted) return;
 
           if (chunk.type === 'text-delta') {
@@ -1607,16 +1686,29 @@ export async function* streamWithVercelAI(
               }
             }, fbTimeoutMs);
 
-            const fbStreamOpts: any = {
-              model: fbVercelModel,
-              messages: chatMessages,
-              temperature: temp,
-              maxOutputTokens: maxT,
-              maxRetries: 0,
-              stopWhen: stepCountIs(maxSteps),
-              toolCallStreaming,
-              abortSignal: fbController.signal,
-            };
+    // Bug fix: the fallback's network request previously only honored
+    // fbController.signal (the speculative-race cancel), so the global
+    // firstTokenTimeoutMs / idleTimeoutMs never aborted it. Merge all
+    // three signals so the provider sees the abort from ANY source:
+    //   - fbController.signal  → primary wins the race, cancel fallback
+    //   - signal               → user cancelled the request (may be undefined)
+    //   - timeoutController.signal → global TTFT/idle timeout fired
+    // Filter undefined sources (AbortSignal.any throws on undefined elements).
+    const fallbackAbortSources: AbortSignal[] = [
+      fbController.signal,
+      signal,
+      timeoutController?.signal,
+    ].filter((s): s is AbortSignal => !!s);
+    const fbStreamOpts: any = {
+      model: fbVercelModel,
+      messages: chatMessages,
+      temperature: temp,
+      maxOutputTokens: maxT,
+      maxRetries: 0,
+      stopWhen: stepCountIs(maxSteps),
+      toolCallStreaming,
+      abortSignal: AbortSignal.any(fallbackAbortSources),
+    };
             if (systemPrompt) fbStreamOpts.system = systemPrompt;
             if (tools && Object.keys(tools).length > 0) fbStreamOpts.tools = tools;
 
@@ -1718,28 +1810,41 @@ try {
 while (thinkPingQueue.length > 0) {
       if (signal?.aborted) return;
       const ping = thinkPingQueue.shift()!;
-      yield {
-        content: '',
-        isComplete: false,
-        timestamp: new Date(),
-        metadata: {
-          type: 'thinking_ping',
-          elapsedMs: ping.elapsedMs,
-          lastActivityType: ping.lastActivityType,
-        },
-      };
+      if (ping.type === 'stall_steer') {
+        yield {
+          content: '[STEER] stall_detected: The model has been silent for 30s. If this was a thinking pause, continue with your response. If you were about to call a tool, invoke it now. If the response was already complete, re-state the conclusion.',
+          isComplete: false,
+          timestamp: new Date(),
+          metadata: { type: 'stall_steer', elapsedMs: ping.elapsedMs },
+        };
+      } else {
+        yield {
+          content: '',
+          isComplete: false,
+          timestamp: new Date(),
+          metadata: {
+            type: 'thinking_ping',
+            elapsedMs: ping.elapsedMs,
+            lastActivityType: ping.lastActivityType,
+          },
+        };
+      }
     }
 
     for await (const streamChunk of streamToIterate) {
       if (signal?.aborted) return;
+      // Bug #45: any arriving chunk resets the stall-steer flag. The stall
+      // only fires during absolute silence (>30s with no chunks at all).
+      stallSteerFiredThisSilence = false;
       const chunk = streamChunk as any;
 
       switch (chunk.type as string) {
-        case 'text-delta': {
+          case 'text-delta': {
           // Clear time-to-first-token timeout once we receive content
           onFirstToken();
-          // Update activity tracker
+          // Update activity tracker (Bug #45: resets stall-steer timer)
           lastActivityTime = Date.now();
+          stallSteerFiredThisSilence = false;
           lastActivityType = 'text';
           const deltaText = (chunk as any).text ?? '';
           lastActivityDetail = deltaText.slice(0, 60);

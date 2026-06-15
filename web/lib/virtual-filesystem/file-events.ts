@@ -25,6 +25,26 @@
 import { emitFilesystemUpdated, type FilesystemUpdatedDetail } from './sync/sync-events';
 import { trackSessionFiles } from './session-file-tracker';
 import { createLogger } from '@/lib/utils/logger';
+import { toolContextStore } from '@/lib/mcp/vfs-mcp-tools';
+
+/**
+ * Read the current UI source tag from `toolContextStore` (Phase B wiring).
+ *
+ * Server-side callers always have `toolContextStore` available (it's a Node
+ * `AsyncLocalStorage`); this helper is a thin, named accessor so the
+ * `emitFileEvent` body stays readable. Returns `undefined` when no context
+ * is active or when `uiSource` is not set on the current context — both
+ * are valid and treated as "no UI source tag for this event".
+ *
+ * Why a helper instead of inlining `toolContextStore.getStore()?.uiSource`:
+ *   - Centralizes the fallback chain (active store → undefined)
+ *   - Makes the intent obvious at the call site (`readUISourceFromContext` vs
+ *     a chained optional that reads like an accident)
+ *   - Single place to add caching, logging, or validation if needed later
+ */
+function readUISourceFromContext(): string | undefined {
+  return toolContextStore.getStore()?.uiSource;
+}
 
 const logger = createLogger('FileEvents');
 
@@ -137,6 +157,52 @@ export function onFileEvent(callback: FileEventCallback): () => void {
 export type FileEventType = 'create' | 'update' | 'delete';
 
 /**
+ * Standardized source tags for file events.
+ *
+ * When a file event is emitted, the `source` field identifies the originating
+ * UI surface or server-side system. Use one of these constants where possible
+ * so run.log entries can be filtered with a single string match:
+ *
+ *   `rg '"source":"workspace-panel"' run.log`
+ *   `rg '"source":"terminal-panel"' run.log`
+ *   `rg '"source":"code-preview-panel"' run.log`
+ *
+ * UI surface tags:
+ *   - `workspace-panel` — user actions in the workspace file-tree panel
+ *     (paste, rename, move, delete, create, upload).
+ *   - `terminal-panel` — file changes triggered by terminal commands
+ *     (PTY/bash, sandbox-shell, file-watchers spawned by terminals).
+ *   - `code-preview-panel` — preview-related file changes
+ *     (scaffolded files, generated assets, preview hot-reload syncs).
+ *
+ * Server-side subsystem tags (kept for back-compat):
+ *   - `mcp-tool`           — VFS MCP tools (write_file, batch_write, apply_diff, delete_file)
+ *   - `mcp-tool-diff`      — apply_diff tool with standard unified diff
+ *   - `mcp-tool-diff-sar`  — apply_diff tool with search-and-replace format (<<<<< SEARCH / >>>>> REPLACE)
+ *   - `mcp-tool:<toolName>` — specific MCP tool (e.g. `mcp-tool:write_file`)
+ *   - `desktop-vfs`        — Tauri desktop VFS sync writes
+ *   - `desktop-vfs-directory` — Tauri desktop VFS directory creation
+ *   - `vfs-file-watcher`   — internal polling watcher (debounced create/update/delete)
+ *   - `diff`               — diff-apply event (enhanced-diff-viewer)
+ *   - `file-events`        — generic / default (caller didn't specify)
+ */
+export const FILE_EVENT_SOURCES = {
+  WORKSPACE_PANEL: 'workspace-panel',
+  TERMINAL_PANEL: 'terminal-panel',
+  CODE_PREVIEW_PANEL: 'code-preview-panel',
+  MCP_TOOL: 'mcp-tool',
+  MCP_TOOL_DIFF: 'mcp-tool-diff',
+  MCP_TOOL_DIFF_SAR: 'mcp-tool-diff-sar',
+  DESKTOP_VFS: 'desktop-vfs',
+  DESKTOP_VFS_DIRECTORY: 'desktop-vfs-directory',
+  VFS_FILE_WATCHER: 'vfs-file-watcher',
+  DIFF: 'diff',
+  FILE_EVENTS: 'file-events',
+} as const;
+
+export type FileEventSource = typeof FILE_EVENT_SOURCES[keyof typeof FILE_EVENT_SOURCES] | string;
+
+/**
  * File event options
  */
 export interface EmitFileEventOptions {
@@ -152,19 +218,38 @@ export interface EmitFileEventOptions {
   content?: string;
   /** Previous content (for update/delete) */
   previousContent?: string;
-  /** Source of the event (e.g., 'mcp-tool', 'desktop-fs', 'vfs') */
-  source?: string;
+  /**
+   * Source of the event. Prefer the constants in {@link FILE_EVENT_SOURCES}
+   * (e.g. `workspace-panel`, `terminal-panel`, `code-preview-panel`) so
+   * run.log entries can be filtered by originating UI surface.
+   */
+  source?: FileEventSource;
+  /**
+   * Originating UI surface tag (e.g. `workspace-panel`, `terminal-panel`,
+   * `code-preview-panel`). **Optional** — when omitted, the value is
+   * read from `toolContextStore` (Phase B wiring: stashed by the
+   * `X-UI-Source` header reader in the route handler). Pass explicitly
+   * only when emitting outside a request scope (e.g. background jobs).
+   */
+  uiSource?: string;
   /** Additional metadata */
   metadata?: Record<string, any>;
 }
 
 /**
  * Emit a unified file event to all subsystems
- * 
+ *
  * This function coordinates:
  * 1. UI updates via emitFilesystemUpdated (cross-tab, cross-session)
  * 2. Session file tracking via trackSessionFiles (for smart-context)
  * 3. Diff tracking for enhanced-diff-viewer (via metadata)
+ *
+ * **UI source tag (Phase B):** when the caller doesn't pass `uiSource`
+ * explicitly, the value is read from `toolContextStore` (stashed by the
+ * `X-UI-Source` header reader at the top of each route handler). This
+ * makes the UI origin transparent to all `emitFileEvent` callers — they
+ * don't need to thread it through manually. The value is included in the
+ * `FilesystemUpdatedDetail` so cross-tab subscribers can read it.
  */
 export async function emitFileEvent(options: EmitFileEventOptions): Promise<void> {
   const {
@@ -178,10 +263,20 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
     metadata = {},
   } = options;
 
+  // Phase B: prefer the explicit `uiSource` if the caller passed one
+  // (background jobs, tests, etc.), otherwise read from the request-scoped
+  // `toolContextStore` stashed by the route handler. `undefined` is a
+  // valid result — the field is simply omitted from the event downstream.
+  const uiSource = options.uiSource ?? readUISourceFromContext();
+
   try {
     // ── 0. Notify registered subscribers FIRST ───────────────────────────
     // Data-integrity subscribers (e.g., cache invalidation) must fire even
     // if the UI event emission or session tracking fails below.
+    // Subscribers receive the original `options` (with `uiSource` if the
+    // caller passed one); the context-derived value is NOT injected here
+    // so subscribers that key on `options.uiSource !== undefined` get a
+    // stable signal (explicit vs implicit).
     for (const subscriber of fileEventSubscribers) {
       try {
         subscriber(options);
@@ -198,6 +293,10 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
     }
 
     // 1. Emit filesystem event for UI updates (cross-tab, cross-session)
+    // `uiSource` is a top-level field on `FilesystemUpdatedDetail` so
+    // cross-tab subscribers (other browser windows) can read it without
+    // digging into `metadata`. Only include when truthy to keep the
+    // broadcast payload tight.
     const eventDetail: FilesystemUpdatedDetail = {
       path,
       type,
@@ -212,11 +311,25 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
       ...(type === 'update' && previousContent ? {
         previousContent: previousContent.slice(0, 100000),
       } : {}),
+      ...(uiSource ? { uiSource } : {}),
       ...metadata,
     };
 
     emitFilesystemUpdated(eventDetail);
-    logger.debug('Filesystem event emitted', { path, type, source });
+
+    // Log the source prominently so run.log can be filtered by originating
+    // UI surface (workspace-panel vs terminal-panel vs code-preview-panel).
+    logger.info('File event emitted', {
+      source,
+      origin: classifyFileEventSource(source),
+      uiSource,
+      uiSourceOrigin: options.uiSource !== undefined ? 'explicit' : (uiSource ? 'context' : 'none'),
+      path,
+      type,
+      sessionId,
+      hasContent: content !== undefined,
+      contentLength: content?.length,
+    });
 
     // 2. Track session files for smart-context
     // Include path in a format that matches the FILE_PATTERN regex in session-file-tracker.ts
@@ -227,7 +340,7 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
         role: 'system' as const,
         content: `Completed ${type} operation on ${path}`, // path will be extracted by regex
       };
-      
+
       // Track the file reference in session
       await trackSessionFiles(sessionId, [syntheticMessage]);
       logger.debug('Session file tracked', { sessionId, path, type });
@@ -242,6 +355,11 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
 /**
  * Emit multiple file events in batch
  * More efficient than calling emitFileEvent multiple times
+ *
+ * The optional `uiSource` on the batch options is forwarded to every
+ * individual `emitFileEvent()` call. If omitted, each call falls back to
+ * `toolContextStore` (so a batch emitted mid-request still picks up the
+ * `X-UI-Source` header value).
  */
 export async function emitBatchFileEvents(
   options: Omit<EmitFileEventOptions, 'path' | 'type' | 'content' | 'previousContent'> & {
@@ -253,7 +371,7 @@ export async function emitBatchFileEvents(
     }>;
   }
 ): Promise<void> {
-  const { userId, sessionId, source, metadata } = options;
+  const { userId, sessionId, source, uiSource, metadata } = options;
 
   // Process in parallel
   await Promise.all(
@@ -266,6 +384,11 @@ export async function emitBatchFileEvents(
         content: file.content,
         previousContent: file.previousContent,
         source,
+        // Forward explicit uiSource so a batch emits a single coherent
+        // origin even if the tool caller had a different one in mind for
+        // the batch as a whole. (Per-file overrides are uncommon; the
+        // per-event fallback in emitFileEvent still handles them.)
+        uiSource,
         metadata,
       })
     )
@@ -274,7 +397,10 @@ export async function emitBatchFileEvents(
 
 /**
  * Emit diff event for enhanced-diff-viewer
- * This is called when a diff/patch is applied to track the change for UI
+ * This is called when a diff/patch is applied to track the change for UI.
+ *
+ * The optional `uiSource` parameter is forwarded to `emitFileEvent`;
+ * omit it to let the function read from `toolContextStore`.
  */
 export async function emitDiffEvent(options: {
   userId: string;
@@ -284,6 +410,7 @@ export async function emitDiffEvent(options: {
   previousContent: string;
   newContent: string;
   source?: string;
+  uiSource?: string;
 }): Promise<void> {
   await emitFileEvent({
     userId: options.userId,
@@ -293,6 +420,7 @@ export async function emitDiffEvent(options: {
     content: options.newContent,
     previousContent: options.previousContent,
     source: options.source || 'diff',
+    uiSource: options.uiSource,
     metadata: {
       diff: options.diff.slice(0, 50000), // Limit diff size
       diffLength: options.diff.length,
@@ -302,7 +430,12 @@ export async function emitDiffEvent(options: {
 
 /**
  * Helper to emit events from MCP tool results
- * Extracts the relevant info from tool execution result
+ * Extracts the relevant info from tool execution result.
+ *
+ * `uiSource` is NOT threaded through this helper — it lets the underlying
+ * `emitFileEvent()` read the value from `toolContextStore` so MCP tools
+ * that don't know about UI surfaces still benefit from the Phase B wiring.
+ * Pass an explicit `uiSource` only when emitting outside a request scope.
  */
 export function emitEventFromToolResult(
   toolName: string,
@@ -353,6 +486,33 @@ export function emitEventFromToolResult(
 
 
   }
+}
+
+/**
+ * Classify a file-event source into a coarse origin bucket for log filtering.
+ * Buckets: `ui` (workspace-panel, terminal-panel, code-preview-panel),
+ * `mcp` (mcp-tool*), `desktop` (desktop-vfs*), `internal` (vfs-file-watcher, diff, file-events),
+ * or `other` for unrecognised sources.
+ */
+function classifyFileEventSource(source: string | undefined): 'ui' | 'mcp' | 'desktop' | 'internal' | 'other' {
+  if (!source) return 'other';
+  if (
+    source === FILE_EVENT_SOURCES.WORKSPACE_PANEL ||
+    source === FILE_EVENT_SOURCES.TERMINAL_PANEL ||
+    source === FILE_EVENT_SOURCES.CODE_PREVIEW_PANEL
+  ) {
+    return 'ui';
+  }
+  if (source.startsWith('mcp-tool')) return 'mcp';
+  if (source.startsWith('desktop-vfs')) return 'desktop';
+  if (
+    source === FILE_EVENT_SOURCES.VFS_FILE_WATCHER ||
+    source === FILE_EVENT_SOURCES.DIFF ||
+    source === FILE_EVENT_SOURCES.FILE_EVENTS
+  ) {
+    return 'internal';
+  }
+  return 'other';
 }
 
 export default {

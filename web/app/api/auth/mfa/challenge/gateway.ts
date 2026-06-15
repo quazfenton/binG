@@ -16,6 +16,7 @@ import { generateToken, verifyMfaToken } from '@/lib/auth/jwt';
 import { verifyTotpCode, decryptTotpSecret, verifyBackupCode } from '@/lib/auth/totp';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';
 import { createLogger } from '@/lib/utils/logger';
+import { transferVFSOnLogin } from '@/lib/auth/transfer-anon-vfs';
 
 // Rate limiting for MFA challenge attempts
 const MFA_CHALLENGE_MAX_ATTEMPTS = 10; // 10 attempts per 5-minute window
@@ -171,6 +172,31 @@ export async function POST(request: NextRequest) {
       userId: user.id.toString(),
       tokenVersion: user.token_version ?? 1,
     });
+
+    // Transfer anonymous VFS workspace to the newly authenticated user.
+    // Fire-and-forget so the MFA challenge response is not blocked by a
+    // slow transfer — the helper itself is non-fatal (failures are
+    // logged inside) and reads only `request.cookies`, which is a
+    // synchronous accessor on the Web Request and remains valid after
+    // the response is sent. The function is idempotent: if it runs
+    // concurrently with the client-side `auth-context.tsx` post-login
+    // fetch to /api/auth/transfer-vfs-on-login, the second call is a
+    // no-op.
+    //
+    // Uses `transferVFSOnLogin` (not `transferVFSFromAnonymous`)
+    // because MFA challenge completes an EXISTING-account login, not
+    // a new registration: MFA can only be enabled on an account that
+    // was created via /auth/register, so by the time we reach this
+    // point the user is returning to an existing account. The
+    // `{ transferredFiles: number }` return is discarded by `void`
+    // here but is available to the login gateway's non-MFA path for
+    // a "restored N files" client message.
+    //
+    // This MUST run BEFORE the `anon-session-id` cookie is cleared
+    // below, otherwise the transfer can no longer derive the anon
+    // ownerId from the request. Mirrors the pattern in
+    // `app/api/auth/login/gateway.ts` for the non-MFA login path.
+    void transferVFSOnLogin(request, user);
 
     // Set cookies and return
     const response = NextResponse.json({

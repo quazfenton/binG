@@ -171,7 +171,7 @@ export class OPFSAdapter {
         try {
           // If enabled for a different workspace, we need to reinitialize
           if (this.enabled && this.currentWorkspaceId !== workspaceId) {
-            logger.info('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', workspaceId);
+            logger.info('[OPFS] Switching workspace', { from: this.currentWorkspaceId, to: workspaceId });
             await this.core.close();
           }
 
@@ -217,7 +217,7 @@ export class OPFSAdapter {
       logger.warn('[OPFS] Initial sync failed:', err);
     });
 
-    logger.info('[OPFS] Enabled for owner:', ownerId, '(fallback:', this.usingFallback + ')');
+    logger.info('[OPFS] Enabled for owner', { ownerId, fallback: this.usingFallback });
   }
 
   /**
@@ -286,7 +286,7 @@ export class OPFSAdapter {
     // Guard against negative reference count
     if (this.enableCount <= 0) {
       if (this.enabled) {
-        logger.info('[OPFS] disable() called with ref count', this.enableCount, 'but still enabled - forcing disable');
+        logger.info('[OPFS] disable() called with ref count but still enabled - forcing disable', { refCount: this.enableCount });
         // Force disable since we're in inconsistent state
         this.performDisable();
       } else {
@@ -397,7 +397,7 @@ export class OPFSAdapter {
 
       // Cache in OPFS for next time (non-blocking)
       this.cacheInOPFS(path, serverFile.content).catch(err => {
-        logger.warn('[OPFS] Failed to cache file:', path, err);
+        logger.warn('[OPFS] Failed to cache file', { path, error: err });
       });
 
       return serverFile;
@@ -460,7 +460,7 @@ export class OPFSAdapter {
     // Queue server sync
     this.queueWrite(ownerId, path, content, versions.opfs);
 
-    logger.info('[OPFS] Write complete:', path, 'version:', versions.opfs);
+    logger.info('[OPFS] Write complete', { path, version: versions.opfs });
 
     return {
       path,
@@ -641,7 +641,7 @@ export class OPFSAdapter {
         };
       }
 
-      logger.info('[OPFS] Syncing from server:', snapshot.files.length, 'files');
+      logger.info('[OPFS] Syncing from server', { count: snapshot.files.length });
 
       // Sync files from snapshot to OPFS
       for (const file of snapshot.files) {
@@ -742,7 +742,7 @@ export class OPFSAdapter {
         { filesSynced, bytesTransferred }
       );
 
-      logger.info('[OPFS] Sync to server complete:', filesSynced, 'files');
+      logger.info('[OPFS] Sync to server complete', { count: filesSynced });
 
       return {
         success: errors.length === 0 && conflicts.length === 0,
@@ -787,7 +787,7 @@ export class OPFSAdapter {
       version,
     });
 
-    logger.info('[OPFS] Queued write:', path, 'queue size:', this.writeQueue.length);
+    logger.info('[OPFS] Queued write', { path, queueSize: this.writeQueue.length });
 
     // Trigger immediate sync if queue is small
     if (this.writeQueue.length <= 5) {
@@ -808,7 +808,7 @@ export class OPFSAdapter {
     try {
       const pendingWrites = this.writeQueue.filter(w => !w.synced);
 
-      logger.info('[OPFS] Flushing', pendingWrites.length, 'pending writes to server');
+      logger.info('[OPFS] Flushing pending writes to server', { count: pendingWrites.length });
 
       for (const write of pendingWrites) {
         try {
@@ -887,14 +887,14 @@ export class OPFSAdapter {
       }
     }, this.options.autoSyncInterval);
 
-    logger.info('[OPFS] Background sync started (interval:', this.options.autoSyncInterval, 'ms)');
+    logger.info('[OPFS] Background sync started', { intervalMs: this.options.autoSyncInterval });
   }
 
   private async cacheInOPFS(path: string, content: string): Promise<void> {
     try {
       await this.core.writeFile(path, content);
     } catch (error) {
-      logger.warn('[OPFS] Failed to cache file:', path, error);
+      logger.warn('[OPFS] Failed to cache file', { path, error });
     }
   }
 

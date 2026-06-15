@@ -151,7 +151,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       // Walk directory tree and load all files
       await this.loadFilesRecursive('', files);
 
-      logger.info('[OPFS Storage] Loaded workspace:', ownerId, 'files:', files.size, 'version:', version);
+      logger.info('[OPFS Storage] Loaded workspace', { ownerId, files: files.size, version });
 
       const opfsState: WorkspaceState = {
         files,
@@ -298,7 +298,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
         }
       }
 
-      logger.info('[VFS Storage] Loaded workspace from IDB:', ownerId, 'files:', files.size);
+      logger.info('[VFS Storage] Loaded workspace from IDB', { ownerId, files: files.size });
       return {
         files,
         version,
@@ -351,7 +351,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       }
 
       setStickyBackend(ownerId, 'opfs');
-      logger.info('[OPFS Storage] Saved workspace:', ownerId, 'files:', state.files.size);
+      logger.info('[OPFS Storage] Saved workspace', { ownerId, files: state.files.size });
     } catch (error) {
       logger.error('[OPFS Storage] Failed to save workspace:', error);
       this.markFailed(ownerId);
@@ -376,7 +376,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
           });
         }
       }
-      logger.info('[VFS Storage] Saved workspace to IDB:', ownerId, 'files:', state.files.size);
+      logger.info('[VFS Storage] Saved workspace to IDB', { ownerId, files: state.files.size });
     } catch (error) {
       logger.error('[VFS Storage] IDB fallback save failed:', error);
       throw error;
@@ -513,7 +513,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
               size: fileData.size,
             });
           } catch (error) {
-            logger.warn('[OPFS Storage] Failed to load file:', entry.path, error);
+            logger.warn('[OPFS Storage] Failed to load file', { path: entry.path, error });
           }
         } else if (entry.type === 'directory' && !entry.name.startsWith('.')) {
           await this.loadFilesRecursive(entry.path, files);
@@ -521,7 +521,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
       }
     } catch (error: any) {
       if (error.name !== 'NotFoundError') {
-        logger.warn('[OPFS Storage] Failed to list directory:', path, error);
+        logger.warn('[OPFS Storage] Failed to list directory', { path, error });
       }
     }
   }

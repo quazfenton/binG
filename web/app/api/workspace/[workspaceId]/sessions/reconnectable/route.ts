@@ -16,6 +16,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph';
 import { formatDuration, formatSessionLabel, getReconnectHint } from '@/lib/workspace/session-label-utils';
 import { createLogger } from '@/lib/utils/logger';
+import { withUISourceScope } from '@/lib/http/ui-source-header-server';
 
 const logger = createLogger('API:WorkspaceSessionsReconnectable');
 
@@ -23,7 +24,8 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ workspaceId: string }> },
 ) {
-  try {
+  return withUISourceScope(request, async () => {
+    try {
     // Authenticate user
     const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
     if (!authResult.success || !authResult.userId) {
@@ -77,11 +79,12 @@ export async function GET(
         sessions,
       },
     });
-  } catch (error: any) {
-    logger.error('Failed to query reconnectable sessions', { error: error.message });
-    return NextResponse.json(
-      { error: 'Failed to query reconnectable sessions' },
-      { status: 500 },
-    );
-  }
+    } catch (error: any) {
+      logger.error('Failed to query reconnectable sessions', { error: error.message });
+      return NextResponse.json(
+        { error: 'Failed to query reconnectable sessions' },
+        { status: 500 },
+      );
+    }
+  });
 }

@@ -278,11 +278,55 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStoredToken(data.token);
       }
 
+      // Capture the pre-login anonymous identity so we can decide
+      // whether to fire the defensive client-side VFS transfer below.
+      // If the user was never anonymous on this device (no localStorage
+      // key set, or the key was already null/empty), there's no anon
+      // workspace to recover and the fetch would be a wasted round-trip
+      // to a 0-files no-op on the server.
+      const hadAnonymousSession =
+        typeof window !== 'undefined' &&
+        (() => {
+          try {
+            const value = localStorage.getItem('anonymous_session_id');
+            return value !== null && value !== '';
+          } catch {
+            return false;
+          }
+        })();
+
       // Clear anonymous session identity — user is now authenticated
       if (typeof window !== 'undefined') {
         try {
           localStorage.removeItem('anonymous_session_id');
         } catch {}
+      }
+
+      // Defensive: explicitly trigger the anon → user VFS transfer on the
+      // client side. The login gateway already calls transferVFSOnLogin
+      // server-side using the anon-session-id cookie that traveled with
+      // this request, but a redirect / refresh / cookie race could have
+      // skipped it. Hitting /api/auth/transfer-vfs-on-login here is
+      // idempotent and ensures returning users (who explored the app
+      // anonymously and then logged in to an existing account) don't
+      // leave their anonymous workspace orphaned.
+      //
+      // SKIP when the user wasn't anonymous on this device: the
+      // endpoint would return 0 transferred files anyway (the
+      // anon-session-id cookie wouldn't match anything in the DB), and
+      // every login otherwise issues a wasted round-trip + rate-limit
+      // token against the per-user limiter.
+      if (hadAnonymousSession) {
+        try {
+          await fetch('/api/auth/transfer-vfs-on-login', {
+            method: 'POST',
+            credentials: 'include',
+          });
+        } catch (transferErr) {
+          // Non-fatal — the server-side in-line transfer already ran. Log
+          // so we have a breadcrumb if a user reports missing files.
+          console.warn('[AuthContext] transferVFSOnLogin request failed:', transferErr);
+        }
       }
 
       // Convert date strings to Date objects

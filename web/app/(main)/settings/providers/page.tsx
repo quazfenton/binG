@@ -14,9 +14,15 @@ import {
   Shield,
   RefreshCw,
 } from "lucide-react"
-import { ProviderGrid } from "@/lib/providers/9router/components/ProviderConnectButton"
-import { revokeUserRouterConnection, getUserRouterConnections } from "@/lib/providers/9router/token-store"
+import dynamic from "next/dynamic"
 import type { OAuthConnection } from "@/lib/auth/oauth-service"
+// ProviderGrid is dynamically imported (ssr: false) because its import
+// chain reaches node:module (via database/connection.ts) which Turbopack
+// cannot bundle for client components.
+const ProviderGrid = dynamic(
+  () => import("@/lib/providers/9router/components/ProviderConnectButton").then(m => m.ProviderGrid),
+  { ssr: false }
+)
 
 export default function ProvidersSettingsPage() {
   const router = useRouter()
@@ -48,6 +54,7 @@ export default function ProvidersSettingsPage() {
   const loadConnections = useCallback(async () => {
     try {
       setLoading(true)
+      const { getUserRouterConnections } = await import("@/lib/providers/9router/token-store")
       const conns = await getUserRouterConnections(userId)
       setConnections(conns)
     } catch (err) {
@@ -71,6 +78,7 @@ export default function ProvidersSettingsPage() {
   const handleDisconnect = useCallback(async (providerId: string) => {
     setDisconnecting(providerId)
     try {
+      const { revokeUserRouterConnection } = await import("@/lib/providers/9router/token-store")
       const revoked = await revokeUserRouterConnection(userId, providerId)
       if (revoked) {
         toast.success(`${providerId} disconnected`)

@@ -249,7 +249,7 @@ export async function getGitBackedVFS(userId: string): Promise<{
   commitChanges: (message: string) => Promise<void>;
 } | null> {
   try {
-    const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+    const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vfsModule = virtualFilesystem as any;
     if (typeof vfsModule.getGitBackedVFS !== 'function') return null;
@@ -364,7 +364,7 @@ export async function getFileHistory(
   limit: number = 10
 ): Promise<Array<{ version: number; date: string; message: string }>> {
   try {
-    const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+    const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const vfsModule = virtualFilesystem as any;
     if (typeof vfsModule.getGitBackedVFS !== 'function') return [];
