@@ -68,9 +68,13 @@ export async function resolveRequestAuth(
   // SECURITY: Only trust HttpOnly cookie for anonymous identity, NOT the client-controlled header
   // The header was previously used but allowed IDOR attacks - now we only use the cookie
   const anonId = req.cookies.get('anon-session-id')?.value || ''
+  // Include JWT token cookies so the cache key changes AFTER login.
+  // Without this, an anonymous request's cached result persists across login
+  // because the cache key (auth:::<anonId>) doesn't reflect the new JWT cookie.
+  const tokenCookie = req.cookies.get('token')?.value || req.cookies.get('auth-token')?.value || ''
 
   // Create unique cache key from all auth factors
-  const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}`;
+  const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}:${tokenCookie}`;
 
   // Check cache first - but ALWAYS re-validate for security
   const cached = authCache.get(cacheKey);
@@ -107,9 +111,15 @@ export async function resolveRequestAuth(
       }
     }
     
-    // For anonymous auth, just return (no expiration to check)
+    // For anonymous auth, only return cached result if anonymous is still
+    // allowed. If the caller passed allowAnonymous: false, the user may have
+    // logged in since the anonymous cache was created — force re-validation.
     if (cached.result.source === 'anonymous') {
-      return cached.result;
+      if (!allowAnonymous) {
+        authCache.delete(cacheKey);
+      } else {
+        return cached.result;
+      }
     }
     
     // For failed auth, return cached failure (short TTL prevents issues)

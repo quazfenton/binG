@@ -1142,6 +1142,11 @@ export class SandboxConnectionManager {
   private handleAuthRequired(): void {
     this.stopSpinner()
     this.clearConnectionTimeout()
+    // Set cooldown to prevent immediate reconnection attempts.
+    // Without this, an auto-retry effect or user interaction could
+    // restart the connect() flow immediately, re-triggering the
+    // initialization step despite the persistent auth failure.
+    this.state.lastConnectionAttempt = Date.now()
 
     this.updateTerminalState({
       sandboxInfo: { status: 'active' },

@@ -33,6 +33,7 @@ import {
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
@@ -168,6 +169,23 @@ async function classifyRequest(
 
   // Empty content — treat as simple query
   if (!content || content.trim().length === 0) {
+    return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
+  }
+
+  // Bug #73 (Pass-5 audit) — skip the classifier on empty history. The
+  // audit observed `Chat API: Task classifier failed, using regex fallback`
+  // firing many times because the first turn of a session has empty
+  // conversation history. For a single-turn request, there's no
+  // contextual signal to derive — the regex fallback is the only sensible
+  // path. We short-circuit BEFORE calling the classifier so the
+  // [STEER] warn log + `classifierFallbacks` counter don't fire on the
+  // first turn. This is the canonical "happy path" for new sessions, so
+  // the de-augmented task below is empty anyway.
+  if (messages.filter((m) => m.role === 'user' || m.role === 'assistant').length <= 1) {
+    chatLogger.debug('Task classifier skipped (single-turn request, no history)', {
+      messageCount: messages.length,
+      userMessages: messages.filter((m) => m.role === 'user').length,
+    });
     return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
   }
 
@@ -647,7 +665,40 @@ export async function POST(request: NextRequest) {
     // Check if cache entry exists and hasn't expired
     if (cachedValidation && (now - cachedValidation.timestamp) < VALIDATION_CACHE_TTL_MS) {
       // Use cached validation - skip redundant checks
-    } else if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
+    } else {
+      // Bug #67 (Pass-5 audit) — pre-validate bare qd/lite (and similar)
+      // model names that the ninerouter registry rejects with the opaque
+      // "model_config for 'lite' not yet known" error. We return a
+      // typed 400 with `availableModels` so the client (and the LLM on
+      // the next turn) can self-correct. The pre-validation in
+      // processUnifiedAgentRequest is a safety net; this route-level
+      // check surfaces the 400 without going through the full agent
+      // pipeline. Mirrors the existing 400 shape (error + availableModels)
+      // for downstream `availableModels` extraction in the client.
+      const normalizedModelLower = (model || '').toString().toLowerCase();
+      const BARE_MODEL_REJECT = new Set(['lite', 'qd/lite', 'qd_lite', 'qd', 'qd-lite']);
+      if (BARE_MODEL_REJECT.has(normalizedModelLower)) {
+        const liteAvailable = ['qd/auto', 'qd/ultimate', 'qd/performance', 'qd/lite', 'qd/dmodel', 'qd/gm51model', 'qd/mmodel', 'qd/efficient'];
+        chatLogger.warn('Bare model name rejected (Bug #67)', {
+          requestId,
+          provider,
+          model,
+          normalizedModelLower,
+          availableModels: liteAvailable,
+        });
+        return NextResponse.json(
+          {
+            error: `Model "${model}" is not supported by ${provider}. Bare names like "lite" are not supported; use the full registry ID.`,
+            availableModels: liteAvailable,
+            errorCode: 'invalid_model_name',
+          },
+          { status: 400 },
+        );
+      }
+
+      // Pass-through to existing provider + model validation (now nested
+      // inside the outer `else` block, so the structure is valid JS).
+      if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
       chatLogger.error('Invalid provider', { requestId, provider }, {
         availableProviders: Object.keys(PROVIDERS),
       });
@@ -684,6 +735,7 @@ export async function POST(request: NextRequest) {
 
       // Cache the validation result with timestamp
       validationCache.set(validationCacheKey, { provider, isValid: true, timestamp: now });
+    }
     }
 
     // Get provider info from cached validation

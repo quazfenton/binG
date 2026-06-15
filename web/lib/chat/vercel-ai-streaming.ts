@@ -40,6 +40,11 @@ import { getConfiguredFallbackChain } from '../providers/provider-fallback-chain
 import { tokenTracker } from '../middleware/ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from '../middleware/ai-middleware';
 import { recordToolCall, shouldForceTextMode } from '../tools/tool-call-telemetry';
+// Bug #80 (Pass-5 audit): record FC-GATE Phase 2 fallback so /api/health
+// surfaces how often the LLM silently dropped all tools. recordSteerInjected
+// is best-effort — if chat-metrics is unavailable (e.g. in a unit test that
+// doesn't import it), the optional-chained call is a no-op.
+import { recordSteerInjected } from './chat-metrics';
 import { getModelsForPurpose } from './model-capability-registry';
 import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm-compat';
 
@@ -360,9 +365,23 @@ export const STREAM_TIMEOUTS = {
  * `elapsed=30002ms` for `deepseek-v4-flash` — the 2-6ms slop past 30000ms
  * indicates a server-side limit, not client-side timeout drift. Similar
  * for `minimaxai/minimax-m2.7` at 75000ms (Pass-7 #103).
+ *
+ * Bug #71 (Pass-5 audit) follow-up — added `firstTokenTimeoutMs` per-model
+ * override. The original table only had IDLE timeout overrides; the
+ * audit's 30,002ms TTFT timeout for `deepseek-v4-flash` (a known cold-start
+ * model with 30–60s first-token latency) was still hitting the global 30s
+ * default. The new column lets each model override the TTFT ceiling
+ * independently of the idle ceiling. Models without an explicit
+ * `firstTokenTimeoutMs` fall back to the global default (30s).
  */
-const MODEL_SERVER_TIMEOUT_OVERRIDES: ReadonlyArray<{ substring: string; timeoutMs: number }> = [
-  { substring: 'deepseek-v4-flash', timeoutMs: 30000 },
+export interface ModelServerTimeoutOverride {
+  substring: string;
+  timeoutMs: number;
+  /** Per-model TTFT ceiling. Falls back to STREAM_TIMEOUTS.firstTokenTimeoutMs when undefined. */
+  firstTokenTimeoutMs?: number;
+}
+const MODEL_SERVER_TIMEOUT_OVERRIDES: ReadonlyArray<ModelServerTimeoutOverride> = [
+  { substring: 'deepseek-v4-flash', timeoutMs: 30000, firstTokenTimeoutMs: 60000 },
   { substring: 'minimax-m2.7', timeoutMs: 75000 },
 ];
 
@@ -393,6 +412,23 @@ export function getModelIdleTimeoutMs(modelId: string): number | null {
   const lastSegment = modelId.toLowerCase().split('/').pop() ?? '';
   for (const { substring, timeoutMs } of MODEL_SERVER_TIMEOUT_OVERRIDES) {
     if (lastSegment.endsWith(substring)) return timeoutMs;
+  }
+  return null;
+}
+
+/**
+ * Bug #71 (Pass-5 audit) — look up the model-specific firstTokenTimeoutMs
+ * override. Returns `null` when no override matches, so the caller falls
+ * back to the global default. Mirrors `getModelIdleTimeoutMs` but for
+ * the TTFT ceiling.
+ */
+export function getModelFirstTokenTimeoutMs(modelId: string): number | null {
+  if (!modelId) return null;
+  const lastSegment = modelId.toLowerCase().split('/').pop() ?? '';
+  for (const { substring, firstTokenTimeoutMs } of MODEL_SERVER_TIMEOUT_OVERRIDES) {
+    if (firstTokenTimeoutMs !== undefined && lastSegment.endsWith(substring)) {
+      return firstTokenTimeoutMs;
+    }
   }
   return null;
 }
@@ -1147,6 +1183,34 @@ export async function* streamWithVercelAI(
     }
 
     // Set time-to-first-token timeout
+    // Bug #71 (Pass-5 audit) — apply per-model firstTokenTimeoutMs
+    // override (e.g. 60s for deepseek-v4-flash cold-start). Falls back
+    // to the caller-supplied `firstTokenTimeoutMs` when no override matches.
+    //
+    // Contract (mirrors the IDLE-timeout Math.min below): the override is
+    // a HARD CEILING. `Math.min(caller, override)` returns the STRICTER of
+    // the two values. The inner `if (newTtft !== firstTokenTimeoutMs)` only
+    // fires when the override actually clamps the caller — a caller that
+    // explicitly widened the window is not silently cut back. The outer
+    // condition must be `_ttftOverrideMs !== null` ONLY (not a direction
+    // check) so the stricter case (override < caller) is also handled.
+    {
+      const _ttftOverrideMs = getModelFirstTokenTimeoutMs(modelName);
+      if (_ttftOverrideMs !== null) {
+        const newTtft = Math.min(firstTokenTimeoutMs, _ttftOverrideMs);
+        if (newTtft !== firstTokenTimeoutMs) {
+          firstTokenTimeoutMs = newTtft;
+          chatLogger.info('[TTFT-OVERRIDE] per-model firstTokenTimeoutMs applied', {
+            provider,
+            model: modelName,
+            overrideMs: _ttftOverrideMs,
+            callerMs: firstTokenTimeoutMs,
+            effectiveMs: newTtft,
+            direction: _ttftOverrideMs < firstTokenTimeoutMs ? 'clamp_to_override' : 'kept_caller',
+          });
+        }
+      }
+    }
     ttftTimeoutId = setTimeout(() => {
       if (!firstTokenReceived) {
         const ttftLatencyMs = Date.now() - startTime;
@@ -1237,7 +1301,18 @@ export async function* streamWithVercelAI(
   // explicitly widened the window (e.g. to 120s) is not silently cut
   // back to the 75s global default. See `getModelIdleTimeoutMs` JSDoc
   // for the contract.
+  // Bug #69 (Pass-5 audit) — long tool chains (10+ steps with file writes)
+  // can take 60+ seconds between tokens while the model composes the next
+  // tool call. The old single 75s idle timeout was too tight for that. The
+  // scaled formula adds 5s per tool call past the first, capped at 5 minutes.
+  // The base IDLE_TIMEOUT_MS is the FLOOR (75s default); on each tool-call
+  // event (see the `tool-call` case below) the live idle timer is REPLACED
+  // with a fresh `setTimeout` using the current toolCallCount, so the
+  // scaling actually applies. Computing it here at stream start would be
+  // a no-op (toolCallCount=0 then), so we compute-on-each-tool-call instead.
   const _modelOverrideMs = getModelIdleTimeoutMs(modelName);
+  // Base idle timeout respects the per-model hard ceiling (Bug #104).
+  // toolCallCount-scaled extension is applied LATER on each tool-call event.
   const IDLE_TIMEOUT_MS =
     _modelOverrideMs !== null ? Math.min(idleTimeoutMs, _modelOverrideMs) : idleTimeoutMs;
 
@@ -1302,13 +1377,33 @@ export async function* streamWithVercelAI(
   const TOOL_SUCCESS_EXTENSION_MULTIPLIER = 2;
   let activeExtensionMultiplier = 1;
 
+  // Bug #69 — tool-call-count extension. Each tool call adds 5s to the idle
+  // budget (capped at 5 minutes) so long tool chains (10+ steps with file
+  // writes) can take 60+ seconds between tokens while the model composes
+  // the next tool call. Recomputed on each tool-call event via the
+  // `computeToolCallScalingMs` helper below; the scaling is APPLIED when
+  // the live idle timer is reset in the `tool-call` case.
+  const computeToolCallScalingMs = (count: number): number => {
+    return Math.min(count * 5_000, 5 * 60_000);
+  };
+
   const resetIdleTimeout = (extensionMultiplier?: number) => {
     if (idleTimeoutId) {
       clearTimeout(idleTimeoutId);
     }
     if (!timeoutController) return;
     const effectiveMultiplier = extensionMultiplier ?? activeExtensionMultiplier;
-    const effectiveTimeout = IDLE_TIMEOUT_MS * effectiveMultiplier;
+    // Bug #69 (Pass-5 audit) — fold tool-call-count scaling into the base
+    // resetIdleTimeout so we never have two timers racing per tool-call event.
+    // `computeToolCallScalingMs` is 0 for the first call and caps at 5 minutes
+    // for very long chains, so the effective timer is:
+    //   (IDLE_TIMEOUT_MS + toolCallScalingMs) × effectiveMultiplier
+    // The caller is the SOLE source of `effectiveMultiplier` (2x on
+    // tool-call / tool-result success, 1x on text/failure). Adding the
+    // scaling here means `tool-call` callers don't need a second
+    // `clearTimeout + setTimeout` block to apply the extra budget.
+    const toolCallScalingMs = computeToolCallScalingMs(toolCallCount);
+    const effectiveTimeout = (IDLE_TIMEOUT_MS + toolCallScalingMs) * effectiveMultiplier;
     idleTimeoutId = setTimeout(() => {
       if (!timeoutController?.signal.aborted) {
         // ── Differentiated timeout diagnostics ────────────────────────────
@@ -1332,6 +1427,7 @@ export async function* streamWithVercelAI(
           `toolResultsOK=${toolResultSuccessCount}`,
           `toolResultsFAIL=${toolResultFailCount}`,
           `extensionMultiplier=${effectiveMultiplier}`,
+          `toolCallScalingMs=${toolCallScalingMs}`,
           `firstTokenTimeoutMs=${firstTokenTimeoutMs}`,
           `idleTimeoutMs=${IDLE_TIMEOUT_MS}`,
         ].join(' | ');
@@ -1353,7 +1449,8 @@ export async function* streamWithVercelAI(
           toolResultSuccessCount,
           toolResultFailCount,
           extensionMultiplier: effectiveMultiplier,
-          effectiveTimeout,                          // IDLE_TIMEOUT_MS × effectiveMultiplier
+          toolCallScalingMs,
+          effectiveTimeout,                          // (IDLE_TIMEOUT_MS + toolCallScalingMs) × effectiveMultiplier
           idleTimeoutMs: IDLE_TIMEOUT_MS,            // clamped (min of requested + override)
           requestedIdleTimeoutMs: idleTimeoutMs,     // user-supplied (post-destructure default)
           modelOverrideMs: _modelOverrideMs,         // per-model hard ceiling from getModelIdleTimeoutMs
@@ -1364,7 +1461,7 @@ export async function* streamWithVercelAI(
             'default',
             'mid_stream_stall',
             'vercel-ai-streaming',
-            { kind: 'idle', provider, model: modelName, lastActivityType, timeSinceLastActivity },
+            { kind: 'idle', provider, model: modelName, lastActivityType, timeSinceLastActivity, toolCallCount },
           );
         } catch { /* best-effort */ }
         timeoutController.abort(new Error(diagnosticMsg));
@@ -1629,6 +1726,13 @@ export async function* streamWithVercelAI(
       });
       if (supportsFC === false) {
         // FC BYPASS - model doesn't support function calling, stripping tools
+        // Bug #80 (Pass-5 audit): record the FC-GATE Phase 2 fallback so
+        // operators can quantify how often the LLM silently dropped all
+        // tools (e.g., mistral-small-latest in the run.log traces). The
+        // `fc_gate_phase2` steer counter is surfaced via /api/health.
+        try {
+          recordSteerInjected?.('fc_gate_phase2');
+        } catch { /* best-effort */ }
         chatLogger.error('[FC-GATE] ✗ FC BYPASSED - Model does NOT support function calling', {
           provider,
           model: modelName,
@@ -2038,9 +2142,15 @@ while (thinkPingQueue.length > 0) {
             // take longer than the normal idle window. We extend by 2x so the model
             // has time to produce tool calls, the tool executor runs, and the result
             // comes back — without the idle timeout firing mid-execution.
-                        activeExtensionMultiplier = TOOL_SUCCESS_EXTENSION_MULTIPLIER;
-resetIdleTimeout(TOOL_SUCCESS_EXTENSION_MULTIPLIER);
-            
+            //
+            // Bug #69 (Pass-5 audit) — `resetIdleTimeout` itself now folds in
+            // the toolCallCount-scaled extension (5s per call, cap 5min), so
+            // we don't need a second `clearTimeout + setTimeout` here. The
+            // single call below is the SOLE timer schedule for this tool-call
+            // event, eliminating the prior "two timers race" bug.
+            activeExtensionMultiplier = TOOL_SUCCESS_EXTENSION_MULTIPLIER;
+            resetIdleTimeout(TOOL_SUCCESS_EXTENSION_MULTIPLIER);
+
             // AI SDK v6 uses 'input' (parsed object) in fullStream tool-call parts
             let callArgs = (() => {
               const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;

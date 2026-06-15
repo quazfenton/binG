@@ -2422,3 +2422,41 @@ context."
 
 **Cumulative Pass-5 status:** 1 PARTIAL (this fix), 13 OPEN (most require
 codebase-wide audits or the prior-fix regression sweep).
+
+## Pass-5 Round 3 — #62 second-half: session-scope system-prompt inject (2026-06-15)
+
+**#62 — CLOSED (fully).**
+The Pass-5 Round 2 fix closed the logging half of #62 (structured
+`[VFS normalizePath] path rejected: out of scope` warn + enriched thrown
+error). This round closes the system-prompt half: the LLM now sees the
+canonical VFS session scope at request start, so it no longer has to
+guess the scope in the first place.
+
+**Files changed:**
+
+1. **`bing/web/lib/orchestra/steer-service.ts`** — new helper
+   `buildSessionScopeSteerPrompt({ ownerId, scopePath? })`:
+   - Returns `null` for plain anon ownerIds (no `$` delimiter) so non-session
+     owners stay silent (VFS falls back to `workspace/sessions/000` for them).
+   - Returns a `[STEER] Your canonical VFS session scope is 'X/'.` prompt
+     that:
+     - Names the canonical scope explicitly (`workspace/sessions/<sessionId>/`)
+     - Tells the LLM paths must be RELATIVE (do NOT include the prefix in
+       path arguments — the router prepends it)
+     - Provides 2 concrete examples (`src/app.tsx` → `X/src/app.tsx`)
+     - Includes self-correction guidance for the "Path traversal beyond
+       workspace root" rejection
+   - Optional `observed` suffix when the caller passes a `scopePath` that
+     starts with the canonical scope, so the LLM can verify the inject
+     matches what it actually saw.
+
+2. **`bing/web/lib/orchestra/unified-agent-service.ts`** — wired the helper
+   into the `autoInjectContext` block (the same block that already injects
+   env-probe fragments and auto-inject powers). The three layers are now
+   concatenated: env-probe → auto-inject powers → session-scope hint.
+   Wrapped in `try/catch` (best-effort, never throws) with `log.debug`
+   on failure.
+
+**Cumulative Pass-5 status:** 1 CLOSED (#62), 13 OPEN remaining. The audit
+note that the system-prompt injection was the "second half" of the fix is
+now resolved.

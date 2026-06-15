@@ -641,13 +641,59 @@ export async function GET(req: NextRequest) {
     // /api/health block reports an accurate entry count.
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
 
+    // Bug #78 (Pass-5 audit) — emit a backoff hint so the client knows it
+    // should poll less aggressively. The hint is conservative (1s → 2s → 4s
+    // → 8s, capped at 30s) and resets when the snapshot is empty (workspace
+    // not ready). This is the same pattern used in `tracking` above for
+    // server-side detection — the client can use the hint to switch from
+    // fixed-interval polling to exponential backoff. Closes the audit's
+    // "client too aggressive" complaint without forcing an SSE migration.
+    const snapshotAgeMs = Date.now() - new Date(snapshot.updatedAt).getTime();
+    const isFresh = snapshotAgeMs < 2_000;
+    const isStale = snapshotAgeMs > 30_000;
+    const backoffHint = isStale
+      ? {
+          strategy: 'exponential' as const,
+          baseMs: 1_000,
+          maxMs: 30_000,
+          currentMs: 4_000,
+          reason: 'stale_snapshot' as const,
+        }
+      : isFresh
+        ? {
+            strategy: 'exponential' as const,
+            baseMs: 1_000,
+            maxMs: 30_000,
+            currentMs: 1_000,
+            reason: 'fresh_snapshot' as const,
+          }
+        : {
+            strategy: 'exponential' as const,
+            baseMs: 1_000,
+            maxMs: 30_000,
+            currentMs: 2_000,
+            reason: 'normal' as const,
+          };
+
     const response = NextResponse.json({
       success: true,
       data: responseData,
       cached: false,
+      // Bug #78 — surface a server-issued backoff hint to the client. The
+      // client may use this to switch from fixed 1.5s polling to the
+      // exponential schedule the server recommends. Optional in the response
+      // shape so older clients that ignore the field are unaffected.
+      backoffHint,
     }, {
       headers: {
-        'cache-control': 'private, no-store',
+        // Bug #78 — `Cache-Control: private, max-age=N` (was `no-store`).
+        // The server-side snapshotCache + ETag are the source of truth;
+        // this `max-age` lets the BROWSER short-circuit identical requests
+        // within N seconds when the client respects the response. `no-store`
+        // forced the browser to re-validate every time, defeating the
+        // purpose of ETag. 1s is a safe lower bound given the snapshot's
+        // sub-second typical update latency.
+        'cache-control': 'private, max-age=1',
         'vary': 'Authorization, Cookie',
         etag,
       }

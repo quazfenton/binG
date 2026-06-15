@@ -73,7 +73,7 @@ import {
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';    // [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
 // an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
-import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer } from './steer-service';
+import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer, InvalidModelError } from './steer-service';
 // Bug #40: per-session orchestration-fallback counter. Incremented in
 // tagResultDegraded so /api/health?detailed can surface the count.
 import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
@@ -153,6 +153,11 @@ import { mem0Add, isMem0Configured } from '@/lib/powers/mem0-power';
 // auto-inject context so all downstream mode handlers pick it up via the
 // same config._autoInjectContext mechanism.
 import { formatAvailableBinariesAsync } from '@/lib/bash/env-probe';
+// Pass-5 #62 (audit) — second half: inject the canonical VFS session-scope
+// path into the system prompt at request start so the LLM never has to
+// guess the scope. Returns null for plain anon ownerIds (no $ delimiter),
+// in which case the inject is silent.
+import { buildSessionScopeSteerPrompt } from './steer-service';
 // Pass-2 cross-cutting theme: record orchestration fallback events so the
 // degradation chain shows when the v1-api text-mode fallback fired. The
 // sessionId is passed through config.conversationId / config.userId / 'default'.
@@ -1204,6 +1209,64 @@ export async function processUnifiedAgentRequest(
     autoInjectContext = buildAutoInjectUserMessage(userMsg) || '';
   } catch (err: any) {
     log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
+  }
+
+  // Bug #67 (Pass-5 audit) — qd/lite pre-validation. The audit observed
+  // recurring 400 errors with `model_config for "lite" not yet known`
+  // caused by the LLM emitting a bare model name. Pre-validate the model
+  // against the ninerouter registry BEFORE calling the provider so the
+  // chat route can surface a typed 400 (with available models) and the
+  // LLM can self-correct on the next turn.
+  //
+  // Throws `InvalidModelError` (a typed Error class from steer-service.ts)
+  // — the chat route's catch distinguishes via `instanceof` and returns
+  // HTTP 400 with `availableModels`. Without this, the route's generic
+  // catch returns 500 + the raw error message, which contradicts the
+  // audit's "typed 400 with available models" ask.
+  const requestedModel = (config.model || '').toString().toLowerCase();
+  const requestedProvider = (config.provider || '').toString();
+  if (requestedModel === 'lite' || requestedModel === 'qd/lite' || requestedModel === 'qd_lite' || requestedModel === 'qd') {
+    const liteAvailable = ['qd/auto', 'qd/ultimate', 'qd/performance', 'qd/lite', 'qd/dmodel', 'qd/gm51model', 'qd/mmodel', 'qd/efficient'];
+    log.warn('[Pre-validate] bare qd/lite model name rejected (Bug #67)', {
+      requestedModel,
+      requestedProvider,
+      availableModels: liteAvailable,
+    });
+    try {
+      // Record the rejection so /api/health?detailed can quantify how
+      // often the LLM emits bare model names. fire-and-forget; never throws.
+      const { recordFallbackChainAttempt } = await import('@/lib/chat/chat-metrics');
+      recordFallbackChainAttempt({
+        provider: requestedProvider || 'ninerouter',
+        model: requestedModel,
+        outcome: 'failure',
+        reason: 'invalid_model_name',
+      });
+    } catch { /* best-effort */ }
+    throw new InvalidModelError({
+      model: config.model || requestedModel,
+      provider: requestedProvider || 'ninerouter',
+      availableModels: liteAvailable,
+    });
+  }
+
+  // Pass-5 #62 — inject the canonical session-scope path so the LLM
+  // never has to guess. The hint tells the model the exact 'workspace/sessions/<id>/'
+  // prefix it should keep paths UNDER (without including the prefix in its
+  // own path arguments — the router prepends it). The helper returns null
+  // for plain anon ownerIds (no $ delimiter) and for empty/missing ownerId,
+  // so non-session owners stay silent without a try/catch.
+  const ownerId = ((config as any).ownerId as string | undefined) ?? '';
+  const sessionScopeHint = ownerId
+    ? buildSessionScopeSteerPrompt({
+        ownerId,
+        scopePath: (config as any).scopePath,
+      })
+    : null;
+  if (sessionScopeHint) {
+    autoInjectContext = autoInjectContext
+      ? `${autoInjectContext}\n\n${sessionScopeHint}`
+      : sessionScopeHint;
   }
 
   // Bug #39: pre-flight env probe (which npx python3 node npm pnpm ...). Run

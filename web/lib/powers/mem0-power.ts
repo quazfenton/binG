@@ -44,7 +44,11 @@ export interface Mem0Memory {
 // ============================================================================
 
 // Default timeouts (override via Mem0Config or per-call where applicable)
-const DEFAULT_SEARCH_TIMEOUT_MS = 2_500;
+// Bug #74 (Pass-5 audit) — search 2.5s → 10s. The 2.5s search timeout
+// fired repeatedly on first-call cold start (TLS handshake + auth + first
+// query). 10s comfortably covers the cold-path while still keeping the
+// hot path responsive. Per-call `timeoutMs` still overrides this default.
+const DEFAULT_SEARCH_TIMEOUT_MS = 10_000;
 const DEFAULT_ADD_TIMEOUT_MS = 8_000;
 const DEFAULT_DEFAULT_TIMEOUT_MS = 5_000;
 const ADD_MAX_RETRIES = 1; // 1 retry on transient errors (total: 2 attempts)
