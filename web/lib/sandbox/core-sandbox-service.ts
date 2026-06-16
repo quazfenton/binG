@@ -12,6 +12,7 @@ import { withRetryAndTimeout } from '@/lib/utils/retry'
 import { isDesktopMode } from '@bing/platform/env'
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync'
 import { autoSuspendService } from './auto-suspend-service'
+import { recordFailureBreaker, getBreakerCooldownUntil } from '@/lib/utils/circuit-breaker';
 
 const log = createLogger('SandboxService')
 
@@ -290,6 +291,34 @@ export class SandboxService {
       }
     }
 
+    // Bug #87 follow-up (Pass-6) — pre-check the circuit breaker BEFORE
+    // the primary provider probe. If the breaker is tripped, every
+    // provider in the fallback chain has been failing and we should
+    // back off rather than pay the cost of another failed round trip
+    // against the primary (which is typically the same provider class
+    // that just tripped the breaker).
+    //
+    // Placement (Pass-6 review fix #1): the pre-check is intentionally
+    // placed AFTER the inferred-provider probe (prefix-match fast path)
+    // and AFTER the cache hit, but BEFORE the primary probe. This way:
+    //   - cache hit: no breaker check needed (we already have a working
+    //     provider).
+    //   - inferred provider: preserved as a fast path. If a user has an
+    //     existing sandbox on a non-primary provider (firecracker,
+    //     modal, mistral, etc.) inferred from its ID prefix, we can
+    //     still resolve it even when the primary's breaker is open.
+    //   - primary probe: guarded (this is the fix the user asked for).
+    //   - fallback chain: guarded (redundant safety net, no harm).
+    const sandboxBreakerCooldown = getBreakerCooldownUntil('sandbox')
+    if (sandboxBreakerCooldown > Date.now()) {
+      const remainingMs = sandboxBreakerCooldown - Date.now()
+      log.warn('[SandboxService] sandbox circuit breaker is open, short-circuiting primary probe', {
+        remainingMs,
+        primaryProvider: this.primaryProviderType,
+      })
+      throw new Error(`Sandbox circuit breaker is open for ${Math.ceil(remainingMs / 1000)}s`)
+    }
+
     // Probe primary first.
      const primaryProvider = await this.getProvider()
      try {
@@ -332,7 +361,9 @@ export class SandboxService {
       }
     }
 
-    // Try all configured providers (excluding primary which we already tried)
+    // Try all configured providers (excluding primary which we already tried).
+    // The circuit-breaker pre-check is at the top of this function (see above)
+    // so the fallback chain is also short-circuited when the breaker is open.
     for (const fallbackType of configuredProviders.filter(t => t !== this.primaryProviderType)) {
       try {
         const fallback = await getSandboxProvider(fallbackType)
@@ -354,6 +385,10 @@ export class SandboxService {
             `(limitType=${fallbackErr?.limitType ?? 'unknown'}) — falling through`,
             { sandboxId, provider: fallbackType, limitType: fallbackErr?.limitType },
           );
+        // Bug #87 follow-up (Pass-6) — trip the circuit breaker so the
+        // next call short-circuits instead of re-hitting the same dead
+        // provider. 60s cooldown matches the arcade-service (#88) convention.
+        recordFailureBreaker('sandbox', 60_000)
         }
         // continue to next provider
       }
@@ -370,6 +405,29 @@ export class SandboxService {
   async createWorkspace(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     log.info(`Creating workspace for user ${userId}${config ? ' with custom config' : ''}`)
     let handle: SandboxHandle | null = null
+
+    // Bug #87 follow-up (Pass-7) — pre-check the circuit breaker BEFORE
+    // attempting to create a new sandbox. The breaker trips when
+    // existing-sandbox resolution has been failing repeatedly (see the
+    // `recordFailureBreaker('sandbox', 60_000)` calls in
+    // `resolveProviderForSandbox`). Without this pre-check, a tripped
+    // breaker would still allow new sandboxes to be created, which
+    // can re-trip the breaker on the very first call. Sharing the same
+    // breaker key (`'sandbox'`) ties the create path to the resolve
+    // path so a backend that's down for resolution is also avoided for
+    // creation. The warm-pool acquire path is also short-circuited
+    // (the warm pool is itself a backend that would fail in the same
+    // conditions).
+    const sandboxBreakerCooldown = getBreakerCooldownUntil('sandbox')
+    if (sandboxBreakerCooldown > Date.now()) {
+      const remainingMs = sandboxBreakerCooldown - Date.now()
+      log.warn('[SandboxService] sandbox circuit breaker is open, short-circuiting createWorkspace', {
+        remainingMs,
+        primaryProvider: this.primaryProviderType,
+        userId,
+      })
+      throw new Error(`Sandbox circuit breaker is open for ${Math.ceil(remainingMs / 1000)}s`)
+    }
     
     // P1 FIX: Honor explicit provider in config if provided
     const explicitProvider = config?.provider as SandboxProviderType | undefined;
@@ -411,6 +469,12 @@ export class SandboxService {
         }
         if (lastError) {
           log.error(`All providers failed for workspace creation`, lastError as Error)
+          // Bug #87 follow-up (Pass-7) — trip the circuit breaker so
+          // the next call (resolve OR create) short-circuits instead
+          // of re-hitting the same dead providers. 60s cooldown
+          // matches the existing `resolveProviderForSandbox` breaker
+          // trip and the arcade-service (#88) convention.
+          recordFailureBreaker('sandbox', 60_000)
           throw lastError
         }
       }
@@ -432,6 +496,12 @@ export class SandboxService {
       }
       if (lastError) {
         log.error(`All providers failed for workspace creation`, lastError as Error)
+        // Bug #87 follow-up (Pass-7) — trip the circuit breaker so
+        // the next call (resolve OR create) short-circuits instead
+        // of re-hitting the same dead providers. 60s cooldown
+        // matches the existing `resolveProviderForSandbox` breaker
+        // trip and the arcade-service (#88) convention.
+        recordFailureBreaker('sandbox', 60_000)
         throw lastError
       }
     }

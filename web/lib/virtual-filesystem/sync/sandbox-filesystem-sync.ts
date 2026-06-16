@@ -461,10 +461,17 @@ class SandboxFilesystemSync {
         await this.syncVFSToSandbox(sandboxId, userId);
         logger.info(`[SandboxSync] Initial sync completed for sandbox ${sandboxId}`);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         logger.warn(
           `[SandboxSync] Initial sync error for sandbox ${sandboxId}:`,
-          err instanceof Error ? err.message : err,
+          message,
         );
+        // Bug #115/#89: stop the sync if the initial sync hits a sandbox
+        // that is no longer accessible (matches the syncSandboxToVFS path).
+        if (isSandboxInaccessible(message)) {
+          this.stopSync(sandboxId);
+          logger.info(`[SandboxSync] Stopped sync for removed/inaccessible sandbox ${sandboxId} (initial-sync path)`);
+        }
       }
     })();
 
@@ -473,10 +480,18 @@ class SandboxFilesystemSync {
         await this.syncSandboxToVFS(sandboxId, userId);
         await this.syncVFSToSandbox(sandboxId, userId);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         logger.warn(
           `[SandboxSync] Periodic sync error for sandbox ${sandboxId}:`,
-          err instanceof Error ? err.message : err,
+          message,
         );
+        // Bug #115/#89: stop the sync if the periodic sync hits a sandbox
+        // that is no longer accessible. Without this, the interval would
+        // keep firing every 5-15s and spamming the log.
+        if (isSandboxInaccessible(message)) {
+          this.stopSync(sandboxId);
+          logger.info(`[SandboxSync] Stopped sync for removed/inaccessible sandbox ${sandboxId} (periodic-sync path)`);
+        }
       }
     }, intervalMs);
 
@@ -679,6 +694,16 @@ class SandboxFilesystemSync {
   }
 
   async syncVFSToSandbox(sandboxId: string, userId: string): Promise<void> {
+    // Bug #115/#89 (Pass-6 review): per-tick 5-strike counter. The
+    // counter is incremented ONCE at the end of this method (not
+    // per-file) so a 1000-file snapshot against a flaky sandbox
+    // doesn't trip the 5-strike after 5 files. A local
+    // hadWriteFailure flag tracks whether ANY writeFile in this
+    // invocation failed. NOTE: do NOT reset the counter at the top
+    // — the counter must persist across consecutive failing calls
+    // so it can actually reach 5. The reset on success is handled
+    // at the end of the method (else branch).
+    let hadWriteFailure = false;
     let currentVersion: number;
     try {
       currentVersion = await virtualFilesystem.getWorkspaceVersion(userId);
@@ -723,15 +748,67 @@ class SandboxFilesystemSync {
       try {
         await sandboxBridge.writeFile(sandboxId, sandboxPath, file.content);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         logger.warn(
           `[SandboxSync] Failed to write ${file.path} to sandbox ${sandboxId}:`,
-          err instanceof Error ? err.message : err,
+          message,
         );
+        // Bug #115/#89: stop the sync if the sandbox is gone (auth revoked,
+        // permission lost, security exception, etc.) — same fix as
+        // syncSandboxToVFS, applied to the VFS->Sandbox direction too.
+        // Design decision (Pass-6 review): we deliberately do NOT add the
+        // 5-strike `consecutiveSyncFailures` counter here. Unlike the
+        // single-call `sandboxBridge.listDirectory` in syncSandboxToVFS,
+        // syncVFSToSandbox calls `sandboxBridge.writeFile` once per file
+        // in a loop (potentially 1000+ files per snapshot). A per-file
+        // counter would trip the 5-strike after 5 files and silently drop
+        // the remaining 995. The isSandboxInaccessible check is sufficient
+        // for the common case (sandbox gone); transient errors are logged
+        // and the loop continues. The 5-strike counter remains in
+        // syncSandboxToVFS where it correctly tracks per-tick failures.
+        // Design decision (Pass-6 review): we deliberately do NOT add the
+        // 5-strike `consecutiveSyncFailures` counter here. Unlike the
+        // single-call `sandboxBridge.listDirectory` in syncSandboxToVFS,
+        // syncVFSToSandbox calls `sandboxBridge.writeFile` once per file
+        // in a loop (potentially 1000+ files per snapshot). A per-file
+        // counter would trip the 5-strike after 5 files and silently drop
+        // the remaining 995. The isSandboxInaccessible check is sufficient
+        // for the common case (sandbox gone); transient errors are logged
+        // and the loop continues. The 5-strike counter remains in
+        // syncSandboxToVFS where it correctly tracks per-tick failures.
+        hadWriteFailure = true;
+        if (isSandboxInaccessible(message)) {
+          this.stopSync(sandboxId);
+          logger.info(`[SandboxSync] Stopped sync for removed/inaccessible sandbox ${sandboxId} (writeFile path)`);
+          // Break out of the file loop too: every remaining file would just
+          // fail the same way against an inaccessible sandbox.
+          break;
+        }
       }
     }
 
     this.lastSyncVersions.set(sandboxId, currentVersion);
     logger.info(`[SandboxSync] VFS → Sandbox: synced ${snapshot.files.length} files to sandbox ${sandboxId}`);
+
+    // Bug #115/#89 (Pass-6 review): per-tick 5-strike counter. If any
+    // writeFile failed during this invocation, increment the counter
+    // ONCE and stop the sync if we've hit the threshold. This gives
+    // 5-strike protection per syncVFSToSandbox call without the
+    // per-file over-aggression that would drop 995/1000 files.
+    if (hadWriteFailure) {
+      const failCount = (this.consecutiveSyncFailures.get(sandboxId) || 0) + 1;
+      this.consecutiveSyncFailures.set(sandboxId, failCount);
+      if (failCount >= SandboxFilesystemSync.MAX_CONSECUTIVE_SYNC_FAILURES) {
+        this.stopSync(sandboxId);
+        logger.warn(
+          `[SandboxSync] Sandbox ${sandboxId} failed ${failCount} consecutive syncVFSToSandbox calls — stopping sync (stale reference cleanup)`,
+          { sandboxId, failCount },
+        );
+      }
+    } else {
+      // Successful sync — reset the counter.
+      this.consecutiveSyncFailures.delete(sandboxId);
+    }
   }
 
   stopAll(): void {

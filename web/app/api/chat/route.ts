@@ -1,14 +1,3 @@
-  // Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small
-  // named helper `maybeDetectorContinuation()` for readability. The helper
-  // forwards real `result.fileEdits ?? []` (not a hardcoded `[]`) so the
-  // detector's `edits-mismatch` signal can actually fire.
-  const detectorOverride = maybeDetectorContinuation(
-    iterContent,
-    result,
-    continuationDecision,
-    normalizeStepArgs,
-    log,
-  ) ?? { force: false };
 import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/providers/llm-providers";
 import { errorHandler } from '@/lib/errors/error-handler';
@@ -110,6 +99,55 @@ function normalizeStepArgs(value: unknown): Record<string, unknown> | undefined 
     }
   }
   return undefined;
+}
+
+/**
+ * Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small named helper
+ * for readability. The helper forwards the REAL `result.fileEdits ?? []`
+ * (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
+ * actually fire. Returns `null` when the detector has no opinion; callers
+ * coalesce with `?? { force: false }` at the call site.
+ */
+function maybeDetectorContinuation(
+  result: { fileEdits?: unknown[] } | undefined,
+  continuationDecision: { continue: boolean; reason?: string },
+  log: { debug: (msg: string, ctx?: unknown) => void },
+): { force: boolean; reason?: string } | null {
+  // Bug #86 (Pass-6, reviewer nit #2) — forwards the REAL `result.fileEdits ?? []`
+  // (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
+  // actually fire. Bug #86 (Pass-6, reviewer nit #1) — extracted to a small
+  // named helper for readability. Returns `null` when the detector has no
+  // opinion (no edits, or shouldAutoContinue already said stop); callers
+  // coalesce with `?? { force: false }` at the call site.
+  const edits = result?.fileEdits ?? [];
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return null;
+  }
+  // NOTE: we deliberately do NOT gate on continuationDecision.continue here.
+  // The detector's job is to override shouldAutoContinue when there's an
+  // edits-mismatch. The caller's OR combines both signals so the detector
+  // CAN force a continuation even when shouldAutoContinue said stop.
+  //
+  // Carve-out: if shouldAutoContinue said stop because the max-continuations
+  // cap was reached, the detector should NOT force another iteration — the
+  // cap is the safety net that prevents infinite loops.
+  if (continuationDecision.reason === 'max_continuations_reached') {
+    log.debug('[maybeDetectorContinuation] suppressed: max_continuations_reached', {
+      editCount: edits.length,
+    });
+    return null;
+  }
+  // Only log the forward when the detector is actually overriding
+  // shouldAutoContinue (i.e. shouldAutoContinue said stop). When both
+  // signals agree, the auto-continue block's normal flow already covers
+  // the case and the log would be redundant noise.
+  if (!continuationDecision.continue) {
+    log.debug('[maybeDetectorContinuation] forwarding edits-mismatch signal', {
+      editCount: edits.length,
+      reason: continuationDecision.reason,
+    });
+  }
+  return { force: true, reason: 'edits-mismatch' };
 }
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
@@ -1587,8 +1625,17 @@ const config: UnifiedAgentConfig = {
                   responseText: iterContent,
                   continuationsSoFar: previousContinuations,
                 });
+                // Bug #86 (Pass-6) — wire the detector-override helper. The
+                // helper forwards real `result.fileEdits ?? []` so the
+                // edits-mismatch signal can actually fire. Coalesce with
+                // `?? { force: false }` so the default path is unchanged.
+                const detectorOverride = maybeDetectorContinuation(
+                  result,
+                  continuationDecision,
+                  chatLogger,
+                ) ?? { force: false }
 
-                if (continuationDecision.continue && iteration < MAX_CONTINUATIONS - 1) {
+                if ((continuationDecision.continue || detectorOverride.force) && iteration < MAX_CONTINUATIONS - 1) {
                   // Signal continuation
                   continuationCounters.set(requestId, continuationDecision.continuationsSoFar);
                   chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {

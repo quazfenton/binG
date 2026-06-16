@@ -158,6 +158,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       return data.toolkits?.map((t: any) => t.name) || [];
     } catch (error: any) {
       logger.error('[ArcadeService] getToolkits failed:', error.message);
@@ -244,6 +246,9 @@ export class ArcadeService {
           requiresAuth: t.requires_auth || false,
         }));
 
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
+
         // Populate cache
         if (!filters) {
           this.tools.clear();
@@ -317,6 +322,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       const mappedTools = data.tools?.map((t: any) => ({
         name: t.name,
         description: t.description,
@@ -372,6 +379,8 @@ export class ArcadeService {
           query,
           limit: options?.limit,
         });
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
         return tools.map((t: any) => ({
           name: t.name,
           description: t.description,
@@ -442,6 +451,8 @@ export class ArcadeService {
           context,
         });
 
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
         return {
           authorized: result.authorized || false,
           authUrl: result.auth_url,
@@ -557,6 +568,8 @@ export class ArcadeService {
           user_id: userId,
         });
 
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
         return {
           success: true,
           output: result,
@@ -601,6 +614,8 @@ export class ArcadeService {
       }
 
       const result = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       return {
         success: true,
         output: result,
@@ -664,6 +679,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       const toolkit = this.extractToolkit(toolName);
       const connection = data.connections?.find((c: any) => 
         c.provider === toolkit && c.status === 'active'
@@ -724,6 +741,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       return data.url;
     } catch (error: any) {
       logger.error('[ArcadeService] getAuthUrl failed:', error.message);
@@ -791,6 +810,8 @@ export class ArcadeService {
         }
 
         if (authResponse.status === 'completed' && authResponse.context?.token) {
+          // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+          this.recordArcadeSuccess();
           return {
             status: 'completed',
             token: authResponse.context.token,
@@ -799,6 +820,8 @@ export class ArcadeService {
 
         // Authorization not yet complete — return URL for browser flow
         if (authResponse.url) {
+          // Bug #88 (Pass-6) — reset 401 counter on SDK success (pending is still a successful API call).
+          this.recordArcadeSuccess();
           return {
             status: 'pending',
             url: authResponse.url,
@@ -858,6 +881,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
 
       if (data.authorized && data.context?.token) {
         return {
@@ -924,6 +949,8 @@ export class ArcadeService {
         });
 
         if (result.status === 'completed' && result.context?.token) {
+          // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+          this.recordArcadeSuccess();
           return {
             status: 'completed',
             token: result.context.token,
@@ -1088,6 +1115,8 @@ export class ArcadeService {
     if (!response.ok) return [];
 
     const data = await response.json();
+    // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+    this.recordArcadeSuccess();
     return data.connections?.map((c: any) => ({
       id: c.id,
       provider: c.provider,
@@ -1125,6 +1154,9 @@ export class ArcadeService {
           createdAt: new Date(c.created_at).getTime(),
         }));
         
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
+        
         // Populate cache
         for (const conn of mappedConnections) {
           this.connections.set(`${userId}:${conn.provider}`, conn);
@@ -1148,6 +1180,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       const mappedConnections = data.connections?.map((c: any) => ({
         id: c.id,
         provider: c.provider,
