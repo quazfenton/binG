@@ -277,6 +277,20 @@ export function shouldAutoContinue(input: {
   const routing = input.routing;
   const planStepsCount = routing?.planSteps?.length ?? routing?.estimatedSteps ?? 0;
 
+  // Env-default-on guard: when no routing metadata is provided AND the
+  // planner didn't enumerate >= 2 plan steps, default to NO continuation.
+  // This makes the previously-implicit heuristic-chain fallback explicit
+  // so future readers don't have to trace the chain to find this branch.
+  // Goal: same observable behavior, with the branch explicit.
+  if (routing == null && planStepsCount < 2) {
+    return {
+      continue: false,
+      reason: 'no_continuation_needed',
+      continuationPrompt: '',
+      continuationsSoFar,
+    };
+  }
+
   // 1. roleSelection.continue === true → continue with the plan's next step
   if (routing?.continue === true) {
     const basePrompt = routing.stepReprompt

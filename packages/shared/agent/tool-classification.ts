@@ -115,10 +115,10 @@ export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
  * drawn from the snake_case entries in READ_ONLY_TOOL_NAMES above.
  * Matched via direct equality (the dotted form is preserved during
  * normalization — we do NOT replace `.` with `_`) so the dotted-match
- * path in consumers can short-circuit with `.has()` without paying
+ * path in `web/lib/chat/llm-continuation.ts` can short-circuit with `.has()` without paying
  * the lower-case + hyphen-to-underscore cost of normalizeToolName().
  * The Set contents are an inline subset of the dotted members of
- * READ_ONLY_TOOL_NAMES; always derive from the array literal below,
+ * READ_ONLY_TOOL_NAMES; in this declaration,
  * not from a count remembered in this JSDoc.
  */
 export const CAPABILITY_PREFIX_TOOLS: ReadonlySet<string> = new Set<string>([  'file.read',

@@ -4,18 +4,39 @@ import { normalizeAndValidateRole } from '@bing/shared/agent';
 
 /**
  * choose_role Capability
- * 
- * Allows the agent to dynamically switch its internal role/persona based on 
+ *
+ * Allows the agent to dynamically switch its internal role/persona based on
  * evolving task requirements, ensuring the system prompt remains optimized.
+ *
+ * Canonical lineage (must stay in sync with CHOOSE_ROLE_DIRECTIVE in
+ * packages/shared/agent/system-prompts-dynamic.ts): the 9 role IDs below and
+ * the 3 lineage concepts — complexity, domain, failure recovery — are the
+ * single coherent menu across every LLM-facing call site.
  *
  * Alias of role_selection — both names are handled by the system.
  */
 export const chooseRoleCapability = tool({
-  description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery. USE THIS when the task has multiple phases (call choose_role role="architect" to plan, then role="coder" to implement) or when you hit repeated tool failures (call choose_role role="debugger" to investigate) or when you finished coding and need a review (call choose_role role="reviewer") or when the user asks for research (call choose_role role="researcher"). Available roles: coder, architect, reviewer, debugger, tester, researcher, planner, documenter, mlEngineer.',
+  description:
+    'Switch the current expert role/persona to better handle one of the 3 lineage concepts: task complexity, domain, or failure recovery. ' +
+    'USE THIS when the task has multiple phases (call choose_role role="architect" to plan, then role="coder" to implement, then role="reviewer" to verify) ' +
+    'or when you hit repeated tool failures (call choose_role role="debugger" to investigate — failure-recovery lineage) ' +
+    'or when the user asks for research (call choose_role role="researcher" — domain lineage) ' +
+    'or when you outlined a multi-role coordination problem (call choose_role role="orchestrator" — complexity lineage). ' +
+    'Available roles (must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE): coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier.',
   inputSchema: z.object({
-    role: z.string().describe('The target expert role to adopt (e.g. coder, architect, reviewer, debugger, tester, researcher, planner, documenter, mlEngineer)'),
-    reason: z.string().optional().describe('Reasoning for the role switch (e.g. handling high-complexity refactor, debugging error loops)'),
-    recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages (system injects these, biases toward debugger role when 2+ failures)'),
+    role: z.string().describe(
+      'The target expert role to adopt — must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE in packages/shared/agent/system-prompts-dynamic.ts: ' +
+      'coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier. ' +
+      'Pair `reason` with one of the 3 lineage concepts: complexity, domain, or failure recovery.',
+    ),
+    reason: z.string().optional().describe(
+      'Reasoning for the role switch — frame it using one of the 3 lineage concepts: task complexity (multi-phase or architectural decisions), ' +
+      'domain (specialist expertise or external research), or failure recovery (debugging error loops, post-mortem of recent failures).',
+    ),
+    recentFailures: z.array(z.string()).optional().describe(
+      'Recent tool execution error messages — biases routing toward the failure-recovery lineage (debugger role) when 2+ entries are present. ' +
+      'Used by the normalization layer to surface error context; not free-form text.',
+    ),
   }),
   execute: ({ role, reason, recentFailures }) => {
     const result = normalizeAndValidateRole(role, reason || '', {

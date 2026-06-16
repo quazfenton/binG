@@ -602,7 +602,11 @@ export class PlanActVerifyOrchestrator {
     this.sdkTools['choose_role'] = aiTool({
       description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
       parameters: z.object({
-        role: z.string().describe('The target expert role to adopt (e.g., debugger, architect, reviewer, tester, researcher, coder).'),
+        role: z.string().describe(
+          'The target expert role to adopt — must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE in system-prompts-dynamic.ts: ' +
+          'coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier. ' +
+          'Pair `reason` with one of the 3 lineage concepts: complexity, domain, or failure recovery.',
+        ),
         reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
         recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages for failure-context bias.'),
       }),

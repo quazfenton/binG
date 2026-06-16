@@ -185,8 +185,7 @@ export class UnifiedAgent {
           // P1 FIX: Use envVars key instead of env
           envVars: this.config.env,
         } as any)
-        const sessionProvider = (workspaceSession as any).provider ?? this.config.provider;
-        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${sessionProvider}`)
+        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${workspaceSession.provider || this.config.provider}`)
       } catch (error: any) {
         log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(
@@ -270,24 +269,24 @@ export class UnifiedAgent {
               break
 
             default:
-              log.warn(`Unknown capability: ${capability}`)
+              console.warn(`[UnifiedAgent] Unknown capability: ${capability}`)
               initResults[capability] = false
           }
         } catch (error: any) {
-          log.error(`Failed to initialize capability ${capability}:`, error.message)
+          console.error(`[UnifiedAgent] Failed to initialize capability ${capability}:`, error.message)
           this.initializationErrors.set(capability, error)
           initResults[capability] = false
           
           // Don't fail entire initialization for non-critical capabilities
           if (['desktop', 'mcp', 'git'].includes(capability)) {
-            log.warn(`Continuing without ${capability} capability`)
+            console.warn(`[UnifiedAgent] Continuing without ${capability} capability`)
           }
         }
       }
 
       const initDuration = Date.now() - initStartTime
-      log.info(
-        `Session initialized: ${this.session.sessionId} ` +
+      console.log(
+        `[UnifiedAgent] Session initialized: ${this.session.sessionId} ` +
         `(${initDuration}ms). Capabilities: ${JSON.stringify(initResults)}`
       )
 
@@ -299,7 +298,7 @@ export class UnifiedAgent {
       return this.session
 
     } catch (error: any) {
-      log.error('Initialization failed:', error.message)
+      console.error('[UnifiedAgent] Initialization failed:', error.message)
       throw error
     }
   }
