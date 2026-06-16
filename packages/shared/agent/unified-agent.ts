@@ -270,24 +270,24 @@ export class UnifiedAgent {
               break
 
             default:
-              console.warn(`[UnifiedAgent] Unknown capability: ${capability}`)
+              log.warn(`Unknown capability: ${capability}`)
               initResults[capability] = false
           }
         } catch (error: any) {
-          console.error(`[UnifiedAgent] Failed to initialize capability ${capability}:`, error.message)
+          log.error(`Failed to initialize capability ${capability}:`, error.message)
           this.initializationErrors.set(capability, error)
           initResults[capability] = false
           
           // Don't fail entire initialization for non-critical capabilities
           if (['desktop', 'mcp', 'git'].includes(capability)) {
-            console.warn(`[UnifiedAgent] Continuing without ${capability} capability`)
+            log.warn(`Continuing without ${capability} capability`)
           }
         }
       }
 
       const initDuration = Date.now() - initStartTime
-      console.log(
-        `[UnifiedAgent] Session initialized: ${this.session.sessionId} ` +
+      log.info(
+        `Session initialized: ${this.session.sessionId} ` +
         `(${initDuration}ms). Capabilities: ${JSON.stringify(initResults)}`
       )
 
@@ -299,7 +299,7 @@ export class UnifiedAgent {
       return this.session
 
     } catch (error: any) {
-      console.error('[UnifiedAgent] Initialization failed:', error.message)
+      log.error('Initialization failed:', error.message)
       throw error
     }
   }
@@ -583,37 +583,24 @@ export class UnifiedAgent {
     y: number
     button?: 'left' | 'right' | 'middle'
   }): Promise<void> {
-    const handle = this.desktopHandle;
-    if (!handle) {
+    if (!this.desktopHandle) {
       throw new Error('Desktop not initialized')
     }
 
-    if (typeof opts.x !== 'number' || typeof opts.y !== 'number' || opts.x < 0 || opts.y < 0) {
-      throw new Error('Invalid coordinates: x and y must be non-negative numbers')
-    }
-    if (opts.button !== undefined && !['left', 'right', 'middle'].includes(opts.button)) {
-      throw new Error(`Invalid button value: ${opts.button}. Must be 'left', 'right', or 'middle'`)
-    }
-
-    if (opts.button === 'right') await handle.rightClick(opts.x, opts.y)
-    else if (opts.button === 'middle') await handle.middleClick(opts.x, opts.y)
-    else await handle.leftClick(opts.x, opts.y)
+    if (opts.button === 'right') await this.desktopHandle.rightClick(opts.x, opts.y)
+    else if (opts.button === 'middle') await this.desktopHandle.middleClick(opts.x, opts.y)
+    else await this.desktopHandle.leftClick(opts.x, opts.y)
   }
 
   /**
    * Move mouse to position
    */
   async desktopMove(opts: { x: number; y: number }): Promise<void> {
-    const handle = this.desktopHandle;
-    if (!handle) {
+    if (!this.desktopHandle) {
       throw new Error('Desktop not initialized')
     }
 
-    if (typeof opts.x !== 'number' || typeof opts.y !== 'number' || opts.x < 0 || opts.y < 0) {
-      throw new Error('Invalid coordinates: x and y must be non-negative numbers')
-    }
-
-    await handle.moveMouse(opts.x, opts.y)
+    await this.desktopHandle.moveMouse(opts.x, opts.y)
   }
 
   /**

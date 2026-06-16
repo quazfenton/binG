@@ -24,6 +24,11 @@ import {
   powerToManifest,
   RuntimeDescriptorSchema,
 } from './types';
+// Pass-7 #107: tag the SKILL.md mtime-changed log with the canonical
+// `drift` detection term. The on-disk file has drifted past the cached
+// version (the underlying cause) which is the same family of detection
+// as schema drift and timestamp drift.
+import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
 
 const log = createLogger('Tools:Loader');
 
@@ -267,6 +272,20 @@ function normalizeFrontmatter(fm: Record<string, any>): Record<string, any> {
 const loadedPowerIds = new Set<string>();
 
 /**
+ * Pass-7 #101 — track the mtime (ms since epoch) of each loaded SKILL.md
+ * so the TS-fallback skip in `loadCapabilitiesAsPowers` can detect a stale
+ * in-memory copy. When a file is edited on disk after being loaded, the
+ * next skip-check invalidates the cache and forces a re-load — preventing
+ * the wrong tools from being selected (the bug #101 symptom).
+ *
+ * Map shape: powerId → { mtimeMs, filePath }. The filePath is captured
+ * so a re-check can re-stat the same path (powerId is just an id, not a
+ * stable on-disk key). The mtimeMs is the source of truth for the
+ * freshness comparison.
+ */
+const loadedPowerMtimes = new Map<string, { mtimeMs: number; filePath: string }>();
+
+/**
  * Load all core capabilities from SKILL.md files in the base directory.
  *
  * Idempotent: calling multiple times will not re-register powers that
@@ -346,6 +365,21 @@ export async function loadCoreCapabilities(options?: { forceReload?: boolean }):
         markdownBodies.set(powerDef.id, extracted.body);
       }
 
+      // Pass-7 #101: capture the SKILL.md mtime so the TS-fallback skip
+      // in loadCapabilitiesAsPowers() can detect a stale in-memory copy.
+      // fs.statSync is the canonical source for the file's mtime; the
+      // stat throws if the file vanishes between readFileSync and now,
+      // so wrap in try/catch and fall back to the read time (less
+      // accurate but never throws out of the loader).
+      try {
+        const stat = fs.statSync(filePath);
+        loadedPowerMtimes.set(powerDef.id, { mtimeMs: stat.mtimeMs, filePath });
+      } catch {
+        // best-effort: stat can fail on some filesystems; use Date.now()
+        // as a safe fallback so the freshness check still has a baseline
+        loadedPowerMtimes.set(powerDef.id, { mtimeMs: Date.now(), filePath });
+      }
+
       // Register in PowersRegistry via adapter
       try {
         const { powersRegistry } = await import('@/lib/powers');
@@ -407,10 +441,46 @@ export async function loadCapabilitiesAsPowers(): Promise<{
 
   for (const cap of ALL_CAPABILITIES) {
     try {
-      // Skip if already loaded (e.g., from a SKILL.md override or auto-inject power)
+      // Pass-7 #101 — SKILL.md freshness check. Before skipping the
+      // TS fallback because a capability was previously loaded from
+      // SKILL.md, verify the file on disk hasn't been edited since.
+      // If the mtime has changed, drop the loaded-power-id entry and
+      // the cached mtime so the next call to loadCoreCapabilities()
+      // (or a forceReload from the caller) re-reads the file. This
+      // closes the "TS fallback skipped for stale SKILL.md" bug.
       if (loadedPowerIds.has(cap.id)) {
-        log.debug(`Capability ${cap.id} already loaded from SKILL.md — skipping TS fallback`);
-        continue;
+        const cached = loadedPowerMtimes.get(cap.id);
+        if (cached) {
+          let currentMtime: number | null = null;
+          try {
+            const fs = await import('fs');
+            currentMtime = fs.statSync(cached.filePath).mtimeMs;
+          } catch {
+            // Stat failed (file deleted, perms changed) → treat as stale
+            // so the next force-reload picks up the new state.
+            currentMtime = null;
+          }
+          if (currentMtime === null || currentMtime > cached.mtimeMs) {
+            log.warn(
+              withDetectionTerms(
+                `SKILL.md mtime changed for ${cap.id} (${new Date(cached.mtimeMs).toISOString()} → ` +
+                `${currentMtime ? new Date(currentMtime).toISOString() : 'gone'}) — invalidating cache; ` +
+                `forcing re-load on next call`,
+                DETECTION_TERMS.drift,
+              ),
+            );
+            loadedPowerIds.delete(cap.id);
+            loadedPowerMtimes.delete(cap.id);
+            // Fall through to the TS-fallback path below (don't continue)
+          } else {
+            log.debug(`Capability ${cap.id} already loaded from SKILL.md — skipping TS fallback (mtime ${currentMtime})`);
+            continue;
+          }
+        } else {
+          // Loaded from a non-SKILL.md path (e.g., auto-inject power); keep skip.
+          log.debug(`Capability ${cap.id} already loaded from SKILL.md — skipping TS fallback`);
+          continue;
+        }
       }
 
       // Skip capabilities that are covered by auto-inject powers to avoid duplicates.
@@ -553,5 +623,6 @@ export function getLoadedPowerIds(): Set<string> {
  */
 export function resetLoader(): void {
   loadedPowerIds.clear();
+  loadedPowerMtimes.clear();
   clearMarkdownBodies();
 }

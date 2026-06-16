@@ -190,7 +190,8 @@ export class UnifiedAgent {
         log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(
           `Failed to initialize sandbox: ${error.message}. ` +
-          `Check that provider "${this.config.provider}" is properly configured.`
+          `Check that provider "${this.config.provider}" is properly configured.`,
+          { cause: error }
         )
       }
 
@@ -576,7 +577,7 @@ export class UnifiedAgent {
   /**
    * Click at position
    */
-  async desktopClick(opts: { 
+  async desktopClick(opts: {
     x: number
     y: number
     button?: 'left' | 'right' | 'middle'

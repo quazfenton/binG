@@ -44,6 +44,7 @@ import {
 } from '../storage/session-store';
 
 import { circuitBreakerManager } from '@/lib/middleware/circuit-breaker';
+import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 const logger = createLogger('Session:Manager');
 
@@ -71,13 +72,22 @@ export interface SessionConfig {
   cloudFsProvider?: 'sprites' | 'e2b' | 'daytona' | 'local';
   workspaceDir?: string;
   quota?: Partial<SessionQuota>;
-  
+
   // Agent-specific (backward compatible)
   mode?: 'opencode' | 'nullclaw' | 'hybrid';
   enableCloudOffload?: boolean;
   executionPolicy?: ExecutionPolicy;
   /** @deprecated Use executionPolicy instead */
   noSandbox?: boolean;
+  /**
+   * Optional authoritative FilesystemOwnerResolution from the API route
+   * caller (when a NextRequest is in scope). Threaded through to
+   * `workspaceControlPlane.register()` so the registered handle carries
+   * the authoritative ownerId from the start — if the handle later calls
+   * `_ensureSession()`, the affinity binding uses this ownerId instead of
+   * falling back to the session lookup.
+   */
+  ownerResolution?: FilesystemOwnerResolution;
 }
 
 export interface Session {
@@ -1207,6 +1217,12 @@ export class SessionManager {
       // Tracks the workspace so get(), list(), and destroy() work. The session
       // manager already handles sandbox creation — this is a lightweight
       // registration with the provider/sandbox/dir info.
+      //
+      // `config.ownerResolution` is forwarded to the handle so the affinity
+      // binding (created lazily on `_ensureSession()`) carries the
+      // authoritative ownerId from the API route caller, not a session
+      // lookup fallback. Falls back to undefined when the caller is a
+      // service that doesn't have a NextRequest in scope.
       try {
         const { workspaceControlPlane } = await import('@/lib/workspace/workspace-control-plane');
         const wsId = `${userId}:${conversationId}`;
@@ -1214,7 +1230,7 @@ export class SessionManager {
           provider: sandboxHandle ? (await this.inferProviderFromHandle(sandboxHandle)) : undefined,
           sandboxId: sandboxHandle?.id,
           workspaceDir: workspacePath,
-        });
+        }, config.ownerResolution);
       } catch {
         // Best-effort — control plane registration is non-critical
       }
@@ -1233,7 +1249,9 @@ export class SessionManager {
         storageBytes: 0,
       });
 
-      logger.info(`Created session ${session.id} for ${userId}:${conversationId} (policy: ${executionPolicy})`);
+      logger.info(`Created session ${session.id} for ${userId}:${conversationId} (policy: ${executionPolicy})`, {
+        hasOwnerResolution: !!config.ownerResolution,
+      });
 
       // Predictive Prewarming (Phase 10): After session creation, fire off a
       // background prewarming scan of the VFS. If dependency files are detected

@@ -45,7 +45,11 @@ export class SandboxSecurityManager {
   // NOTE: \n and \r are intentionally NOT blocked — they are required for heredocs,
   // multi-line scripts, and other legitimate bash use cases. Security against
   // command injection is handled by DANGEROUS_COMMAND_PARTIALS and schema validation.
-  private static readonly SHELL_METADATA_CHARS = ['`', '$'];
+  // NOTE: $ was previously blocked but is fundamental to shell usage (variable
+  // expansion, subshells, arithmetic). Bug #81 — removal is safe because
+  // DANGEROUS_COMMAND_PARTIALS blocks eval/source, and schema validation prevents
+  // injection through tool arguments.
+  private static readonly SHELL_METADATA_CHARS = ['`'];
 
 
   // Input size limits

@@ -17,7 +17,9 @@ import type {
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';;;
-import { assertScopePathMatchesSessionId } from './session-path-guard';
+import { reconcileScopePathWithSessionId, DETECTION_TERMS, withDetectionTerms } from './session-path-guard';
+// Bug #72 review fix: removed dead assertScopePathMatchesSessionId import
+// (both call sites in this file now use the recovery variant).
 import { getSnapshotBroadcaster } from './snapshot-broadcaster';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
@@ -94,11 +96,32 @@ export interface ConflictEvent {
 }
 
 /**
- * Threshold for detecting concurrent modifications (in milliseconds)
- * Increased from 1000ms to 100ms to reduce false positives during rapid test execution
- * while still catching real concurrent modification conflicts in production
+ * Base threshold for detecting concurrent modifications (in milliseconds).
+ *
+ * The effective production threshold is `CONCURRENT_MODIFICATION_THRESHOLD_MS *
+ * <multiplier>`, where the multiplier is read from
+ * `VFS_CONCURRENT_MODIFICATION_MULTIPLIER` (default 2 → 200ms in production,
+ * 50ms in test). Bug #95 (Pass-7 audit): the previous default multiplier of
+ * 10 produced a 1000ms threshold which fired a false-positive on every
+ * normal 250-300ms SQLite + Node.js fs write latency. 200ms is high enough
+ * to skip normal latency but low enough to catch true race conditions
+ * (typically <50ms).
  */
 const CONCURRENT_MODIFICATION_THRESHOLD_MS = process.env.NODE_ENV === 'test' ? 50 : 100;
+
+/**
+ * Multiplier applied to the base concurrent-modification threshold in
+ * production. Override via the `VFS_CONCURRENT_MODIFICATION_MULTIPLIER` env
+ * var for emergency tuning (must be a positive integer; invalid values
+ * fall back to the default). See Bug #95 (Pass-7).
+ */
+const CONCURRENT_MODIFICATION_MULTIPLIER = (() => {
+  const raw = process.env.VFS_CONCURRENT_MODIFICATION_MULTIPLIER;
+  if (raw === undefined || raw === '') return 2;
+  const parsed = parseInt(raw, 10);
+  if (isNaN(parsed) || parsed < 1) return 2;
+  return parsed;
+})();
 
 export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
@@ -251,7 +274,12 @@ export class VirtualFilesystemService {
     // folder. The check is a no-op for non-session paths (workspace root
     // reads, etc.) so it doesn't affect existing non-session workflows.
     const resolvedFilePath = resolveFilePathScopeFromOwnerId(ownerId, filePath);
-      assertScopePathMatchesSessionId(ownerId, resolvedFilePath);
+      // Bug #72: rebind ownerId to the scopePath-derived value when a
+      // path-drift mismatch is detected, so the actual read targets the
+      // correct session folder. The recovery is logged at WARN level
+      // by reconcileScopePathWithSessionId itself (includes the original
+      // ownerId in the log payload for traceability).
+      ownerId = reconcileScopePathWithSessionId(ownerId, resolvedFilePath).ownerId;
 
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
@@ -321,7 +349,12 @@ export class VirtualFilesystemService {
     // session. Same rationale as readFile above — catch path drift before
     // we silently write to the wrong folder.
     const resolvedFilePath = resolveFilePathScopeFromOwnerId(ownerId, filePath);
-      assertScopePathMatchesSessionId(ownerId, resolvedFilePath);
+      // Bug #72: rebind ownerId to the scopePath-derived value when a
+      // path-drift mismatch is detected, so the actual read targets the
+      // correct session folder. The recovery is logged at WARN level
+      // by reconcileScopePathWithSessionId itself (includes the original
+      // ownerId in the log payload for traceability).
+      ownerId = reconcileScopePathWithSessionId(ownerId, resolvedFilePath).ownerId;
 
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
@@ -392,17 +425,28 @@ export class VirtualFilesystemService {
     // Only warn if time since last write is below threshold (indicates potential race condition)
     if (previous) {
       const timeSinceLastWrite = Date.now() - new Date(previous.lastModified).getTime();
-      
+
       // Skip conflict detection in test environment for rapid sequential writes
       // Real concurrent modifications (from different async operations) will still be caught
       const isTestEnvironment = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
-      const threshold = isTestEnvironment ? CONCURRENT_MODIFICATION_THRESHOLD_MS : CONCURRENT_MODIFICATION_THRESHOLD_MS * 10;
-      
+      // Bug #95 (Pass-7 audit): the previous inline multiplier of *10 produced
+      // a 1000ms production threshold, which fired on every normal 250-300ms
+      // write latency (SQLite + Node.js fs latency). The multiplier is now a
+      // module-level constant (default 2 → 200ms in production) that still
+      // catches true race conditions (typically <50ms) but skips normal
+      // write latency. Override via VFS_CONCURRENT_MODIFICATION_MULTIPLIER
+      // env var (must be a positive integer) for emergency tuning.
+      const threshold = isTestEnvironment
+        ? CONCURRENT_MODIFICATION_THRESHOLD_MS
+        : CONCURRENT_MODIFICATION_THRESHOLD_MS * CONCURRENT_MODIFICATION_MULTIPLIER;
+
       if (timeSinceLastWrite < threshold && timeSinceLastWrite >= 0) {
         // File was modified very recently - potential conflict
         // In tests: only warn if < 50ms (likely race condition)
-        // In production: warn if < 1000ms (potential concurrent user edits)
-        logger.warn('[VFS] Potential concurrent modification', { filePath,
+        // In production: warn if < 200ms (potential concurrent writes; bypass
+        // normal 250-300ms SQLite write latency). Bug #95 (Pass-7): was 1000ms
+        // which produced a false positive on every normal write.
+        logger.warn(withDetectionTerms('[VFS] Potential concurrent modification', DETECTION_TERMS.drift, DETECTION_TERMS.mismatch), { filePath,
           timeSinceLastWrite,
           previousVersion: previous.version,
           threshold,
@@ -1223,16 +1267,91 @@ export class VirtualFilesystemService {
     }
 
     logger.info('[VFS normalizePath] inputPath/workspaceRoot/normalizedPath/workspacePrefix', { inputPath, workspaceRoot: this.workspaceRoot, normalizedPath, workspacePrefix });
-    
+
     // Verify the normalized path is within or an ancestor of the workspace root
     // When workspacePrefix is empty (no workspace root set), any non-empty relative path is valid
     const isWithin = workspacePrefix === ''
       ? true
       : normalizedPath.startsWith(workspacePrefix + '/') || normalizedPath === workspacePrefix;
     const isAncestor = workspacePrefix.startsWith(normalizedPath + '/');
-    logger.info('[VFS normalizePath] isWithin/isAncestor', { isWithin, isAncestor });
     if (!isWithin && !isAncestor) {
-      throw new Error(`Path traversal beyond workspace root: ${inputPath}`);
+      // Pass-5 #62 (audit): surface enough context in the rejection log for
+      // operators (and the meta-monitor) to understand why an LLM-emitted
+      // path was rejected. The plain `Path traversal beyond workspace root:
+      // <path>` error was uninformative; the structured log now includes the
+      // raw input, the normalized form, the expected workspace root, and a
+      // canonical session-scope hint so the LLM's next attempt can self-correct.
+      //
+      // Hot-path throttling: `normalizePath` is called on every read/write/list.
+      // If the LLM loops on a bad path, the warn would fire N times and drown
+      // the audit signal. Use a per-process throttled counter (60s window
+      // per unique input path) so the FIRST occurrence is always logged with
+      // full context, and subsequent occurrences within the window are
+      // suppressed in favor of a periodic summary log. Persisted on
+      // globalThis so Next.js hot-reload preserves the counters.
+      const throttleKey = `__vfsNormalizePathReject__:${inputPath}`;
+      const now = Date.now();
+      const throttleState = (globalThis as any)[throttleKey] as
+        | { firstSeenAt: number; lastLoggedAt: number; count: number }
+        | undefined;
+      // Bug #4 fix: When the path is a bare filename (no workspace/ prefix),
+      // log at DEBUG level instead of WARN since the caller will prepend scopePath.
+      // The warn was misleading - writes succeed because scopePath is prepended
+      // client-side, making the "out of scope" log noise rather than a real error.
+      const isBareRelativePath = !inputPath.includes('/') ||
+        (/^[^/]+$/.test(inputPath)) ||
+        (/^(src|lib|app|components|pages|public|tests?|docs?|scripts?|config)\//i.test(inputPath));
+
+      if (isBareRelativePath && workspacePrefix?.startsWith('workspace/sessions/')) {
+        // Log at debug - this is expected when LLM writes to relative paths
+        // The scopePath will be prepended by the caller
+        logger.debug('[VFS normalizePath] bare relative path detected - scopePath should be prepended by caller', {
+          inputPath,
+          expectedScope: workspacePrefix,
+          hint: `Use canonical path like '${workspacePrefix}/${inputPath}' or let the tool layer prepend scopePath.`,
+        });
+        return normalizedPath; // Allow bare relative paths
+      }
+
+      if (!throttleState) {
+        (globalThis as any)[throttleKey] = { firstSeenAt: now, lastLoggedAt: now, count: 1 };
+        logger.warn(withDetectionTerms(
+          '[VFS normalizePath] path rejected: out of scope',
+          DETECTION_TERMS.mismatch,
+        ), {
+          inputPath,
+          normalizedPath,
+          workspacePrefix,
+          expectedScopeHint: workspacePrefix
+            ? `Paths must be under '${workspacePrefix}/...' — use a relative path like 'src/app.tsx' or the canonical session-scope '${workspacePrefix}/<sessionId>/...'.`
+            : 'No workspace root set; pass a path that is within the active workspace.',
+          isWithin,
+          isAncestor,
+          rejectionCount: 1,
+        });
+      } else {
+        throttleState.count += 1;
+        if (now - throttleState.lastLoggedAt > 60_000) {
+          throttleState.lastLoggedAt = now;
+          logger.warn(withDetectionTerms(
+            '[VFS normalizePath] path rejected: out of scope (throttled summary)',
+            DETECTION_TERMS.mismatch,
+          ), {
+            inputPath,
+            normalizedPath,
+            workspacePrefix,
+            isWithin,
+            isAncestor,
+            rejectionCount: throttleState.count,
+            windowMs: now - throttleState.firstSeenAt,
+          });
+        }
+      }
+      throw new Error(
+        `Path traversal beyond workspace root: ${inputPath}. ` +
+        `Expected scope: ${workspacePrefix || this.workspaceRoot}/... ` +
+        `(use a relative path within the active session workspace, not an absolute or parent-relative one).`,
+      );
     }
     
     const sessionsMatch = normalizedPath.match(/^workspace\/sessions\/([^/]+)/i);
@@ -1399,9 +1518,10 @@ export class VirtualFilesystemService {
       const db = getDatabase();
       // In JS template literals, '\\\\' → regex literal '%\\%' matches a literal backslash
       // and REPLACE's '\\\\' → SQL literal '\\' → one literal backslash character
-      const backslashCount = (db.prepare(
+      const backslashRow = (db.prepare(
         "SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ? AND path LIKE '%\\\\%'"
-      ).get(normalizedOwnerId) as { cnt: number }).cnt;
+      ).get(normalizedOwnerId)) as { cnt: number } | null;
+      const backslashCount = backslashRow?.cnt ?? 0;
       if (backslashCount > 0) {
         const normalizePaths = db.prepare(
           "UPDATE vfs_workspace_files SET path = REPLACE(path, '\\\\', '/') WHERE owner_id = ? AND path LIKE '%\\\\%'"
@@ -1592,6 +1712,7 @@ export class VirtualFilesystemService {
         `findAnonOwnerIds: maxAgeHours must be >= 0 (got ${maxAgeHours})`
       );
     }
+    try {
     const db = getDatabase();
     let rows: Array<{ owner_id: string }>;
     if (maxAgeHours > 0) {
@@ -1623,6 +1744,18 @@ export class VirtualFilesystemService {
         .all() as Array<{ owner_id: string }>;
     }
     return rows.map((r) => r.owner_id);
+    } catch (err) {
+      // Bug #85 (Pass-6 audit) — return [] instead of letting the error
+      // propagate. The old code returned undefined on DB failure, which
+      // crashed transfer-anon-vfs.ts with "Cannot read properties of
+      // null (reading 'cnt')". Returning [] makes the fallback a clean
+      // no-op.
+      logger.warn(
+        '[VFS] findAnonOwnerIds: DB unavailable, returning empty array',
+        { error: err instanceof Error ? err.message : String(err) }
+      );
+      return [];
+    }
   }
 
   /**
@@ -1640,8 +1773,12 @@ export class VirtualFilesystemService {
 
     const db = getDatabase();
 
-    // Check if source has any data to transfer
-    const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ?').get(normalizedFrom) as { cnt: number }).cnt;
+    // Bug #112/#85: Guard against null result from db.prepare().get().
+    // When the DB is transiently unavailable or the row doesn't exist,
+    // .get() returns null instead of {cnt: 0}, and accessing .cnt
+    // throws "Cannot read properties of null (reading 'cnt')".
+    const countRow = db.prepare('SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ?').get(normalizedFrom) as { cnt: number } | null;
+    const fileCount = countRow?.cnt ?? 0;
     if (fileCount === 0) {
       return { transferredFiles: 0 };
     }
@@ -1741,7 +1878,10 @@ export class VirtualFilesystemService {
           db.prepare(
             `UPDATE vfs_workspace_meta
              SET version = MAX(version, ?),
-                 updated_at = CASE WHEN ? > updated_at THEN ? ELSE updated_at END
+                 updated_at = CASE
+                   WHEN julianday(?) > julianday(updated_at) THEN ?
+                   ELSE updated_at
+                 END
              WHERE owner_id = ?`
           ).run(
             sourceMeta.version,
@@ -1763,9 +1903,11 @@ export class VirtualFilesystemService {
              VALUES (?, ?, ?, ?)
              ON CONFLICT(owner_id) DO UPDATE SET
                version = MAX(version, excluded.version),
-               updated_at = CASE WHEN excluded.updated_at > updated_at
-                                 THEN excluded.updated_at
-                                 ELSE updated_at END`
+               updated_at = CASE
+                 WHEN julianday(excluded.updated_at) > julianday(updated_at)
+                   THEN excluded.updated_at
+                   ELSE updated_at
+                 END`
           ).run(
             normalizedTo,
             sourceMeta.version,

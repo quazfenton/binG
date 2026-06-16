@@ -20,6 +20,7 @@ import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
 import type { LLMMessage, StreamingResponse } from "@/lib/providers/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
+import { createStreamChunkHandler, createStreamChunkState, resetStreamChunkState, DEFAULT_ROLE_SELECT_MARKERS, type StreamChunkState } from '@/lib/chat/stream-chunk-handler';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra/index';
 import { 
   executeV2Task, 
@@ -33,6 +34,7 @@ import {
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
+import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
@@ -49,6 +51,104 @@ import {
 } from '@/lib/chat/file-edit-parser';
 import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
+import type { FilesystemEditSummary } from './filesystem-edits';
+import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
+import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
+
+// =========================================================================
+// Auto-continuation counter
+// =========================================================================
+// Tracks how many continuations have been triggered per requestId so the
+// max-continuations cap in `shouldAutoContinue` actually fires across
+// iterations. Entries are cleaned up when the cap is reached or when the
+// request finishes.
+const continuationCounters = new Map<string, number>();
+
+/**
+ * Maximum number of auto-continuations allowed per request turn. Read once at
+ * module load from `LLM_MAX_CONTINUATIONS_PER_TURN` (with a NaN/negative guard
+ * falling back to 3) so the cap is consistent across all requests and doesn't
+ * re-parse the env var on every loop iteration.
+ */
+const parsedMaxContinuations = parseInt(process.env.LLM_MAX_CONTINUATIONS_PER_TURN || '3', 10);
+const MAX_CONTINUATIONS =
+  Number.isFinite(parsedMaxContinuations) && parsedMaxContinuations > 0
+    ? parsedMaxContinuations
+    : 3;
+
+/**
+ * Normalize a step's `args` field for the `shouldAutoContinue` helper.
+ * Stream results sometimes encode args as JSON strings (e.g. `"{}"`); parse
+ * them so the helper's `Object.keys(s.args).length === 0` check sees the
+ * real shape. Pass-through for objects; return `undefined` for non-parseable
+ * values so the helper's `args?` type is honored.
+ */
+function normalizeStepArgs(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Fall through to undefined
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small named helper
+ * for readability. The helper forwards the REAL `result.fileEdits ?? []`
+ * (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
+ * actually fire. Returns `null` when the detector has no opinion; callers
+ * coalesce with `?? { force: false }` at the call site.
+ */
+function maybeDetectorContinuation(
+  result: { fileEdits?: unknown[] } | undefined,
+  continuationDecision: { continue: boolean; reason?: string },
+  log: { debug: (msg: string, ctx?: unknown) => void },
+): { force: boolean; reason?: string } | null {
+  // Bug #86 (Pass-6, reviewer nit #2) — forwards the REAL `result.fileEdits ?? []`
+  // (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
+  // actually fire. Bug #86 (Pass-6, reviewer nit #1) — extracted to a small
+  // named helper for readability. Returns `null` when the detector has no
+  // opinion (no edits, or shouldAutoContinue already said stop); callers
+  // coalesce with `?? { force: false }` at the call site.
+  const edits = result?.fileEdits ?? [];
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return null;
+  }
+  // NOTE: we deliberately do NOT gate on continuationDecision.continue here.
+  // The detector's job is to override shouldAutoContinue when there's an
+  // edits-mismatch. The caller's OR combines both signals so the detector
+  // CAN force a continuation even when shouldAutoContinue said stop.
+  //
+  // Carve-out: if shouldAutoContinue said stop because the max-continuations
+  // cap was reached, the detector should NOT force another iteration — the
+  // cap is the safety net that prevents infinite loops.
+  if (continuationDecision.reason === 'max_continuations_reached') {
+    log.debug('[maybeDetectorContinuation] suppressed: max_continuations_reached', {
+      editCount: edits.length,
+    });
+    return null;
+  }
+  // Only log the forward when the detector is actually overriding
+  // shouldAutoContinue (i.e. shouldAutoContinue said stop). When both
+  // signals agree, the auto-continue block's normal flow already covers
+  // the case and the log would be redundant noise.
+  if (!continuationDecision.continue) {
+    log.debug('[maybeDetectorContinuation] forwarding edits-mismatch signal', {
+      editCount: edits.length,
+      reason: continuationDecision.reason,
+    });
+  }
+  return { force: true, reason: 'edits-mismatch' };
+}
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
@@ -171,6 +271,23 @@ async function classifyRequest(
     return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
   }
 
+  // Bug #73 (Pass-5 audit) — skip the classifier on empty history. The
+  // audit observed `Chat API: Task classifier failed, using regex fallback`
+  // firing many times because the first turn of a session has empty
+  // conversation history. For a single-turn request, there's no
+  // contextual signal to derive — the regex fallback is the only sensible
+  // path. We short-circuit BEFORE calling the classifier so the
+  // [STEER] warn log + `classifierFallbacks` counter don't fire on the
+  // first turn. This is the canonical "happy path" for new sessions, so
+  // the de-augmented task below is empty anyway.
+  if (messages.filter((m) => m.role === 'user' || m.role === 'assistant').length <= 1) {
+    chatLogger.debug('Task classifier skipped (single-turn request, no history)', {
+      messageCount: messages.length,
+      userMessages: messages.filter((m) => m.role === 'user').length,
+    });
+    return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
+  }
+
   try {
     const classifier = getTaskClassifier({ provider: process.env.DEFAULT_PROVIDER || 'mistral' });
     if (!classifier) {
@@ -276,6 +393,41 @@ const PATH_SCSS_VAR_RE = /[\/\\]\$/  // Matches "/$" or "\$" (SCSS variable)
 const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
+/**
+ * Bug #48 / cross-pass dedup helper: insert a path into the dedup Set
+ * in BOTH the resolved and parser-relative forms so a later parse that
+ * emits either form finds the dedup hit. The parser can emit either
+ * "workspace/sessions/002/src/foo.ts" or "src/foo.ts" depending on how
+ * the LLM wrote the edit, so storing only one form lets the other pass
+ * through and re-apply. Storing both closes the cross-pass re-apply gap.
+ *
+ * Symmetric: if input is parser-relative, the resolved form is added;
+ * if input is resolved, the parser-relative form is added. This handles
+ * the v1 pre-populate and tool-call sites where the input could be
+ * either form (the streaming site always sees resolved paths).
+ *
+ * Top-level (not a closure) so there's no TDZ dependency on the
+ * request-scoped `requestedScopePath` `let` declaration.
+ */
+function addWrittenPath(
+  set: Set<string>,
+  path: string | undefined | null,
+  scopePath: string,
+): void {
+  if (!path) return;
+  set.add(path);
+  if (path.startsWith(scopePath + '/')) {
+    set.add(path.slice(scopePath.length + 1));
+  } else if (!path.startsWith('/')) {
+    // Skip absolute paths (not under scopePath) to avoid producing
+    // double-slash entries like `workspace/sessions/002//etc/foo` when
+    // the input is an absolute filesystem path. Unlikely in practice
+    // since paths are normalized upstream, but the skip is cheap and
+    // keeps the dedup set free of clearly-malformed entries.
+    set.add(`${scopePath}/${path}`);
+  }
+}
+
 export async function POST(request: NextRequest) {
   // Phase B: stash the X-UI-Source header value on the AsyncLocalStorage
   // scope so any downstream `emitFileEvent()` call in this request can
@@ -290,6 +442,7 @@ export async function POST(request: NextRequest) {
   // call sites so the text-mode parser skips these paths instead of overwriting
   // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
   const alreadyWrittenPaths = new Set<string>();
+
   // Bug #43: memory-pressure throttle. If the heap is above the soft
   // threshold, return 503 Retry-After before any processing starts.
   try {
@@ -545,7 +698,7 @@ export async function POST(request: NextRequest) {
             });
           }
         } catch (error: unknown) {
-          chatLogger.warn('Failed to select retry model, using original', error);
+          chatLogger.warn('Failed to select retry model, using original', { error: error instanceof Error ? error.message : String(error) });
         }
       }
 
@@ -611,7 +764,40 @@ export async function POST(request: NextRequest) {
     // Check if cache entry exists and hasn't expired
     if (cachedValidation && (now - cachedValidation.timestamp) < VALIDATION_CACHE_TTL_MS) {
       // Use cached validation - skip redundant checks
-    } else if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
+    } else {
+      // Bug #67 (Pass-5 audit) — pre-validate bare qd/lite (and similar)
+      // model names that the ninerouter registry rejects with the opaque
+      // "model_config for 'lite' not yet known" error. We return a
+      // typed 400 with `availableModels` so the client (and the LLM on
+      // the next turn) can self-correct. The pre-validation in
+      // processUnifiedAgentRequest is a safety net; this route-level
+      // check surfaces the 400 without going through the full agent
+      // pipeline. Mirrors the existing 400 shape (error + availableModels)
+      // for downstream `availableModels` extraction in the client.
+      const normalizedModelLower = (model || '').toString().toLowerCase();
+      const BARE_MODEL_REJECT = new Set(['lite', 'qd/lite', 'qd_lite', 'qd', 'qd-lite']);
+      if (BARE_MODEL_REJECT.has(normalizedModelLower)) {
+        const liteAvailable = ['qd/auto', 'qd/ultimate', 'qd/performance', 'qd/lite', 'qd/dmodel', 'qd/gm51model', 'qd/mmodel', 'qd/efficient'];
+        chatLogger.warn('Bare model name rejected (Bug #67)', {
+          requestId,
+          provider,
+          model,
+          normalizedModelLower,
+          availableModels: liteAvailable,
+        });
+        return NextResponse.json(
+          {
+            error: `Model "${model}" is not supported by ${provider}. Bare names like "lite" are not supported; use the full registry ID.`,
+            availableModels: liteAvailable,
+            errorCode: 'invalid_model_name',
+          },
+          { status: 400 },
+        );
+      }
+
+      // Pass-through to existing provider + model validation (now nested
+      // inside the outer `else` block, so the structure is valid JS).
+      if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
       chatLogger.error('Invalid provider', { requestId, provider }, {
         availableProviders: Object.keys(PROVIDERS),
       });
@@ -648,6 +834,7 @@ export async function POST(request: NextRequest) {
 
       // Cache the validation result with timestamp
       validationCache.set(validationCacheKey, { provider, isValid: true, timestamp: now });
+    }
     }
 
     // Get provider info from cached validation
@@ -944,9 +1131,9 @@ export async function POST(request: NextRequest) {
                   scopePath: requestedScopePath,
                   lastUserMessage: '',
                   attachedPaths: [],
-                  responseContent: gwResponse,
-                  preParsedEdits: null,
-                  alreadyWrittenPaths,
+              responseContent: gwResponse,
+              preParsedEdits: undefined,
+              alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1005,9 +1192,9 @@ export async function POST(request: NextRequest) {
                   scopePath: requestedScopePath,
                   lastUserMessage: '',
                   attachedPaths: [],
-                  responseContent: v2Response,
-                  preParsedEdits: null,
-                  alreadyWrittenPaths,
+              responseContent: v2Response,
+              preParsedEdits: undefined,
+              alreadyWrittenPaths,
                 });
               }
             } catch (editError: any) {
@@ -1203,7 +1390,7 @@ const config: UnifiedAgentConfig = {
       parameters: t.function.parameters,
     }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId, requestedScopePath);
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId ?? '', requestedScopePath ?? '');
       return {
         success: result.success,
         output: result.output,
@@ -1241,9 +1428,17 @@ const config: UnifiedAgentConfig = {
               emit(SSE_EVENT_TYPES.STEP, payload);
             };
 
-            // Progressive file edit parsing - buffer for incremental parsing
-            let streamingContentBuffer = '';
-            const fileEditParserState = createIncrementalParser();
+            // NOTE: `streamState` is declared at this scope (outside the try
+            // block) so the catch block can still reference it for cleanup.
+            // Its fields are RESET in place at the start of each loop
+            // iteration. ROLE_SELECT_MARKERS is kept at function scope for use
+            // by the post-loop code (finalContent, cleanup).
+            const streamState: StreamChunkState = {
+              buffer: '',
+              parser: createIncrementalParser(),
+              markerSeen: false,
+              charsEmittedSafely: 0,
+            };
 
             try {
               sendStep('Start agentic pipeline', 'started');
@@ -1252,85 +1447,8 @@ const config: UnifiedAgentConfig = {
               // never sees the raw routing JSON (or any simulated multi-turn
               // content the model emits after it). The full content is still
               // captured server-side for parsing in unified-agent-service.
-              let roleSelectMarkerSeen = false;
-              let charsEmittedSafely = 0; // count of bytes from buffer already emitted
               const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
 
-              config.onStreamChunk = (chunk: string) => {
-                const previousLen = streamingContentBuffer.length;
-                streamingContentBuffer += chunk;
-
-                if (!roleSelectMarkerSeen) {
-                  // Search for marker in the full buffer (it may straddle chunk boundaries)
-                  let markerIdx = -1;
-                  for (const m of ROLE_SELECT_MARKERS) {
-                    const idx = streamingContentBuffer.indexOf(m);
-                    if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
-                  }
-
-                  if (markerIdx !== -1) {
-                    // Emit only the safe portion (before the marker), then suppress
-                    if (markerIdx > charsEmittedSafely) {
-                      const safe = streamingContentBuffer.slice(charsEmittedSafely, markerIdx);
-                      if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
-                    }
-                    charsEmittedSafely = streamingContentBuffer.length; // skip everything beyond
-                    roleSelectMarkerSeen = true;
-                    chatLogger.debug('[StreamFilter] [ROLE_SELECT] detected, suppressing further tokens', {
-                      markerIdx,
-                      previousLen,
-                    });
-                  } else {
-                    // No marker yet — but the marker could be split across chunks.
-                    // Hold back the trailing N chars in case they form a partial marker.
-                    const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
-                    const HOLDBACK = Math.max(...ROLE_SELECT_MARKERS.map((m) => m.length));
-                    const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
-                    if (safeUpto > charsEmittedSafely) {
-                      const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);
-                      if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
-                      charsEmittedSafely = safeUpto;
-                    }
-                  }
-                }
-                // else: marker already seen — silently buffer; do not emit tokens
-
-                // Progressive file edit detection (still over full buffer)
-                const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
-
-                // Filter out invalid paths and empty content to prevent UI polling loops
-                for (const edit of newFileEdits) {
-                  // CRITICAL FIX: Use proper isValidFilePath validation instead of simple regex
-                  // This catches CSS values (0.3s), code snippets (with, submission), etc.
-                  if (!isValidFilePath(edit.path)) {
-                    chatLogger.debug('Skipping invalid progressive file edit path (failed isValidFilePath)', { path: edit.path });
-                    continue;
-                  }
-                  // CRITICAL FIX: Skip empty content to prevent infinite loops
-                  const editContent = edit.content || edit.diff || '';
-                  if (!editContent || editContent.trim().length === 0) {
-                    chatLogger.debug('Skipping empty edit content (prevents infinite loop)', { path: edit.path });
-                    continue;
-                  }
-                  // CRITICAL FIX: Determine operation type and send correct data format
-                  // - For WRITE operations: send full content, operation='write', NO diff field
-                  // - For PATCH operations: send unified diff in diff field, operation='patch'
-                  const isPatch = edit.action === 'patch' || !!edit.diff;
-                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
-                    path: edit.path,
-                    status: 'detected',
-                    operation: isPatch ? 'patch' : 'write',
-                    timestamp: Date.now(),
-                    content: edit.content || '',  // Always send full content for WRITE operations
-                    diff: isPatch ? (edit.diff || '') : undefined,  // Only send diff for PATCH operations
-                  });
-                  chatLogger.debug('Progressive file edit detected', { 
-                    path: edit.path,
-                    operation: isPatch ? 'patch' : 'write',
-                    hasDiff: !!edit.diff,
-                  });
-                }
-              };
               config.onToolExecution = (toolName: string, args: any, result: any) => {
                 const toolCallId = `${toolName}-${Date.now()}`;
                 sendStep(`Tool ${toolName}`, result?.success === false ? 'failed' : 'completed', {
@@ -1365,47 +1483,74 @@ const config: UnifiedAgentConfig = {
                 }
               };
 
-              const result = await processUnifiedAgentRequest(config);
-              sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+              // Server-side continuation loop: re-invoke the LLM with the
+              // continuation prompt as the next user message when shouldAutoContinue
+              // returns continue: true. Tracks continuationsSoFar across iterations
+              // via the module-level continuationCounters Map. Accumulates content,
+              // steps, and fileEdits across iterations. Emits SSE events for each
+              // iteration so the client sees real-time streaming for the continuation.
+              let currentConfig = config;
+              let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>> | undefined;
+              let iteration = 0;
+              // Per-iteration state — streamState is declared at the outer callback
+              // scope (before the try block) so the catch block can still reference
+              // it. Only the loop-local state is here.
+              let appliedEditsResult: any = null;
+              // Accumulated state across iterations
+              const accumulatedSteps: any[] = [];
+              const accumulatedFileEdits: any[] = [];
+              const accumulatedEditCount = { applied: 0, extracted: 0 };
 
-              // Flush any holdback chars that were withheld for partial-marker detection
-              // (only when no [ROLE_SELECT] marker was seen). Without this, the last
-              // ~16 chars of a clean response would be silently dropped from the UI.
-              if (!roleSelectMarkerSeen && charsEmittedSafely < streamingContentBuffer.length) {
-                const flush = streamingContentBuffer.slice(charsEmittedSafely);
-                if (flush) emit(SSE_EVENT_TYPES.TOKEN, { content: flush, timestamp: Date.now() });
-                charsEmittedSafely = streamingContentBuffer.length;
-              }
+              do {
+                // Reset per-iteration state in place. The factory's returned
+                // handler reads/writes `streamState` by reference, so the same
+                // handler is reused across iterations after we mutate its fields.
+                resetStreamChunkState(streamState);
+                appliedEditsResult = null;
 
-              // FIX: Final parse after stream completes to catch any remaining edits
-              // The closing >>> may have arrived in the last chunk
-              // CRITICAL: Clear BOTH emittedEdits AND unclosedPositions for proper re-parsing
-              if (streamingContentBuffer.trim().length > 0) {
-                fileEditParserState.emittedEdits.clear();
-                fileEditParserState.unclosedPositions.clear();
-                const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
-                
-                // CRITICAL FIX: Emit FILE_EDIT events for final edits caught in post-stream parse
-                // This ensures frontend receives edits that were stuck in "unclosed" regions during streaming
-                if (finalEdits && finalEdits.length > 0) {
-                  chatLogger.debug('Emitting final file edits from post-stream parse', {
-                    requestId,
-                    editCount: finalEdits.length,
-                    paths: finalEdits.map(e => e.path).join(', ')
-                  });
-                  try {
+                // Re-wire the streaming callback for this iteration. The factory
+                // captures `streamState` by reference, so per-iteration resets
+                // above are visible to the handler on the next chunk. The
+                // onMarkerSeen callback fires the debug log on the false→true
+                // transition without recreating a per-chunk wrapper closure.
+                currentConfig.onStreamChunk = createStreamChunkHandler(
+                  streamState,
+                  emit,
+                  ROLE_SELECT_MARKERS,
+                  undefined, // use default holdback (longest marker length)
+                  ({ bufferLength }) => {
+                    chatLogger.debug(
+                      '[StreamFilter-LLM-Stream] [ROLE_SELECT] detected, suppressing further tokens',
+                      { bufferLength }
+                    );
+                  }
+                );
+
+                // Call the LLM
+                result = await processUnifiedAgentRequest(currentConfig);
+                sendStep(`Iteration ${iteration + 1}`, result.success ? 'completed' : 'failed');
+
+                // Accumulate this iteration's result
+                const iterContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '');
+                if (result.steps) accumulatedSteps.push(...result.steps);
+
+                // Flush holdback chars
+                if (!streamState.markerSeen && streamState.charsEmittedSafely < streamState.buffer.length) {
+                  const flush = streamState.buffer.slice(streamState.charsEmittedSafely);
+                  if (flush) emit(SSE_EVENT_TYPES.TOKEN, { content: flush, timestamp: Date.now() });
+                  streamState.charsEmittedSafely = streamState.buffer.length;
+                }
+
+                // Final parse for remaining edits
+                if (streamState.buffer.trim().length > 0) {
+                  streamState.parser.emittedEdits.clear();
+                  streamState.parser.unclosedPositions.clear();
+                  const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
+                  if (finalEdits && finalEdits.length > 0) {
                     for (const edit of finalEdits) {
-                      // Validate path and content before emitting
-                      if (!isValidFilePath(edit.path)) {
-                        chatLogger.debug('Skipping invalid path from finalEdits (post-stream)', { path: edit.path });
-                        continue;
-                      }
+                      if (!isValidFilePath(edit.path)) continue;
                       const editContent = edit.content || edit.diff || '';
-                      if (!editContent || editContent.trim().length === 0) {
-                        chatLogger.debug('Skipping empty edit from finalEdits (post-stream)', { path: edit.path });
-                        continue;
-                      }
-                      // CRITICAL FIX: Determine operation type and send correct data format
+                      if (!editContent || editContent.trim().length === 0) continue;
                       const isPatch = edit.action === 'patch' || !!edit.diff;
                       emit(SSE_EVENT_TYPES.FILE_EDIT, {
                         path: edit.path,
@@ -1414,28 +1559,18 @@ const config: UnifiedAgentConfig = {
                         timestamp: Date.now(),
                         content: edit.content || '',
                         diff: isPatch ? (edit.diff || '') : undefined,
-                        isFinal: true,  // Mark as final parse edit for frontend
+                        isFinal: true,
                       });
-                      }
-                  } catch (error: unknown) {
-                    chatLogger.warn('Failed to emit final file edits', {
-                      requestId,
-                      error: error instanceof Error ? error.message : String(error),
-                    });
-                    // Continue anyway - don't break stream completion
+                    }
                   }
                 }
 
-                // VFS WRITE: Actually write extracted file edits to the virtual filesystem
-                // This mirrors the streaming path at line ~2340 — without this, edits are
-                // only emitted as SSE events (status: 'detected') but NEVER persisted to VFS.
-                const fullResponse = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
-                let appliedEditsResult: any = null;
+                // VFS WRITE: Apply file edits to the virtual filesystem
+                const fullResponse = iterContent;
                 if (enableFilesystemEdits && fullResponse.trim() && filesystemOwnerId) {
                   try {
                     const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
                     enableVFSBatchMode(filesystemOwnerId);
-
                     appliedEditsResult = await applyFilesystemEditsFromResponse({
                       ownerId: filesystemOwnerId,
                       conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
@@ -1451,21 +1586,13 @@ const config: UnifiedAgentConfig = {
                       forceExtract: true,
                       alreadyWrittenPaths,
                     });
-
                     await flushVFSBatchMode(filesystemOwnerId);
-
-                    // Bug #63: track paths applied by this call so subsequent
-                    // applyFilesystemEditsFromResponse calls skip them instead
-                    // of re-applying (which can cause file corruption when the
-                    // second parse produces truncated/partial content).
                     if (appliedEditsResult?.applied?.length) {
+                      accumulatedFileEdits.push(...appliedEditsResult.applied);
+                      accumulatedEditCount.applied += appliedEditsResult.applied.length;
                       for (const edit of appliedEditsResult.applied) {
-                        alreadyWrittenPaths.add(edit.path);
+                        addWrittenPath(alreadyWrittenPaths, edit.path, requestedScopePath);
                       }
-                    }
-
-                    // Emit applied file edit events so UI shows status: 'applied'
-                    if (appliedEditsResult?.applied?.length) {
                       for (const edit of appliedEditsResult.applied) {
                         if (!isValidFilePath(edit.path)) continue;
                         const editContent = edit.content || edit.diff || '';
@@ -1480,217 +1607,254 @@ const config: UnifiedAgentConfig = {
                           content: edit.content || '',
                           diff: isPatch ? (edit.diff || '') : undefined,
                         });
-                        chatLogger.debug('VFS file edit applied (agentic path)', {
-                          path: edit.path,
-                          operation: isPatch ? 'patch' : 'write',
-                        });
                       }
-                      chatLogger.info('Agentic path: filesystem edits applied to VFS', {
-                        editCount: appliedEditsResult.applied.length,
-                        paths: appliedEditsResult.applied.map(e => e.path).join(', '),
-                      });
-                    } else if (appliedEditsResult?.errors?.length) {
-                      chatLogger.warn('Agentic path: VFS write errors', {
-                        errors: appliedEditsResult.errors.slice(0, 5),
-                      });
                     }
-                  } catch (e: unknown) {
-                    chatLogger.warn('Agentic path: VFS write failed (non-fatal)', {
-                      error: e instanceof Error ? e.message : String(e),
-                    });
+                  } catch (vfsError) {
+                    chatLogger.warn('VFS write failed (iteration)', { requestId, iteration, error: vfsError instanceof Error ? vfsError.message : String(vfsError) });
                   }
                 }
 
-                // Collect file edits into result object for the done event
-                // This ensures the stream method returns fileEdits in the result
-                if (appliedEditsResult) {
-                  result.fileEdits = appliedEditsResult;
+                // Auto-continue check: should we re-invoke the LLM?
+                const previousContinuations = continuationCounters.get(requestId) ?? 0;
+                const continuationDecision = shouldAutoContinue({
+                  routing: result.metadata?.routing,
+                  steps: (result.steps ?? []).map((s: any) => ({
+                    toolName: s.toolName,
+                    args: normalizeStepArgs(s.args),
+                  })),
+                  responseText: iterContent,
+                  continuationsSoFar: previousContinuations,
+                });
+                // Bug #86 (Pass-6) — wire the detector-override helper. The
+                // helper forwards real `result.fileEdits ?? []` so the
+                // edits-mismatch signal can actually fire. Coalesce with
+                // `?? { force: false }` so the default path is unchanged.
+                const detectorOverride = maybeDetectorContinuation(
+                  result,
+                  continuationDecision,
+                  chatLogger,
+                ) ?? { force: false }
+
+                if ((continuationDecision.continue || detectorOverride.force) && iteration < MAX_CONTINUATIONS - 1) {
+                  // Signal continuation
+                  continuationCounters.set(requestId, continuationDecision.continuationsSoFar);
+                  chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {
+                    requestId,
+                    iteration: iteration + 1,
+                    reason: continuationDecision.reason,
+                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                  });
+                  // Emit a marker event so the client knows a continuation is happening
+                  emit(SSE_EVENT_TYPES.STEP, {
+                    type: 'continuation',
+                    iteration: iteration + 1,
+                    reason: continuationDecision.reason,
+                    prompt: continuationDecision.continuationPrompt.slice(0, 200),
+                    timestamp: Date.now(),
+                  });
+                  // Build the next config with the continuation prompt as a new user message
+                  const previousAssistantContent = typeof result.response === 'string'
+                    ? result.response
+                    : (iterContent || '');
+                  currentConfig = {
+                    ...currentConfig,
+                    conversationHistory: [
+                      ...(currentConfig.conversationHistory || []),
+                      { role: 'assistant', content: previousAssistantContent },
+                      { role: 'user', content: continuationDecision.continuationPrompt },
+                    ],
+                  };
+                  iteration++;
+                } else {
+                  // No continuation needed (or max reached). Break out of loop.
+                  // Surface the decision in result.metadata so the client sees it
+                  // in the DONE event. This replaces the previous post-loop
+                  // auto-continue block (which was dead-weight — the loop is the
+                  // single source of truth for the decision).
                   result.metadata = result.metadata || {};
-                  result.metadata.appliedEditCount = appliedEditsResult.applied?.length || 0;
-                  result.metadata.extractedEditCount = finalEdits?.length || 0;
+                  result.metadata.continuationDecision = {
+                    continue: continuationDecision.continue,
+                    reason: continuationDecision.reason,
+                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                  };
+                  if (continuationDecision.continue) {
+                    // Full prompt stored server-side only; the client can request
+                    // it via a follow-up endpoint if needed.
+                    result.metadata.continuationPrompt = continuationDecision.continuationPrompt;
+                  }
+                  if (continuationDecision.continue || continuationDecision.reason === 'max_continuations_reached') {
+                    // Max reached (continue: true) or explicit max-reached signal
+                    // (continue: false) — clean up the counter either way to
+                    // prevent memory leaks.
+                    continuationCounters.delete(requestId);
+                  }
+                  break;
                 }
+              } while (iteration < MAX_CONTINUATIONS);
 
-                // SESSION NAMING: Detect if this is a new single-folder workspace
-                // If so, rename the session folder to match the workspace folder
-                const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+              // Build the final accumulated result for the DONE event
+              if (accumulatedFileEdits.length > 0) {
+                // UnifiedAgentResult.fileEdits is typed as FileEdit[]; assign the
+                // accumulated array directly (any[] is assignable to FileEdit[]).
+                // The `applied`/`extracted` counts are surfaced via result.metadata
+                // (see appliedEditCount/extractedEditCount below) so the SSE DONE
+                // event still carries the summary the client needs.
+                result.fileEdits = accumulatedFileEdits;
+                result.metadata = result.metadata || {};
+                result.metadata.appliedEditCount = accumulatedEditCount.applied;
+                result.metadata.extractedEditCount = accumulatedEditCount.extracted;
+                result.metadata.iterationCount = iteration + 1;
+              }
+              if (accumulatedSteps.length > 0) {
+                result.steps = accumulatedSteps;
+              }
+              // Post-loop: extract any final edits from the LAST iteration's buffer
+              // and apply session naming detection. The loop already handled VFS
+              // writes and step accumulation; this block runs once after the loop.
+              const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
 
-                const { detectSingleFolderFromResponse } = await import('@/lib/session/session-naming');
+              // SESSION NAMING: Detect if this is a new single-folder workspace
+              const responseContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '') || '';
+              try {
+                const { detectSingleFolderFromResponse, sessionNameExists } = await import('@/lib/session/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
-
-                // Check if we should rename: new session (sequential ID) with single detected folder
                 const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
                 const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
-
-                // DEBUG LOGGING: Session naming detection
-                chatLogger.debug('[SessionNaming] Session folder detection', {
-                  detectedFolder,
-                  resolvedConversationId,
-                  isSequentialSession,
-                  isNewSession,
-                  responseContentLength: responseContent.length,
-                  responsePreview: responseContent.slice(0, 200),
-                  metadata: result.metadata,
-                });
-                
                 if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
-                  // Check if detected folder name is available
-                  const { sessionNameExists } = await import('@/lib/session/session-naming');
                   const folderExists = await sessionNameExists(detectedFolder);
-
                   if (!folderExists) {
-                    // Rename session folder by moving contents
-                    const oldPath = `workspace/sessions/${resolvedConversationId}`;
-                    const newPath = `workspace/sessions/${detectedFolder}`;
-
-                    try {
-                      const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
-                      // List files in old session
-                      const listing = await virtualFilesystem.listDirectory(filesystemOwnerId, oldPath);
-
-                      // ALWAYS rename session when LLM suggests a single folder name
-                      // File migration is optional (currently not implemented in VFS)
-                      if (listing.nodes.length > 0) {
-                        // Note: VFS doesn't support rename, so we'd need to copy+delete
-                        // For now, skip file moving - session rename is cosmetic only
-                        chatLogger.info('Session folder name updated (files would need manual migration)', {
-                          oldPath,
-                          newPath,
-                          filesToMove: listing.nodes.length,
-                        });
-                        // TODO: Implement file migration when VFS supports rename/move operations
-                      }
-
-                      // Update resolvedConversationId for future operations
-                      const previousId = resolvedConversationId;
-                      resolvedConversationId = detectedFolder;
-                      // CRITICAL: Update scope path to match renamed session
-                      requestedScopePath = `workspace/sessions/${detectedFolder}`;
-
-                      chatLogger.info('Session folder renamed based on detected workspace structure', {
-                        previousId,
-                        newId: detectedFolder,
-                        filesMoved: listing.nodes.length,
-                      });
-
-                      // Emit filesystem updated event for UI
-                      emit(SSE_EVENT_TYPES.FILESYSTEM, {
-                        previousId,
-                        newId: detectedFolder,
-                        reason: 'single-folder-workspace',
-                      });
-                    } catch (renameError: any) {
-                      chatLogger.warn('Failed to rename session folder', {
-                        error: renameError.message,
-                        detectedFolder,
-                      });
-                    }
+                    // Capture previousId BEFORE reassignment so the SSE event
+                    // shows the actual rename (previous !== new), not a no-op.
+                    const previousId = resolvedConversationId;
+                    resolvedConversationId = detectedFolder;
+                    requestedScopePath = `workspace/sessions/${detectedFolder}`;
+                    emit(SSE_EVENT_TYPES.FILESYSTEM, {
+                      previousId,
+                      newId: detectedFolder,
+                      reason: 'single-folder-workspace',
+                    });
+                    chatLogger.info('Session folder renamed based on detected workspace structure', {
+                      previousId,
+                      newId: detectedFolder,
+                    });
                   }
                 }
+              } catch (sessionErr: any) {
+                chatLogger.debug('Session naming detection failed (non-fatal)', {
+                  error: sessionErr instanceof Error ? sessionErr.message : String(sessionErr),
+                });
+              }
 
-                // Apply filesystem edits if any were detected
-                if (finalEdits.length > 0 && filesystemOwnerId) {
-                  try {
-                    const appliedEdits = await applyFilesystemEditsFromResponse({
-                      ownerId: filesystemOwnerId,
-                      conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
-                      requestId,
-                      scopePath: requestedScopePath,
-                      lastUserMessage: task,
-                      attachedPaths: attachedFilesystemFiles.map(f => f.path),
-                      responseContent: streamingContentBuffer,
-                      commands: {},
-                      forceExtract: true,
-                      alreadyWrittenPaths,
-                    });
-
-                    // Emit applied edits
-                    if (appliedEdits?.applied?.length) {
-                      for (const edit of appliedEdits.applied) {
-                        // Validate path before emitting
-                        if (!isValidFilePath(edit.path)) {
-                          chatLogger.debug('Skipping invalid path from appliedEdits', { path: edit.path });
-                          continue;
-                        }
-                        // CRITICAL FIX: Skip empty content to prevent infinite loops
-                        const editContent = edit.content || edit.diff || '';
-                        if (!editContent || editContent.trim().length === 0) {
-                          chatLogger.debug('Skipping empty edit from appliedEdits (prevents infinite loop)', { path: edit.path });
-                          continue;
-                        }
-                        // CRITICAL FIX: Determine operation type and send correct data format
-                        // Check for diff field to determine if it's a patch operation
-                        const hasDiff = !!edit.diff;
-                        const isPatch = edit.operation === 'patch' || hasDiff;
-                        emit(SSE_EVENT_TYPES.FILE_EDIT, {
-                          path: edit.path,
-                          status: 'applied',
-                          operation: isPatch ? 'patch' : (edit.operation || 'write'),
-                          timestamp: Date.now(),
-                          content: edit.content || '',
-                          diff: isPatch ? (edit.diff || '') : undefined,
-                        });
-                      }
-                      chatLogger.info('Final parse: applied filesystem edits', {
-                        count: appliedEdits.applied.length
-                      });
-
-                      // CRITICAL FIX Bug #2: Emit filesystem-updated CustomEvent for agent tool path
-                      // This ensures components listening to CustomEvent update (not just SSE recipients)
-                      emitFilesystemUpdated({
-                        scopePath: requestedScopePath,
-                        sessionId: resolvedConversationId,
-                        applied: appliedEdits.applied,
-                        source: 'agent-tool',
-                      });
-
-                      // CRITICAL: Add fallback message if content is empty but files were applied
-                      if (!streamingContentBuffer.trim() && appliedEdits.applied.length > 0) {
-                        streamingContentBuffer = `Applied filesystem changes to ${appliedEdits.applied.length} file(s).`;
-                      }
-                    }
-                  } catch (editErr: any) {
-                    chatLogger.warn('Final parse: filesystem edit application failed', {
-                      error: editErr.message
-                    });
-                  }
-                } else {
-                  // Just emit events if no filesystem owner
-                  for (const edit of finalEdits) {
-                    // Validate path before emitting
-                    if (!isValidFilePath(edit.path)) {
-                      chatLogger.debug('Skipping invalid path from finalEdits (no owner)', { path: edit.path });
-                      continue;
-                    }
-                    // CRITICAL FIX: Skip empty content to prevent infinite loops
-                    const editContent = edit.content || edit.diff || '';
-                    if (!editContent || editContent.trim().length === 0) {
-                      chatLogger.debug('Skipping empty edit from finalEdits (prevents infinite loop)', { path: edit.path });
-                      continue;
-                    }
-                    // CRITICAL FIX: Determine operation type and send correct data format
-                    const isPatch = edit.action === 'patch' || !!edit.diff;
-                    chatLogger.debug('Final parse file edit detected', { 
-                      path: edit.path,
-                      operation: isPatch ? 'patch' : 'write',
-                    });
-                    emit(SSE_EVENT_TYPES.FILE_EDIT, {
-                      path: edit.path,
-                      status: 'detected',
-                      operation: isPatch ? 'patch' : 'write',
-                      timestamp: Date.now(),
-                      content: edit.content || '',
-                      diff: isPatch ? (edit.diff || '') : undefined,
-                    });
-                  }
+              // Final file edits emit (post-stream parse catch-all)
+              if (finalEdits && finalEdits.length > 0) {
+                for (const edit of finalEdits) {
+                  if (!isValidFilePath(edit.path)) continue;
+                  const editContent = edit.content || edit.diff || '';
+                  if (!editContent || editContent.trim().length === 0) continue;
+                  const isPatch = edit.action === 'patch' || !!edit.diff;
+                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                    path: edit.path,
+                    status: 'detected',
+                    operation: isPatch ? 'patch' : 'write',
+                    timestamp: Date.now(),
+                    content: edit.content || '',
+                    diff: isPatch ? (edit.diff || '') : undefined,
+                    isFinal: true,
+                  });
                 }
               }
 
+              // VFS WRITE: Apply final filesystem edits to the virtual filesystem.
+              // This mirrors the per-iteration VFS write in the loop — without this,
+              // edits from the post-stream parse are only emitted as SSE events
+              // (status: 'detected') but NEVER persisted to VFS. Critical for
+              // single-iteration requests where the loop's per-iteration VFS write
+              // may not catch edits that arrived after the last iteration boundary.
+              if (finalEdits.length > 0 && filesystemOwnerId) {
+                try {
+                  const appliedEdits = await applyFilesystemEditsFromResponse({
+                    ownerId: filesystemOwnerId,
+                    conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+                    requestId,
+                    scopePath: requestedScopePath,
+                    lastUserMessage: task,
+                    attachedPaths: attachedFilesystemFiles.map(f => f.path),
+                    responseContent: streamState.buffer,
+                    commands: {},
+                    forceExtract: true,
+                    alreadyWrittenPaths,
+                  });
+
+                  if (appliedEdits?.applied?.length) {
+                    for (const edit of appliedEdits.applied) {
+                      if (!isValidFilePath(edit.path)) continue;
+                      const editContent = edit.content || edit.diff || '';
+                      if (!editContent || editContent.trim().length === 0) continue;
+                      const hasDiff = !!edit.diff;
+                      const isPatch = edit.operation === 'patch' || hasDiff;
+                      emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                        path: edit.path,
+                        status: 'applied',
+                        operation: isPatch ? 'patch' : (edit.operation || 'write'),
+                        timestamp: Date.now(),
+                        content: edit.content || '',
+                        diff: isPatch ? (edit.diff || '') : undefined,
+                      });
+                    }
+                    chatLogger.info('Final parse: applied filesystem edits', {
+                      count: appliedEdits.applied.length
+                    });
+
+                    // Emit filesystem-updated CustomEvent for agent-tool path so
+                    // components listening to CustomEvent update (not just SSE
+                    // recipients) reflect the new file state.
+                    emitFilesystemUpdated({
+                      scopePath: requestedScopePath,
+                      sessionId: resolvedConversationId,
+                      applied: appliedEdits.applied,
+                      source: 'agent-tool',
+                    });
+
+                    // Add fallback message if content is empty but files were applied
+                    if (!streamState.buffer.trim() && appliedEdits.applied.length > 0) {
+                      streamState.buffer = `Applied filesystem changes to ${appliedEdits.applied.length} file(s).`;
+                    }
+                  }
+                } catch (editErr: any) {
+                  chatLogger.warn('Final parse: filesystem edit application failed', {
+                    error: editErr.message
+                  });
+                }
+              }
+
+              // Collect file edits into result for the done event
+              if (accumulatedFileEdits.length > 0) {
+                // UnifiedAgentResult.fileEdits is typed as FileEdit[]; assign the
+                // accumulated array directly (any[] is assignable to FileEdit[]).
+                // Counts are surfaced via result.metadata below.
+                result.fileEdits = accumulatedFileEdits;
+              }
+              result.metadata = result.metadata || {};
+              result.metadata.appliedEditCount = accumulatedEditCount.applied;
+              result.metadata.extractedEditCount = accumulatedEditCount.extracted;
+              result.metadata.iterationCount = iteration + 1;
+              if (accumulatedSteps.length > 0) {
+                result.steps = accumulatedSteps;
+              }
+
               // Prefer the server-cleaned response (markers stripped, simulated-turn
-                // truncation applied) over the raw streaming buffer. Falls back to the
-                // buffer only if the server didn't return text (shouldn't happen).
+              // truncation applied) over the raw streaming buffer.
               const finalContent = (typeof result.response === 'string' && result.response.trim())
                 ? result.response
-                : streamingContentBuffer;
+                : streamState.buffer;
+
+              // NOTE: Auto-continue evaluation is now performed inside the loop
+              // above (per-iteration `shouldAutoContinue` call). The loop surfaces
+              // `result.metadata.continuationDecision` on the break path so the
+              // client sees the decision in the DONE event. This site is no longer
+              // needed — the second evaluation here was dead-weight that produced
+              // the same result and risked overwriting the loop's metadata with a
+              // stale snapshot.
 
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
@@ -1701,21 +1865,26 @@ const config: UnifiedAgentConfig = {
                   processingSteps,
                   // Include routing metadata so client can auto-continue multi-step flows
                   ...(result.metadata?.routing ? { routing: result.metadata.routing } : {}),
+                  ...(result.metadata?.continuationDecision
+                    ? { continuationDecision: result.metadata.continuationDecision }
+                    : {}),
                 },
                 data: result,
               });
 
               // Cleanup: Clear streaming buffer to free memory
-              streamingContentBuffer = '';
-              fileEditParserState.emittedEdits.clear();
-              fileEditParserState.unclosedPositions.clear();
+              streamState.buffer = '';
+              streamState.parser.emittedEdits.clear();
+              streamState.parser.unclosedPositions.clear();
             } catch (error: any) {
+              // Clean up the continuation counter on error so it doesn't leak.
+              continuationCounters.delete(requestId);
               // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
-              if (streamingContentBuffer.trim().length > 0) {
+              if (streamState.buffer.trim().length > 0) {
                 try {
-                  fileEditParserState.emittedEdits.clear();
-                  fileEditParserState.unclosedPositions.clear();
-                  const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+                  streamState.parser.emittedEdits.clear();
+                  streamState.parser.unclosedPositions.clear();
+                  const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
                   for (const edit of finalEdits) {
                     // Validate path before emitting (even in error handler)
                     if (!isValidFilePath(edit.path)) {
@@ -1747,9 +1916,9 @@ const config: UnifiedAgentConfig = {
               emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
 
               // Cleanup on error too
-              streamingContentBuffer = '';
-              fileEditParserState.emittedEdits.clear();
-              fileEditParserState.unclosedPositions.clear();
+              streamState.buffer = '';
+              streamState.parser.emittedEdits.clear();
+              streamState.parser.unclosedPositions.clear();
             } finally {
               controller.close();
             }
@@ -1823,9 +1992,13 @@ const config: UnifiedAgentConfig = {
                 });
 
                 controller.close();
+                // Clean up the continuation counter on success so it doesn't leak.
+                continuationCounters.delete(requestId);
               } catch (error: any) {
                 enqueue('error', { message: error.message });
                 controller.close();
+                // Clean up the continuation counter on error so it doesn't leak.
+                continuationCounters.delete(requestId);
               }
             },
           });
@@ -1874,22 +2047,22 @@ const config: UnifiedAgentConfig = {
         // (V2 gateway/local fallback paths use different code paths entirely).
         if (result.success && result.response) {
           for (const fe of (result.fileEdits || [])) {
-            if (fe?.path) alreadyWrittenPaths.add(fe.path);
+            addWrittenPath(alreadyWrittenPaths, fe?.path, requestedScopePath);
           }
           for (const s of (result.steps || [])) {
             const toolName = s?.toolName;
             if (!toolName) continue;
             if (toolName === 'file.batch_write' || toolName === 'batch_write') {
               for (const f of (s.args?.files || [])) {
-                if (f?.path) alreadyWrittenPaths.add(f.path);
+                addWrittenPath(alreadyWrittenPaths, f?.path, requestedScopePath);
               }
             } else if (toolName === 'file.write' || toolName === 'write_file' ||
                        toolName === 'file.str_replace' || toolName === 'file.append') {
-              if (s.args?.path) alreadyWrittenPaths.add(s.args.path);
+              addWrittenPath(alreadyWrittenPaths, s.args?.path, requestedScopePath);
             }
           }
           for (const wp of ((result as any)._writtenPaths || [])) {
-            if (wp) alreadyWrittenPaths.add(wp);
+            addWrittenPath(alreadyWrittenPaths, wp, requestedScopePath);
           }
         }
 
@@ -1914,9 +2087,8 @@ const config: UnifiedAgentConfig = {
             });
 
             chatLogger.debug('[FILE-EDIT-DEBUG] appliedEdits', {
-              writes: appliedEdits?.writes?.length,
-              patches: appliedEdits?.patches?.length,
               applied: appliedEdits?.applied?.length,
+              pending: appliedEdits?.pendingEdits?.length,
               errors: appliedEdits?.errors?.length,
             });
 
@@ -2275,7 +2447,6 @@ const config: UnifiedAgentConfig = {
                   ...(((unifiedResponse.data as any)?.toolInvocations as any[]) || []),
                   ...(agentToolResults.toolInvocations || []),
                 ],
-                agentToolResults,
               };
               if (!rawResponseContent.trim() && agentToolResults.message) {
                 unifiedResponse.content = agentToolResults.message;
@@ -2428,7 +2599,7 @@ const config: UnifiedAgentConfig = {
         const codeArtifacts = filesystemEdits.applied
           .filter((edit) => edit.operation !== 'delete')
           .map((edit) => {
-            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            const requestedFile = filesystemEdits?.requestedFiles.find(f => f.path === edit.path);
             return {
               path: edit.path,
               operation: edit.operation,
@@ -2462,7 +2633,7 @@ const config: UnifiedAgentConfig = {
             return true;
           })
           .map((edit) => {
-            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            const requestedFile = filesystemEdits?.requestedFiles.find(f => f.path === edit.path);
             // Determine what to send:
             // - If edit.diff exists and looks like unified diff, send it
             // - Otherwise send full content (EnhancedDiffViewer will auto-detect)
@@ -2492,7 +2663,7 @@ const config: UnifiedAgentConfig = {
               status: filesystemEdits.status,
               applied: filesystemEdits.applied,
               errors: filesystemEdits.errors,
-              requestedFiles: filesystemEdits.requestedFiles,
+              requestedFiles: filesystemEdits?.requestedFiles ?? [],
               scopePath: filesystemEdits.scopePath,
               workspaceVersion: filesystemEdits.workspaceVersion,
               commitId: filesystemEdits.commitId,
@@ -2539,14 +2710,11 @@ const config: UnifiedAgentConfig = {
           chatLogger.info('Streaming with LLM generator (real-time token streaming)', { requestId: streamRequestId, provider: actualProvider, model: actualModel });
 
           const encoder = new TextEncoder();
-          let encoderRef = encoder;
-          let streamingContentBuffer = '';
-          const fileEditParserState = createIncrementalParser();
-
-          // Track whether we've crossed into a [ROLE_SELECT] marker block
-          // This is the second streaming path (unifiedResponse.stream generator)
-          let roleSelectMarkerSeen = false;
-          let charsEmittedSafely = 0; // count of bytes from buffer already emitted
+          let encoderRef: TextEncoder | null = encoder;
+          // Per-iteration state for the second streaming path. Uses the same
+          // shared factory as the first streaming path (config.onStreamChunk)
+          // for consistency — see bing/web/lib/chat/stream-chunk-handler.ts.
+          const streamState = createStreamChunkState();
 
           // Track tool invocations for telemetry
           const toolCallTracker = new Map<string, { toolName: string; args?: Record<string, any>; startTime: number }>();
@@ -2565,9 +2733,43 @@ const config: UnifiedAgentConfig = {
               const realEmit = (eventType: string, data: any) => {
                 if (request.signal?.aborted) return;
                 const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
-                controller.enqueue(encoderRef.encode(eventStr));
+                if (encoderRef) safeEnqueue(encoderRef, controller, eventStr);
                 chunkCount++;
               };
+
+              // Adapter: realEmit has a looser signature than createSSEEmitter's
+              // return type, so cast to the expected type. The factory's emit
+              // calls use SSE_EVENT_TYPES.TOKEN ('token') and SSE_EVENT_TYPES.FILE_EDIT
+              // ('file_edit'), which are compatible with realEmit's string-based
+              // event types.
+              // The second streaming path was originally tuned to a 16-char
+              // holdback. Override the factory default (17 = longest marker
+              // length) to preserve that exact pre-refactor behavior.
+              const streamChunkEmit = ((type, data) => realEmit(type as string, data)) as ReturnType<typeof createSSEEmitter>;
+              // holdback: 16 preserves the pre-refactor behavior of this path.
+              // NOTE: 16 is less than the longest marker `[ROUTING_METADATA]`
+              // (18 chars), so a marker straddling a chunk boundary could
+              // theoretically partially emit. This is a pre-existing quirk
+              // faithfully preserved from the original `HOLDBACK = 16`
+              // constant. Unifying both paths on 18 would be the more
+              // conservative choice if you want to eliminate the edge case.
+              const handleStreamChunk = createStreamChunkHandler(
+                streamState,
+                streamChunkEmit,
+                DEFAULT_ROLE_SELECT_MARKERS,
+                16, // see comment above
+                ({ bufferLength }) => {
+                  const wasMarkerSeen = streamState.markerSeen;
+                  // The factory has already flipped markerSeen by the time
+                  // this fires; this check is a no-op safety guard.
+                  if (!wasMarkerSeen) {
+                    chatLogger.debug(
+                      '[StreamFilter-LLM-Stream] [ROLE_SELECT] detected, suppressing further tokens',
+                      { bufferLength }
+                    );
+                  }
+                }
+              );
 
               emitRef.current = realEmit;
 
@@ -2624,8 +2826,9 @@ const config: UnifiedAgentConfig = {
               const cleanup = () => {
                 encoderRef = null;
                 emitRef.current = null;
-                streamingContentBuffer = '';
-                fileEditParserState.emittedEdits.clear();
+                streamState.buffer = '';
+                streamState.parser.emittedEdits.clear();
+                streamState.parser.unclosedPositions.clear();
               };
 
               if (request.signal) {
@@ -2697,80 +2900,26 @@ const config: UnifiedAgentConfig = {
 
                   // Accumulate token content
                   if (streamChunk.content) {
-                    // Progressive file edit detection from streaming content
-                    streamingContentBuffer += streamChunk.content;
-                    const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
-
-                    // Track whether we've crossed into a [ROLE_SELECT] marker block
-                    // This is the second streaming path (unifiedResponse.stream generator)
-                    // and needs the same filtering as the first path (config.onStreamChunk)
-                    if (!roleSelectMarkerSeen) {
-                      const ROLE_SELECT_MARKERS = ['[ROLE_SELECT]', '[ROUTING_METADATA]'];
-                      let markerIdx = -1;
-                      for (const m of ROLE_SELECT_MARKERS) {
-                        const idx = streamingContentBuffer.indexOf(m);
-                        if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
-                      }
-
-                      if (markerIdx !== -1) {
-                        // Emit only the safe portion (before the marker), then suppress
-                        if (markerIdx > charsEmittedSafely) {
-                          const safe = streamingContentBuffer.slice(charsEmittedSafely, markerIdx);
-                          if (safe) realEmit('token', { content: safe, timestamp: Date.now() });
-                        }
-                        charsEmittedSafely = streamingContentBuffer.length;
-                        roleSelectMarkerSeen = true;
-                        chatLogger.debug('[StreamFilter-LLM-Stream] [ROLE_SELECT] detected, suppressing further tokens', {
-                          markerIdx,
-                        });
-                      } else {
-                        // No marker yet — hold back trailing chars for partial marker detection
-                        const HOLDBACK = 16;
-                        const safeUpto = Math.max(charsEmittedSafely, streamingContentBuffer.length - HOLDBACK);
-                        if (safeUpto > charsEmittedSafely) {
-                          const safe = streamingContentBuffer.slice(charsEmittedSafely, safeUpto);
-                          if (safe) realEmit('token', { content: safe, timestamp: Date.now() });
-                          charsEmittedSafely = safeUpto;
-                        }
-                      }
+                    // Delegate buffer append, marker detection, holdback,
+                    // file edit extraction and emit to the shared
+                    // createStreamChunkHandler factory. tokenBuffer
+                    // accumulation is kept here because it feeds the
+                    // separate emitBufferedTokens() SSE path.
+                    const wasMarkerSeen = streamState.markerSeen;
+                    handleStreamChunk(streamChunk.content);
+                    // Observability: log the transition when a [ROLE_SELECT]/
+                    // [ROUTING_METADATA] marker is first detected so operators
+                    // can see the suppression kick in (lost when the inline
+                    // marker logic was replaced with the shared factory).
+                    if (!wasMarkerSeen && streamState.markerSeen) {
+                      chatLogger.debug('[StreamFilter-LLM-Stream] [ROLE_SELECT] detected, suppressing further tokens', {
+                        bufferLength: streamState.buffer.length,
+                      });
                     }
 
                     // Only add to tokenBuffer if we haven't seen the marker yet
-                    if (!roleSelectMarkerSeen) {
+                    if (!streamState.markerSeen) {
                       tokenBuffer += streamChunk.content;
-                    }
-
-                    // Filter out invalid paths and empty content to prevent UI polling loops
-                    for (const edit of newFileEdits) {
-                      // CRITICAL FIX: Use proper isValidFilePath validation instead of simple regex
-                      // This catches CSS values (0.3s), code snippets (with, submission), etc.
-                      if (!isValidFilePath(edit.path)) {
-                        chatLogger.debug('Skipping invalid progressive file edit path (failed isValidFilePath)', { path: edit.path });
-                        continue;
-                      }
-                      // CRITICAL FIX: Skip empty content to prevent infinite loops
-                      const editContent = edit.content || edit.diff || '';
-                      if (!editContent || editContent.trim().length === 0) {
-                        chatLogger.debug('Skipping empty edit content (prevents infinite loop)', { path: edit.path });
-                        continue;
-                      }
-                      // CRITICAL FIX: Determine operation type and send correct data format
-                      // - For WRITE operations: send full content, operation='write', NO diff field
-                      // - For PATCH operations: send unified diff in diff field, operation='patch'
-                      const isPatch = edit.action === 'patch' || !!edit.diff;
-                      realEmit('file_edit', {
-                        path: edit.path,
-                        status: 'detected',
-                        operation: isPatch ? 'patch' : 'write',
-                        timestamp: Date.now(),
-                        content: edit.content || '',  // Always send full content for WRITE operations     
-                        diff: isPatch ? (edit.diff || '') : undefined,  // Only send diff for PATCH operations
-                      });
-                      chatLogger.debug('Progressive file edit detected during LLM stream', {
-                        path: edit.path,
-                        operation: isPatch ? 'patch' : 'write',
-                        hasDiff: !!edit.diff,
-                      });
                     }
 
                     // Emit buffered tokens if interval has passed
@@ -2896,11 +3045,11 @@ const config: UnifiedAgentConfig = {
                             if (Array.isArray(output)) {
                               for (const item of output) {
                                 if (item && typeof item === 'object' && item.path && item.success !== false) {
-                                  alreadyWrittenPaths.add(item.path);
+                                  addWrittenPath(alreadyWrittenPaths, item.path, requestedScopePath);
                                 }
                               }
                             } else if (output && typeof output === 'object' && output.path && output.success !== false) {
-                              alreadyWrittenPaths.add(output.path);
+                              addWrittenPath(alreadyWrittenPaths, output.path, requestedScopePath);
                             }
                           }
 
@@ -2991,7 +3140,7 @@ const config: UnifiedAgentConfig = {
                   if (streamChunk.isComplete) {
                     // Post-processing: run filesystem edits on accumulated stream content
                     // This ensures WRITE/APPLY_DIFF from streamed output reaches the VFS
-                    const streamedContent = streamingContentBuffer;
+                    const streamedContent = streamState.buffer;
 
                     // DIAGNOSTIC: Log why VFS writes may or may not happen
                     chatLogger.debug('Stream complete — filesystem edit gate check', {
@@ -3148,7 +3297,7 @@ const config: UnifiedAgentConfig = {
                       // ROBUSTNESS: Don't assume WRITE=content, PATCH=diff
                       // LLM may return diffs in <file_edit> tags or full content for existing files
                       // Let EnhancedDiffViewer detect format using isDiffFormat()
-                      const fileEdits = allEdits.applied
+                      const fileEdits = (allEdits.applied.map(e => ({ ...e })) as FilesystemEditSummary[])
                         .filter((edit) => {
                           // Skip invalid paths
                           if (!isValidFilePath(edit.path)) return false;
@@ -3159,7 +3308,7 @@ const config: UnifiedAgentConfig = {
                           return true;
                         })
                         .map((edit) => {
-                          const requestedFile = allEdits.requestedFiles.find(f => f.path === edit.path);
+                          const requestedFile = allEdits?.requestedFiles.find(f => f.path === edit.path);
                           // Determine what to send:
                           // - If edit.diff exists and looks like unified diff, send it
                           // - Otherwise send full content (EnhancedDiffViewer will auto-detect format)
@@ -3218,7 +3367,7 @@ const config: UnifiedAgentConfig = {
                     // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
                     // Use streamingContentBuffer which has the full response
                     if (isMem0Configured()) {
-                      storeConversationInMem0(messages, streamingContentBuffer, filesystemOwnerId, streamRequestId, {
+                      storeConversationInMem0(messages, streamState.buffer, filesystemOwnerId, streamRequestId, {
                         sessionId: resolvedConversationId,
                         metadata: {
                           threadId: resolvedConversationId,
@@ -3235,11 +3384,11 @@ const config: UnifiedAgentConfig = {
 
                 // Flush any holdback chars that were withheld for partial-marker detection
                 // (only when no [ROLE_SELECT] marker was seen). Without this, the last
-                // ~16 chars of a clean response would be silently dropped from the UI.
-                if (!roleSelectMarkerSeen && charsEmittedSafely < streamingContentBuffer.length) {
-                  const flush = streamingContentBuffer.slice(charsEmittedSafely);
+                // ~17 chars of a clean response would be silently dropped from the UI.
+                if (!streamState.markerSeen && streamState.charsEmittedSafely < streamState.buffer.length) {
+                  const flush = streamState.buffer.slice(streamState.charsEmittedSafely);
                   if (flush) realEmit('token', { content: flush, timestamp: Date.now() });
-                  charsEmittedSafely = streamingContentBuffer.length;
+                  streamState.charsEmittedSafely = streamState.buffer.length;
                 }
 
                 // Emit any remaining buffered tokens (in case loop exited without hitting isComplete)
@@ -3276,22 +3425,22 @@ const config: UnifiedAgentConfig = {
                 if (shouldRunSpecAmplification) {
                   chatLogger.info('Code/file edits detected, triggering spec amplification (regular LLM path)', {
                     requestId: streamRequestId,
-                    contentLength: streamingContentBuffer.length,
+                    contentLength: streamState.buffer.length,
                     appliedEditsCount: effectiveEdits?.applied?.length || 0,
                     mcpFileEdits: hasMcpFileEdits ? mcpFileEdits.map(e => e.path) : undefined,
                   });
 
                   // Build enhanced content including actual file edits
-                  let enhancedContent = streamingContentBuffer;
-                  if (effectiveEdits?.applied?.length > 0) {
-                    const fileEditsContent = effectiveEdits.applied
-                      .filter(e => e.content || e.diff)
-                      .map(e => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n${e.content || e.diff || ''}\n>>>\n\`\`\``)
+                  let enhancedContent = streamState.buffer;
+                  if ((effectiveEdits?.applied?.length ?? 0) > 0) {
+                    const fileEditsContent = (effectiveEdits?.applied ?? [] as Array<{ path: string; content?: string; diff?: string }>)
+                      .filter((e: { content?: string; diff?: string }) => e.content || e.diff)
+                      .map((e: { path: string; content?: string; diff?: string }) => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n${e.content || e.diff || ''}\n>>>\n\`\`\``)
                       .join('\n\n');
                     if (fileEditsContent) {
-                      enhancedContent = streamingContentBuffer + '\n\n' + fileEditsContent;
+                      enhancedContent = streamState.buffer + '\n\n' + fileEditsContent;
                       chatLogger.debug('Including file edits in spec amplification', {
-                        fileCount: effectiveEdits.applied.length,
+                        fileCount: effectiveEdits?.applied?.length ?? 0,
                         additionalContentLength: fileEditsContent.length,
                       });
                     }
@@ -3301,7 +3450,7 @@ const config: UnifiedAgentConfig = {
                     // the background refinement engine would parse those markers and overwrite
                     // the real file content with the placeholder text.
                     // Instead, just note that files were created/updated via MCP.
-                    enhancedContent = streamingContentBuffer +
+                    enhancedContent = streamState.buffer +
                       `\n\n[Note: ${mcpFileEdits.length} file(s) were created/updated via tool calls: ${mcpFileEdits.map(e => e.path).join(', ')}]`;
                     chatLogger.debug('Noting MCP tool file edits in spec amplification (no WRITE markers)', {
                       fileCount: mcpFileEdits.length,
@@ -3341,14 +3490,14 @@ const config: UnifiedAgentConfig = {
                 chatRequestLogger.logRequestComplete(
                   streamRequestId,
                   true,
-                  streamingContentBuffer.length,
+                  streamState.buffer.length,
                   undefined,
                   streamDuration,
                   undefined,
                   actualProvider,
                   actualModel,
                   (completedToolCalls.length > 0 ? completedToolCalls : undefined) as any,
-                  streamingContentBuffer.length,
+                  streamState.buffer.length,
                 ).catch(() => {});
 
                 cleanup();
@@ -3397,7 +3546,7 @@ const config: UnifiedAgentConfig = {
         }
 
         // NOTE: Spec amplification trigger moved to inside each streaming path's completion handler
-        // - Regular LLM streaming: line ~1825 (after streamingContentBuffer is finalized)
+        // - Regular LLM streaming: line ~1825 (after streamState.buffer is finalized)
         // - ToolLoopAgent streaming: line ~2155 (after finalContent is finalized)
         // This ensures content is available and emitRef.current is properly set
 
@@ -3409,7 +3558,7 @@ const config: UnifiedAgentConfig = {
           chatLogger.info('Streaming with ToolLoopAgent real-time events', { requestId: streamRequestId });
           
           const encoder = new TextEncoder();
-          let encoderRef = encoder;
+          let encoderRef: TextEncoder | null = encoder;
 
           const readableStream = new ReadableStream({
             async start(controller) {
@@ -3417,7 +3566,7 @@ const config: UnifiedAgentConfig = {
               const realEmit = (eventType: string, data: any) => {
                 if (request.signal?.aborted) return;
                 const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
-                controller.enqueue(encoderRef.encode(eventStr));
+                if (encoderRef) safeEnqueue(encoderRef, controller, eventStr);
                 chunkCount++;
               };
 
@@ -3458,7 +3607,7 @@ const config: UnifiedAgentConfig = {
                   const baseEvents = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
                   for (const event of baseEvents) {
                     if (request.signal?.aborted) return;
-                    controller.enqueue(encoderRef.encode(event));
+                    safeEnqueue(encoderRef, controller, event);
                     chunkCount++;
                   }
 
@@ -3481,7 +3630,7 @@ const config: UnifiedAgentConfig = {
                         content: tokenBuffer,
                         timestamp: Date.now(),
                       })}\n\n`;
-                      controller.enqueue(encoderRef.encode(tokenEvent));
+                      safeEnqueue(encoderRef, controller, tokenEvent);
                       chunkCount++;
                       finalContent += tokenBuffer;
                       tokenBuffer = '';
@@ -3503,7 +3652,7 @@ const config: UnifiedAgentConfig = {
                         result: chunk.toolInvocation.result,
                         timestamp: Date.now(),
                       })}\n\n`;
-                      controller.enqueue(encoderRef.encode(toolEvent));
+                      safeEnqueue(encoderRef, controller, toolEvent);
                       chunkCount++;
 
                       // Real-time: Track tool call for model ranking telemetry
@@ -3536,7 +3685,7 @@ const config: UnifiedAgentConfig = {
                         reasoning: chunk.reasoning,
                         timestamp: Date.now(),
                       })}\n\n`;
-                      controller.enqueue(encoderRef.encode(reasoningEvent));
+                      safeEnqueue(encoderRef, controller, reasoningEvent);
                       chunkCount++;
                     } else if (chunk.type === 'text-delta') {
                       // Accumulate text deltas and emit in batches
@@ -3660,7 +3809,7 @@ const config: UnifiedAgentConfig = {
                     // CRITICAL FIX: Also include fileEdits array for enhanced-diff-viewer
                     // ROBUSTNESS: Don't assume WRITE=content, PATCH=diff
                     // Let EnhancedDiffViewer detect format using isDiffFormat()
-                    doneEventData.fileEdits = allEdits.applied
+                    doneEventData.fileEdits = (allEdits.applied as FilesystemEditSummary[])
                       .filter((edit) => {
                         // Skip invalid paths
                         if (!isValidFilePath(edit.path)) return false;
@@ -3689,7 +3838,7 @@ const config: UnifiedAgentConfig = {
                   }
 
                   const doneEvent = `event: done\ndata: ${JSON.stringify(doneEventData)}\n\n`;
-                  controller.enqueue(encoderRef.encode(doneEvent));
+                  safeEnqueue(encoderRef, controller, doneEvent);
                   chunkCount++;
                 })();
 
@@ -3810,7 +3959,7 @@ const config: UnifiedAgentConfig = {
                     message: 'Streaming error occurred',
                     canRetry: true,
                   })}\n\n`;
-                  controller.enqueue(encoderRef.encode(errorEvent));
+                  safeEnqueue(encoderRef, controller, errorEvent);
                 }
                 controller.close();
               } finally {
@@ -3925,7 +4074,7 @@ const config: UnifiedAgentConfig = {
           filesystemEdits &&
           (filesystemEdits.applied.length > 0 ||
             filesystemEdits.errors.length > 0 ||
-            filesystemEdits.requestedFiles.length > 0)
+            (filesystemEdits?.requestedFiles?.length ?? 0) > 0)
         ) {
           const filesystemEvent = `event: filesystem\ndata: ${JSON.stringify({
             requestId: streamRequestId,
@@ -3933,7 +4082,7 @@ const config: UnifiedAgentConfig = {
             status: filesystemEdits.status,
             applied: filesystemEdits.applied,
             errors: filesystemEdits.errors,
-            requestedFiles: filesystemEdits.requestedFiles,
+            requestedFiles: filesystemEdits?.requestedFiles ?? [],
             scopePath: filesystemEdits.scopePath,
             workspaceVersion: filesystemEdits.workspaceVersion,
             commitId: filesystemEdits.commitId,
@@ -3945,7 +4094,7 @@ const config: UnifiedAgentConfig = {
         // Bug #9 Fix: hasFilesystemEdits should be true only when there are actual filesystem write events
         // Not just when the function ran (enableFilesystemEdits was true)
         const hasActualFilesystemEdits = filesystemEdits &&
-          (filesystemEdits.applied.length > 0 || filesystemEdits.requestedFiles.length > 0);
+          (filesystemEdits.applied.length > 0 || (filesystemEdits?.requestedFiles?.length ?? 0) > 0);
         chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
           eventsCount: events.length,
           hasFilesystemEdits: hasActualFilesystemEdits,
@@ -3954,7 +4103,7 @@ const config: UnifiedAgentConfig = {
         });
 
         const encoder = new TextEncoder();
-        let encoderRef = encoder;  // Reference for cleanup
+        let encoderRef: TextEncoder | null = encoder;  // Reference for cleanup
         let streamClosed = false;  // Track stream state for cancel callback
         let refinementTimeoutId: NodeJS.Timeout | null = null;  // Timeout for background refinement
 
@@ -3986,7 +4135,7 @@ const config: UnifiedAgentConfig = {
               updateActivity();
               
               const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
-              controller.enqueue(encoderRef.encode(eventStr));
+              if (encoderRef) safeEnqueue(encoderRef, controller, eventStr);
               chunkCount++;
 
               // Close stream when refinement completes (true terminal states only)
@@ -4060,7 +4209,7 @@ const config: UnifiedAgentConfig = {
                   cleanup();
                   return;
                 }
-                controller.enqueue(encoderRef.encode(event));
+                safeEnqueue(encoderRef, controller, event);
                 chunkCount++;
               }
 
@@ -4070,7 +4219,7 @@ const config: UnifiedAgentConfig = {
                   cleanup();
                   return;
                 }
-                controller.enqueue(encoderRef.encode(fileEditEvent));
+                safeEnqueue(encoderRef, controller, fileEditEvent);
                 chunkCount++;
               }
 
@@ -4091,7 +4240,7 @@ const config: UnifiedAgentConfig = {
                 if (streamClosed) {
                   return;
                 }
-                controller.enqueue(encoderRef.encode(event));
+                safeEnqueue(encoderRef, controller, event);
                 chunkCount++;
 
                 // OPTIMIZED: Minimal delays for faster text display
@@ -4122,7 +4271,7 @@ const config: UnifiedAgentConfig = {
               if (doneEvent) {
                 // Replace 'done' with 'primary_done' to avoid triggering client stream close
                 const primaryDoneEvent = doneEvent.replace(/^event:\s*done/m, 'event: primary_done');
-                controller.enqueue(encoderRef.encode(primaryDoneEvent));
+                safeEnqueue(encoderRef, controller, primaryDoneEvent);
                 chunkCount++;
               }
 
@@ -4186,7 +4335,7 @@ const config: UnifiedAgentConfig = {
               }
 
               // SPEC AMPLIFICATION: Will be triggered after primary response completes
-              // Check happens inside the stream callback where streamingContentBuffer is available
+              // Check happens inside the stream callback where streamState.buffer is available
               // See line ~2520 for spec amplification trigger (inside stream callback)
 
               // Stream stays open for background refinement events
@@ -4228,7 +4377,7 @@ const config: UnifiedAgentConfig = {
                   message: 'Streaming error occurred',
                   canRetry: true  // Changed to true - most errors are retryable
                 })}\n\n`;
-                controller.enqueue(encoderRef.encode(errorEvent));
+                safeEnqueue(encoderRef, controller, errorEvent);
                 chunkCount++;
               }
               streamClosed = true;
@@ -4429,19 +4578,6 @@ interface ChatFilesystemContextPayload {
   scopePath?: string;
 }
 
-interface FilesystemEditSummary {
-  path: string;
-  operation: 'write' | 'patch' | 'delete';
-  version: number;
-  previousVersion: number | null;
-  existedBefore: boolean;
-  content?: string;
-  diff?: string;
-  commitId?: string;
-  commitMessage?: string;
-  message?: string;
-}
-
 interface FilesystemEditResult {
   transactionId: string | null;
   status: 'auto_applied' | 'accepted' | 'denied' | 'reverted_with_conflicts' | 'none';
@@ -4633,7 +4769,16 @@ async function handleGatewayStreaming(params: {
 
   const readableStream = new ReadableStream({
     async start(controller) {
-      const reader = streamResponse.body.getReader();
+      const reader = streamResponse.body?.getReader();
+  if (!reader) {
+    // Bug #X: signal a stream error via controller.error() instead of throwing.
+    // Throwing inside ReadableStream.start() crashes the stream without
+    // surfacing the error to the client. signalStreamError() wraps the
+    // controller.error() call and returns a sentinel so the caller can
+    // `return` it directly. See bing/web/lib/chat/stream-safety-helpers.ts
+    // for the behavioral test coverage.
+    return signalStreamError(controller, 'No response body reader available from gateway stream');
+  }
 
       try {
         while (true) {
@@ -4749,7 +4894,7 @@ async function buildWorkspaceSessionContext(
         contextPack.bundle,
       ].filter(Boolean).join('\n');
     } catch (error: unknown) {
-      chatLogger.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
+      chatLogger.warn('[Chat] Context pack generation failed, falling back to basic context:', { error: error instanceof Error ? error.message : String(error) });
       // Fall through to enhanced context with key file contents
     }
   }
@@ -6037,7 +6182,7 @@ async function applyFilesystemEditsFromResponse(input: {
         }
       } catch (commitError) {
         // Non-fatal: edits were applied even if commit fails
-        chatLogger.error('[Chat] Auto-commit failed:', commitError);
+        chatLogger.error('[Chat] Auto-commit failed:', { error: commitError instanceof Error ? commitError.message : String(commitError) });
       }
     }
   }
@@ -6115,7 +6260,7 @@ export async function GET(request: NextRequest) {
         timestamp: Date.now(),
       });
     } catch (error) {
-      chatLogger.error("Chat API warmup error:", error);
+      chatLogger.error("Chat API warmup error:", { error: error instanceof Error ? error.message : String(error) });
       return NextResponse.json(
         { success: false, error: "Warmup failed" },
         { status: 500 }

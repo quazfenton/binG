@@ -1,4 +1,8 @@
 import { createLogger } from '@/lib/utils/logger';
+// Pass-7 #107: tag migration-state-mismatch logs with the canonical
+// `mismatch` (migration record vs. actual schema) and `drift` (schema
+// has drifted past what the migrations table records) detection terms.
+import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
 
 const logger = createLogger('Database:Migration');
 
@@ -233,7 +237,10 @@ export class MigrationRunner {
               /already exists/i.test(msg)
             ) {
               logger.warn(
-                `Migration ${migration.version} already applied (schema present): ${msg}. Marking as executed.`
+                withDetectionTerms(
+                  `Migration ${migration.version} already applied (schema present): ${msg}. Marking as executed.`,
+                  DETECTION_TERMS.mismatch,
+                ),
               );
               alreadyApplied = true;
             } else if (
@@ -244,7 +251,10 @@ export class MigrationRunner {
               // It will be re-attempted on the next startup after schema init
               // has created the missing tables/columns.
               logger.warn(
-                `Migration ${migration.version} skipped (missing schema prerequisite: ${msg}). Will retry next startup.`
+                withDetectionTerms(
+                  `Migration ${migration.version} skipped (missing schema prerequisite: ${msg}). Will retry next startup.`,
+                  DETECTION_TERMS.drift,
+                ),
               );
               continue; // Skip to next migration without marking as executed
             } else {

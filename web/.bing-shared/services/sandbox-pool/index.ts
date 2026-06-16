@@ -255,7 +255,7 @@ class SandboxPoolService {
 
     // Destroy the sandbox
     try {
-      const { getSandboxProvider } = await import('../../lib/sandbox/providers');
+      const { getSandboxProvider } = await import('@/lib/sandbox/providers');
       const provider = await getSandboxProvider(pooled.provider);
       await provider.destroySandbox(sandboxId);
     } catch (error: any) {

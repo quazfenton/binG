@@ -13,6 +13,114 @@ import { useStreamControl } from './use-stream-control';
 import { voiceService } from '@/lib/voice/voice-service';
 import { streamingSpeaker } from '@/lib/voice/streaming-speaker';
 import { createLogger } from '@/lib/utils/logger';
+import { recordFallbackChainAttempt, recordFallbackChainExhausted } from '@/lib/chat/chat-metrics';
+
+/**
+ * Bug #61: build a fallback chain list. Prefers the synchronous useRef
+ * (chainRef + messageId) over the async metadata.fallbackChain, since
+ * setMessages is async and the catch blocks may see stale metadata.
+ * Falls back to metadata.fallbackChain, then to a single [orig, selected]
+ * pair. Returns [] when no source has data, so callers don't emit
+ * {provider:'', model:''} entries into the exhausted metric.
+ */
+export function buildFallbackChainList(
+  chainRef: Map<string, Array<{ provider: string; model: string }>> | undefined,
+  messageId: string | undefined,
+  metadata: any,
+  origProvider = '',
+  origModel = '',
+  selectedProvider = '',
+  selectedModel = '',
+): ReadonlyArray<{ provider: string; model: string }> {
+  // 1. Prefer the synchronous ref (always up-to-date)
+  if (chainRef && messageId) {
+    const refChain = chainRef.get(messageId);
+    if (refChain && refChain.length > 0) return refChain;
+  }
+  // 2. Fall back to React-state metadata (may be stale for retryCount > 0)
+  if (metadata?.fallbackChain) return metadata.fallbackChain;
+  // 3. Last resort: build a single [orig, selected] pair
+  if (!origProvider && !origModel && !selectedProvider && !selectedModel) return [];
+  return [
+    { provider: origProvider, model: origModel },
+    { provider: selectedProvider, model: selectedModel },
+  ];
+}
+
+/**
+ * Bug #61: push a (provider, model) entry into the synchronous chain ref.
+ * Creates the per-message array on first push. Updates the ref synchronously
+ * (not via setState), so catch blocks reading it see the latest chain.
+ */
+export function pushChainEntry(
+  chainRef: Map<string, Array<{ provider: string; model: string }>>,
+  messageId: string,
+  provider: string,
+  model: string,
+): void {
+  let arr = chainRef.get(messageId);
+  if (!arr) {
+    arr = [];
+    chainRef.set(messageId, arr);
+  }
+  arr.push({ provider, model });
+}
+
+/**
+ * Bug #61 (reviewer follow-up): pure wrapper that combines the ref update
+ * and the metrics call into a single testable function. Use this at every
+ * per-attempt call site instead of calling `recordFallbackChainAttempt`
+ * directly — this way the test suite can verify the production code fires
+ * the metrics with the right payload without rendering the full hook.
+ *
+ * Also pushes the entry to the ref so the catch block can read the latest
+ * chain synchronously (the useRef fix for the stale metadata issue).
+ */
+export function emitFallbackOutcome(input: {
+  chainRef: Map<string, Array<{ provider: string; model: string }>>;
+  messageId: string;
+  provider: string;
+  model: string;
+  outcome: 'success' | 'failure' | 'circuit_open' | 'rate_limited';
+  reason?: string;
+}): void {
+  pushChainEntry(input.chainRef, input.messageId, input.provider, input.model);
+  recordFallbackChainAttempt({
+    provider: input.provider,
+    model: input.model,
+    outcome: input.outcome,
+    reason: input.reason,
+  });
+}
+
+/**
+ * Bug #61 (reviewer follow-up): pure wrapper for the exhaustion metrics
+ * call. Reads the full chain from the ref (via `buildFallbackChainList`)
+ * and fires `recordFallbackChainExhausted` with the complete attempt list.
+ */
+export function emitFallbackExhausted(input: {
+  chainRef: Map<string, Array<{ provider: string; model: string }>>;
+  messageId: string;
+  metadata: any;
+  reason: string;
+  origProvider?: string;
+  origModel?: string;
+  selectedProvider?: string;
+  selectedModel?: string;
+}): void {
+  recordFallbackChainExhausted({
+    reason: input.reason,
+    attempts: buildFallbackChainList(
+      input.chainRef,
+      input.messageId,
+      input.metadata,
+      input.origProvider ?? '',
+      input.origModel ?? '',
+      input.selectedProvider ?? '',
+      input.selectedModel ?? '',
+    ),
+  });
+}
 
 const logger = createLogger('UI:EnhancedChat');
 
@@ -277,6 +385,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
+  // Bug #61: synchronous per-message fallback chain ref. setMessages is
+  // async, so the catch blocks can't read the latest chain from React
+  // state. Push to this ref synchronously at each rotation site; read
+  // from it in the 3 exhausted call sites.
+  const fallbackChainRef = useRef<Map<string, Array<{ provider: string; model: string }>>>(new Map());
   // Tracks consecutive stepReprompt auto-continues to prevent infinite loops
   const stepRepromptCountRef = useRef(0);
   const isMountedRef = useRef(true);
@@ -736,6 +849,23 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           const origModel = String(resolvedBody?.model ?? '');
           const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, retryCount, 'pre-stream');
 
+          // Bug #61: push to synchronous chain ref so the catch block sees the
+          // full rotation history even if setMessages hasn't committed yet.
+          pushChainEntry(fallbackChainRef.current, assistantMessage.id, origProvider, origModel);
+          pushChainEntry(fallbackChainRef.current, assistantMessage.id, selectedProvider, selectedModel);
+
+          // Bug #61: record the original (pre-stream) attempt as failure so the
+          // fallback chain metric actually fires in production. Without this the
+          // chat-metrics helper is dead code.
+          emitFallbackOutcome({
+            chainRef: fallbackChainRef.current,
+            messageId: assistantMessage.id,
+            provider: origProvider,
+            model: origModel,
+            outcome: 'failure',
+            reason: `pre-stream HTTP ${statusCode}`,
+          });
+
           // Create retry message bubble (first retry creates new, subsequent reuse)
           const isFirstRetry = retryCount === 0;
           let retryAssistantMessage: Message;
@@ -743,7 +873,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             setMessages(prev => prev.map(msg =>
               msg.id === assistantMessage.id
                 ? { ...msg, content: '_Retrying with alternate provider/model..._',
-                    metadata: { ...(msg.metadata || {}), retryCount: retryCount + 1, isEmptyResponse: true } }
+                    metadata: {
+                      ...(msg.metadata || {}),
+                      retryCount: retryCount + 1,
+                      isEmptyResponse: true,
+                      // Bug #61: track the fallback chain so exhausted() sees the full history.
+                      fallbackChain: [
+                        ...((msg.metadata as any)?.fallbackChain || []),
+                        { provider: origProvider, model: origModel },
+                        { provider: selectedProvider, model: selectedModel },
+                      ],
+                    } }
                 : msg
             ));
             retryAssistantMessage = {
@@ -806,14 +946,53 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             });
 
             if (!retryResponse.ok || !retryResponse.body) {
+              // Bug #61: record the rotated attempt as failure with the actual
+              // status code so we know why the fallback chain entry failed.
+              emitFallbackOutcome({
+                chainRef: fallbackChainRef.current,
+                messageId: assistantMessage.id,
+                provider: selectedProvider,
+                model: selectedModel,
+                outcome: 'failure',
+                reason: `retry HTTP ${retryResponse.status} (pre-stream)`,
+              });
               throw new Error(`Retry failed: HTTP ${retryResponse.status}`);
             }
 
             // Success — stream the retry response and return early
+            emitFallbackOutcome({
+              chainRef: fallbackChainRef.current,
+              messageId: assistantMessage.id,
+              provider: selectedProvider,
+              model: selectedModel,
+              outcome: 'success',
+            });
+            // Bug #61: free the per-message chain so the ref doesn't grow unbounded.
+            // (Non-maxRetries failures keep the entry so the next retry accumulates.)
+            fallbackChainRef.current.delete(assistantMessage.id);
             await handleStreamingResponse(retryResponse.body, retryAssistantMessage, retryAbortController);
             return;
           } catch (retryError) {
             logger.error('[Chat] Pre-stream retry failed:', retryError);
+            // Bug #61: if we've hit maxRetries, mark the chain as exhausted so
+            // downstream dashboards can show why the cascade to text mode fired.
+            // Note: assistantMessage.metadata.fallbackChain may be stale for
+            // retryCount > 0 (setMessages is async). The fallback captures the
+            // current pair; useRef-based tracking is a TODO.
+            if (retryCount + 1 >= maxRetries) {
+              emitFallbackExhausted({
+                chainRef: fallbackChainRef.current,
+                messageId: assistantMessage.id,
+                metadata: assistantMessage.metadata,
+                reason: `pre-stream HTTP ${statusCode} -> retry failed after ${maxRetries} attempts`,
+                origProvider,
+                origModel,
+                selectedProvider,
+                selectedModel,
+              });
+              // Bug #61: free the per-message chain so the ref doesn't grow unbounded.
+              fallbackChainRef.current.delete(assistantMessage.id);
+            }
             setMessages(prev => prev.map(msg =>
               msg.id === retryAssistantMessage.id
                 ? { ...msg, content: '⚠️ _Retry failed. Please try resending your message._',
@@ -1453,17 +1632,26 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           setMessages(prev => [...prev, retryAssistantMessage]);
                         } else {
                           // Reuse the existing retry bubble — just clear its content
+                          // and bump the retryCount. No new bubble.                          // Reuse the existing retry bubble — just clear its content
                           // and bump the retryCount. No new bubble.
-                           retryAssistantMessage = {
-                             id: assistantMessage.id,
-                             role: 'assistant',
-                             content: '',
-                             metadata: {
-                               ...(assistantMessage.metadata || {}),
-                               retryCount: assistantRetryCount + 1,
-                               isEmptyResponse: true,
-                               emptyResponseAttempt: assistantRetryCount + 1,
+                          retryAssistantMessage = {
+                            id: assistantMessage.id,
+                            role: 'assistant',
+                            content: '',
+                            metadata: {
+                              ...(assistantMessage.metadata || {}),
+                              retryCount: assistantRetryCount + 1,
+                              isEmptyResponse: true,
+                              emptyResponseAttempt: assistantRetryCount + 1,
                               retryContext: toolContext,
+                              // Bug #61: track the fallback chain so exhausted() sees the full history.
+                              // On subsequent retries, origProvider/selectedProvider are not
+                              // in scope here (they're defined later via rotateProviderModel).
+                              // The chain entry for the current attempt was already added in
+                              // the first-retry branch, so just spread the existing chain.
+                              fallbackChain: [
+                                ...((assistantMessage.metadata as any)?.fallbackChain || []),
+                              ],
                             },
                           };
                           setMessages(prev => prev.map(msg =>
@@ -1501,6 +1689,23 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           const origModel = String(doneMetadata.model ?? '');
                           const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, assistantRetryCount, 'empty-response');
 
+                        // Bug #61: push to synchronous chain ref so the catch block
+                        // sees the full rotation history even if setMessages hasn't
+                        // committed yet.
+                        pushChainEntry(fallbackChainRef.current, assistantMessage.id, origProvider, origModel);
+                        pushChainEntry(fallbackChainRef.current, assistantMessage.id, selectedProvider, selectedModel);
+
+                        // Bug #61: record the original (empty-response) attempt
+                        // as failure so the fallback chain metric fires in production.
+                        emitFallbackOutcome({
+                          chainRef: fallbackChainRef.current,
+                          messageId: assistantMessage.id,
+                          provider: origProvider,
+                          model: origModel,
+                          outcome: 'failure',
+                          reason: 'empty-response (stream done with no content)',
+                        });
+
                           const retryRequestBody = {
                             ...resolvedBody,
                             messages: [...messagesWithoutEmpty, lastUserMsg],
@@ -1529,14 +1734,52 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           });
 
                           if (!retryResponse.ok || !retryResponse.body) {
+                            // Bug #61: record the rotated attempt as failure.
+                            emitFallbackOutcome({
+                              chainRef: fallbackChainRef.current,
+                              messageId: assistantMessage.id,
+                              provider: selectedProvider,
+                              model: selectedModel,
+                              outcome: 'failure',
+                              reason: `retry HTTP ${retryResponse.status} (empty-response)`,
+                            });
                             throw new Error(`Retry failed: HTTP ${retryResponse.status}`);
                           }
 
                           // Handle the retry streaming response
+                          emitFallbackOutcome({
+                            chainRef: fallbackChainRef.current,
+                            messageId: assistantMessage.id,
+                            provider: selectedProvider,
+                            model: selectedModel,
+                            outcome: 'success',
+                          });
+                          // Bug #61: free the per-message chain so the ref doesn't grow unbounded.
+                          // (Non-maxRetries failures keep the entry so the next retry accumulates.)
+                          fallbackChainRef.current.delete(assistantMessage.id);
                           await handleStreamingResponse(retryResponse.body, retryAssistantMessage, retryAbortController);
                           return; // Don't continue with normal flow
                         } catch (retryError) {
                           logger.error('[Chat] Retry failed:', retryError);
+                          // Bug #61: if we've hit maxRetries, mark the chain as exhausted.
+                          // Note: assistantMessage.metadata.fallbackChain may be stale for
+                          // retryCount > 0 (setMessages is async). The fallback below
+                          // captures the current pair; useRef-based tracking is a TODO.
+                          if (assistantRetryCount + 1 >= maxRetries) {
+                            emitFallbackExhausted({
+
+                              chainRef: fallbackChainRef.current,
+
+                              messageId: assistantMessage.id,
+
+                              metadata: assistantMessage.metadata,
+
+                              reason: `empty-response after ${maxRetries} attempts (cascade to text mode)`,
+
+                            });
+                            // Bug #61: free the per-message chain so the ref doesn't grow unbounded.
+                            fallbackChainRef.current.delete(assistantMessage.id);
+                          }
                           setMessages(prev => prev.map(msg =>
                             msg.id === retryAssistantMessage.id
                               ? {
@@ -1557,7 +1800,33 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     } else {
                       // Max retries reached — update the SAME bubble, don't create a new one
                       logger.warn('[Chat] Empty response after retry, stopping retries');
-                      
+
+                      // Bug #61: mark the chain as exhausted (cascade to text mode).
+                      // Mutually exclusive with the inner-catch exhausted call above
+                      // (that path returns early), so no dedup guard is needed here.
+                      // Guard: only fire the exhausted metric when there were actual
+                      // attempts recorded (preserves the original behavior of
+                      // `if (exhaustedChain.length > 0)` — the other 2 exhausted
+                      // call sites at lines 977 + 1755 fire unconditionally because
+                      // they're in the "we tried N times" path; this outer branch
+                      // is hit even when the stream returned empty on the first try).
+                      const exhaustedChain = buildFallbackChainList(
+                        fallbackChainRef.current,
+                        assistantMessage.id,
+                        assistantMessage.metadata,
+                      );
+                      if (exhaustedChain.length > 0) {
+                        emitFallbackExhausted({
+                          chainRef: fallbackChainRef.current,
+                          messageId: assistantMessage.id,
+                          metadata: assistantMessage.metadata,
+                          reason: `empty-response after ${maxRetries} attempts (cascade to text mode, outer branch)`,
+                        });
+                      }
+                        // Bug #61: free the per-message chain so the ref doesn't grow unbounded.
+                        fallbackChainRef.current.delete(assistantMessage.id);
+                      }
+
                       // Process queued prompts when max retries reached
                       if (inputQueue.length > 0) {
                         logger.info('[InputQueue] Max retries reached, processing next queued prompt');
@@ -1578,7 +1847,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           : msg
                       ));
                     }
-                  }
 
                   // Streaming complete (all background tasks finished) - ONLY if not retrying
                   clearTimeout(timeoutRef.current);

@@ -454,3 +454,29 @@ export class UnifiedResponseHandler {
 }
 
 export const unifiedResponseHandler = new UnifiedResponseHandler();
+
+
+/**
+ * Bug #91 (Pass-6) — classifies an LLM response into one of 4 shapes so
+ * downstream consumers (proxy, tool router, UI) can decide routing +
+ * billing + caching policies without re-parsing the response.
+ *
+ * Priority order (reviewer feedback): empty → text_only → tools_only → mixed.
+ *   - `empty`      — neither text nor tool calls (model stopped early)
+ *   - `text_only`  — text present, no tool calls
+ *   - `tools_only` — tool calls present, no text
+ *   - `mixed`      — both text AND tool calls present
+ */
+export type ResponseShape = 'empty' | 'text' | 'tools_only' | 'mixed';
+
+export function classifyResponseShape(input: {
+  response?: string | null;
+  toolCalls?: Array<{ name?: string; args?: unknown }>;
+}): ResponseShape {
+  const hasText = typeof input.response === 'string' && input.response.trim().length > 0;
+  const hasTools = Array.isArray(input.toolCalls) && input.toolCalls.length > 0;
+  if (!hasText && !hasTools) return 'empty';
+  if (hasText && !hasTools) return 'text';
+  if (!hasText && hasTools) return 'tools_only';
+  return 'mixed';
+}

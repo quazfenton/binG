@@ -1050,7 +1050,13 @@ export function useVirtualFilesystem(
         }
         return data;
       } catch (error) {
-        logError(`getSnapshot: failed for "${targetPath}"`, error);
+        // "Workspace not yet initialized" is expected during startup — don't
+        // log as error. Downgrade to warn so the console isn't spammed on load.
+        if (error instanceof Error && error.message.includes('not yet initialized')) {
+          logWarn(`getSnapshot: workspace not ready for "${targetPath}"`, error);
+        } else {
+          logError(`getSnapshot: failed for "${targetPath}"`, error);
+        }
         // Remove promise entry on error to avoid repopulating with stale data
         const currentPromise = inFlightRequests.get(cacheKey);
         if (currentPromise === requestPromise) {

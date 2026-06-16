@@ -2,17 +2,20 @@ import { NextRequest } from 'next/server';
 
 import { createLogger } from '@/lib/utils/logger';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { isDatabaseAvailable } from '@/lib/database/connection';
 
 const logger = createLogger('Auth:TransferAnonVFS');
 
 /**
- * Core transfer routine. Reads the `anon-session-id` cookie, sanitizes
- * it, and moves the anonymous workspace to the given user.
+ * Core transfer routine. Resolves the anonymous session id (from the
+ * `options.anonymousSessionId` override when provided, otherwise from
+ * the `anon-session-id` cookie), sanitizes it, and moves the anonymous
+ * workspace to the given user.
  *
  * Non-fatal — failures are logged but do not block the auth flow.
- * Idempotent: only runs if there's an anon-session-id cookie AND the
- * derived anonOwnerId differs from the new userId. Safe to call from
- * both register and login flows.
+ * Idempotent: only runs if there's an anon session id AND the derived
+ * anonOwnerId differs from the new userId. Safe to call from both
+ * register and login flows.
  *
  * Transfer strategy (two-tier):
  *   1. FAST PATH: derive the anon ownerId from the cookie using the
@@ -31,9 +34,13 @@ const logger = createLogger('Auth:TransferAnonVFS');
  * the auth flow.
  *
  * Used by:
- *   - /api/auth/register (after successful registration)
- *   - /api/auth/login (after successful login)
- *   - /api/auth/transfer-vfs-on-login (client-triggered, post-login)
+ *   - /api/auth/register (after successful registration; cookie-only)
+ *   - /api/auth/login (after successful login; cookie-only)
+ *   - /api/auth/mfa/challenge (after TOTP verification; cookie-only)
+ *   - /api/auth/transfer-vfs-on-login (client-triggered, post-login;
+ *     passes the body's anonymousSessionId via options when the cookie
+ *     is missing or rotated, so the recovery path has an identifier
+ *     to migrate even when the cookie never reached the server)
  *
  * NOTE for MFA: For MFA-enabled users, the login flow returns early
  * with `mfaRequired: true` and does NOT call this function. The MFA
@@ -44,8 +51,15 @@ const logger = createLogger('Auth:TransferAnonVFS');
 async function transferAnonVFS(
   request: NextRequest,
   user: { id: number | string } | undefined,
+  options?: { anonymousSessionId?: string },
 ): Promise<{ transferredFiles: number }> {
-  const anonCookie = request.cookies.get('anon-session-id')?.value;
+  // Prefer the explicit override (used by the client-side recovery path
+  // in /api/auth/transfer-vfs-on-login when the anon-session-id cookie
+  // is missing, rotated, or was never sent). Falls back to the cookie
+  // for the in-line login/register/mfa paths where the cookie is the
+  // authoritative source.
+  const anonCookie = options?.anonymousSessionId
+    ?? request.cookies.get('anon-session-id')?.value;
   if (!anonCookie || !user?.id) {
     return { transferredFiles: 0 };
   }
@@ -78,7 +92,13 @@ async function transferAnonVFS(
   // `withAnonSessionCookie` call site in
   // `@/lib/virtual-filesystem/resolve-filesystem-owner` is the
   // canonical cookie setter — update both together.
-  const cookiePrefix = sanitizedSessionId.split(/[_-]/)[0] || '';
+  // Accept only the expected anon session format: "<13-digit-ts>_<random>" or "<13-digit-ts>-<random>".
+  // A short crafted prefix can match many recent anon owners and transfer unrelated anon files
+  // into the authenticated account when the fast-path misses — see the fast-path note above.
+  // We require both a 13-digit millisecond timestamp (the established format) and a 6+ char
+  // random tail, so the only prefix we ever key on is a full 13-digit timestamp.
+  const prefixMatch = rawSessionId.match(/^(\d{13})[_-][A-Za-z0-9_-]{6,}$/);
+  const cookiePrefix = prefixMatch?.[1] ?? '';
 
   let totalTransferred = 0;
   const triedOwnerIds = new Set<string>();
@@ -126,53 +146,103 @@ async function transferAnonVFS(
   // plausibly belong to this browser. The findAnonOwnerIds call is
   // bounded to the last 7 days (default) to limit blast radius.
   if (totalTransferred === 0 && cookiePrefix) {
-    logger.debug('VFS transfer entered DB fallback', {
-      cookieDerivedOwnerId,
+    totalTransferred += await tryDbFallback({
       cookiePrefix,
+      cookieDerivedOwnerId,
+      newOwnerId,
+      tryTransfer,
     });
-    // Wrap the scan in its own try/catch so a DB failure during the
-    // fallback degrades to "no fallback" rather than losing the
-    // fast-path result. The fast path (cookie-derived transfer) is
-    // already done; we just skip the DB recovery if the scan throws.
-    let recentAnonOwnerIds: string[] = [];
-    try {
-      recentAnonOwnerIds = await virtualFilesystem.findAnonOwnerIds();
-    } catch (err) {
-      logger.warn('VFS transfer: findAnonOwnerIds scan failed (non-fatal)', {
-        error: err instanceof Error ? err.message : String(err),
-        cookieDerivedOwnerId,
-      });
-      // Fall through with empty candidates \u2014 transfer still returns
-      // whatever the fast path got.
-    }
-    // Scope to ownerIds whose session-id portion starts with the
-    // same timestamp prefix as the cookie. ownerId format is
-    // "anon:<sessionId>" where sessionId was originally derived
-    // from the cookie's "anon_<timestamp>_<random>".
-    const candidates = cookiePrefix
-      ? recentAnonOwnerIds.filter((id) => {
-          const sessionPart = id.startsWith('anon:') ? id.slice(5) : id;
-          return sessionPart.startsWith(cookiePrefix);
-        })
-      : recentAnonOwnerIds;
-    for (const anonOwnerId of candidates) {
-      const moved = await tryTransfer(anonOwnerId, 'fallback');
-      totalTransferred += moved;
-      if (moved > 0) {
-        // Warn when the fallback actually moved files — these are
-        // orphan anon files recovered via prefix matching, and ops
-        // should be able to see this in the logs.
-        logger.warn('VFS transfer: orphan anon files recovered via DB fallback', {
-          from: anonOwnerId,
-          to: newOwnerId,
-          transferredFiles: moved,
-          cookiePrefix,
-        });
-      }
-    }
   }
 
   return { transferredFiles: totalTransferred };
+}
+
+/**
+ * DB fallback: scan the VFS for anon ownerIds whose timestamp prefix
+ * matches the cookie's, then transfer each. Extracted from
+ * `transferAnonVFS` to keep the outer function linear.
+ *
+ * Non-fatal: any failure (DB unavailable, scan throws, individual
+ * transfers fail) is logged and the function returns 0. The caller
+ * still gets whatever the fast path got.
+ *
+ * Returns the number of files transferred via the fallback.
+ */
+async function tryDbFallback(params: {
+  cookiePrefix: string;
+  cookieDerivedOwnerId: string;
+  newOwnerId: string;
+  tryTransfer: (fromOwnerId: string, source: 'cookie' | 'fallback') => Promise<number>;
+}): Promise<number> {
+  const { cookiePrefix, cookieDerivedOwnerId, newOwnerId, tryTransfer } = params;
+
+  // isDatabaseAvailable() can re-throw unexpected errors (OOM, perms).
+  // Wrap it so the transfer stays non-fatal — a broken availability
+  // check should never block the auth flow, matching the original
+  // contract (see "Non-fatal" in transferAnonVFS).
+  let dbAvailable = false;
+  let dbCheckError: string | null = null;
+  try {
+    dbAvailable = isDatabaseAvailable();
+  } catch (err) {
+    dbCheckError = err instanceof Error ? err.message : String(err);
+  }
+  if (!dbAvailable) {
+    logger.warn('VFS transfer: DB fallback skipped', {
+      cookieDerivedOwnerId,
+      cookiePrefix,
+      reason: dbCheckError ?? 'better-sqlite3 unavailable',
+    });
+    return 0;
+  }
+
+  logger.debug('VFS transfer entered DB fallback', {
+    cookieDerivedOwnerId,
+    cookiePrefix,
+  });
+
+  // Scan bounded to last 7 days (default). A scan failure degrades to
+  // "no fallback" rather than losing the fast-path result.
+  let recentAnonOwnerIds: string[] = [];
+  try {
+    recentAnonOwnerIds = await virtualFilesystem.findAnonOwnerIds();
+  } catch (err) {
+    logger.warn('VFS transfer: findAnonOwnerIds scan failed (non-fatal)', {
+      error: err instanceof Error ? err.message : String(err),
+      cookieDerivedOwnerId,
+    });
+    return 0;
+  }
+
+  // Scope to ownerIds whose session-id portion starts with the same
+  // timestamp prefix as the cookie. ownerId format is "anon:<sessionId>"
+  // where sessionId was originally derived from the cookie's
+  // "anon_<timestamp>_<random>".
+  const candidates = recentAnonOwnerIds.filter((id) => {
+    const sessionPart = id.startsWith('anon:') ? id.slice(5) : id;
+    return (
+      sessionPart.startsWith(`${cookiePrefix}_`) ||
+      sessionPart.startsWith(`${cookiePrefix}-`)
+    );
+  });
+
+  let movedTotal = 0;
+  for (const anonOwnerId of candidates) {
+    const moved = await tryTransfer(anonOwnerId, 'fallback');
+    movedTotal += moved;
+    if (moved > 0) {
+      // Warn when the fallback actually moved files — these are
+      // orphan anon files recovered via prefix matching, and ops
+      // should be able to see this in the logs.
+      logger.warn('VFS transfer: orphan anon files recovered via DB fallback', {
+        from: anonOwnerId,
+        to: newOwnerId,
+        transferredFiles: moved,
+        cookiePrefix,
+      });
+    }
+  }
+  return movedTotal;
 }
 
 /**
@@ -183,8 +253,9 @@ async function transferAnonVFS(
 export async function transferVFSFromAnonymous(
   request: NextRequest,
   user: { id: number | string } | undefined,
+  options?: { anonymousSessionId?: string },
 ): Promise<void> {
-  await transferAnonVFS(request, user);
+  await transferAnonVFS(request, user, options);
 }
 
 /**
@@ -202,9 +273,17 @@ export async function transferVFSFromAnonymous(
  * Returns the number of files transferred so the client can show a
  * confirmation (e.g. "Restored 12 files from your anonymous session").
  *
+ * @param options.anonymousSessionId Explicit override for the anon
+ *   session id, used by the client-side recovery path in
+ *   /api/auth/transfer-vfs-on-login when the `anon-session-id` cookie
+ *   is missing or rotated. When provided, takes precedence over the
+ *   cookie. When omitted, falls back to `request.cookies.get('anon-session-id')`.
+ *
  * Used by:
- *   - /api/auth/login (after successful login, alongside auth flow)
- *   - /api/auth/transfer-vfs-on-login (client-triggered explicit retry)
+ *   - /api/auth/login (after successful login, alongside auth flow; cookie-only)
+ *   - /api/auth/transfer-vfs-on-login (client-triggered explicit retry;
+ *     passes the body's anonymousSessionId via options when the cookie
+ *     is missing or rotated)
  *
  * NOTE for MFA: For MFA-enabled users, the login flow returns early
  * with `mfaRequired: true` and does NOT call this function. The MFA
@@ -215,6 +294,7 @@ export async function transferVFSFromAnonymous(
 export async function transferVFSOnLogin(
   request: NextRequest,
   user: { id: number | string } | undefined,
+  options?: { anonymousSessionId?: string },
 ): Promise<{ transferredFiles: number }> {
-  return transferAnonVFS(request, user);
+  return transferAnonVFS(request, user, options);
 }

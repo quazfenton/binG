@@ -6,6 +6,9 @@
 
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('BackgroundJobs');
 
 export interface BackgroundJobConfig {
   sandboxId: string;
@@ -97,50 +100,8 @@ export class BackgroundExecutor extends EventEmitter {
           if (this.executor) {
             result = await this.executor.execCommand(sandboxId, command, args, timeout);
           } else {
-            // Fallback: use child_process directly
-            const { spawn } = require('child_process');
-            result = await new Promise((resolve) => {
-              const proc = spawn(command, args, {
-                timeout,
-                stdio: ['pipe', 'pipe', 'pipe'],
-              });
-
-              let resolved = false;
-              const settle = (value: { stdout: string; stderr: string; exitCode: number | null }) => {
-                if (resolved) return;
-                resolved = true;
-                resolve(value);
-              };
-
-              // Explicit timeout handler — child_process.spawn's `timeout` option
-              // does not always kill the process across Node.js versions, so we
-              // also wire up our own SIGTERM safety net.
-              const timer = setTimeout(() => {
-                try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-                settle({ stdout: '', stderr: `Process killed: exceeded ${timeout}s timeout`, exitCode: null });
-              }, timeout * 1000);
-
-              let stdout = '';
-              let stderr = '';
-
-              proc.stdout?.on('data', (data: Buffer) => {
-                stdout += data.toString();
-              });
-
-              proc.stderr?.on('data', (data: Buffer) => {
-                stderr += data.toString();
-              });
-
-              proc.on('close', (exitCode: number | null) => {
-                clearTimeout(timer);
-                settle({ stdout, stderr, exitCode });
-              });
-
-              proc.on('error', (error: Error) => {
-                clearTimeout(timer);
-                settle({ stdout: '', stderr: error.message, exitCode: null });
-              });
-            });
+            // Fallback: use child_process directly (timeout is in ms)
+            result = await this.runChildProcess(command, args, timeout * 1000);
           }
 
           const duration = Date.now() - startTime;
@@ -160,7 +121,7 @@ export class BackgroundExecutor extends EventEmitter {
           this.emit('error', { jobId, sandboxId, error });
           
           // Log error but continue the loop
-          console.error(`Background job ${jobId} error:`, error.message);
+          log.error(`Background job ${jobId} error:`, error.message);
         }
 
         // Wait for next interval
@@ -260,49 +221,8 @@ export class BackgroundExecutor extends EventEmitter {
               job.timeout / 1000
             );
           } else {
-            const { spawn } = require('child_process');
-            result = await new Promise((resolve) => {
-              const proc = spawn(job.command, job.args, {
-                timeout: job.timeout,
-                stdio: ['pipe', 'pipe', 'pipe'],
-              });
-
-              let resolved = false;
-              const settle = (value: { stdout: string; stderr: string; exitCode: number | null }) => {
-                if (resolved) return;
-                resolved = true;
-                resolve(value);
-              };
-
-              // Explicit timeout handler — child_process.spawn's `timeout` option
-              // does not always kill the process across Node.js versions, so we
-              // also wire up our own SIGTERM safety net.
-              const timer = setTimeout(() => {
-                try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-                settle({ stdout: '', stderr: `Process killed: exceeded ${job.timeout}ms timeout`, exitCode: null });
-              }, job.timeout);
-
-              let stdout = '';
-              let stderr = '';
-
-              proc.stdout?.on('data', (data: Buffer) => {
-                stdout += data.toString();
-              });
-
-              proc.stderr?.on('data', (data: Buffer) => {
-                stderr += data.toString();
-              });
-
-              proc.on('close', (exitCode: number | null) => {
-                clearTimeout(timer);
-                settle({ stdout, stderr, exitCode });
-              });
-
-              proc.on('error', (error: Error) => {
-                clearTimeout(timer);
-                settle({ stdout: '', stderr: error.message, exitCode: null });
-              });
-            });
+            // job.timeout is already in ms
+            result = await this.runChildProcess(job.command, job.args, job.timeout);
           }
 
           job.lastExecuted = new Date();
@@ -393,6 +313,60 @@ export class BackgroundExecutor extends EventEmitter {
     this.jobs.clear();
 
     this.emit('shutdown');
+  }
+
+  /**
+   * Shared helper for the spawn + resolve-once + SIGTERM-timeout pattern.
+   * Used by `startJob` and `resumeJob` as a fallback when no `JobExecutor`
+   * is configured. The `resolved` flag prevents double-resolve on
+   * `close` + `error`; the `setTimeout` SIGTERM safety net replaces the
+   * unreliable `spawn({ timeout })` option.
+   */
+  private runChildProcess(
+    command: string,
+    args: string[],
+    timeoutMs: number
+  ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
+    const { spawn } = require('child_process');
+    return new Promise((resolve) => {
+      const proc = spawn(command, args, {
+        timeout: timeoutMs,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let resolved = false;
+      const settle = (value: { stdout: string; stderr: string; exitCode: number | null }) => {
+        if (resolved) return;
+        resolved = true;
+        resolve(value);
+      };
+
+      const timer = setTimeout(() => {
+        try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
+        settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+      }, timeoutMs);
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout?.on('data', (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr?.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (exitCode: number | null) => {
+        clearTimeout(timer);
+        settle({ stdout, stderr, exitCode });
+      });
+
+      proc.on('error', (error: Error) => {
+        clearTimeout(timer);
+        settle({ stdout: '', stderr: error.message, exitCode: null });
+      });
+    });
   }
 
   /**

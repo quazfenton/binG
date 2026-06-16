@@ -26,7 +26,8 @@ export type TopPanelTab =
   | "zine-display"
   | "mcp"
   | "movies"
-  | "messages";
+  | "messages"
+  | "iptv";
 
 interface PanelContextType {
   isOpen: boolean;

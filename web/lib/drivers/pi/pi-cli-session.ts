@@ -75,7 +75,11 @@ async function executeBashLocally(command: string, cwd: string): Promise<ToolRes
       };
     }
 
-    const result = await bashTool.execute({ command }, {} as any);
+    const result = await bashTool.execute({ command }, {
+      messages: [],
+      toolCallId: globalThis.crypto.randomUUID(),
+      threadId: globalThis.crypto.randomUUID(),
+    } as any);
     const res = result as any;
     return {
       content: [{ type: 'text', text: res.output || '' }],

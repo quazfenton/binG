@@ -24,11 +24,46 @@ import { providerAttemptLogger } from '../../sandbox/provider-attempt-log';
 
 const logger = createLogger('Tools:Sandbox-Bootstrap');
 
+// Bug #79 (Pass-5 audit) — per-process idempotency guard for sandbox
+// provider registration. A module-scoped variable stores the state so
+// it survives hot-reload within the same Node process across module
+// instances. The slot stores { count, providers, pid } so we can
+// tell the operator WHICH providers were already registered and on
+// WHICH process.
+type SandboxBootstrapState = { count: number; providers: string[]; pid: number; lastAt: number };
+let _sandboxBootstrapState: SandboxBootstrapState | null = null;
+let _sandboxBootstrapRan = false;
+const _getSandboxBootstrapState = (): SandboxBootstrapState | null => _sandboxBootstrapState;
+const _setSandboxBootstrapState = (state: SandboxBootstrapState): void => { _sandboxBootstrapState = state; };
+let _sandboxBootstrapCallCount = 0;
+
 /**
  * Register sandbox tools from configured providers
  */
 export async function registerSandboxTools(registry: ToolRegistry, config: BootstrapConfig): Promise<number> {
+  _sandboxBootstrapCallCount += 1;
+  const priorState = _getSandboxBootstrapState();
+
+  // Bug #79 — idempotency guard. If the prior run completed in the same
+  // process AND the registry is the same instance, return the cached count
+  // without re-running the side-effect. We do NOT re-run for the same
+  // (registry, providers-configured) tuple — only the FIRST call is real.
+  if (priorState && priorState.pid === process.pid && _sandboxBootstrapCallCount > 1) {
+    logger.warn(
+      `[SANDBOX-BOOTSTRAP] re-run detected: call #${_sandboxBootstrapCallCount} in PID ${process.pid} — returning cached count of ${priorState.count} tools (providers: ${priorState.providers.join(', ') || 'none configured'})`,
+      {
+        callCount: _sandboxBootstrapCallCount,
+        pid: process.pid,
+        cachedCount: priorState.count,
+        providers: priorState.providers,
+        firstRunAt: new Date(priorState.lastAt).toISOString(),
+      },
+    );
+    return priorState.count;
+  }
+
   let count = 0;
+  const providersUsed: string[] = [];
 
   // Each provider gets the same treatment: start → run → log success/fail.
   // On success the attempt-logger emits a single [INFO] line that includes
@@ -36,15 +71,32 @@ export async function registerSandboxTools(registry: ToolRegistry, config: Boots
   // previous double-log (attempt-success + logToolCount).
   if (process.env.E2B_API_KEY) {
     count += await runProviderRegistration('e2b', 'registerSandboxTools', () => registerE2BTools(registry));
+    providersUsed.push('e2b');
   }
 
   if (process.env.DAYTONA_API_KEY) {
     count += await runProviderRegistration('daytona', 'registerSandboxTools', () => registerDaytonaTools(registry));
+    providersUsed.push('daytona');
   }
 
   if (process.env.CODESANDBOX_API_KEY) {
     count += await runProviderRegistration('codesandbox', 'registerSandboxTools', () => registerCodeSandboxTools(registry));
+    providersUsed.push('codesandbox');
   }
+
+  // Bug #79 — cache the bootstrap result in the module-level variable so
+  // subsequent calls in the same process are no-ops. The PID check above
+  // makes this safe across worker restarts (a new PID resets the guard).
+  _setSandboxBootstrapState({
+    count,
+    providers: providersUsed,
+    pid: process.pid,
+    lastAt: Date.now(),
+  });
+  // Mark the well-known "this process has run bootstrap" flag too, so
+  // other modules (e.g. diagnostic tools) can detect a re-run without
+  // touching the state slot directly.
+  _sandboxBootstrapRan = true;
 
   return count;
 }

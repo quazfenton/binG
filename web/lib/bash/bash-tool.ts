@@ -85,6 +85,43 @@ function extractBaseCommand(command: string | undefined): string | null {
 }
 
 /**
+ * Bug #77 / #83: build a descriptive, actionable error string for a failed
+ * bash execution. Many failures (especially sandbox-routed ones) come back
+ * with `success: false` but an empty `stderr`, which the chat layer then logs
+ * as the opaque "Unknown error". The LLM has nothing to act on, retries the
+ * exact same command, and the loop-guard kills the turn after 3 attempts —
+ * forcing a manual reprompt. A specific message lets the model self-correct.
+ */
+function describeBashFailure(result: BashExecutionResult): string {
+  const parts: string[] = [];
+  const stderr = (result.stderr || '').trim();
+  const stdoutTail = (result.stdout || '').trim().split('\n').slice(-5).join('\n').trim();
+  const exitCode = typeof result.exitCode === 'number' ? result.exitCode : -1;
+
+  if (stderr) {
+    parts.push(stderr);
+  } else if (stdoutTail) {
+    // Some shells write failure detail to stdout (e.g. `which` prints nothing,
+    // build tools print to stdout). Surface the tail so the LLM has context.
+    parts.push(stdoutTail);
+  }
+
+  // Common, recognizable failure modes get an explicit remediation hint.
+  const combined = `${stderr}\n${stdoutTail}`.toLowerCase();
+  if (/command not found|not found|no such file|enoent/.test(combined)) {
+    const base = extractBaseCommand(result.command) ?? 'the command';
+    parts.push(`The interpreter/binary for \`${base}\` may not be installed in this environment. Try a different tool, install it first, or use the VFS file tools (write_file/read_file) instead of shelling out.`);
+  } else if (exitCode === 124 || /timed out|timeout/.test(combined)) {
+    parts.push('The command timed out. Run a faster/non-interactive variant, or background long-running processes.');
+  } else if (parts.length === 0) {
+    // Truly empty failure — still give the LLM the exit code and a nudge.
+    parts.push(`Command exited with code ${exitCode} and produced no output. The command may have failed to start (missing binary, wrong working directory, or unavailable sandbox). Verify the command and path, or try an alternative approach.`);
+  }
+
+  return `Command failed (exit ${exitCode}): ${parts.join(' ')}`.trim();
+}
+
+/**
  * Re-export isCommandSafe for external consumers
  */
 export function isCommandSafe(command: string): boolean {
@@ -754,7 +791,11 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           return {
             success: sandboxRoute.result.success,
             output: sandboxRoute.result.stdout,
-            error: sandboxRoute.result.stderr,
+            // Bug #77/#83: never surface an empty error on failure — the chat
+            // layer would log "Unknown error" and the LLM cannot self-correct.
+            error: sandboxRoute.result.success
+              ? sandboxRoute.result.stderr
+              : describeBashFailure(sandboxRoute.result),
             exitCode: sandboxRoute.result.exitCode,
             duration: sandboxRoute.result.duration,
             outputPath: sandboxRoute.result.outputPath,
@@ -982,7 +1023,8 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           return {
             success: result.success,
             output: finalOutput,
-            error: result.stderr,
+            // Bug #77/#83: never surface an empty error on failure.
+            error: result.success ? result.stderr : describeBashFailure(result),
             exitCode: result.exitCode,
             duration: result.duration,
             outputPath: result.outputPath,

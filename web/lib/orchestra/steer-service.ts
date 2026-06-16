@@ -38,6 +38,14 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
+// Pass-5 #62 (audit) — second half: inject the canonical VFS session-scope
+// path into the system prompt so the LLM never has to guess the scope. The
+// helper is wired into the autoInjectContext block in unified-agent-service.ts
+// at request start. extractSessionIdFromOwnerId is the canonical owner-id →
+// session-id parser (handles the anon:USERID vs anon:USERID$001 split — see
+// bing/web/lib/virtual-filesystem/id-normalization.ts Bug #26 hot-fix for
+// the full rationale).
+import { extractSessionIdFromOwnerId } from '@/lib/virtual-filesystem/id-normalization';
 
 const logger = createLogger('SteerService');
 
@@ -157,10 +165,10 @@ export type SteerTrigger =
   | {
       // Bug #41: emitted by wireLoopAbortSteer when the 3-consecutive-tool-failures
       // loop-guard kills the agent. Categorizes the abort so the LLM knows
-      // whether to switch tools (binary_missing) or fix its tool-name (wrong_tool_name).
+      // whether to switch tools (binary_missing) or fix its tool-name (tool_failing).
       kind: 'loop_abort';
       detail: {
-        abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+        abortReason: 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown';
         consecutive: number;
         failedTools: Array<{ name: string; error: string }>;
         suggestion: string;
@@ -369,8 +377,80 @@ export function buildCombinedSteerPrompt(
 const MAX_TRIGGERS_PER_PROMPT = 5;
 
 // ============================================================================
-// Detection helpers — translate low-level signals into SteerTriggers
+// Bug #67 (Pass-5 audit) — typed error for qd/lite (and similar) pre-validation
+// rejections. Thrown by processUnifiedAgentRequest when the LLM emits a bare
+// model name like "lite" or "qd/lite" that the ninerouter registry does not
+// know about. The chat route's catch distinguishes this from generic Errors
+// via instanceof and returns HTTP 400 with `availableModels` so the client
+// (or the LLM on the next turn) can self-correct. The class is plain
+// (extends Error) and carries the canonical `availableModels` list + a
+// stable `errorCode` for client-side detection.
 // ============================================================================
+export class InvalidModelError extends Error {
+  readonly errorCode: 'invalid_model_name' = 'invalid_model_name';
+  readonly model: string;
+  readonly provider: string;
+  readonly availableModels: ReadonlyArray<string>;
+
+  constructor(input: {
+    model: string;
+    provider: string;
+    availableModels: ReadonlyArray<string>;
+  }) {
+    super(
+      `Invalid model name "${input.model}" for provider "${input.provider}". ` +
+      `Did you mean one of: ${input.availableModels.join(', ')}? ` +
+      `Bare names like "lite" are not supported; use the full registry ID.`,
+    );
+    this.name = 'InvalidModelError';
+    this.model = input.model;
+    this.provider = input.provider;
+    this.availableModels = input.availableModels;
+  }
+}
+
+// ============================================================================
+// Pass-5 #62: buildSessionScopeSteerPrompt — emit a one-liner [STEER] that
+// tells the LLM the canonical VFS session-scope path for the current ownerId.
+// The "first half" of #62 (Pass-5 Round 2) was the structured-rejection log
+// in normalizePath; this is the "second half" — proactively tell the LLM the
+// scope so it doesn't have to guess. Closes #62 fully.
+//
+// Returns null when the ownerId has no extractable session id (e.g. plain
+// `anon:USERID` with no `$sessionId` suffix) so the inject is silent for
+// non-session owners — they fall back to the default 'workspace/sessions/000'
+// scope that the VFS already uses for anon without a $ delimiter.
+// ============================================================================
+export function buildSessionScopeSteerPrompt(input: {
+  ownerId: string;
+  /** Optional: pass a known scopePath (e.g. from the request) for a richer hint. */
+  scopePath?: string;
+}): string | null {
+  const { ownerId, scopePath } = input;
+  if (!ownerId) return null;
+  const sessionId = extractSessionIdFromOwnerId(ownerId);
+  if (!sessionId) {
+    // Plain anon / non-session owner — no session encoded, the VFS will
+    // fall back to the default 'workspace/sessions/000' scope. Skip the
+    // inject so we don't confuse the LLM with a non-applicable scope.
+    return null;
+  }
+  const canonicalScope = `workspace/sessions/${sessionId}`;
+  const observed = scopePath && scopePath.startsWith(canonicalScope)
+    ? ` (observed scopePath: '${scopePath}')`
+    : '';
+  return (
+    `[STEER] Your canonical VFS session scope is '${canonicalScope}/'${observed}. ` +
+    `All file paths you emit (write_file / read_file / apply_diff / batch_write / search_files / list_files) ` +
+    `must be RELATIVE to this scope. ` +
+    `Do NOT include the '${canonicalScope}/' prefix in your path arguments — the router prepends it. ` +
+    `Example: 'src/app.tsx' → resolved to '${canonicalScope}/src/app.tsx'; 'package.json' → '${canonicalScope}/package.json'. ` +
+    `If a path is rejected with 'Path traversal beyond workspace root', use a SHORTER path that stays under the scope ` +
+    `(no leading slash, no parent traversal, no absolute paths, no template literals).`
+  );
+}
+
+
 
 /**
  * Build a SteerTrigger from a streaming finish reason and tool-call count.
@@ -911,7 +991,7 @@ export const incompleteConfidenceThreshold = {
 // categorizeAbortReason() inspects the last N failed tool calls and picks
 // the dominant failure mode:
 //   - binary_missing    — all N failures are ENOENT for the same binary
-//   - wrong_tool_name   — all N failures are capability_not_found / alias_rewrite
+//   - tool_failing   — all N failures are capability_not_found / alias_rewrite
 //   - timeout           — all N failures are idle_timeout / TIMEOUT-TTFT
 //   - unknown           — anything else (mixed, or unclassifiable)
 //
@@ -929,7 +1009,7 @@ export const incompleteConfidenceThreshold = {
  */
 export function categorizeAbortReason(
   recentFailures: ReadonlyArray<{ name: string; error: string }>,
-): 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown' {
+): 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown' {
   if (recentFailures.length === 0) return 'unknown';
 
   let enoentCount = 0;
@@ -948,10 +1028,24 @@ export function categorizeAbortReason(
   }
 
   const total = recentFailures.length;
-  // Dominant: at least half the failures match the category.
-  if (enoentCount >= total / 2) return 'binary_missing';
-  if (notFoundCount >= total / 2) return 'wrong_tool_name';
-  if (timeoutCount >= total / 2) return 'timeout';
+  // Bug #84 (Pass-6 audit) — derive abortReason from the failure pattern:
+  //   - binary_missing: dominant pattern is ENOENT for the same binary
+  //     (all 3+ failures are the same spawn error)
+  //   - tool_failing:   dominant pattern is the same tool failing repeatedly
+  //     (not ENOENT — the tool exists but its results are broken)
+  //   - mixed:         failures span 2+ distinct categories (e.g. one ENOENT
+  //     + one timeout + one not_found) — the loop-guard fired on heterogeneous
+  //     failures, not a single root cause
+  //   - unknown:       can't categorise (empty recentFailures or all
+  //     failures are unrecognised shapes)
+  if (enoentCount >= total / 2 && enoentCount === total) return 'binary_missing';
+  if (notFoundCount >= total / 2 && notFoundCount === total) return 'binary_missing';
+  if (enoentCount + notFoundCount + timeoutCount >= total / 2) return 'tool_failing';
+  // Mixed: at least 2 distinct categories contributed, but no single
+  // category dominates. e.g. 1 ENOENT + 1 timeout + 1 not_found.
+  if (Number(enoentCount > 0) + Number(notFoundCount > 0) + Number(timeoutCount > 0) >= 2) {
+    return 'mixed';
+  }
   return 'unknown';
 }
 
@@ -960,16 +1054,31 @@ export function categorizeAbortReason(
  * a short, actionable sentence the LLM can use to self-correct on the next
  * turn (e.g. "switch to write_file" for binary_missing).
  */
-function abortReasonSuggestion(abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown'): string {
+function abortReasonSuggestion(abortReason: 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown'): string {
   switch (abortReason) {
     case 'binary_missing':
       return 'Switch to `write_file` / `read_file` / `apply_diff` for file operations — the binary you were calling is not installed. See the "Available Binaries" list in your system prompt.';
-    case 'wrong_tool_name':
-      return 'Check the canonical tool names in your system prompt (underscore, not camelCase). The tool you were calling is not registered.';
-    case 'timeout':
-      return 'Break the request into smaller pieces. The current task is too large for a single turn.';
+    case 'tool_failing':
+      // Bug #84 (Pass-6 audit) — the same tool is failing repeatedly but
+      // not with ENOENT (so the binary exists). The LLM should switch to
+      // a different tool for the same task rather than retrying the same
+      // failing call. write_file/apply_diff are safe fallbacks for any
+      // file operation; for non-file tools, break the task into pieces.
+      return 'The same tool failed 3+ times (not a missing binary). Switch to a different tool: use `write_file` / `apply_diff` for file operations, or break the task into smaller pieces for non-file tools. Do NOT retry the same failing call.';
+    case 'mixed':
+      // Bug #84 (Pass-6 audit) — failures span 2+ distinct categories
+      // (e.g. one ENOENT + one timeout + one not_found). No single root
+      // cause; the LLM should step back and try a fundamentally different
+      // approach rather than retrying any of the failed tools.
+      return 'Failures span multiple tools and error types (mixed pattern). Step back and try a fundamentally different approach. Use `write_file` or `apply_diff` for file operations as a safe fallback, or break the request into smaller, single-tool steps.';
     case 'unknown':
-      return 'Review the recent tool-call errors and try a different approach. The same pattern of failures triggered the loop-guard.';
+      // Bug #85 (Pass-6 audit): the original "review the errors" suggestion
+      // was a no-op for the LLM — it had no actionable next step. With the
+      // same fallback as timeout, the LLM has a concrete tool to try
+      // regardless of what the underlying cause of the 3-failure cascade
+      // was. This eliminates the manual reprompt the user had to send
+      // whenever the loop-guard fired with abortReason: 'unknown'.
+      return 'Use `write_file` or `apply_diff` for file operations as a safe fallback. Review the recent tool-call errors above and try a different approach — do NOT retry the same failing calls. The same pattern of failures triggered the loop-guard.';
   }
 }
 
@@ -984,7 +1093,7 @@ function abortReasonSuggestion(abortReason: 'binary_missing' | 'wrong_tool_name'
 export function wireLoopAbortSteer(input: {
   consecutive: number;
   recentFailures: ReadonlyArray<{ name: string; error: string }>;
-}): { steer: string; abort: { abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown'; consecutive: number; failedTools: Array<{ name: string; error: string }>; suggestion: string; promptLength: number } } | null {
+}): { steer: string; abort: { abortReason: 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown'; consecutive: number; failedTools: Array<{ name: string; error: string }>; suggestion: string; promptLength: number } } | null {
   const { consecutive, recentFailures } = input;
   if (consecutive < 1) return null;
 

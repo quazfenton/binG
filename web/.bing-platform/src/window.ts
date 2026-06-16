@@ -202,24 +202,34 @@ class WindowControl {
           await invoke('plugin:opener|open_url', { path: url });
           return;
         } catch {
-          // Shell invoke also failed — use window.open
+          // Shell invoke also failed — use window.open with the same
+          // security attributes as the web path for consistency.
         }
       }
-      // Built-in Tauri fallback: open via <a> tag click simulation
-      try {
-        const a = document.createElement('a');
-        a.href = url;
-        a.target = target;
-        a.rel = target === '_blank' ? 'noopener noreferrer' : '';
-        a.click();
-      } catch (error) {
-        console.error('[WindowControl] Failed to open URL via <a> fallback:', error);
-      }
-    } else {
+    }
+    // Unified fallback (both desktop Tauri and web): window.open with
+    // `noopener,noreferrer` features + explicit `opener = null` for
+    // defense-in-depth against reverse tabnabbing.
+    try {
       const openedWindow = window.open(url, target, 'noopener,noreferrer');
       if (openedWindow) {
         openedWindow.opener = null;
+        return;
       }
+      // window.open returned null (blocked popup, restricted webview) — fall through
+    } catch (error) {
+      console.error('[WindowControl] window.open failed, falling back to <a> click:', error);
+    }
+    // Last-resort <a> tag click — works in environments where window.open
+    // is unavailable (e.g. some Tauri webview configs, sandboxed iframes).
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = target;
+      a.rel = target === '_blank' ? 'noopener noreferrer' : '';
+      a.click();
+    } catch (error) {
+      console.error('[WindowControl] <a> fallback also failed:', error);
     }
   }
 }

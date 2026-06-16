@@ -689,13 +689,19 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
         }
       }
     }
-    // All retries exhausted — record failure timestamp so subsequent
-    // getSandboxProvider() calls skip the retry loop during cooldown.
+    // All retries exhausted — set permanent failure state.
+    // Subsequent getSandboxProvider() calls will check circuitBreaker.canExecute()
+    // and throw immediately without re-entering the init loop.
     entry.available = false
     entry.healthy = false
     entry.initializing = false
     entry.initPromise = null
     entry.lastInitFailureTime = Date.now()
+    // Open the circuit breaker so future calls skip the init loop and throw
+    // immediately instead of retrying every INIT_FAILURE_COOLDOWN_MS.
+    if (entry.circuitBreaker) {
+      entry.circuitBreaker.recordFailure(new Error(lastError?.message || 'Init failed'));
+    }
 
     log.error(`Provider ${providerType} failed after ${MAX_RETRIES} attempts: ${lastError?.message} (cooldown: ${INIT_FAILURE_COOLDOWN_MS / 1000}s)`)
     throw new Error(

@@ -3,6 +3,11 @@
 // This file is server-only - do not import in Client Components
 import { createRequire } from 'node:module';
 import { createLogger } from '@/lib/utils/logger';
+// Pass-7 #107: tag schema-drift logs with the canonical `drift` detection
+// term so the meta-monitor can grep on a single token. The schema on disk
+// has drifted past the schema.sql in code (the underlying cause) which
+// is the same family of detection as SKILL.md mtime drift.
+import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
 
 const logger = createLogger('Database:Connection');
 const require = createRequire(import.meta.url);
@@ -1002,7 +1007,12 @@ function executeSchemaStatements(sql: string): void {
       // columns/tables into existence.
       if (/no such column/i.test(msg) || /no such table/i.test(msg)) {
         skipped++;
-        logger.warn(`[schema-init] Skipping statement (schema drift — migration will add): ${msg}`);
+        logger.warn(
+          withDetectionTerms(
+            `[schema-init] Skipping statement (schema drift — migration will add): ${msg}`,
+            DETECTION_TERMS.drift,
+          ),
+        );
         continue;
       }
       // SQLITE_BUSY is transient — let the caller's retry loop handle it.
@@ -1015,7 +1025,12 @@ function executeSchemaStatements(sql: string): void {
     }
   }
 
-  logger.info(`[schema-init] Executed ${created} statements, skipped ${skipped} (schema drift)`);
+  logger.info(
+    withDetectionTerms(
+      `[schema-init] Executed ${created} statements, skipped ${skipped} (schema drift)`,
+      DETECTION_TERMS.drift,
+    ),
+  );
 }
 
 /**
@@ -1605,3 +1620,35 @@ export const dbOps = new DatabaseOperations();
 // Database connections will be cleaned up automatically by the runtime
 
 export default getDatabase;
+
+/**
+ * Returns true if the database is available (better-sqlite3 can be loaded AND
+ * its native binding works). Use this to skip DB-dependent code paths when
+ * running in environments where the native module cannot be loaded
+ * (e.g., Edge Runtime, missing native deps, or a broken native binding).
+ *
+ * The result is cached at module level — the check instantiates an in-memory
+ * database to verify the native binding works, which is expensive to repeat.
+ *
+ * IMPORTANT: This check is more than just `require('better-sqlite3')` — the
+ * require can succeed even when the native binding is broken (the .node file
+ * is present in node_modules but cannot be loaded by Node.js). We must
+ * actually instantiate the database to catch native binding failures.
+ */
+export function isDatabaseAvailable(): boolean {
+  if (_dbAvailable !== null) return _dbAvailable;
+  try {
+    const Database = require('better-sqlite3');
+    const testDb = new Database(':memory:');
+    testDb.close();
+    _dbAvailable = true;
+    return true;
+  } catch {
+    _dbAvailable = false;
+    return false;
+  }
+}
+
+// Module-level cache for isDatabaseAvailable() to avoid repeated native-binding
+// instantiation on every call. null = not yet checked, true/false = cached result.
+let _dbAvailable: boolean | null = null;

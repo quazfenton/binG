@@ -17,6 +17,7 @@ import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
+import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
@@ -73,7 +74,7 @@ import {
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';    // [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
 // an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
-import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer } from './steer-service';
+import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer, InvalidModelError } from './steer-service';
 // Bug #40: per-session orchestration-fallback counter. Incremented in
 // tagResultDegraded so /api/health?detailed can surface the count.
 import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
@@ -153,6 +154,11 @@ import { mem0Add, isMem0Configured } from '@/lib/powers/mem0-power';
 // auto-inject context so all downstream mode handlers pick it up via the
 // same config._autoInjectContext mechanism.
 import { formatAvailableBinariesAsync } from '@/lib/bash/env-probe';
+// Pass-5 #62 (audit) — second half: inject the canonical VFS session-scope
+// path into the system prompt at request start so the LLM never has to
+// guess the scope. Returns null for plain anon ownerIds (no $ delimiter),
+// in which case the inject is silent.
+import { buildSessionScopeSteerPrompt } from './steer-service';
 // Pass-2 cross-cutting theme: record orchestration fallback events so the
 // degradation chain shows when the v1-api text-mode fallback fired. The
 // sessionId is passed through config.conversationId / config.userId / 'default'.
@@ -178,6 +184,43 @@ function _hasOpenCodeSDKPackageCheck(): boolean {
 const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
+
+// Bug #108 (Pass-7 audit) — emit a structured env-var fingerprint at
+// module load so operators can verify which feature flags / routing
+// overrides are active in this process. Pass-7 noted that "env-var /
+// feature-flag mentions" were absent from logs entirely — a `v1-api`
+// selection in production was ambiguous because there was no single log
+// line listing the routing-relevant env vars. Tagged at INFO so it shows
+// up in every [INFO]-level dashboard filter. The list is intentionally
+// narrow (routing-affecting vars only) to avoid noise — auth keys are
+// not listed (those are secrets and go through their own audit).
+const _envFingerprint: Record<string, string> = {
+  AGENT_EXECUTION_ENGINE: process.env.AGENT_EXECUTION_ENGINE || 'auto (default)',
+  DISABLE_V2_MODE: process.env.DISABLE_V2_MODE || '(default)',
+  DEFAULT_MODEL: process.env.DEFAULT_MODEL || '(default)',
+  LLM_PROVIDER: process.env.LLM_PROVIDER || '(default)',
+  AGENT_CLASSIFIER_RICH_TOOLING_THRESHOLD:
+    process.env.AGENT_CLASSIFIER_RICH_TOOLING_THRESHOLD || '0.6 (default)',
+  AGENT_CLASSIFIER_AGENTIC_VERB_THRESHOLD:
+    process.env.AGENT_CLASSIFIER_AGENTIC_VERB_THRESHOLD || '0.25 (default)',
+  INCOMPLETE_RESPONSE_CONFIDENCE_THRESHOLD:
+    process.env.INCOMPLETE_RESPONSE_CONFIDENCE_THRESHOLD || '0.4 (default)',
+  LLM_STREAM_IDLE_TIMEOUT_MS: process.env.LLM_STREAM_IDLE_TIMEOUT_MS || '75000 (default)',
+  LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS: process.env.LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS || '30000 (default)',
+  LLM_STREAM_STALL_STEER_MS: process.env.LLM_STREAM_STALL_STEER_MS || '30000 (default)',
+  VFS_CONCURRENT_MODIFICATION_MULTIPLIER:
+    process.env.VFS_CONCURRENT_MODIFICATION_MULTIPLIER || '2 (default)',
+  VFS_SNAPSHOT_STALE_THRESHOLD_MS: process.env.VFS_SNAPSHOT_STALE_THRESHOLD_MS || '60000 (default)',
+  MEMORY_SOFT_THROTTLE_MB: process.env.MEMORY_SOFT_THROTTLE_MB || '1024 (default)',
+  MEMORY_CRITICAL_MB: process.env.MEMORY_CRITICAL_MB || '1843 (default)',
+  MEMORY_GROWTH_REPORT_MB: process.env.MEMORY_GROWTH_REPORT_MB || '8 (default)',
+  MEMORY_SHRINK_REPORT_MB: process.env.MEMORY_SHRINK_REPORT_MB || '4 (default)',
+  ENABLE_STATEFUL_AGENT: process.env.ENABLE_STATEFUL_AGENT || '(default; enabled)',
+  ENABLE_MASTRA_WORKFLOWS: process.env.ENABLE_MASTRA_WORKFLOWS || '(default; enabled)',
+  OPENCODE_SDK_URL: process.env.OPENCODE_SDK_URL || '(default; uses OPENCODE_HOSTNAME:OPENCODE_PORT)',
+  NODE_ENV: process.env.NODE_ENV || '(default)',
+};
+log.info('[UnifiedAgent] env-var fingerprint (routing-affecting)', _envFingerprint);
 
 // SelfHeal carry-forward cache: stores the provider+model that succeeded
 // on the most recent attempt so SelfHeal retries can skip dead providers.
@@ -407,6 +450,50 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
  * fallback iterations. Resets per-request.
  */
 const _sessionPermanentFailures = new Set<string>();
+
+/**
+ * Bug #116/#90: Process-level circuit breaker for transient failures.
+ * A provider that hits N transient failures within a TTL window gets
+ * temporarily blocked (not permanently). This prevents the "sticky
+ * permanent failure" bug where a single transient error disables a
+ * provider for the entire process lifetime.
+ */
+const TRANSIENT_CIRCUIT_BREAKER_TTL_MS = 5 * 60 * 1000;
+const TRANSIENT_CIRCUIT_BREAKER_THRESHOLD = 5;
+const _transientCircuitBreaker = new Map<string, { count: number; firstAt: number; lastAt: number }>();
+
+function recordTransientFailure(providerName: string): void {
+  const key = providerName.toLowerCase();
+  const now = Date.now();
+  let entry = _transientCircuitBreaker.get(key);
+  if (!entry || now - entry.firstAt > TRANSIENT_CIRCUIT_BREAKER_TTL_MS) {
+    entry = { count: 1, firstAt: now, lastAt: now };
+    _transientCircuitBreaker.set(key, entry);
+    return;
+  }
+  entry.count++;
+  entry.lastAt = now;
+}
+
+function isProviderCircuitBroken(providerName: string): boolean {
+  const key = providerName.toLowerCase();
+  const entry = _transientCircuitBreaker.get(key);
+  if (!entry) return false;
+  const now = Date.now();
+  if (now - entry.firstAt > TRANSIENT_CIRCUIT_BREAKER_TTL_MS) {
+    _transientCircuitBreaker.delete(key);
+    return false;
+  }
+  return entry.count >= TRANSIENT_CIRCUIT_BREAKER_THRESHOLD;
+}
+
+function resetTransientCircuitBreaker(providerName: string): void {
+  _transientCircuitBreaker.delete(providerName.toLowerCase());
+}
+
+function resetAllTransientCircuitBreakers(): void {
+  _transientCircuitBreaker.clear();
+}
 
 /** Reset permanent failure tracking at the start of each request. */
 function resetSessionPermanentFailures(): void {
@@ -699,7 +786,18 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   const engine = (process.env.AGENT_EXECUTION_ENGINE || 'auto').split('#')[0].trim();
 
   if (engine === 'v1-api') {
-    log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path');
+    // Bug #98 (Pass-7 audit) — include `engineSource` in the log so
+    // operators can distinguish an explicit user/admin override from a
+    // router/fallback-driven v1-api selection. The log line is the
+    // single source of truth for "why are we on v1-api right now?";
+    // without the source tag, a `v1-api` selection in production logs
+    // is ambiguous and the operator has to cross-reference env vars +
+    // classifier output + fallback chain. Tagged at info to match the
+    // other engine-override log lines in this block.
+    log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path', {
+      engineSource: 'env-override',
+      envVar: process.env.AGENT_EXECUTION_ENGINE,
+    });
     return { mode: 'v1-api' as const };
   }
   if (engine === 'v1-agent-loop') {
@@ -1156,6 +1254,64 @@ export async function processUnifiedAgentRequest(
     autoInjectContext = buildAutoInjectUserMessage(userMsg) || '';
   } catch (err: any) {
     log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
+  }
+
+  // Bug #67 (Pass-5 audit) — qd/lite pre-validation. The audit observed
+  // recurring 400 errors with `model_config for "lite" not yet known`
+  // caused by the LLM emitting a bare model name. Pre-validate the model
+  // against the ninerouter registry BEFORE calling the provider so the
+  // chat route can surface a typed 400 (with available models) and the
+  // LLM can self-correct on the next turn.
+  //
+  // Throws `InvalidModelError` (a typed Error class from steer-service.ts)
+  // — the chat route's catch distinguishes via `instanceof` and returns
+  // HTTP 400 with `availableModels`. Without this, the route's generic
+  // catch returns 500 + the raw error message, which contradicts the
+  // audit's "typed 400 with available models" ask.
+  const requestedModel = (config.model || '').toString().toLowerCase();
+  const requestedProvider = (config.provider || '').toString();
+  if (requestedModel === 'lite' || requestedModel === 'qd/lite' || requestedModel === 'qd_lite' || requestedModel === 'qd') {
+    const liteAvailable = ['qd/auto', 'qd/ultimate', 'qd/performance', 'qd/lite', 'qd/dmodel', 'qd/gm51model', 'qd/mmodel', 'qd/efficient'];
+    log.warn('[Pre-validate] bare qd/lite model name rejected (Bug #67)', {
+      requestedModel,
+      requestedProvider,
+      availableModels: liteAvailable,
+    });
+    try {
+      // Record the rejection so /api/health?detailed can quantify how
+      // often the LLM emits bare model names. fire-and-forget; never throws.
+      const { recordFallbackChainAttempt } = await import('@/lib/chat/chat-metrics');
+      recordFallbackChainAttempt({
+        provider: requestedProvider || 'ninerouter',
+        model: requestedModel,
+        outcome: 'failure',
+        reason: 'invalid_model_name',
+      });
+    } catch { /* best-effort */ }
+    throw new InvalidModelError({
+      model: config.model || requestedModel,
+      provider: requestedProvider || 'ninerouter',
+      availableModels: liteAvailable,
+    });
+  }
+
+  // Pass-5 #62 — inject the canonical session-scope path so the LLM
+  // never has to guess. The hint tells the model the exact 'workspace/sessions/<id>/'
+  // prefix it should keep paths UNDER (without including the prefix in its
+  // own path arguments — the router prepends it). The helper returns null
+  // for plain anon ownerIds (no $ delimiter) and for empty/missing ownerId,
+  // so non-session owners stay silent without a try/catch.
+  const ownerId = ((config as any).ownerId as string | undefined) ?? '';
+  const sessionScopeHint = ownerId
+    ? buildSessionScopeSteerPrompt({
+        ownerId,
+        scopePath: (config as any).scopePath,
+      })
+    : null;
+  if (sessionScopeHint) {
+    autoInjectContext = autoInjectContext
+      ? `${autoInjectContext}\n\n${sessionScopeHint}`
+      : sessionScopeHint;
   }
 
   // Bug #39: pre-flight env probe (which npx python3 node npm pnpm ...). Run
@@ -3355,6 +3511,13 @@ async function runV1ApiWithTools(
       log.debug("[V1-API-WITH-TOOLS] │ provider: " + providerName + " skipped — permanently failed earlier in this request");
       continue;
     }
+
+    // Bug #116/#90: Skip providers with an open transient circuit breaker.
+    // Unlike permanent failures, these auto-recover after the TTL window expires.
+    if (isProviderCircuitBroken(providerName)) {
+      log.debug("[V1-API-WITH-TOOLS] │ provider: " + providerName + " skipped — transient circuit breaker open");
+      continue;
+    }
     // FIX: Skip models that are rate-limited per model-ranker
     if (modelRankerFns?.isRateLimited(providerName, modelForProvider)) {
       log.warn('[V1-API-WITH-TOOLS] ┌─ RATE LIMITED ────────────────');
@@ -3432,11 +3595,17 @@ async function runV1ApiWithTools(
             config.onToolExecution?.(toolDef.name, args, toolResult);
 
             // Track for no-progress loop detection
-            const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success);
+            // Bug #111/#84: Pass the real error string so loop-abort steer has
+            // concrete failure history instead of empty/placeholder entries.
+            const _toolError: unknown = toolResult.error;
+            const toolErrorMsg = typeof _toolError === 'string'
+              ? _toolError
+              : (typeof _toolError === 'object' && _toolError !== null && 'message' in _toolError ? String((_toolError as { message: unknown }).message) : undefined);
+            const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success, toolErrorMsg);
             if (loopMsg) {
               log.warn(`[V1-API-WITH-TOOLS] Loop detected: ${loopMsg}`);
               // Bug #41: emit categorized loop-abort steer so the LLM knows WHY
-              // the loop was triggered (binary_missing, wrong_tool_name, timeout, unknown)
+              // the loop was triggered (binary_missing, tool_failing, mixed, unknown)
               // and gets a concrete suggestion for what to do next.
               const abortSteer = wireLoopAbortSteer({
                 consecutive: loopState.consecutiveFailures,
@@ -4137,8 +4306,8 @@ Based on what you have learned, continue working on the original task. Take the 
           // Give specific correction prompt based on what detectIncompleteResponse found.
           // NOTE: injectedFeedback sections are empty here (no entries when anyToolFailed is false),
           // but included for future-proofing when both conditions may coexist.
-          feedbackMsg = `[INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
-          userPrompt = 'Please complete your previous response. Start from where you left off or restate your answer clearly.';
+          feedbackMsg = `[STEER] [INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour previous response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
+          userPrompt = 'Continue from where you left off. Complete the remaining work.';
         } else if (successfulToolsButSilent) {
           // Tools ran successfully but the model produced zero follow-up text.
           // Give it the executed tool list so it can summarize for the user.
@@ -4283,6 +4452,108 @@ Based on what you have learned, continue working on the original task. Take the 
         } catch { /* best effort */ }
       }
 
+      // Bug #1 fix: Check shouldAutoContinue for v1-api-with-tools path
+      // This handles: roleSelection.continue=true, empty_tool_args, single_step_read
+      // Previously this only fired in chat/route.ts SSE streaming path.
+      const continuationDecision = shouldAutoContinue({
+        routing: routingForClient ? {
+          continue: routingForClient.continue,
+          stepReprompt: routingForClient.stepReprompt,
+          primaryRole: routingForClient.primaryRole,
+          estimatedSteps: routingForClient.estimatedSteps,
+          planSteps: routingForClient.planSteps,
+        } : undefined,
+        steps: steps.map(s => ({ toolName: s.toolName, args: s.args })),
+        responseText: finalResponse,
+        continuationsSoFar: ((config as any)._autoContinueCount as number) || 0,
+        maxContinuations: 3,
+      });
+
+      if (continuationDecision.continue && continuationDecision.continuationPrompt) {
+        log.info('[V1-API-WITH-TOOLS] shouldAutoContinue triggered', {
+          reason: continuationDecision.reason,
+          continuationsSoFar: continuationDecision.continuationsSoFar,
+        });
+
+        const contMessages = [
+          ...llmMessages,
+          { role: 'assistant', content: finalResponse },
+          { role: 'user', content: continuationDecision.continuationPrompt },
+        ];
+
+        (config as any)._autoContinueCount = continuationDecision.continuationsSoFar;
+
+        try {
+          const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+          let contContent = '';
+          const contToolInvocations: typeof toolInvocations = [];
+
+          for await (const chunk of streamWithConcurrentFallback({
+            provider: providerName,
+            model: modelForProvider,
+            messages: contMessages as any,
+            temperature: config.temperature || 0.7,
+            maxTokens: config.maxTokens || 65536,
+            maxSteps: config.maxSteps || 15,
+            tools: aiSdkTools,
+            toolCallStreaming: true,
+          })) {
+            if (chunk.content) {
+              contContent += chunk.content;
+              config.onStreamChunk?.(chunk.content);
+            }
+            if (chunk.toolInvocations) {
+              for (const inv of chunk.toolInvocations) {
+                if (inv.state !== 'result') continue;
+                contToolInvocations.push({
+                  toolCallId: inv.toolCallId,
+                  toolName: inv.toolName,
+                  args: (inv.args as Record<string, any>) || {},
+                  result: inv.result ?? { success: false, error: 'Tool result was undefined' },
+                });
+              }
+            }
+          }
+
+          if (contContent.trim() || contToolInvocations.length > 0) {
+            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced results', {
+              contentLength: contContent.length,
+              toolCount: contToolInvocations.length,
+            });
+
+            const allSteps = [
+              ...steps,
+              ...contToolInvocations.map(inv => ({
+                toolName: inv.toolName,
+                args: inv.args,
+                result: inv.result,
+              })),
+            ];
+
+            return {
+              success: true,
+              response: (finalResponse + '\n\n' + contContent).trim(),
+              steps: allSteps,
+              totalSteps: allSteps.length,
+              mode: 'v1-api',
+              metadata: {
+                provider: providerName,
+                model: modelForProvider,
+                duration: Date.now() - startTime,
+                toolInvocations: [...toolInvocations, ...contToolInvocations],
+                autoContinued: true,
+                autoContinueReason: continuationDecision.reason,
+                ...(routingForClient ? { routing: routingForClient } : {}),
+              },
+            };
+          }
+        } catch (contErr: any) {
+          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning original response', {
+            error: contErr?.message,
+          });
+        }
+      }
+
       return {
         success: true,
         response: finalResponse,
@@ -4353,6 +4624,21 @@ Based on what you have learned, continue working on the original task. Take the 
             log.error("[V1-API-WITH-TOOLS] │ remaining: " + (uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).filter(p => !isProviderPermanentlyFailed(p)).join(", ") || "NONE"));
             log.error("[V1-API-WITH-TOOLS] └───────────────────────────────");
             continue;
+          }
+
+          // Bug #116/#90: Record transient/rate-limit failures in the process-level
+          // circuit breaker. After N transient failures within a TTL window, the
+          // provider is temporarily skipped (not permanently banned). This prevents
+          // the "sticky permanent failure" pattern where a single transient outage
+          // disables a provider for the rest of the process lifetime.
+          if (errorClass === "transient" || errorClass === "rate_limit") {
+            recordTransientFailure(providerName);
+            if (isProviderCircuitBroken(providerName)) {
+              log.warn("[V1-API-WITH-TOOLS] Circuit breaker OPEN for provider: " + providerName + " — temporarily skipping (TTL " + TRANSIENT_CIRCUIT_BREAKER_TTL_MS / 1000 + "s)", {
+                transientFailures: _transientCircuitBreaker.get(providerName.toLowerCase()),
+              });
+              continue;
+            }
           }
           
           // "Controller is already closed" = stream controller dead (idle timeout,
@@ -5071,11 +5357,21 @@ async function runV1ApiCompletion(
         provider: providerName,
         model: modelForProvider,
         messages: messages as import("../providers/llm-providers").LLMMessage[],
+        // runV1ApiCompletion is only reached when executeTool is unavailable,
+        // after runV1Api() has already folded system messages into
+        // config.systemPrompt. Preserve the resolved system prompt here so
+        // the simple/fallback completion path keeps its context.
+        ...(config.systemPrompt ? { system: config.systemPrompt } : {}),
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 4096,
         maxRetries: 0,
         maxSteps: 12,  // Allow tool execution
-        tools: (config.tools?.length ? config.tools : undefined) as Record<string, any> | undefined,
+        // Tool-free completion branch: this path cannot run tools (no
+        // executeTool handler in scope), so passing config.tools would
+        // invite the model to call tool functions that have no runnable
+        // handler. Force tools to undefined so the LLM completes in
+        // text mode only.
+        tools: undefined,
       };
 
       if (config.onStreamChunk) {

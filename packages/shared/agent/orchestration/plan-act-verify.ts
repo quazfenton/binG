@@ -12,7 +12,7 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
+import { generateText, stepCountIs, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { normalizeSchemaForAI } from '../tool-schema';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
@@ -42,6 +42,21 @@ export function isModelSchemaError(error: unknown): boolean {
     message.includes('ModelMessage[]') ||
     message.includes('messages do not match')
   );
+}
+
+/**
+ * Check if an error is an AI SDK "Invalid JSON response" error.
+ * This occurs when the provider returns a non-JSON response (HTML error page,
+ * empty body, malformed payload) instead of valid JSON. These errors are
+ * thrown by the AI SDK's provider layer (inside generateText) and are NOT
+ * schema validation errors, but retrying + plain-text fallback is still
+ * the correct recovery path.
+ */
+function isInvalidJsonError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = (error as any).message;
+  if (typeof message !== 'string') return false;
+  return message.includes('Invalid JSON');
 }
 
 /**
@@ -576,14 +591,6 @@ export class PlanActVerifyOrchestrator {
         this.sdkTools[toolName] = aiTool({
           description: toolDef.description || `Execute ${toolName}`,
           inputSchema: normalizedSchema,
-          execute: async (args: Record<string, unknown>) => {
-            try {
-              return await config.executeTool(toolName, args);
-            } catch (error: any) {
-              log.error(`Tool ${toolName} execution failed`, { error: error.message });
-              throw error;
-            }
-          },
         } as any);
       }
 
@@ -927,12 +934,11 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
             '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
             'Use these tools to inspect and verify workspace health before and after making changes.',
-          // Note: AI SDK v6 removed `maxSteps` from generateText options (it is
-          // ignored at runtime and fails the type check). Multi-step execution
-          // is handled by this orchestrator's own plan-step loop, so a single
-          // generation per call is intentional here.
           maxOutputTokens: 4000,
           temperature: 0.2,
+          // Allow multiple tool calls per LLM call so the orchestrator can
+          // process a batch of calls in one iteration instead of one-at-a-time.
+          stopWhen: stepCountIs(this.validatedConfig.maxIterations),
         });
 
         // Extract tool calls from the result
@@ -956,7 +962,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         // and no tool_calls, or a system-role message appearing AFTER an
         // assistant turn (which newer providers reject). Re-sanitize the
         // history (idempotent for already-clean messages) and retry once.
-        if (isModelSchemaError(error) && attempt < MAX_ATTEMPTS - 1) {
+        if ((isModelSchemaError(error) || isInvalidJsonError(error)) && attempt < MAX_ATTEMPTS - 1) {
           log.warn(
             'callLLM: schema validation error, sanitizing history and retrying',
             { provider, model, error: error.message },
@@ -976,9 +982,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     // system prompt and the user's prompt as a bare message. This
     // sacrifices tool-calling ability but ensures the user gets a
     // response instead of a crash.
-    if (isModelSchemaError(lastError)) {
+    if (isModelSchemaError(lastError) || isInvalidJsonError(lastError)) {
       log.warn(
-        'callLLM: both retries failed with schema errors, falling back to plain-text call',
+        'callLLM: both retries failed with schema/JSON errors, falling back to plain-text call',
         { provider, model, error: lastError?.message },
       );
 

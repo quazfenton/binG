@@ -1,5 +1,5 @@
 declare module 'fs-extra' {
-  import type { Dirent, PathLike, Stats, StatOptions, ReadableStream } from 'fs';
+  import type { Dirent, PathLike, Stats, StatOptions } from 'fs';
   export * from 'fs';
   export function readFile(path: PathLike, encoding: string): Promise<string>;
   export function writeFile(path: PathLike, data: string, encoding: string): Promise<void>;

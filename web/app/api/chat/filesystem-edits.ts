@@ -26,7 +26,7 @@ const PATH_HAS_COLON_RE = /:/;
 const PATH_CSS_VALUE_RE = /[\/\\](?:\d*\.\d+|\d+[a-z%]+)$/i;
 const PATH_SCSS_VAR_RE = /[\/\\]\$/;
 
-interface FilesystemEditSummary {
+export interface FilesystemEditSummary {
   path: string;
   operation: 'write' | 'patch' | 'delete';
   version: number;

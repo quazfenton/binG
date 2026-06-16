@@ -42,6 +42,7 @@ import {
   SESSION_SCOPED_PATH_REGEX,
   isSessionScopedPath,
   assertScopePathMatchesSessionId,
+  reconcileScopePathWithSessionId,
   SessionPathMismatchError,
   invalidateAllScopeCachesForRename,
 } from '../session-path-guard';
@@ -385,6 +386,158 @@ describe('invalidateAllScopeCachesForRename', () => {
   });
 });
 
+
+describe('reconcileScopePathWithSessionId (Bug #72: fall-back recovery path)', () => {
+  // Helper: re-derive the private `reconstructOwnerIdWithSession` behavior
+  // by inspecting the returned ownerId. The function replaces the suffix
+  // after the last `$` with the new session id.
+
+  it('returns { ownerId, recovered: false } when scopePath is undefined', () => {
+    const result = reconcileScopePathWithSessionId('1$001', undefined);
+    expect(result).toEqual({ ownerId: '1$001', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } when scopePath is empty string', () => {
+    const result = reconcileScopePathWithSessionId('1$001', '');
+    expect(result).toEqual({ ownerId: '1$001', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } for root scope (scopePath === "workspace")', () => {
+    const result = reconcileScopePathWithSessionId('1$001', 'workspace');
+    expect(result).toEqual({ ownerId: '1$001', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } for normalized root scope (trailing slash, leading slash)', () => {
+    // normalizeScopePath should turn these into "workspace" and short-circuit.
+    const result = reconcileScopePathWithSessionId('1$001', '/workspace/');
+    expect(result).toEqual({ ownerId: '1$001', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } when scopePath and ownerId sessions MATCH (simple composite)', () => {
+    // No drift → no recovery needed.
+    const result = reconcileScopePathWithSessionId('1$001', 'workspace/sessions/001');
+    expect(result).toEqual({ ownerId: '1$001', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } when scopePath and ownerId sessions MATCH (anon composite)', () => {
+    const result = reconcileScopePathWithSessionId(
+      'anon:1781140394202_dfe2a8d006d3d4db22$001',
+      'workspace/sessions/001',
+    );
+    expect(result).toEqual({
+      ownerId: 'anon:1781140394202_dfe2a8d006d3d4db22$001',
+      recovered: false,
+    });
+  });
+
+  it('RECONSTRUCTS ownerId via $-split when session ids MISMATCH (simple composite)', () => {
+    // ownerId `1$001` → session `001`, scopePath points at `ai_terminal`.
+    // Recovery should replace the session segment: `1$001` → `1$ai_terminal`.
+    const result = reconcileScopePathWithSessionId('1$001', 'workspace/sessions/ai_terminal');
+    expect(result).toEqual({ ownerId: '1$ai_terminal', recovered: true });
+  });
+
+  it('RECONSTRUCTS ownerId via $-split when session ids MISMATCH (anon composite)', () => {
+    // ownerId `anon:USERID$001` → session `001`, scopePath points at `ai_terminal`.
+    // Recovery should keep the prefix and only swap the session segment.
+    const result = reconcileScopePathWithSessionId(
+      'anon:1781140394202_dfe2a8d006d3d4db22$001',
+      'workspace/sessions/ai_terminal',
+    );
+    expect(result).toEqual({
+      ownerId: 'anon:1781140394202_dfe2a8d006d3d4db22$ai_terminal',
+      recovered: true,
+    });
+  });
+
+  it('uses the LAST `$` as the session-segment delimiter (multiple `$` in ownerId)', () => {
+    // The reconstruction is anchored on the LAST `$` so that ownerIds
+    // containing `$` in their user-id portion (e.g. composite ids with
+    // a `$`-bearing slug) are split correctly.
+    const result = reconcileScopePathWithSessionId(
+      'prefix$middle$001',
+      'workspace/sessions/alpha',
+    );
+    expect(result).toEqual({ ownerId: 'prefix$middle$alpha', recovered: true });
+  });
+
+  it('returns { ownerId, recovered: false } when ownerId has NO `$` (plain anon:USERID)', () => {
+    // Plain anon:USERID carries no session info → the guard cannot recover
+    // (reconstructOwnerIdWithSession would return the ownerId unchanged).
+    // Behavior is identical to assertScopePathMatchesSessionId in this case.
+    const result = reconcileScopePathWithSessionId(
+      'anon:1781140394202_dfe2a8d006d3d4db22',
+      'workspace/sessions/001',
+    );
+    expect(result).toEqual({
+      ownerId: 'anon:1781140394202_dfe2a8d006d3d4db22',
+      recovered: false,
+    });
+  });
+
+  it('returns { ownerId, recovered: false } when ownerId is empty string', () => {
+    const result = reconcileScopePathWithSessionId('', 'workspace/sessions/001');
+    expect(result).toEqual({ ownerId: '', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } for bare ownerIds like "default" (no $)', () => {
+    const result = reconcileScopePathWithSessionId('default', 'workspace/sessions/001');
+    expect(result).toEqual({ ownerId: 'default', recovered: false });
+  });
+
+  it('returns { ownerId, recovered: false } when scopePath has NO session segment (e.g. workspace/src/app.ts)', () => {
+    // extractSessionIdFromPath returns null for non-session-scoped paths
+    // → the guard cannot derive a session to recover to.
+    const result = reconcileScopePathWithSessionId('1$001', 'workspace/src/app.ts');
+    expect(result).toEqual({ ownerId: '1$001', recovered: false });
+  });
+
+  it('normalizes scopePath before comparison (trailing slash, leading slash, backslashes)', () => {
+    // /workspace/sessions/ai_terminal/ should normalize to
+    // workspace/sessions/ai_terminal → mismatch detected → recovery.
+    const result = reconcileScopePathWithSessionId('1$001', '/workspace/sessions/ai_terminal/');
+    expect(result).toEqual({ ownerId: '1$ai_terminal', recovered: true });
+  });
+
+  it('recovers correctly when scopePath session is a sub-path (e.g. workspace/sessions/alpha/nested/file.txt)', () => {
+    // The session id is the FIRST segment after `workspace/sessions/`,
+    // not the full path. Sub-paths should still recover.
+    const result = reconcileScopePathWithSessionId(
+      '1$001',
+      'workspace/sessions/alpha/nested/deep/file.txt',
+    );
+    expect(result).toEqual({ ownerId: '1$alpha', recovered: true });
+  });
+
+  it('does not throw and returns a string ownerId for the "no recovery possible" cases', () => {
+    // Belt-and-suspenders: all the no-op cases must return a string ownerId
+    // and recovered: false. Verify the shape explicitly.
+    const cases: Array<[string, string | undefined]> = [
+      ['1$001', undefined],
+      ['1$001', ''],
+      ['1$001', 'workspace'],
+      ['', 'workspace/sessions/001'],
+      ['default', 'workspace/sessions/001'],
+      ['1$001', 'workspace/src/app.ts'],
+    ];
+    for (const [ownerId, scopePath] of cases) {
+      const result = reconcileScopePathWithSessionId(ownerId, scopePath);
+      expect(result.recovered).toBe(false);
+      expect(typeof result.ownerId).toBe('string');
+      expect(result.ownerId).toBe(ownerId);
+    }
+  });
+
+  // NOTE: Logger-side-effect tests were intentionally omitted. The
+  // `vi.mock('@/lib/utils/logger')` factory returns a NEW spy object on
+  // every call, so a spy captured inside the test would be a *different*
+  // instance from the one the production code uses at module load. The
+  // recovery behavior is fully covered by the 16 behavioral tests above
+  // (returned `{ ownerId, recovered }` shape, $-split reconstruction,
+  // and edge-case no-ops). To assert on the warn payload, export the
+  // logger from `session-path-guard.ts` or switch to a hoisted mock
+  // factory that shares spy instances across calls.
+});
 
 describe('resolveScopePathFromOwnerId', () => {
   it('returns the fallback unchanged for plain anon:USERID ownerIds (no $) — USERID is NOT a sessionId', () => {

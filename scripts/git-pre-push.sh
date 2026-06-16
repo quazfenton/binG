@@ -28,15 +28,21 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     continue
   fi
 
+  # Use mapfile + quoted arrays to handle filenames with spaces/special
+  # chars safely. `echo $prod_files | xargs grep` is unsafe because xargs
+  # word-splits on whitespace and chokes on single-quoted names.
+  mapfile -t changed_files_arr <<< "$changed_files"
+
   # ── Layer 1: Truncation / corruption markers ──────────────────────────
   # Explicit markers that LLMs emit when they clip output or leave
   # placeholder artifacts. Skip test files — they may legitimately assert
   # truncation behavior (e.g. `expect(truncate(s, 100)).toBe('...')`).
   prod_files=$(echo "$changed_files" | grep -vE '(^|/)(__tests__/|\.test\.|\.spec\.)' || :)
   if [ -n "$prod_files" ]; then
-    marker_hits=$(echo "$prod_files" | xargs grep -nE \
-      'TODO_RESTORE|CUT_HERE|\[REST_OF_FILE\]|\[CODE_CONTINUES\]|\.\.\\. remainder omitted|\.\.\. \d+ more lines?\.\.\.|\[OUTPUT_TRUNCATED\]|\[FILE_TRUNCATED\]|\[CONTENT_SKIPPED\]' \
-      2>/dev/null || :)
+    mapfile -t prod_files_arr <<< "$prod_files"
+    marker_hits=$(grep -nE \
+      'TODO_RESTORE|CUT_HERE|\[REST_OF_FILE\]|\[CODE_CONTINUES\]|\.\.\\ remainder omitted|\.\.\. \d+ more lines?\.\.\.|\[OUTPUT_TRUNCATED\]|\[FILE_TRUNCATED\]|\[CONTENT_SKIPPED\]' \
+      "${prod_files_arr[@]}" 2>/dev/null || :)
     if [ -n "$marker_hits" ]; then
       echo "❌ Layer 1 — Truncation/corruption markers found:"
       echo "$marker_hits"
@@ -49,9 +55,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # preserving real code. NOTE: `__PLACEHOLDER__` (with double underscores)
   # is the LLM artifact marker. Single-word `PLACEHOLDER` in legitimate
   # variable names like `PLACEHOLDER_REGEX` is allowed.
-  artifact_hits=$(echo "$changed_files" | xargs grep -nE \
+  # Layer 2 scans ALL changed files (including test files) because test
+  # files should not contain unreplaced placeholder strings either.
+  artifact_hits=$(grep -nE \
     'YOUR_API_KEY_HERE|INSERT_CODE_HERE|__PLACEHOLDER__|FIXME_AUTO|REPLACE_WITH|\[IMPLEMENTATION_DETAILS\]|\[ADD YOUR|\[FILL IN\]' \
-    2>/dev/null || :)
+    "${changed_files_arr[@]}" 2>/dev/null || :)
   if [ -n "$artifact_hits" ]; then
     echo "⚠️  Layer 2 — AI artifact/placeholder patterns found:"
     echo "$artifact_hits"
@@ -73,7 +81,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   # ── Layer 4: Accidental full-file overwrite detection ─────────────────
   # If a file went from >200 lines to <20 lines it was likely nuked.
-  for f in $changed_files; do
+  # Iterate over the quoted array (NOT `for f in $changed_files`) so
+  # filenames with spaces don't get silently split. Layer 4 scans ALL
+  # changed files (including test files) because accidentally nuked test
+  # files are still a regression.
+  for f in "${changed_files_arr[@]}"; do
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
       base_ref="${local_sha}^"
     else

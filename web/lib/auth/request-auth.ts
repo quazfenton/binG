@@ -68,34 +68,35 @@ export async function resolveRequestAuth(
   // SECURITY: Only trust HttpOnly cookie for anonymous identity, NOT the client-controlled header
   // The header was previously used but allowed IDOR attacks - now we only use the cookie
   const anonId = req.cookies.get('anon-session-id')?.value || ''
+  // Include JWT token cookies so the cache key changes AFTER login.
+  // Without this, an anonymous request's cached result persists across login
+  // because the cache key (auth:::<anonId>) doesn't reflect the new JWT cookie.
+  const tokenCookie = req.cookies.get('token')?.value || req.cookies.get('auth-token')?.value || ''
 
   // Create unique cache key from all auth factors
-  const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}`;
+  const cacheKey = `auth:${authHeader}:${sessionId}:${anonId}:${tokenCookie}`;
 
   // Check cache first - but ALWAYS re-validate for security
-  const cached = authCache.get(cacheKey);
+  // Skip the cache entirely when allowAnonymous is false AND the cache key
+  // lacks a token cookie — this prevents returning a stale anonymous result
+  // after the user has logged in but their JWT cookie expired.
+  const shouldBypassCache = !allowAnonymous && !tokenCookie && !!anonId;
+  let cached = shouldBypassCache ? undefined : authCache.get(cacheKey);
   if (cached) {
-    // SECURITY: Re-validate cached results to prevent bypassing expiration checks
-    
     // For JWT auth, NEVER cache success - always re-verify to check blacklist
     if (cached.result.source === 'jwt' && cached.result.userId) {
-      // Remove from cache - JWT must always be re-verified
       authCache.delete(cacheKey);
     }
     
     // For session auth, re-check expiration using stored metadata
-    if (cached.result.source === 'session' && cached.result.userId) {
+    else if (cached.result.source === 'session' && cached.result.userId) {
       if (cached.sessionExpiresAt) {
-        // Check if session has expired since caching
         if (Date.now() >= cached.sessionExpiresAt) {
-          // Session expired, remove from cache and re-validate
           authCache.delete(cacheKey);
         } else {
-          // Session still valid, return cached result
           return cached.result;
         }
       } else if (sessionId) {
-        // No expiration metadata, re-validate session
         const sessionAuth = await authService.validateSession(sessionId);
         if (!sessionAuth.success) {
           authCache.delete(cacheKey);
@@ -107,13 +108,17 @@ export async function resolveRequestAuth(
       }
     }
     
-    // For anonymous auth, just return (no expiration to check)
-    if (cached.result.source === 'anonymous') {
-      return cached.result;
+    // For anonymous auth, only return if anonymous is still allowed
+    else if (cached.result.source === 'anonymous') {
+      if (!allowAnonymous) {
+        authCache.delete(cacheKey);
+      } else {
+        return cached.result;
+      }
     }
     
-    // For failed auth, return cached failure (short TTL prevents issues)
-    if (!cached.result.success) {
+    // For failed auth, return cached failure
+    else if (!cached.result.success) {
       return cached.result;
     }
   }

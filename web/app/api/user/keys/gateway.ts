@@ -4,17 +4,20 @@ import { NextResponse } from 'next/server';
 import { initializeDatabase, BetterSqlite3Database } from '@/lib/database/db';
 import jwt from 'jsonwebtoken';
 import { encryptSecret, decryptSecret, isEncryptedFormat } from '@/lib/utils/crypto';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('UserKeys');
 
 // SECURITY: Fail-closed - require JWT_SECRET to be set
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
-  console.error('CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.');
+  log.error('CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.');
   throw new Error('JWT_SECRET is required in production. Set this environment variable before deploying.');
 }
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 if (!ENCRYPTION_KEY && process.env.NODE_ENV === 'production') {
-  console.warn('WARNING: ENCRYPTION_KEY not set in production. API keys will be stored unencrypted.');
+  log.warn('WARNING: ENCRYPTION_KEY not set in production. API keys will be stored unencrypted.');
 }
 
 // Helper to verify JWT token
@@ -93,7 +96,7 @@ export async function GET(req: Request) {
         try {
           decryptedKey = decryptSecret(row.api_key, ENCRYPTION_KEY);
         } catch (decryptError) {
-          console.error('Failed to decrypt API key:', decryptError);
+          log.error('Failed to decrypt API key:', decryptError);
           decryptedKey = '***DECRYPTION_ERROR***';
         }
       } else {
@@ -104,7 +107,7 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ apiKeys });
   } catch (error) {
-    console.error('Get API keys API error:', error);
+    log.error('Get API keys API error:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

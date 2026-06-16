@@ -7,6 +7,29 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('TerminalAPI');
 
+// Track per-user sandbox creation failures to prevent infinite retry loops.
+// When sandbox creation fails for a user, subsequent attempts are blocked
+// for FAILURE_BACKOFF_MS (5 min) to avoid hammering provider APIs.
+const USER_FAILURE_TRACKER_KEY = '__terminalSandboxFailure__';
+const FAILURE_BACKOFF_MS = 300_000; // 5 minutes
+interface SandboxFailureEntry {
+  lastFailureAt: number;
+  error: string;
+}
+function getSandboxFailureEntry(userId: string): SandboxFailureEntry | undefined {
+  const map: Record<string, SandboxFailureEntry> | undefined = (globalThis as any)[USER_FAILURE_TRACKER_KEY];
+  return map?.[userId];
+}
+function setSandboxFailureEntry(userId: string, error: string): void {
+  const g = globalThis as any;
+  if (!g[USER_FAILURE_TRACKER_KEY]) g[USER_FAILURE_TRACKER_KEY] = {};
+  g[USER_FAILURE_TRACKER_KEY][userId] = { lastFailureAt: Date.now(), error };
+}
+function clearSandboxFailureEntry(userId: string): void {
+  const g = globalThis as any;
+  if (g[USER_FAILURE_TRACKER_KEY]) delete g[USER_FAILURE_TRACKER_KEY][userId];
+}
+
 
 
 /**
@@ -116,16 +139,51 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // No valid session, create a new sandbox session
-    const session = await sandboxBridge.getOrCreateSession(authResult.userId, {
-      language: 'typescript',
-    });
-    return NextResponse.json({
-      sessionId: session.sessionId,
-      sandboxId: session.sandboxId,
-    }, { status: 201 });
+    // No valid session, create a new sandbox session.
+    // Check per-user failure backoff to prevent infinite retry loops
+    // when ALL providers are exhausted/circuit-broken.
+    const failureEntry = getSandboxFailureEntry(authResult.userId);
+    if (failureEntry) {
+      const elapsed = Date.now() - failureEntry.lastFailureAt;
+      if (elapsed < FAILURE_BACKOFF_MS) {
+        logger.warn('Sandbox creation blocked by failure backoff', {
+          userId: authResult.userId,
+          elapsedMs: elapsed,
+          backoffMs: FAILURE_BACKOFF_MS,
+          lastError: failureEntry.error,
+        });
+        return NextResponse.json({
+          error: 'Sandbox creation temporarily unavailable. Please wait a few minutes and try again.',
+          retryAfter: Math.ceil((FAILURE_BACKOFF_MS - elapsed) / 1000),
+          backoff: true,
+        }, { status: 503 });
+      }
+      // Backoff expired, clear the entry and allow retry
+      clearSandboxFailureEntry(authResult.userId);
+    }
+
+    try {
+      const session = await sandboxBridge.getOrCreateSession(authResult.userId, {
+        language: 'typescript',
+      });
+      // Success — clear any previous failure entry
+      clearSandboxFailureEntry(authResult.userId);
+      return NextResponse.json({
+        sessionId: session.sessionId,
+        sandboxId: session.sandboxId,
+      }, { status: 201 });
+    } catch (createError: any) {
+      // Record failure with backoff to prevent infinite retry loops
+      const errMsg = createError instanceof Error ? createError.message : String(createError);
+      setSandboxFailureEntry(authResult.userId, errMsg);
+      logger.error('Sandbox creation failed', {
+        userId: authResult.userId,
+        error: errMsg,
+      });
+      throw createError;
+    }
   } catch (error) {
-    console.error('[Terminal] Create error:', error);
+    logger.error('Create error:', error);
     return NextResponse.json({ error: 'Failed to create terminal session' }, { status: 500 });
   }
 }

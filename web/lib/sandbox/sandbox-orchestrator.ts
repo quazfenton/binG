@@ -10,6 +10,18 @@ import { createLogger } from '../utils/logger';
 import { providerRouter, type TaskContext } from './provider-router';
 import { sessionManager } from '../session/session-manager';
 import { resourceMonitor, type ResourceMetrics } from '../management/resource-monitor';
+// Pass-7 #92/#93: lifecycle observability — emits canonical [INITIALIZED]/
+// [DESTROYED] and [OPERATION STARTED/COMPLETED/FAILED] log events so
+// meta-monitoring can grep on a single vocabulary. The 1,885:0 init:teardown
+// ratio in run.log was a silent leak; the 4:2 sandbox start:end ratio
+// meant we couldn't tell when ops finished. Wire the markers at the
+// authoritative create/destroy sites below.
+import {
+  markInitialized,
+  markDestroyed,
+  markReleased,
+  trackOperation,
+} from '../management/lifecycle';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import {
   assessRisk,
@@ -19,6 +31,7 @@ import {
   getPreferredProviders,
 } from './types';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+import type { FilesystemOwnerResolution } from '../virtual-filesystem/resolve-filesystem-owner';
 import type { SandboxHandle } from './providers/sandbox-provider';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
@@ -79,6 +92,15 @@ export interface AffinityBinding {
   ttl: number;
   /** Number of commands executed under this affinity */
   commandCount: number;
+  /**
+   * Pre-resolved FilesystemOwnerResolution captured at binding creation time
+   * (when the request context is available). Used by startAffinityCleanup
+   * to snapshot the workspace under the correct VFS ownerId without needing
+   * a NextRequest — the cleanup runs in a setInterval that has no request
+   * scope. Optional for backward compatibility: bindings created without
+   * request context fall back to the orchestrator's session lookup.
+   */
+  ownerResolution?: FilesystemOwnerResolution;
 }
 
 export class SandboxOrchestrator {
@@ -125,8 +147,18 @@ export class SandboxOrchestrator {
     conversationId: string;
     task: string;
     policy?: ExecutionPolicy;
+    /**
+     * Pre-resolved FilesystemOwnerResolution from the caller (the API route
+     * already ran `resolveFilesystemOwner(req)` for auth). Threaded through
+     * to the affinity binding so the periodic cleanup tick (which has no
+     * request context) can snapshot the workspace under the correct VFS
+     * ownerId. Optional: callers that don't have a request context can
+     * omit it; startAffinityCleanup will fall back to the orchestrator's
+     * session lookup, which may evict the binding if no session is found.
+     */
+    ownerResolution?: FilesystemOwnerResolution;
   }): Promise<OrchestratorSession> {
-    const { userId, conversationId, task, policy: explicitPolicy } = options;
+    const { userId, conversationId, task, policy: explicitPolicy, ownerResolution } = options;
 
     const risk = assessRisk(task);
     if (risk.shouldBlock) {
@@ -273,7 +305,7 @@ export class SandboxOrchestrator {
 
     // === Update workspace affinity ===
     if (this.AFFINITY_ENABLED) {
-      this.setAffinity(affinityWorkspaceId, provider, handle.id, handle.workspaceDir);
+      this.setAffinity(affinityWorkspaceId, provider, handle.id, handle.workspaceDir, ownerResolution);
     }
 
     logger.info('Sandbox session created', {
@@ -508,7 +540,10 @@ export class SandboxOrchestrator {
         }
       }
 
-      // Update affinity binding to point to the new provider
+      // Update affinity binding to point to the new provider.
+      // No need to pass ownerResolution explicitly — setAffinity preserves
+      // the existing one on update (cross-provider migrations re-use the
+      // same authenticated identity, so the ownerId doesn't change).
       if (this.AFFINITY_ENABLED) {
         this.setAffinity(affinityWorkspaceId, toProvider, newHandle.id, newHandle.workspaceDir);
         logger.debug('Affinity binding updated after cross-provider migration', {
@@ -615,6 +650,21 @@ export class SandboxOrchestrator {
       }
 
       const oldSessionId = session.sessionId;
+      // Pass-7 #92 (review feedback) — emit [DESTROYED] for the old
+      // handle BEFORE the reassignment so the lifecycle counter doesn't
+      // leak the old id as 'initialized' forever. Without this, cross-
+      // provider migrations would inflate the live-ids counter and the
+      // init:teardown ratio. The teardown term is `destroyed` (not
+      // `released`) because the old provider's sandbox is hard-killed
+      // as part of the migration; the new one gets a fresh
+      // [INITIALIZED] via createSandboxHandle's existing markInitialized.
+      markDestroyed('sandbox', oldSessionId, {
+        provider: fromProvider,
+        userId: session.userId,
+        conversationId: session.conversationId,
+        teardown: 'migrated',
+        toProvider,
+      });
       session.handle = newHandle;
       session.provider = toProvider;
       session.sessionId = newHandle.id;
@@ -685,7 +735,19 @@ export class SandboxOrchestrator {
     });
 
     this.sessions.delete(session.logicalId);
-    resourceMonitor.stopMonitoring(session.handle.id);
+    resourceMonitor.stopMonitoring(session.handle.id);      // Pass-7 #92: emit [RELEASED] for the idle-eviction path.
+      // markReleased (not markDestroyed) is the right term here because
+      // the sandbox is being returned to idle — the resource isn't
+      // necessarily gone, just no longer claimed. Operators grep
+      // separately on [RELEASED] vs [DESTROYED] for distinct bucket
+      // counts in the meta-monitor.
+    markReleased('sandbox', session.handle.id, {
+      provider: session.provider,
+      userId: session.userId,
+      conversationId: session.conversationId,
+      idleMs: Date.now() - session.lastActivityAt,
+      teardown: 'idle-evict',
+    });
 
     if (session.isWarm) {
       try {
@@ -838,6 +900,14 @@ export class SandboxOrchestrator {
           try {
             const suspended = await autoSuspendService.suspendSandbox(handle.id, 'idle');
             if (suspended) {
+              // Pass-7 #92: emit [RELEASED] for hibernation (state preserved,
+              // not fully destroyed). markDestroyed is reserved for hard-kill.
+              markDestroyed('sandbox', handle.id, {
+                provider: providerType,
+                userId: 'warm-pool',
+                ageMs: Date.now() - (createdAt || Date.now()),
+                teardown: 'suspended',
+              });
               logger.info('Hibernated idle warm sandbox (state preserved)', {
                 provider: providerType,
                 sandboxId: handle.id,
@@ -846,6 +916,12 @@ export class SandboxOrchestrator {
             } else if (provider) {
               // Fallback: provider doesn't support suspension, destroy instead
               await provider.destroySandbox(handle.id);
+              markDestroyed('sandbox', handle.id, {
+                provider: providerType,
+                userId: 'warm-pool',
+                ageMs: Date.now() - (createdAt || Date.now()),
+                teardown: 'destroyed',
+              });
               logger.info('Destroyed idle warm sandbox (hibernation not supported)', {
                 provider: providerType,
                 sandboxId: handle.id,
@@ -862,6 +938,12 @@ export class SandboxOrchestrator {
             if (provider) {
               try {
                 await provider.destroySandbox(handle.id);
+                markDestroyed('sandbox', handle.id, {
+                  provider: providerType,
+                  userId: 'warm-pool',
+                  ageMs: Date.now() - (createdAt || Date.now()),
+                  teardown: 'destroyed-after-hibernate-failure',
+                });
               } catch {
                 // Sandbox may already be dead
               }
@@ -951,15 +1033,26 @@ export class SandboxOrchestrator {
   /**
    * Create or update an affinity binding for a workspace.
    * Subsequent commands for the same workspace will prefer this provider.
+   *
+   * @param ownerResolution Optional pre-resolved FilesystemOwnerResolution
+   *   from the caller. Captured on the binding so startAffinityCleanup can
+   *   snapshot the workspace under the correct VFS ownerId even though the
+   *   cleanup tick has no request context. If the binding is updated and
+   *   the new ownerResolution is omitted, the existing one is preserved
+   *   (cross-provider migrations re-use the same identity).
    */
   setAffinity(
     workspaceId: string,
     provider: SandboxProviderType,
     sandboxId: string,
     workspaceDir: string,
+    ownerResolution?: FilesystemOwnerResolution,
   ): void {
     const existing = this.affinityBindings.get(workspaceId);
     const commandCount = existing ? existing.commandCount + 1 : 1;
+    // Preserve existing ownerResolution on update unless the caller
+    // explicitly provides a new one. Migrations re-bind the same user.
+    const capturedOwnerResolution = ownerResolution ?? existing?.ownerResolution;
 
     this.affinityBindings.set(workspaceId, {
       workspaceId,
@@ -970,12 +1063,14 @@ export class SandboxOrchestrator {
       lastUsedAt: Date.now(),
       ttl: this.AFFINITY_TTL_MS,
       commandCount,
+      ownerResolution: capturedOwnerResolution,
     });
 
     logger.debug('Affinity binding set', {
       workspaceId,
       provider,
       commandCount,
+      hasOwnerResolution: !!capturedOwnerResolution,
     });
   }
 
@@ -1007,7 +1102,22 @@ export class SandboxOrchestrator {
    */
   private findSessionByWorkspaceId(workspaceId: string): OrchestratorSession | null {
     // workspaceId format is "userId:conversationId"
-    const [userId, conversationId] = workspaceId.split(':');
+    //
+    // SAFETY (Pass-7): the previous code used `workspaceId.split(':')`
+    // without validating the format. If the workspaceId was an
+    // anonymous id like `anon:1781575460175_3ec237956ae556b95a`, the
+    // split produced `['anon', '1781575460175_3ec237956ae556b95a']`
+    // and the lookup compared `session.userId === 'anon'` — which
+    // would never match a real session (sessions are keyed by
+    // authenticated userId). The function returned `null` in that
+    // case, which is the correct behavior, but the split was
+    // fragile. Validate the format here and bail early if it doesn't
+    // match the expected `userId:conversationId` shape.
+    if (typeof workspaceId !== 'string') return null;
+    const colonIdx = workspaceId.indexOf(':');
+    if (colonIdx <= 0 || colonIdx === workspaceId.length - 1) return null;
+    const userId = workspaceId.slice(0, colonIdx);
+    const conversationId = workspaceId.slice(colonIdx + 1);
     if (!userId || !conversationId) return null;
 
     for (const session of this.sessions.values()) {
@@ -1065,6 +1175,23 @@ export class SandboxOrchestrator {
    * Start periodic cleanup of expired affinity bindings.
    * Before evicting a binding, snapshots the workspace filesystem
    * so caches can be restored when the workspace re-binds later.
+   *
+   * userId resolution (Pass-7 follow-up): the cleanup tick runs in a
+   * setInterval from the constructor and has NO NextRequest in scope, so
+   * we cannot call `resolveFilesystemOwner(req)` here. Instead, we use the
+   * FilesystemOwnerResolution that callers (e.g. getSandbox) capture on
+   * the AffinityBinding at creation time and pass through setAffinity.
+   * That is the authoritative ownerId (it came from resolveFilesystemOwner
+   * at the API route), so the VFS snapshot is correctly attributed even
+   * though we are no longer in request scope.
+   *
+   * If the binding has no captured ownerResolution (legacy binding, or
+   * the caller omitted it), we fall back to the orchestrator's own
+   * session lookup. This is safer than the previous workspaceId.split
+   * fallback (which produced the literal string 'anon' or 'unknown' and
+   * caused cross-session contamination), but it can still fail if the
+   * session expired before the binding TTL. In that case we log loudly
+   * and evict the binding — the same behavior as before this fix.
    */
   private startAffinityCleanup(): void {
     setInterval(async () => {
@@ -1075,8 +1202,49 @@ export class SandboxOrchestrator {
           // This captures caches (node_modules, venvs, pip cache) so they can
           // be restored when the workspace re-binds to a new provider later.
           if (!workspaceFSSnapshotService.hasSnapshot(workspaceId)) {
-            const session = this.findSessionByWorkspaceId(workspaceId);
-            const userId = session?.userId || workspaceId.split(':')[0] || 'unknown';
+            // Bug fix (Pass-7): the previous code used `workspaceId.split(':')[0]`
+            // which produced the literal string 'anon' when the workspaceId had
+            // the anonymous format `anon:<sessionId>`, and 'unknown' when the
+            // split failed. Both values then propagated as the VFS ownerId and
+            // caused cross-session workspace contamination (visible as
+            // `[VFS] getWorkspaceVersion called { ownerId: 'anon' }` in logs).
+            //
+            // Pass-7 follow-up: the cleanup tick cannot call
+            // `resolveFilesystemOwner(req)` because it has no NextRequest.
+            // Instead, callers thread a pre-resolved FilesystemOwnerResolution
+            // through setAffinity (see AffinityBinding.ownerResolution), and
+            // we use that here. This is the authoritative ownerId because it
+            // came from the API route's auth resolution.
+            //
+            // Split per Pass-7 reviewer nit: validate userId outside the
+            // try so a legitimate createSnapshot failure (network, timeout)
+            // is NOT conflated with a userId resolution failure. The userId
+            // check is a hard precondition; the snapshot is best-effort and
+            // is already wrapped in its own try/catch.
+            let userId: string | undefined = binding.ownerResolution?.ownerId;
+            if (!userId) {
+              // Fallback: session lookup. Same warning behavior as before,
+              // but only triggered if the caller never threaded an
+              // ownerResolution through (legacy binding or non-route caller).
+              const session = this.findSessionByWorkspaceId(workspaceId);
+              userId = session?.userId;
+            }
+            if (!userId) {
+              logger.warn(
+                '[sandbox-orchestrator] startAffinityCleanup: skipping binding due to userId resolution failure',
+                {
+                  workspaceId,
+                  error:
+                    `could not resolve userId for workspaceId=${workspaceId}; ` +
+                    'neither the binding ownerResolution nor the orchestrator session lookup produced a userId. ' +
+                    'Callers should pass the FilesystemOwnerResolution from resolveFilesystemOwner(req) into getSandbox() ' +
+                    'so the cleanup tick can attribute the snapshot to the correct VFS owner.',
+                },
+              );
+              // Evict the affinity binding so we don't loop on it.
+              this.evictAffinity(workspaceId);
+              continue;
+            }
             try {
               await workspaceFSSnapshotService.createSnapshot(
                 workspaceId,
@@ -1086,6 +1254,9 @@ export class SandboxOrchestrator {
                 binding.workspaceDir,
               );
             } catch (err: any) {
+              // Best-effort — snapshot failure should not block affinity
+              // eviction. The workspace FS will be re-snapshotted on the
+              // next re-bind.
               logger.debug('Workspace FS snapshot skipped (best-effort)', {
                 workspaceId,
                 error: err.message,
@@ -1137,28 +1308,42 @@ export class SandboxOrchestrator {
     const secretBroker = getSecretBroker();
     const virtualEnv = secretBroker.virtualizeEnvVars(workspaceEnv, { ownerId: userId });
 
-    const handle = await provider.createSandbox({
-      workspaceDir,
-      language: 'typescript',
-      autoStopInterval: 3600,
-      envVars: {
-        // Virtualized workspace env (secrets replaced with placeholders)
-        ...virtualEnv,
-        USER_ID: userId,
-        CONVERSATION_ID: conversationId,
-        EXECUTION_POLICY: policy,
-        PREFERRED_PROVIDERS: preferredProviders.join(','),
-      },
-      labels: {
-        userId,
-        conversationId,
-        executionPolicy: policy,
-        createdBy: 'sandbox-orchestrator',
-      },
-      resources: {
-        cpu: policyConfig.resources?.cpu || 1,
-        memory: policyConfig.resources?.memory || 2,
-      },
+    const handle = await trackOperation(
+      'sandbox.create',
+      { userId, conversationId, provider: providerType, policy },
+      () => provider.createSandbox({
+        workspaceDir,
+        language: 'typescript',
+        autoStopInterval: 3600,
+        envVars: {
+          // Virtualized workspace env (secrets replaced with placeholders)
+          ...virtualEnv,
+          USER_ID: userId,
+          CONVERSATION_ID: conversationId,
+          EXECUTION_POLICY: policy,
+          PREFERRED_PROVIDERS: preferredProviders.join(','),
+        },
+        labels: {
+          userId,
+          conversationId,
+          executionPolicy: policy,
+          createdBy: 'sandbox-orchestrator',
+        },
+        resources: {
+          cpu: policyConfig.resources?.cpu || 1,
+          memory: policyConfig.resources?.memory || 2,
+        },
+      }),
+    );
+
+    // Pass-7 #92: emit the canonical [INITIALIZED] event so meta-monitoring
+    // can grep for it. Paired with markDestroyed in warm-pool-cleanup,
+    // evictSession, and migrateSession so the init:teardown ratio is
+    // visible in run.log.
+    markInitialized('sandbox', handle.id, {
+      provider: providerType,
+      userId,
+      conversationId,
     });
 
     const sandboxRoot = handle.workspaceDir || '/';

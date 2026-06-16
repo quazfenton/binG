@@ -20,7 +20,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-HOOKS_DIR="${REPO_ROOT}/.git/hooks"
+# Use `git rev-parse --git-dir` to support worktrees and custom git
+# directories (e.g. `--separate-git-dir`). The hardcoded `.git/hooks`
+# path breaks for both of those.
+HOOKS_DIR="$(git -C "${REPO_ROOT}" rev-parse --git-dir)/hooks"
 
 # Each entry: "<hook-name>:<source-path-relative-to-repo-root>"
 HOOKS=(
@@ -59,6 +62,11 @@ install_hook() {
 
     # A real file exists at the destination (e.g. installed manually) — back it up.
     if [ -e "${dst}" ]; then
+        # Warn before clobbering a previous backup so re-running the script
+        # doesn't silently destroy the original .bak from the first install.
+        if [ -e "${dst}.bak" ]; then
+            echo "WARNING: ${dst}.bak already exists and will be overwritten." >&2
+        fi
         echo "Note: ${dst} already exists and is not a symlink. Backing up to ${dst}.bak"
         mv "${dst}" "${dst}.bak"
     fi

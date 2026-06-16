@@ -19,19 +19,23 @@
  * app failures when the package is not installed.
  */
 
+import { resolve, relative, join, dirname } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { enable as enableDebug } from 'debug';
+
 // Suppress verbose HTTP request logging from axios/got/follow-redirects internals
 // follow-redirects logs full request options (including auth headers) via debug("follow-redirects")
+// debug caches the enabled-set at construction; calling enable() forces a re-read
+// after we strip sensitive namespaces from process.env.DEBUG.
 if (process.env.DEBUG) {
   const sensitiveNamespaces = ['http', 'axios', 'e2b', 'follow-redirects', 'needle'];
   const debugVal = process.env.DEBUG;
   const hasSensitive = sensitiveNamespaces.some(ns => debugVal.includes(ns));
   if (hasSensitive) {
-    process.env.DEBUG = debugVal.split(',').filter(ns => !sensitiveNamespaces.includes(ns.trim())).join(',');
+    process.env.DEBUG = debugVal.split(',').filter(ns => !sensitiveNamespaces.includes(ns.trim())).join(',') || '';
+    enableDebug(process.env.DEBUG);
   }
 }
-
-import { resolve, relative, join, dirname } from 'node:path'
-import { readFile } from 'node:fs/promises'
 import { quotaManager } from '../../management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
 import { E2BDesktopProvider, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'

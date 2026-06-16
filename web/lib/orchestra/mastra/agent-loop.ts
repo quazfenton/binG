@@ -18,7 +18,7 @@ import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { LLMMessage } from '@/lib/providers/llm-providers';
 import { createRequire } from 'node:module';
-import { generateId, generateText, tool as createTool } from 'ai';
+import { generateId, generateText, stepCountIs, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
 import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 
@@ -85,7 +85,7 @@ export interface AgentResult {
   // `loop_abort` SSE event for the UI banner. Plain `error` field still
   // carries the abort message for backward compat.
   loopAbort?: {
-    abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+    abortReason: 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown';
     consecutive: number;
     failedTools: Array<{ name: string; error: string }>;
     suggestion: string;
@@ -621,7 +621,7 @@ export class AgentLoop {
 
               // Track with shared loop detector. Bug #41: pass the real error
               // string so the [STEER] loop_abort payload can categorize the
-              // abort reason correctly (binary_missing vs wrong_tool_name vs
+              // abort reason correctly (binary_missing vs tool_failing vs
               // timeout). Without the 5th arg, categorizeAbortReason only sees
               // placeholder "repeated failure" strings and always returns
               // 'unknown'. Uses the shared `extractToolError` helper so the
@@ -1028,6 +1028,7 @@ export class AgentLoop {
       this.toolLoopAgent = new ToolLoopAgent({
         model: vercelModel,
         maxIterations: this.maxIterations,
+        stopWhen: stepCountIs(this.maxIterations),
         tools: sdkTools,
       });
 

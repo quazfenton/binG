@@ -16,6 +16,7 @@
 
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
+import { recordFailureBreaker } from '@/lib/utils/circuit-breaker';
 
 const logger = createLogger('Integration:Arcade');
 
@@ -65,6 +66,29 @@ export class ArcadeService {
   // warning instead, so the rest of the app keeps working.
   private disabled = false;
   private disabledReason: string | null = null;
+  // Bug #88 (Pass-6) — reset the consecutive-401 counter + clear the
+  // `disabled` flag after a successful Arcade call. Only re-enables if
+  // the service was disabled by US (credFailuresDisabled), never silently
+  // re-enables a manually-disabled service.
+  private recordArcadeSuccess(): void {
+    if (this.consecutive401s > 0) this.consecutive401s = 0;
+    if (this.disabled && this.credFailuresDisabled) {
+      this.disabled = false;
+      this.credFailuresDisabled = false;
+      this.disabledReason = null;
+    }
+  }
+
+    // Bug #88 (Pass-6) — count consecutive 401s. The previous code disabled
+  // on the FIRST 401, permanently stranding the service on a single bad
+  // API key. Now we count, and once the threshold is reached, call
+  // recordFailureBreaker() which schedules a self-reset after 60s.
+  private consecutive401s = 0;
+  private static readonly MAX_CONSECUTIVE_401s = 3;
+  // Bug #88 (Pass-6, reviewer nit) — dedicated flag so the auto-re-enable
+  // path doesn't rely on substring-matching the disabledReason. Only this
+  // flag triggers the auto re-enable on a successful response.
+  private credFailuresDisabled = false;
   private connections = new Map<string, ArcadeConnection>();
   private tools = new Map<string, ArcadeTool>();
 
@@ -134,6 +158,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       return data.toolkits?.map((t: any) => t.name) || [];
     } catch (error: any) {
       logger.error('[ArcadeService] getToolkits failed:', error.message);
@@ -180,8 +206,27 @@ export class ArcadeService {
           // the HTTP fallback path: disable the service and stop the noise.
           const status = sdkError?.status ?? sdkError?.statusCode ?? sdkError?.response?.status;
           if (status === 401) {
+            // Bug #88 (Pass-6) — count consecutive 401s. After MAX_CONSECUTIVE_401s,
+
+            // record a failure on the 'arcade' circuit-breaker key with a 60s
+
+            // cooldown. The breaker auto-resets via `recordFailureBreaker()` so
+
+            // we don't permanently strand the service on a single bad API key.
+
+            this.consecutive401s += 1;
+
+            if (this.consecutive401s >= ArcadeService.MAX_CONSECUTIVE_401s) {
+
+              recordFailureBreaker('arcade', 60_000);
+
+            }
+
             this.disabled = true;
-            this.disabledReason = 'Invalid API credentials';
+
+            this.credFailuresDisabled = true;
+
+            this.disabledReason = `Invalid API credentials (${this.consecutive401s}/${ArcadeService.MAX_CONSECUTIVE_401s} consecutive 401s)`;
             arcadeServiceDisabled = true;
             const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
             logger.warn(
@@ -200,6 +245,9 @@ export class ArcadeService {
           inputSchema: t.input_schema || {},
           requiresAuth: t.requires_auth || false,
         }));
+
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
 
         // Populate cache
         if (!filters) {
@@ -238,8 +286,27 @@ export class ArcadeService {
         // The API key is invalid/expired. Disable the service for the rest of
         // the process lifetime so we don't keep paying the latency + log
         // noise on every tool call.
+        // Bug #88 (Pass-6) — count consecutive 401s. After MAX_CONSECUTIVE_401s,
+
+        // record a failure on the 'arcade' circuit-breaker key with a 60s
+
+        // cooldown. The breaker auto-resets via `recordFailureBreaker()` so
+
+        // we don't permanently strand the service on a single bad API key.
+
+        this.consecutive401s += 1;
+
+        if (this.consecutive401s >= ArcadeService.MAX_CONSECUTIVE_401s) {
+
+          recordFailureBreaker('arcade', 60_000);
+
+        }
+
         this.disabled = true;
-        this.disabledReason = 'Invalid API credentials';
+
+        this.credFailuresDisabled = true;
+
+        this.disabledReason = `Invalid API credentials (${this.consecutive401s}/${ArcadeService.MAX_CONSECUTIVE_401s} consecutive 401s)`;
         arcadeServiceDisabled = true;
         const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
         logger.warn(
@@ -255,6 +322,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       const mappedTools = data.tools?.map((t: any) => ({
         name: t.name,
         description: t.description,
@@ -310,6 +379,8 @@ export class ArcadeService {
           query,
           limit: options?.limit,
         });
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
         return tools.map((t: any) => ({
           name: t.name,
           description: t.description,
@@ -380,6 +451,8 @@ export class ArcadeService {
           context,
         });
 
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
         return {
           authorized: result.authorized || false,
           authUrl: result.auth_url,
@@ -495,6 +568,8 @@ export class ArcadeService {
           user_id: userId,
         });
 
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
         return {
           success: true,
           output: result,
@@ -539,6 +614,8 @@ export class ArcadeService {
       }
 
       const result = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       return {
         success: true,
         output: result,
@@ -602,6 +679,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       const toolkit = this.extractToolkit(toolName);
       const connection = data.connections?.find((c: any) => 
         c.provider === toolkit && c.status === 'active'
@@ -662,6 +741,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       return data.url;
     } catch (error: any) {
       logger.error('[ArcadeService] getAuthUrl failed:', error.message);
@@ -729,6 +810,8 @@ export class ArcadeService {
         }
 
         if (authResponse.status === 'completed' && authResponse.context?.token) {
+          // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+          this.recordArcadeSuccess();
           return {
             status: 'completed',
             token: authResponse.context.token,
@@ -737,6 +820,8 @@ export class ArcadeService {
 
         // Authorization not yet complete — return URL for browser flow
         if (authResponse.url) {
+          // Bug #88 (Pass-6) — reset 401 counter on SDK success (pending is still a successful API call).
+          this.recordArcadeSuccess();
           return {
             status: 'pending',
             url: authResponse.url,
@@ -796,6 +881,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
 
       if (data.authorized && data.context?.token) {
         return {
@@ -862,6 +949,8 @@ export class ArcadeService {
         });
 
         if (result.status === 'completed' && result.context?.token) {
+          // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+          this.recordArcadeSuccess();
           return {
             status: 'completed',
             token: result.context.token,
@@ -1026,6 +1115,8 @@ export class ArcadeService {
     if (!response.ok) return [];
 
     const data = await response.json();
+    // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+    this.recordArcadeSuccess();
     return data.connections?.map((c: any) => ({
       id: c.id,
       provider: c.provider,
@@ -1063,6 +1154,9 @@ export class ArcadeService {
           createdAt: new Date(c.created_at).getTime(),
         }));
         
+        // Bug #88 (Pass-6) — reset 401 counter on SDK success too.
+        this.recordArcadeSuccess();
+        
         // Populate cache
         for (const conn of mappedConnections) {
           this.connections.set(`${userId}:${conn.provider}`, conn);
@@ -1086,6 +1180,8 @@ export class ArcadeService {
       }
 
       const data = await response.json();
+      // Bug #88 (Pass-6) — reset 401 counter + re-enable service on any 2xx.
+      this.recordArcadeSuccess();
       const mappedConnections = data.connections?.map((c: any) => ({
         id: c.id,
         provider: c.provider,

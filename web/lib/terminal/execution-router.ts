@@ -21,6 +21,7 @@ import { createLogger } from '@/lib/utils/logger';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { latencyTracker } from '@/lib/sandbox/provider-router';
 import { providerHealthTracker } from '@/lib/sandbox/provider-health';
+import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 const logger = createLogger('ExecutionRouter');
 
@@ -671,6 +672,15 @@ export interface ExecutionRouterConfig {
   onRoute?: (message: string) => void;
   /** Optional: workspace ID for service registration (used for daemon commands) */
   workspaceId?: string;
+  /**
+   * Pre-resolved FilesystemOwnerResolution from the API route caller.
+   * Threaded into the affinity binding so the periodic cleanup tick
+   * (which has no request context) can snapshot the workspace under the
+   * correct VFS ownerId. Optional: callers without a request context
+   * (e.g. background jobs) can omit it; the orchestrator will fall back
+   * to the session lookup at cleanup time.
+   */
+  ownerResolution?: FilesystemOwnerResolution;
 }
 
 /**
@@ -725,12 +735,15 @@ export async function executeWithRouting(
     // services (npm run dev, etc.) benefit from affinity-based cache warmth.
     const effectiveConversationId = config.workspaceId || config.conversationId;
 
-    // Get or create a sandbox session (uses warm pool if available)
+    // Get or create a sandbox session (uses warm pool if available).
+    // Thread the pre-resolved ownerResolution from the API route so the
+    // affinity binding carries the authoritative VFS ownerId.
     const session = await sandboxOrchestrator.getSandbox({
       userId: config.userId,
       conversationId: effectiveConversationId,
       task: command,
       policy: classification.tier === 'heavy' ? 'sandbox-heavy' : 'sandbox-preferred',
+      ownerResolution: config.ownerResolution,
     });
 
     // Execute the command in the sandbox

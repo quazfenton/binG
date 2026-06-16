@@ -9,6 +9,9 @@ import { SignJWT, jwtVerify, JWTPayload, errors } from 'jose';
 const { JWTExpired, JWTInvalid, JOSEError } = errors;
 import { createSecureHash } from './crypto-utils';
 import { isBuildEnvironment } from '@/lib/utils/build-env';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('Security');
 
 /**
  * JWT Token Payload Structure
@@ -582,7 +585,7 @@ export class DegradedTokenBlacklist implements TokenBlacklistProvider {
     this.revoked.set(tokenJti, expiryTimestamp);
     this.revocationCount++;
     // Log every revocation loudly — ops must know Redis is down
-    console.error(`[Security] FAIL-CLOSED: Token revocation #${this.revocationCount} stored in-memory ONLY. Redis is unavailable! Cross-instance revocation NOT functional.`);
+    log.error(`FAIL-CLOSED: Token revocation #${this.revocationCount} stored in-memory ONLY. Redis is unavailable! Cross-instance revocation NOT functional.`);
   }
 
   isRevoked(tokenJti: string): boolean {
@@ -648,14 +651,14 @@ export function getBlacklistInstance(): TokenBlacklistProvider {
       const { RedisTokenBlacklist } = require('./redis-token-blacklist');
       const redis = new (require('ioredis'))(redisUrl);
       blacklistInstance = new RedisTokenBlacklist(redis);
-      console.log('[Security] Using Redis token blacklist for distributed revocation');
+      log.info('Using Redis token blacklist for distributed revocation');
       return blacklistInstance;
     } catch (error) {
       // CRIT-3 fix: Fail closed in production if Redis is configured but unavailable
       // Previously fell back to in-memory, which doesn't work across instances.
       // Now we create a fail-closed blacklist that rejects all tokens when Redis is down.
-      console.error('[Security] CRITICAL: Redis blacklist failed to initialize in production! Using fail-closed blacklist.');
-      console.error('[Security] All revoked tokens will be rejected (fail-closed). Fix Redis connectivity immediately.');
+      log.error('CRITICAL: Redis blacklist failed to initialize in production! Using fail-closed blacklist.');
+      log.error('All revoked tokens will be rejected (fail-closed). Fix Redis connectivity immediately.');
       blacklistInstance = new DegradedTokenBlacklist();
       return blacklistInstance;
     }

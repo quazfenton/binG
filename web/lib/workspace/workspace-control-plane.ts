@@ -80,6 +80,7 @@ import { workspaceSessionGraph } from './workspace-session-graph';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import type { AffinityBinding } from '@/lib/sandbox/sandbox-orchestrator';
 import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 const logger = createLogger('WorkspaceControlPlane');
 
@@ -158,7 +159,17 @@ export interface WorkspaceHandle {
   /** Get the current affinity binding, if active */
   getAffinity(): AffinityBinding | null;
 
-  // === Phase 7: Snapshots ===
+  // === Phase 7: VFS Owner Resolution ===
+  /**
+   * True if this handle was constructed with an authoritative
+   * FilesystemOwnerResolution captured at handle creation time
+   * (from an API route caller that had a NextRequest in scope).
+   * When false, the handle will fall back to the session lookup
+   * for the ownerId when _ensureSession() is invoked.
+   */
+  hasOwnerResolution(): boolean;
+
+  // === Phase 8: Snapshots ===
   /** Create a workspace filesystem snapshot */
   snapshot(): Promise<WorkspaceFSSnapshot | null>;
   /** Check if a snapshot exists for this workspace */
@@ -213,14 +224,24 @@ class WorkspaceHandleImpl implements WorkspaceHandle {
   /** @internal */ _sandboxId: string | null = null;
   /** @internal */ _workspaceDir: string | null = null;
   /** @internal */ _orchestratorSession: OrchestratorSession | null = null;
+  /**
+   * Pre-resolved FilesystemOwnerResolution from the API route caller,
+   * threaded through create() and stored on the handle so the lazy
+   * `_ensureSession()` call can pass it to the orchestrator. Captured
+   * at handle creation (when request context is available) and used
+   * for the lifetime of the handle.
+   */
+  private readonly ownerResolution: FilesystemOwnerResolution | undefined;
 
   constructor(
     workspaceId: string,
     userId: string,
     private readonly parent: WorkspaceControlPlane,
+    ownerResolution?: FilesystemOwnerResolution,
   ) {
     this.workspaceId = workspaceId;
     this.userId = userId;
+    this.ownerResolution = ownerResolution;
   }
 
   // ========================================================================
@@ -289,7 +310,15 @@ class WorkspaceHandleImpl implements WorkspaceHandle {
   }
 
   // ========================================================================
-  // Phase 7: Snapshots
+  // Phase 7: VFS Owner Resolution
+  // ========================================================================
+
+  hasOwnerResolution(): boolean {
+    return !!this.ownerResolution;
+  }
+
+  // ========================================================================
+  // Phase 8: Snapshots
   // ========================================================================
 
   async snapshot(): Promise<WorkspaceFSSnapshot | null> {
@@ -307,7 +336,7 @@ class WorkspaceHandleImpl implements WorkspaceHandle {
   }
 
   // ========================================================================
-  // Phase 8: Execution
+  // Phase 9: Execution
   // ========================================================================
 
   async execute(
@@ -474,6 +503,7 @@ class WorkspaceHandleImpl implements WorkspaceHandle {
       conversationId: this.workspaceId,
       task: 'general',
       policy: 'sandbox-preferred',
+      ownerResolution: this.ownerResolution,
     });
 
     this._provider = this._orchestratorSession.provider;
@@ -610,6 +640,7 @@ export class WorkspaceControlPlane extends EventEmitter {
     workspaceId: string,
     userId: string,
     options?: WorkspaceCreateOptions,
+    ownerResolution?: FilesystemOwnerResolution,
   ): Promise<WorkspaceHandle> {
     logger.info('Creating workspace', {
       workspaceId,
@@ -619,7 +650,7 @@ export class WorkspaceControlPlane extends EventEmitter {
       hasTemplate: !!options?.template,
     });
 
-    const handle = new WorkspaceHandleImpl(workspaceId, userId, this);
+    const handle = new WorkspaceHandleImpl(workspaceId, userId, this, ownerResolution);
 
     try {
       // === Phase 9: VFS workspace scope ===
@@ -652,6 +683,7 @@ export class WorkspaceControlPlane extends EventEmitter {
         conversationId: workspaceId,
         task: 'general',
         policy: options?.policy || 'sandbox-preferred',
+        ownerResolution,
       });
 
       handle._orchestratorSession = session;
@@ -758,6 +790,15 @@ export class WorkspaceControlPlane extends EventEmitter {
       sandboxId?: string;
       workspaceDir?: string;
     },
+    /**
+     * Optional authoritative owner resolution captured at registration time
+     * (e.g. when the caller is an API route that has a NextRequest in scope).
+     * Threaded into the handle for consistency with `create()` — `register()`
+     * itself does NOT create a sandbox/affinity binding, but a future change
+     * to add one won't require re-plumbing this param through every caller.
+     * Falls back to the session lookup if omitted.
+     */
+    ownerResolution?: FilesystemOwnerResolution,
   ): WorkspaceHandle {
     // Return existing handle if already registered
     const existing = this.handles.get(workspaceId);
@@ -767,10 +808,27 @@ export class WorkspaceControlPlane extends EventEmitter {
       if (info.sandboxId) existing._sandboxId = info.sandboxId;
       if (info.workspaceDir) existing._workspaceDir = info.workspaceDir;
       existing.phase = 'ready';
+      // If a fresh ownerResolution is passed on re-registration, it is
+      // intentionally NOT swapped onto the existing handle — re-registering
+      // should not silently change ownership mid-flight. Log at debug so
+      // operators can see when a caller is passing it (and notice if they
+      // expected a swap).
+      if (ownerResolution) {
+        logger.debug('register() called on existing handle; ownerResolution is not swapped', {
+          workspaceId,
+          newHasOwnerResolution: true,
+          existingHasOwnerResolution: existing.hasOwnerResolution(),
+        });
+      }
       return existing;
     }
 
-    const handle = new WorkspaceHandleImpl(workspaceId, userId, this);
+    // register() is a lightweight tracking operation (no sandbox creation).
+    // ownerResolution is still threaded through to the handle so that if a
+    // registered handle later calls _ensureSession(), the binding carries
+    // the authoritative ownerId captured at registration time (instead of
+    // relying on the session lookup fallback).
+    const handle = new WorkspaceHandleImpl(workspaceId, userId, this, ownerResolution);
     handle._provider = info.provider || null;
     handle._sandboxId = info.sandboxId || null;
     handle._workspaceDir = info.workspaceDir || null;
@@ -781,6 +839,7 @@ export class WorkspaceControlPlane extends EventEmitter {
       workspaceId,
       provider: info.provider,
       sandboxId: info.sandboxId,
+      hasOwnerResolution: !!ownerResolution,
     });
 
     this.emit('workspace:registered', handle);

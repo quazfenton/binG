@@ -284,12 +284,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // key set, or the key was already null/empty), there's no anon
       // workspace to recover and the fetch would be a wasted round-trip
       // to a 0-files no-op on the server.
+      // Capture the actual anonymous session ID BEFORE we clear localStorage.
+      // If the inline login transfer missed (e.g. the anon-session-id cookie
+      // never reached the server), the recovery POST needs the ID to be
+      // effective — otherwise the server has nothing to migrate and the
+      // recovery request becomes a no-op for the exact failure mode it is
+      // meant to heal.
+      let capturedAnonSessionId: string | null = null;
       const hadAnonymousSession =
         typeof window !== 'undefined' &&
         (() => {
           try {
             const value = localStorage.getItem('anonymous_session_id');
-            return value !== null && value !== '';
+            if (value !== null && value !== '') {
+              capturedAnonSessionId = value;
+              return true;
+            }
+            return false;
           } catch {
             return false;
           }
@@ -318,9 +329,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // token against the per-user limiter.
       if (hadAnonymousSession) {
         try {
+          // Build the recovery request body. The endpoint prefers the
+          // `anonymousSessionId` body field over a stale cookie when both
+          // are present, so the client-captured value wins when the cookie
+          // never reached the server.
+          const recoveryBody: Record<string, unknown> = {};
+          if (capturedAnonSessionId) {
+            recoveryBody.anonymousSessionId = capturedAnonSessionId;
+          }
           await fetch('/api/auth/transfer-vfs-on-login', {
             method: 'POST',
             credentials: 'include',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(recoveryBody),
           });
         } catch (transferErr) {
           // Non-fatal — the server-side in-line transfer already ran. Log

@@ -25,6 +25,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -283,6 +285,14 @@ interface LocalPtySession {
   oracleIsolation?: 'podman' | 'bwrap' | 'chroot' | 'docker' | 'shared-shell';
   // Oracle VM container name for Docker-based isolation (for cleanup)
   oracleContainerName?: string;
+  /**
+   * Authoritative VFS owner resolution captured from the API route
+   * request. Threaded into the session at creation time and forwarded
+   * to the execution router so the affinity binding (created on
+   * first sandbox access) carries the authoritative ownerId instead
+   * of falling back to the session lookup.
+   */
+  ownerResolution?: FilesystemOwnerResolution;
   // Execution routing: intercept non-trivial commands and route to sandbox providers
   executionRouterEnabled?: boolean;
 }
@@ -1119,6 +1129,14 @@ export async function POST(req: NextRequest) {
     }
     const sessionId = randomUUID();
 
+    // Resolve authoritative VFS owner from the request — threaded into
+    // the session + execution router so the affinity binding carries the
+    // authoritative ownerId instead of falling back to the session lookup.
+    // Safe to call for anonymous users (returns `anon:<sessionId>` ownerId).
+    // When this throws (e.g. DB unavailable), the orchestrator's session
+    // lookup will fall back to `authResult.userId` as before.
+    const ownerResolution = await resolveFilesystemOwner(req);
+
     // === Isolation mode: unshare (Linux user namespaces) ===
     if (ENABLE_LOCAL_PTY === 'unshare') {
       return addAnonSessionCookie(await createUnsharePtySession(
@@ -1128,7 +1146,8 @@ export async function POST(req: NextRequest) {
         cols,
         rows,
         cwd,
-        ptyShell
+        ptyShell,
+        ownerResolution
       ));
     }
 
@@ -1139,7 +1158,8 @@ export async function POST(req: NextRequest) {
         authResult.userId,
         cols,
         rows,
-        ptyShell
+        ptyShell,
+        ownerResolution
       ));
     }
 
@@ -1150,7 +1170,8 @@ export async function POST(req: NextRequest) {
         authResult.userId,
         cols,
         rows,
-        ptyShell
+        ptyShell,
+        ownerResolution
       ));
     }
 
@@ -1163,7 +1184,8 @@ export async function POST(req: NextRequest) {
         cols,
         rows,
         cwd,
-        ptyShell
+        ptyShell,
+        ownerResolution
       ));
     }
 
@@ -1175,7 +1197,8 @@ export async function POST(req: NextRequest) {
       cols,
       rows,
       cwd,
-      ptyShell
+      ptyShell,
+      ownerResolution
     ));
   } catch (error: any) {
     logger.error('[Local PTY] Failed to create session:', error);
@@ -1205,7 +1228,8 @@ async function createR2DockerPtySession(
   userId: string,
   cols: number,
   rows: number,
-  ptyShell: string
+  ptyShell: string,
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   const { spawn } = await import('child_process');
 
@@ -1228,7 +1252,8 @@ async function createR2DockerPtySession(
       rows,
       workspaceDir,
       ptyShell,
-      vfsWatcher
+      vfsWatcher,
+      ownerResolution
     );
   }
 
@@ -1388,6 +1413,7 @@ async function createR2DockerPtySession(
         dockerContainerId: containerId,
         r2MountStrategy: useHostMount ? 'host' : 'container',
         // No VFS watcher — R2 IS the storage, no sync needed
+        ...(ownerResolution && { ownerResolution }),
       });
 
       // Note: R2 unmount on cleanup is handled by cleanupSession()
@@ -1482,7 +1508,8 @@ async function createDockerPtySessionWithVfs(
   rows: number,
   workspaceDir: string,
   ptyShell: string,
-  vfsWatcher: { stop: () => void }
+  vfsWatcher: { stop: () => void },
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   const { spawn } = await import('child_process');
   const containerName = `pty-${sessionId.slice(0, 12)}`;
@@ -1559,6 +1586,7 @@ async function createDockerPtySessionWithVfs(
       registerSession(sessionId, userId, pty, workspaceDir, {
         dockerContainerId: containerId,
         vfsWatcher,
+        ...(ownerResolution && { ownerResolution }),
       });
 
       resolve(NextResponse.json({ sessionId, mode: 'docker', workspaceDir }));
@@ -1577,7 +1605,8 @@ async function createDirectPtySession(
   cols: number,
   rows: number,
   cwd: string | undefined,
-  ptyShell: string
+  ptyShell: string,
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   // Materialize VFS files to a real directory for this user
   const workspaceDir = await resolveWorkspaceDir(userId);
@@ -1701,6 +1730,7 @@ async function createDirectPtySession(
 
   registerSession(sessionId, userId, pty, workspaceDir, {
     vfsWatcher,
+    ...(ownerResolution && { ownerResolution }),
   });
 
   return NextResponse.json({
@@ -1733,6 +1763,7 @@ async function createUnsharePtySessionWithSubuid(
   rows: number,
   workspaceDir: string,
   safeShell: NonNullable<Awaited<ReturnType<typeof createSafeShellWrapper>>>,
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   // Generate the wrapper script
   const wrapperScript = buildUnshareSubuidWrapperScript(
@@ -1774,9 +1805,7 @@ async function createUnsharePtySessionWithSubuid(
     // Apply cgroups v2 resource limits (best-effort)
     if (unsharePid && typeof unsharePid === 'number') {
       applyCgroupLimits(unsharePid, sessionId);
-    }
-
-    registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
+    }      registerSession(sessionId, userId, pty, workspaceDir, { unsharePid, ...(ownerResolution && { ownerResolution }) });
 
     logger.info('[Local PTY] Unshare session created with subuid isolation', {
       sessionId,
@@ -1819,7 +1848,8 @@ async function createUnsharePtySession(
   cols: number,
   rows: number,
   cwd: string | undefined,
-  ptyShell: string
+  ptyShell: string,
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   if (process.platform !== 'linux') {
     return NextResponse.json(
@@ -1848,7 +1878,7 @@ async function createUnsharePtySession(
   // Otherwise, use unshare --map-root-user directly (existing behavior).
   if (UNSHARE_PER_WORKSPACE_UID) {
     return createUnsharePtySessionWithSubuid(
-      nodePty, sessionId, userId, cols, rows, workspaceDir, safeShell
+      nodePty, sessionId, userId, cols, rows, workspaceDir, safeShell, ownerResolution
     );
   }
 
@@ -1880,9 +1910,7 @@ async function createUnsharePtySession(
     // Apply cgroups v2 resource limits (best-effort)
     if (unsharePid && typeof unsharePid === 'number') {
       applyCgroupLimits(unsharePid, sessionId);
-    }
-
-    registerSession(sessionId, userId, pty, workspaceDir, { unsharePid });
+    }      registerSession(sessionId, userId, pty, workspaceDir, { unsharePid, ...(ownerResolution && { ownerResolution }) });
 
     logger.info(`[Local PTY] Unshare session created: ${sessionId}`);
 
@@ -1925,7 +1953,8 @@ async function createDockerPtySession(
   cols: number,
   rows: number,
   cwd: string | undefined,
-  ptyShell: string
+  ptyShell: string,
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   const { spawn } = await import('child_process');
 
@@ -2126,6 +2155,7 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
       registerSession(sessionId, userId, pty, workspaceDir, {
         dockerContainerId: containerId,
         vfsWatcher,
+        ...(ownerResolution && { ownerResolution }),
       });
 
       resolve(NextResponse.json({ sessionId, mode: 'docker', workspaceDir }));
@@ -2146,7 +2176,8 @@ async function createOracleVMPtySession(
   userId: string,
   cols: number,
   rows: number,
-  ptyShell: string
+  ptyShell: string,
+  ownerResolution?: FilesystemOwnerResolution,
 ): Promise<NextResponse> {
   const { Client } = await import('ssh2');
 
@@ -2319,6 +2350,7 @@ async function createOracleVMPtySession(
                 sshClient: client,
                 oracleIsolation: isolation,
                 oracleContainerName,
+                ...(ownerResolution && { ownerResolution }),
                 // Include isolation mode in the sandbox info so the UI can render the badge
               });
 
@@ -2397,6 +2429,10 @@ function registerSession(
       workingDir: workspaceDir,
       enabled: true,
       workspaceId: sessionId,
+      // Authoritative VFS owner from the API route caller (POST handler resolves
+      // via resolveFilesystemOwner(req)). When omitted, the orchestrator falls
+      // back to the session lookup.
+      ...(extras.ownerResolution ? { ownerResolution: extras.ownerResolution } : {}),
       onOutput: (text: string) => {
         // Feed sandbox output back through the session's output queue
         if (!session.exited) {

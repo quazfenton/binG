@@ -10,6 +10,13 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Auth:Login');
 
+// Bound the fail-closed MFA session cleanup at 1s so a hanging DB can't
+// stall the 503 response. The logout promise is kept alive in the
+// background if it hasn't resolved by then (an orphaned session row is
+// acceptable cleanup debt compared to a 30s+ request hang on a degraded
+// DB). Tunable here so ops can adjust without grepping the catch block.
+const MFA_FAIL_CLOSED_LOGOUT_TIMEOUT_MS = 1000;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -54,7 +61,7 @@ export async function POST(request: NextRequest) {
         const { logLoginFailure } = await import('@/lib/auth/auth-audit-logger');
         await logLoginFailure(email, 'invalid_credentials', request);
       } catch (auditError) {
-        console.warn('[Login] Audit log failed:', auditError);
+        logger.warn('Audit log failed:', auditError);
       }
       return NextResponse.json(
         { success: false, error: result.error },
@@ -112,8 +119,48 @@ export async function POST(request: NextRequest) {
           }
         }
     } catch (mfaError) {
-      // MFA check failed — log but continue with normal login (fail open)
-      console.warn('[Login] MFA check failed, proceeding without MFA:', mfaError);
+      // MFA check failed — fail-closed to preserve security guarantees.
+      // Fail-open would let a DB/query outage bypass MFA enforcement, which
+      // is unacceptable for a security control. Invalidate the session we
+      // just created and return a retryable 503 so the client can retry.
+      logger.error('MFA check failed, login blocked (fail-closed):', mfaError);
+      if (result.sessionId) {
+        // Bound the cleanup with the module-scope timeout so a hanging DB
+        // can't stall the 503 response. The logout promise is kept alive
+        // in the background if it hasn't resolved by then. The inner
+        // .catch collapses any rejection (DB error, etc.) so the race
+        // always settles within the timeout.
+        // Log a short hash of the sessionId (not the raw value) to avoid
+        // leaking session tokens in operator logs — same pattern as
+        // /api/auth/mfa/challenge/gateway.ts which hashes the MFA token.
+        // The hash is computed INSIDE the .catch so the happy path (logout
+        // resolves cleanly) skips the work entirely.
+        const logoutPromise = authService
+          .logout(result.sessionId)
+          .catch((err) => {
+            const sessionIdHash = require('crypto')
+              .createHash('sha256')
+              .update(result.sessionId)
+              .digest('hex')
+              .substring(0, 16);
+            logger.warn('MFA-fail-closed: session cleanup failed (non-fatal)', {
+              sessionIdHash,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          });
+        const timeoutPromise = new Promise<void>((resolve) =>
+          setTimeout(resolve, MFA_FAIL_CLOSED_LOGOUT_TIMEOUT_MS)
+        );
+        await Promise.race([logoutPromise, timeoutPromise]);
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Login temporarily unavailable. Please try again in a moment.',
+          retryable: true,
+        },
+        { status: 503, headers: { 'Retry-After': '5' } }
+      );
     }
   }
 
@@ -137,22 +184,30 @@ export async function POST(request: NextRequest) {
   // early before reaching this point. The MFA challenge endpoint
   // calls this same function after TOTP verification.
   const loginUserId = result.user?.id !== undefined ? String(result.user.id) : undefined;
-  void transferVFSOnLogin(request, result.user).then((transferResult) => {
-    if (transferResult.transferredFiles > 0) {
-      logger.info('VFS ownership transferred on login', {
+  void transferVFSOnLogin(request, result.user)
+    .then((transferResult) => {
+      if (transferResult.transferredFiles > 0) {
+        logger.info('VFS ownership transferred on login', {
+          userId: loginUserId,
+          transferredFiles: transferResult.transferredFiles,
+          source: 'login-gateway-inline',
+        });
+      }
+    })
+    .catch((error) => {
+      logger.warn('VFS transfer on login failed', {
         userId: loginUserId,
-        transferredFiles: transferResult.transferredFiles,
+        error: error instanceof Error ? error.message : String(error),
         source: 'login-gateway-inline',
       });
-    }
-  });
+    });
 
   // MED-5 fix: Log successful login
     try {
       const { logLoginSuccess } = await import('@/lib/auth/auth-audit-logger');
       await logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });
     } catch (auditError) {
-      console.warn('[Login] Audit log failed:', auditError);
+      logger.warn('Audit log failed:', auditError);
     }
 
     // Set session cookie
@@ -169,7 +224,8 @@ export async function POST(request: NextRequest) {
         // to prevent cookies from being sent over HTTP. Check x-forwarded-proto as fallback.
         secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
         sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60 // 7 days
+        maxAge: 7 * 24 * 60 * 60, // 7 days
+        path: '/',
       });
     }
 
@@ -203,7 +259,7 @@ export async function POST(request: NextRequest) {
     return response;
 
   } catch (error) {
-    console.error('Login API error:', error);
+    logger.error('Login API error:', error);
     return NextResponse.json(
       { success: false, error: 'Internal server error' },
       { status: 500 }

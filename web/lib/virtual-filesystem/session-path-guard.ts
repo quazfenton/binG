@@ -38,6 +38,52 @@ import { extractSessionIdFromOwnerId } from './id-normalization';
 const logger = createLogger('VFS:SessionGuard');
 
 // ============================================================================
+// Pass-7 #107: Canonical detection-term helper.
+//
+// Pass-7 noted that detection terms like "drift", "skew", and "mismatch"
+// were absent from logs — meta-monitoring queries like `grep -i 'drift'`
+// returned nothing because individual detection sites used their own
+// ad-hoc terminology ("Session id disagreement", "path mismatch", "VFS
+// concurrent modification", etc.). This helper centralizes the canonical
+// terms so future detection logs can call `DETECTION_TERMS.drift | skew |
+// mismatch` and the meta-monitor can grep on a single canonical token.
+//
+// Usage:
+//   import { DETECTION_TERMS, withDetectionTerms } from './session-path-guard';
+//   logger.warn(`VFS ${DETECTION_TERMS.drift} detected: ...`);
+//   // or
+//   logger.warn(withDetectionTerms('Session id mismatch', 'mismatch'),
+//     { ownerId, scopePath });
+// ============================================================================
+export const DETECTION_TERMS = {
+  drift: 'drift',
+  skew: 'skew',
+  mismatch: 'mismatch',
+} as const;
+
+export type DetectionTerm = (typeof DETECTION_TERMS)[keyof typeof DETECTION_TERMS];
+
+/**
+ * Prepend one or more canonical detection terms to a log message so the
+ * line is grep-able by the meta-monitor (Pass-7 #107). Returns the
+ * prefixed string; the caller is responsible for actually emitting the log.
+ *
+ * @example
+ *   logger.warn(withDetectionTerms(
+ *     `Session id ${ownerSession} does not match scopePath ${scopeSession}`,
+ *     DETECTION_TERMS.drift,
+ *     DETECTION_TERMS.mismatch,
+ *   ), { ownerId, scopePath });
+ */
+export function withDetectionTerms(
+  message: string,
+  ...terms: ReadonlyArray<DetectionTerm>
+): string {
+  if (terms.length === 0) return message;
+  return `[${terms.join('|')}] ${message}`;
+}
+
+// ============================================================================
 // Constants
 // ============================================================================
 
@@ -135,15 +181,85 @@ export function assertScopePathMatchesSessionId(
   if (!ownerSession) return; // no session in ownerId → can't verify
 
   if (scopeSession !== ownerSession) {
+    // Pass-7 #107: tag the log with canonical detection terms (drift |
+    // mismatch) so the meta-monitor can grep on a single canonical token.
+    // The natural-language description stays human-readable; the prefix
+    // is what dashboards alert on.
     logger.error(
-      `[CRITICAL] Session id mismatch: scopePath "${normalized}" refers to ` +
-        `"${scopeSession ?? '<none>'}" but ownerId encodes "${ownerSession}". ` +
-        `This is the path-drift bug — the session folder was likely renamed ` +
-        `out from under us. Refusing the operation.`,
+      withDetectionTerms(
+        `[CRITICAL] Session id mismatch: scopePath "${normalized}" refers to ` +
+          `"${scopeSession ?? '<none>'}" but ownerId encodes "${ownerSession}". ` +
+          `This is the path-drift bug — the session folder was likely renamed ` +
+          `out from under us. Refusing the operation.`,
+        DETECTION_TERMS.drift,
+        DETECTION_TERMS.mismatch,
+      ),
       { ownerId, scopePath: normalized, scopeSession, ownerSession },
     );
     throw new SessionPathMismatchError(ownerId, normalized, ownerSession, scopeSession);
   }
+}
+
+/**
+ * Bug #72: fall-back recovery path for scopePath/sessionId mismatch.
+ *
+ * Unlike `assertScopePathMatchesSessionId` (which throws on mismatch to
+ * refuse the operation), this function returns a corrected ownerId that
+ * matches the scopePath's sessionId. Use this when you'd rather recover
+ * from the path-drift bug than fail the operation.
+ *
+ * Returns `{ ownerId, recovered: true }` if the ownerId was re-derived
+ * from the scopePath; `{ ownerId, recovered: false }` if no recovery
+ * was needed (match, no session, or root scope).
+ *
+ * The recovery is best-effort: it only fires when BOTH the ownerId and
+ * the scopePath have extractable sessions, AND they differ. All other
+ * cases (missing ownerId session, missing scopePath session, root scope,
+ * match) pass through unchanged.
+ */
+export function reconcileScopePathWithSessionId(
+  ownerId: string,
+  scopePath: string | undefined,
+): { ownerId: string; recovered: boolean } {
+  if (!scopePath) return { ownerId, recovered: false };
+  const normalized = normalizeScopePath(scopePath);
+  if (normalized === 'workspace') return { ownerId, recovered: false };
+
+  const scopeSession = extractSessionIdFromPath(normalized);
+  const ownerSession = extractSessionIdFromOwnerId(ownerId);
+  if (!ownerSession || !scopeSession) return { ownerId, recovered: false };
+
+  if (scopeSession === ownerSession) return { ownerId, recovered: false };
+
+  // Mismatch detected — log a warning (not CRITICAL) and attempt recovery
+  // by re-deriving the ownerId from the scopePath's sessionId.
+  logger.warn(
+    withDetectionTerms(
+      `[WARN] Session id mismatch recovered: scopePath "${normalized}" refers to ` +
+        `"${scopeSession}" but ownerId encodes "${ownerSession}". ` +
+        `Falling back to scopePath-derived owner.`,
+      DETECTION_TERMS.drift,
+      DETECTION_TERMS.mismatch,
+    ),
+    { ownerId, scopePath: normalized, scopeSession, ownerSession },
+  );
+
+  const recoveredOwnerId = reconstructOwnerIdWithSession(ownerId, scopeSession);
+  return { ownerId: recoveredOwnerId, recovered: true };
+}
+
+/**
+ * Bug #72: reconstruct an ownerId by replacing its session segment with
+ * `newSessionId`. OwnerId format is `<prefix>$<sessionId>` for composite
+ * ids (e.g. `1$001`) or `<prefix>` for simple ids (e.g. `default`).
+ *
+ * If the ownerId has no `$` separator, it's returned unchanged (no
+ * session to replace).
+ */
+function reconstructOwnerIdWithSession(ownerId: string, newSessionId: string): string {
+  const lastDollar = ownerId.lastIndexOf('$');
+  if (lastDollar < 0) return ownerId;
+  return ownerId.substring(0, lastDollar + 1) + newSessionId;
 }
 
 /**

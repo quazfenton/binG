@@ -118,7 +118,9 @@ export function stripRoutingMarkers(responseText: string): string {
   return cleaned.trim();
 }
 
-/** Default routing for when parsing fails — safe conservative defaults */
+/** Default routing for when parsing fails — safe conservative defaults.
+ * Bug #70: `continue` defaults to true (env-tunable via LLM_AUTO_CONTINUE_DEFAULT)
+ * so multi-step agent tasks auto-continue instead of stopping at step 1. */
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -127,7 +129,7 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-  continue: false,
+  continue: typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false',
 };
 
 /**
@@ -225,7 +227,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       continue:
         normalizeBoolean(parsed.continue) ??
         normalizeBoolean(parsed.requiresAutoReprompt) ??
-        false,
+        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : DEFAULT_ROUTING.continue),
     };
 
     return {
@@ -341,7 +343,13 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  const shouldContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
+  // Bug #2 fix: planSteps >= 2 should force continue: true
+  // The LLM outlined a multi-step plan but may have set continue: false
+  // (DEFAULT_ROUTING.continue defaults to false). This ensures multi-step
+  // plans always trigger auto-continuation.
+  const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
+  const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
+  const shouldContinue = explicitContinue || hasMultiplePlanSteps;
   return {
     stepReprompt: shouldContinue ? generateStepReprompt(routing, 0) : '',
     primaryRole: routing.suggestedRole,
