@@ -166,6 +166,92 @@ CRITICAL INSTRUCTIONS FOR THIS RETRY:
 The previous attempt(s) may have failed due to: malformed arguments, missing required fields, wrong parameter types, or the model attempting text-output instead of tool calls.`;
 }
 
+// ─── Tool result classification (Bug #83) ──────────────────────────────────
+
+/**
+ * Classification of a tool-result object's failure/success state.
+ *
+ * Bug #83 (Pass-6 audit): the old heuristic in `streamWithVercelAI` checked
+ * for a truthy `error` field and labelled anything else as "Unknown error"
+ * with the result's keys dumped. This mis-classified successful tool results
+ * like `{ success: true, output: "...", exitCode: 0, error: null, _recoveryHint: "..." }`
+ * as failures, which then triggered the 3-consecutive-failures loop-guard
+ * and killed the agent.
+ *
+ * The fix inverts the priority:
+ *   1. `_recoveryHint` presence → success (the injector set it on the
+ *      success path with a non-fatal recovery hint; treat as positive).
+ *   2. `success === true`      → success (source of truth, even when
+ *      `error` is explicitly `null`).
+ *   3. `success === false`     → failure (use the legacy error extraction).
+ *   4. Legacy fallback (no `success` field): truthy `error` → failure,
+ *      otherwise → success.
+ *
+ * Returns a structured result so callers can both log the outcome AND
+ * forward the original error message when the tool did actually fail.
+ */
+export type ToolResultClassification =
+  | { isFailure: false; reason: 'success_true' | 'recovery_hint' | 'no_error_field' }
+  | { isFailure: true; reason: 'success_false' | 'error_string' | 'error_object' | 'unknown_shape'; errorMsg: string };
+
+export function classifyToolResult(toolResult: any): ToolResultClassification {
+  // Priority 1: _recoveryHint is a positive signal — even on success===false,
+  // the injector attached a recovery hint meaning the executor has a non-fatal
+  // recoverable path the LLM can use on the next turn.
+  if (toolResult?._recoveryHint) {
+    return { isFailure: false, reason: 'recovery_hint' };
+  }
+  // Priority 2: success:true is the source of truth, even when error is
+  // explicitly null. Many tools (bash_execute, etc.) return
+  // { success: true, output, exitCode, error: null } on success.
+  if (toolResult?.success === true) {
+    return { isFailure: false, reason: 'success_true' };
+  }
+  // Priority 3: explicit success:false → failure. Extract the error message
+  // using the same logic the old buggy code had, so the downstream log line
+  // still gets a useful string.
+  if (toolResult?.success === false) {
+    const errorObj = toolResult?.error;
+    const resultKeys = toolResult ? Object.keys(toolResult) : [];
+    let errorMsg: string;
+    if (typeof errorObj === 'string') {
+      errorMsg = errorObj;
+    } else if (errorObj?.message) {
+      errorMsg = errorObj.message;
+    } else if (errorObj && typeof errorObj === 'object') {
+      const extracted = [errorObj.code, errorObj.reason, errorObj.type, errorObj.status, errorObj.path, errorObj.exitCode, errorObj.stderr]
+        .filter((v: unknown) => typeof v === 'string' && v.length > 0);
+      if (extracted.length > 0) {
+        errorMsg = extracted.join(' | ');
+      } else {
+        try {
+          errorMsg = JSON.stringify(errorObj);
+        } catch {
+          errorMsg = String(errorObj);
+        }
+      }
+      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
+        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
+      }
+    } else {
+      errorMsg = toolResult
+        ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}], no error field`
+        : `Unknown error — tool result is ${typeof toolResult}`;
+    }
+    return { isFailure: true, reason: 'success_false', errorMsg };
+  }
+  // Priority 4: legacy fallback (no explicit `success` field). A truthy
+  // error → failure; otherwise treat as success (optimistic).
+  const errorObj = toolResult?.error;
+  if (typeof errorObj === 'string' && errorObj.length > 0) {
+    return { isFailure: true, reason: 'error_string', errorMsg: errorObj };
+  }
+  if (errorObj && typeof errorObj === 'object' && typeof errorObj.message === 'string') {
+    return { isFailure: true, reason: 'error_object', errorMsg: errorObj.message };
+  }
+  return { isFailure: false, reason: 'no_error_field' };
+}
+
 // ─── Text-mode tool instructions (for models without native FC) ─────────────
 
 const TEXT_MODE_TOOL_INSTRUCTIONS = `
@@ -1797,7 +1883,7 @@ export async function* streamWithVercelAI(
           reason: 'model does not support function calling',
           fallbackMode: 'text-mode tool instructions injected into system prompt',
         });
-        delete streamOptions.tools;
+        // delete streamOptions.tools;  // Bug #87 (Pass-6 audit): keep full tool list
 
         // Inject text-mode tool instructions plus general plain-text fallback
         const textModeInstructions = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
@@ -2432,18 +2518,39 @@ while (thinkPingQueue.length > 0) {
               resultKeys: toolResult ? Object.keys(toolResult) : [],
             });
           } else {
-            const errorObj = toolResult?.error;
-            const resultKeys = toolResult ? Object.keys(toolResult) : [];
-            let errorMsg: string;
-            if (typeof errorObj === 'string') {
-              errorMsg = errorObj;
-            } else if (errorObj?.message) {
-              errorMsg = errorObj.message;
-            } else {
-              errorMsg = toolResult
-                ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}]${errorObj ? `, error type: ${typeof errorObj}` : ', no error field'}`
-                : `Unknown error — tool result is ${typeof toolResult}`;
+            // Bug #83 (Pass-6 audit) — use the new classifyToolResult helper
+            // so successful tool results with `error: null` are no longer
+            // mis-classified as "Unknown error" failures. The old heuristic
+            // synthesised an "Unknown error" string when the error field was
+            // absent. But tools like bash_execute return
+            // `{ success: true, output, exitCode: 0, error: null, _recoveryHint }`
+            // on success — the explicit `null` error field was being treated
+            // as a failure, which then tripped the 3-consecutive-failures
+            // loop-guard and killed the agent. classifyToolResult inverts the
+            // priority (success:true and _recoveryHint are positive signals)
+            // and is the single source of truth for the failure classification.
+            const _toolResultClassification = classifyToolResult(toolResult);
+            if (!_toolResultClassification.isFailure) {
+              // Tool actually succeeded — log success and continue without
+              // bumping the consecutive-failure counter. This is the headline
+              // Bug #83 fix: a successful tool no longer reports a failure
+              // that the loop-guard can pile up on.
+              chatLogger.info('[TOOL-RESULT] \u2713 Tool succeeded (reclassified from old "Unknown error" path)', {
+                toolCallId: resultToolCallId,
+                toolName,
+                hasCachedArgs: !!cachedArgs,
+                classificationReason: _toolResultClassification.reason,
+              });
+              consecutiveToolFailures = 0;
+              // Bug #83 (Pass-6, reviewer nit #1) — `break;` exits THIS
+              // switch case ("tool-result"), NOT the outer `for await`. The next
+              // iteration will continue consuming the LLM stream. This is standard
+              // JS switch semantics: `break` always targets the innermost switch,
+              // not an enclosing loop. To exit the loop use `return` or throw.
+              break;
             }
+            const errorObj = toolResult?.error;
+            const errorMsg = _toolResultClassification.errorMsg;
             const isEmptyArgs = !finalArgs || Object.keys(finalArgs).length === 0;
 
             chatLogger.error('[TOOL-RESULT] ✗ Tool failed', {

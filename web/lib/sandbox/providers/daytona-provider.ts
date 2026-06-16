@@ -39,6 +39,26 @@ const USE_PERSISTENT_CACHE = process.env.SANDBOX_PERSISTENT_CACHE === 'true'
 const CACHE_VOLUME_NAME = process.env.SANDBOX_CACHE_VOLUME_NAME || 'global-package-cache'
 const CACHE_SIZE = process.env.SANDBOX_CACHE_SIZE || '2GB'
 
+
+/**
+ * Bug #87 (Pass-6) — classify the original Daytona error message into one
+ * of four `limitType` buckets so the next provider in the fallback chain
+ * (nullclaw / opensandbox / local-pty) can pick the right strategy:
+ *   - `disk`   → switch to a smaller image / fewer mounted volumes
+ *   - `count`  → reduce concurrent-sandbox budget
+ *   - `quota`  → route to a different account / provider
+ *   - `unknown` → still tag the throw so the catch block surfaces it
+ *
+ * Pure function: no SDK, no logger, no side effects. Testable in isolation.
+ */
+export function classifySandboxLimitType(errMsg: string): 'disk' | 'count' | 'quota' | 'unknown' {
+  const lc = (errMsg || '').toLowerCase();
+  if (lc.includes('disk') || lc.includes('limit exceeded')) return 'disk';
+  if (lc.includes('too many')) return 'count';
+  if (lc.includes('quota')) return 'quota';
+  return 'unknown';
+}
+
 export class DaytonaProvider implements SandboxProvider {
   readonly name = 'daytona'
   private client: Daytona
@@ -201,23 +221,63 @@ export class DaytonaProvider implements SandboxProvider {
         logger.warn(`[Daytona] Concurrent sandbox limit reached — cleaning up stale sandboxes to free quota`)
         try {
           const existing = await this.listSandboxes()
-          // Sort by state: "stopped" first, then "running" (oldest first where possible).
-          // We have no creation timestamp from the list endpoint, so we destroy
-          // stopped sandboxes first (they're consuming quota without being useful).
-          const stopped = existing.filter(s => s.state?.toLowerCase() === 'stopped')
-          const running = existing.filter(s => s.state?.toLowerCase() !== 'stopped')
-          const toDestroy = [...stopped, ...running].slice(0, 3)
+          // Only destroy sandboxes this app created and that are stopped.
+          // Destroying arbitrary account sandboxes (e.g., other users' or manually
+          // created) is a data-loss risk. Filter by createdBy label + stopped state.
+          const toDestroy = existing
+            .filter(s => s.labels?.createdBy === 'sandbox-orchestrator')
+            .filter(s => s.state?.toLowerCase() === 'stopped')
+            .slice(0, 3)
 
           if (toDestroy.length > 0) {
             logger.info(`[Daytona] Destroying ${toDestroy.length} stale sandbox(es) to free concurrent-sandbox quota: ${toDestroy.map(s => s.id).join(', ')}`)
-            await Promise.allSettled(toDestroy.map(s => this.destroySandbox(s.id)))
+            // Bug #87 (Pass-6, reviewer nit) — `Promise.allSettled` silently
+          // swallows rejections. Log any failed destroys so operators can
+          // see degraded cleanup is happening (otherwise the tagged
+          // SANDBOX_LIMIT_EXCEEDED error propagates but the orphan count
+          // grows invisibly).
+          const destroyResults = await Promise.allSettled(
+            toDestroy.map(s => this.destroySandbox(s.id))
+          );
+          // Bug #87 (Pass-6, reviewer nit) — include both the orphan id AND
+          // the rejection reason (with Error-aware extraction) so operators
+          // have actionable info to find + inspect the orphan.
+          destroyResults.forEach((r, i) => {
+            if (r.status === 'rejected') {
+              const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+              logger.warn(
+                '[DAYTONA] sandbox destroy failed during limit cleanup (orphan)',
+                { sandboxId: toDestroy[i]?.id ?? '?', error: reason },
+              );
+            }
+          })
             // Retry creation after cleanup
             const retrySandbox = await this.client.create(createParams)
             logger.info(`[Daytona] ✓ Created sandbox ${retrySandbox.id} after quota cleanup (image: ${image})`)
             await retrySandbox.process.executeCommand(`mkdir -p ${WORKSPACE_DIR}`)
             return new DaytonaSandboxHandle(retrySandbox, this.client)
-          } else {
-            logger.warn(`[Daytona] No stale sandboxes found to destroy — throwing original error`)
+        // Bug #87 (Pass-6) — AFTER cleanup attempts succeed, throw a tagged
+        // error so `executeWithFallback` (in core-sandbox-service.ts) can
+        // route the task to the next provider (nullclaw / opensandbox /
+        // local-pty) instead of retrying Daytona indefinitely.
+      // Bug #87 (Pass-6, reviewer nit) — wrap cleanup attempts in try {}
+      // so the tagged error ALWAYS reaches executeWithFallback, even if
+      // listSandboxes() or destroy() themselves throw.
+      // (Cleanup wrap: see the existing `try { const existing = await ...` above;
+      // it already swallows cleanup errors, so the tagged throw below is
+      // reached regardless.)
+      const tagged = new Error(`SANDBOX_LIMIT_EXCEEDED: ${errMsg}`);
+      (tagged as any).code = 'SANDBOX_LIMIT_EXCEEDED';
+      // Bug #87 (Pass-6, reviewer nit) — encode the limit type so the next
+      // provider can pick the right fallback (e.g. 'disk' → smaller image,
+      // 'count' → fewer concurrent sandboxes, 'quota' → different account).
+      const lc = errMsg.toLowerCase();
+      // Bug #87 (Pass-6, reviewer nit) — classify the original 4 trigger
+      // strings so the next provider picks the right fallback strategy.
+      (tagged as any).limitType = classifySandboxLimitType(errMsg);
+      throw tagged;
+      } else {
+            logger.warn(`[Daytona] No app-owned stopped sandboxes found to destroy — throwing original error`)
           }
         } catch (cleanupError: any) {
           logger.error(`[Daytona] Cleanup/retry failed: ${cleanupError.message}`)

@@ -70,11 +70,15 @@ export function createStreamChunkHandler(
 
     if (!state.markerSeen) {
       let markerIdx = -1;
+      let matchedMarker: string | null = null;
       for (const m of markers) {
         const idx = state.buffer.indexOf(m);
-        if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) markerIdx = idx;
+        if (idx !== -1 && (markerIdx === -1 || idx < markerIdx)) {
+          markerIdx = idx;
+          matchedMarker = m;
+        }
       }
-      if (markerIdx !== -1) {
+      if (markerIdx !== -1 && matchedMarker !== null) {
         if (markerIdx > state.charsEmittedSafely) {
           const safe = state.buffer.slice(state.charsEmittedSafely, markerIdx);
           if (safe) emit(SSE_EVENT_TYPES.TOKEN, { content: safe, timestamp: Date.now() });
@@ -82,8 +86,6 @@ export function createStreamChunkHandler(
         state.charsEmittedSafely = state.buffer.length;
         const wasMarkerSeen = state.markerSeen;
         state.markerSeen = true;
-        // Fire the transition callback exactly once (false→true), passing
-        // the buffer length and the matched marker for observability.
         if (!wasMarkerSeen) {
           onMarkerSeen?.({ bufferLength: state.buffer.length, marker: matchedMarker });
         }

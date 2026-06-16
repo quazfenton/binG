@@ -339,8 +339,23 @@ export class SandboxService {
         await fallback.getSandbox(sandboxId)
         this.sandboxProviderById.set(sandboxId, fallback)
         return fallback
-      } catch {
-        // continue
+      } catch (fallbackErr: any) {
+        // Bug #87 (Pass-6) — when a provider throws a tagged SANDBOX_LIMIT_EXCEEDED
+        // error, log the limitType + provider so the operator can see which
+        // provider hit which limit (disk / count / quota / unknown), then
+        // continue to the next provider in the chain (nullclaw → opensandbox
+        // → local-pty). The fallback chain naturally continues via `continue`.
+        if (
+          fallbackErr?.code === 'SANDBOX_LIMIT_EXCEEDED' ||
+          (typeof fallbackErr?.message === 'string' && fallbackErr.message.includes('SANDBOX_LIMIT_EXCEEDED'))
+        ) {
+          log.warn(
+            `[Sandbox] ${fallbackType} hit SANDBOX_LIMIT_EXCEEDED ` +
+            `(limitType=${fallbackErr?.limitType ?? 'unknown'}) — falling through`,
+            { sandboxId, provider: fallbackType, limitType: fallbackErr?.limitType },
+          );
+        }
+        // continue to next provider
       }
     }
 

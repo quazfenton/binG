@@ -20,6 +20,44 @@ import { emitFilesystemUpdated } from './sync-events';
 
 import { createLogger } from '@/lib/utils/logger';
 
+/**
+ * Bug (Pass-6) — patterns that indicate the sandbox is gone or the caller
+ * can no longer talk to it (auth revoked, permission lost, network auth
+ * failed, etc.). Matched against an error message; the sync interval is
+ * stopped when any of them hit so we don't retry forever.
+ *
+ * Note: HTTP status codes (401/403) are NOT included here because they
+ * false-positive on numeric substrings like "1401" or "v1.401". The
+ * textual patterns (`unauthorized`, `forbidden`) cover the same cases
+ * unambiguously.
+ */
+const SANDBOX_INACCESSIBLE_PATTERNS: RegExp[] = [
+  /sandbox.*not[\s_-]*found/i,
+  /not[\s_-]*found.*sandbox/i,
+  /security[_\s-]*exception/i,
+  /exception[_\s-]*security/i,
+  /access[_\s-]*denied/i,
+  /permission[_\s-]*denied/i,
+  /\beacces\b/i,
+  /\beperm\b/i,
+  /\bunauthorized\b/i,
+  /\bforbidden\b/i,
+  /security[_\s-]*violation/i,
+];
+
+/**
+ * Bug (Pass-6) — returns true if the given error message matches any of
+ * the sandbox-inaccessibility patterns. Used by the sync loop to decide
+ * when to call `stopSync(sandboxId)` instead of retrying.
+ */
+function isSandboxInaccessible(message: string): boolean {
+  for (const pattern of SANDBOX_INACCESSIBLE_PATTERNS) {
+    if (pattern.test(message)) return true;
+  }
+  return false;
+}
+
+
 const logger = createLogger('VFS:SandboxSync');
 
 // ============================================================================
@@ -225,6 +263,14 @@ class SandboxFilesystemSync {
   private lastSyncVersions: Map<string, number> = new Map<string, number>();
   private enabled: boolean;
   private syncIntervalMs: number;
+  
+  // Bug #115/#89: Consecutive failure counter per sandbox. After
+  // MAX_CONSECUTIVE_SYNC_FAILURES failures, stop syncing regardless
+  // of the error message content. This prevents orphan sandbox refs
+  // that never match the isSandboxInaccessible regex patterns from
+  // spamming the log indefinitely.
+  private consecutiveSyncFailures: Map<string, number> = new Map<string, number>();
+  private static readonly MAX_CONSECUTIVE_SYNC_FAILURES = 5;
   
   // === IMPROVEMENT 1: Per-session debounce queues ===
   // Each PTY session gets its own debounce queue instead of global
@@ -444,6 +490,7 @@ class SandboxFilesystemSync {
       clearInterval(interval);
       this.syncIntervals.delete(sandboxId);
       this.lastSyncVersions.delete(sandboxId);
+      this.consecutiveSyncFailures.delete(sandboxId);
       logger.info(`[SandboxSync] Stopped sync for sandbox ${sandboxId}`);
     }
     
@@ -461,16 +508,26 @@ class SandboxFilesystemSync {
       entries = await sandboxBridge.listDirectory(sandboxId, workspaceDir);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Bug #115/#89: Track consecutive failures. After MAX_CONSECUTIVE_SYNC_FAILURES
+      // we stop the sync even if isSandboxInaccessible doesn't match, because the
+      // sandbox is clearly gone or unreachable.
+      const failCount = (this.consecutiveSyncFailures.get(sandboxId) || 0) + 1;
+      this.consecutiveSyncFailures.set(sandboxId, failCount);
+
+      if (failCount >= SandboxFilesystemSync.MAX_CONSECUTIVE_SYNC_FAILURES) {
+        logger.warn(
+          `[SandboxSync] Sandbox ${sandboxId} failed ${failCount} consecutive syncs — stopping sync (stale reference cleanup)`,
+          { sandboxId, failCount, lastMessage: message },
+        );
+        this.stopSync(sandboxId);
+        return;
+      }
+
       logger.warn(
         `[SandboxSync] Cannot list sandbox ${sandboxId} directory:`,
         message,
       );
-      // If the sandbox itself no longer exists (destroyed, expired, or never
-      // started) or is inaccessible (security exception), stop the sync interval
-      // so we don't spam the same warning on every poll. We require both
-      // "sandbox" and "not found" in the message to avoid false positives from
-      // transient errors like "directory not found" during sandbox startup.
-      if (/sandbox.*not found|not found.*sandbox|security.*exception|exception.*security/i.test(message)) {
+      if (isSandboxInaccessible(message)) {
         this.stopSync(sandboxId);
         logger.info(`[SandboxSync] Stopped sync for removed/inaccessible sandbox ${sandboxId}`);
       }
@@ -478,6 +535,9 @@ class SandboxFilesystemSync {
     }
 
     if (!Array.isArray(entries)) return;
+
+    // Bug #115/#89: Reset consecutive failure counter on successful sync
+    this.consecutiveSyncFailures.delete(sandboxId);
 
     const files = entries.filter((e) => e.type === 'file');
 

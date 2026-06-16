@@ -196,7 +196,7 @@ export interface LoopDetectorResult {
   message: string | null;
   /** Bug #41: structured abort payload for the final SSE `loop_abort` event. */
   abort?: {
-    abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+    abortReason: 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown';
     consecutive: number;
     failedTools: Array<{ name: string; error: string }>;
     suggestion: string;
@@ -249,19 +249,17 @@ export function isLoopDetectorResult(x: unknown): x is LoopDetectorResult {
  * `binary_missing` is the dominant case (the LLM is trying to call a binary
  * that doesn't exist); switching to `write_file` is the safest recovery.
  */
-function autoRecoverToolFor(abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown'): string | undefined {
-  switch (abortReason) {
-    case 'binary_missing':
-      return 'write_file';
-    case 'wrong_tool_name':
-      // No single "replacement" tool — the LLM must pick the right canonical
-      // name from the system prompt. Return undefined so the UI does not
-      // pre-fill a misleading tool.
-      return undefined;
-    case 'timeout':
-    case 'unknown':
-      return undefined;
-  }
+/**
+ * Map a loop-abort reason to a safe fallback tool name (Bug #41 / #84).
+ * Only `binary_missing` has a known-good replacement (`write_file`); for
+ * all other reasons the LLM must pick the right canonical name from the
+ * system prompt, so we return `undefined` to avoid pre-filling a
+ * misleading tool.
+ */
+function autoRecoverToolFor(
+  abortReason: 'binary_missing' | 'tool_failing' | 'mixed' | 'unknown'
+): string | undefined {
+  return abortReason === 'binary_missing' ? 'write_file' : undefined;
 }
 
 /**
@@ -357,7 +355,7 @@ function buildLoopAbortResult(
  * @param error — Optional real error message from the failed tool. When
  *   provided on a failure, it's stored in `state.failedToolErrors` so the
  *   Bug #41 loop_abort steer can categorize the abort reason correctly
- *   (binary_missing vs wrong_tool_name vs timeout). Default is undefined —
+ *   (binary_missing vs tool_failing vs timeout). Default is undefined —
  *   the detector falls back to a placeholder string and the steer gets
  *   `abortReason: 'unknown'`.
  */

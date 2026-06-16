@@ -1,3 +1,14 @@
+  // Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small
+  // named helper `maybeDetectorContinuation()` for readability. The helper
+  // forwards real `result.fileEdits ?? []` (not a hardcoded `[]`) so the
+  // detector's `edits-mismatch` signal can actually fire.
+  const detectorOverride = maybeDetectorContinuation(
+    iterContent,
+    result,
+    continuationDecision,
+    normalizeStepArgs,
+    log,
+  ) ?? { force: false };
 import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/providers/llm-providers";
 import { errorHandler } from '@/lib/errors/error-handler';

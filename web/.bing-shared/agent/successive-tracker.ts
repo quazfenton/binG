@@ -74,7 +74,12 @@ export interface ReEvalTrigger {
 }
 
 const DEFAULT_RESPONSE_THRESHOLD = 5;
-const DEFAULT_TOOL_CALL_THRESHOLD = 15;
+// Bug #89 (Pass-6 audit) — bumped from 15 to 50. The previous value
+// fired mid-chat on legitimate multi-step tasks (e.g. scaffolding 10
+// files + 5 tests + 2 fixes = 17) and caused silent state resets with
+// no STEER message. 50 covers a reasonable task envelope while still
+// catching runaway loops.
+const DEFAULT_TOOL_CALL_THRESHOLD = 50;
 const DEFAULT_CONSECUTIVE_TOOL_THRESHOLD = 7;
 const RE_EVAL_WINDOW_MS = 60 * 1000; // 1 minute
 /**

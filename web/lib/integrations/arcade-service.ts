@@ -16,6 +16,7 @@
 
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
+import { recordFailureBreaker } from '@/lib/utils/circuit-breaker';
 
 const logger = createLogger('Integration:Arcade');
 
@@ -65,6 +66,29 @@ export class ArcadeService {
   // warning instead, so the rest of the app keeps working.
   private disabled = false;
   private disabledReason: string | null = null;
+  // Bug #88 (Pass-6) — reset the consecutive-401 counter + clear the
+  // `disabled` flag after a successful Arcade call. Only re-enables if
+  // the service was disabled by US (credFailuresDisabled), never silently
+  // re-enables a manually-disabled service.
+  private recordArcadeSuccess(): void {
+    if (this.consecutive401s > 0) this.consecutive401s = 0;
+    if (this.disabled && this.credFailuresDisabled) {
+      this.disabled = false;
+      this.credFailuresDisabled = false;
+      this.disabledReason = null;
+    }
+  }
+
+    // Bug #88 (Pass-6) — count consecutive 401s. The previous code disabled
+  // on the FIRST 401, permanently stranding the service on a single bad
+  // API key. Now we count, and once the threshold is reached, call
+  // recordFailureBreaker() which schedules a self-reset after 60s.
+  private consecutive401s = 0;
+  private static readonly MAX_CONSECUTIVE_401s = 3;
+  // Bug #88 (Pass-6, reviewer nit) — dedicated flag so the auto-re-enable
+  // path doesn't rely on substring-matching the disabledReason. Only this
+  // flag triggers the auto re-enable on a successful response.
+  private credFailuresDisabled = false;
   private connections = new Map<string, ArcadeConnection>();
   private tools = new Map<string, ArcadeTool>();
 
@@ -180,8 +204,27 @@ export class ArcadeService {
           // the HTTP fallback path: disable the service and stop the noise.
           const status = sdkError?.status ?? sdkError?.statusCode ?? sdkError?.response?.status;
           if (status === 401) {
+            // Bug #88 (Pass-6) — count consecutive 401s. After MAX_CONSECUTIVE_401s,
+
+            // record a failure on the 'arcade' circuit-breaker key with a 60s
+
+            // cooldown. The breaker auto-resets via `recordFailureBreaker()` so
+
+            // we don't permanently strand the service on a single bad API key.
+
+            this.consecutive401s += 1;
+
+            if (this.consecutive401s >= ArcadeService.MAX_CONSECUTIVE_401s) {
+
+              recordFailureBreaker('arcade', 60_000);
+
+            }
+
             this.disabled = true;
-            this.disabledReason = 'Invalid API credentials';
+
+            this.credFailuresDisabled = true;
+
+            this.disabledReason = `Invalid API credentials (${this.consecutive401s}/${ArcadeService.MAX_CONSECUTIVE_401s} consecutive 401s)`;
             arcadeServiceDisabled = true;
             const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
             logger.warn(
@@ -238,8 +281,27 @@ export class ArcadeService {
         // The API key is invalid/expired. Disable the service for the rest of
         // the process lifetime so we don't keep paying the latency + log
         // noise on every tool call.
+        // Bug #88 (Pass-6) — count consecutive 401s. After MAX_CONSECUTIVE_401s,
+
+        // record a failure on the 'arcade' circuit-breaker key with a 60s
+
+        // cooldown. The breaker auto-resets via `recordFailureBreaker()` so
+
+        // we don't permanently strand the service on a single bad API key.
+
+        this.consecutive401s += 1;
+
+        if (this.consecutive401s >= ArcadeService.MAX_CONSECUTIVE_401s) {
+
+          recordFailureBreaker('arcade', 60_000);
+
+        }
+
         this.disabled = true;
-        this.disabledReason = 'Invalid API credentials';
+
+        this.credFailuresDisabled = true;
+
+        this.disabledReason = `Invalid API credentials (${this.consecutive401s}/${ArcadeService.MAX_CONSECUTIVE_401s} consecutive 401s)`;
         arcadeServiceDisabled = true;
         const maskedKey = `${this.config.apiKey.slice(0, 8)}...${this.config.apiKey.slice(-4)}`;
         logger.warn(

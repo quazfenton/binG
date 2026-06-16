@@ -353,12 +353,12 @@ export interface SSENexPayload {
 /**
  * Bug #41: loop-guard abort payload. Emitted as the FINAL SSE event when the
  * 3-consecutive-tool-failures kill fires. The UI shows a banner with the
- * categorized reason (binary_missing | wrong_tool_name | timeout | unknown),
+ * categorized reason (binary_missing | tool_failing | timeout | unknown),
  * the failed tool list, and the recovery suggestion.
  */
 export interface SSELoopAbortPayload {
   /** Categorized abort reason for the UI banner. */
-  abortReason: 'binary_missing' | 'wrong_tool_name' | 'timeout' | 'unknown';
+  abortReason: 'binary_missing' | 'tool_failing' | 'timeout' | 'unknown';
   /** Number of consecutive failures that triggered the kill. */
   consecutive: number;
   /** Last N failed tool calls (name + error preview) so the UI can show details. */

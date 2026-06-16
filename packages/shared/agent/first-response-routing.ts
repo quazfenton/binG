@@ -118,7 +118,9 @@ export function stripRoutingMarkers(responseText: string): string {
   return cleaned.trim();
 }
 
-/** Default routing for when parsing fails — safe conservative defaults */
+/** Default routing for when parsing fails — safe conservative defaults.
+ * Bug #70: `continue` defaults to true (env-tunable via LLM_AUTO_CONTINUE_DEFAULT)
+ * so multi-step agent tasks auto-continue instead of stopping at step 1. */
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -127,7 +129,7 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-  continue: false,
+  continue: typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false',
 };
 
 /**

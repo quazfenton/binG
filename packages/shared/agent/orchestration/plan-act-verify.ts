@@ -591,14 +591,6 @@ export class PlanActVerifyOrchestrator {
         this.sdkTools[toolName] = aiTool({
           description: toolDef.description || `Execute ${toolName}`,
           inputSchema: normalizedSchema,
-          execute: async (args: Record<string, unknown>) => {
-            try {
-              return await config.executeTool(toolName, args);
-            } catch (error: any) {
-              log.error(`Tool ${toolName} execution failed`, { error: error.message });
-              throw error;
-            }
-          },
         } as any);
       }
 

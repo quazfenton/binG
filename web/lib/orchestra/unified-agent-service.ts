@@ -450,6 +450,50 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
  */
 const _sessionPermanentFailures = new Set<string>();
 
+/**
+ * Bug #116/#90: Process-level circuit breaker for transient failures.
+ * A provider that hits N transient failures within a TTL window gets
+ * temporarily blocked (not permanently). This prevents the "sticky
+ * permanent failure" bug where a single transient error disables a
+ * provider for the entire process lifetime.
+ */
+const TRANSIENT_CIRCUIT_BREAKER_TTL_MS = 5 * 60 * 1000;
+const TRANSIENT_CIRCUIT_BREAKER_THRESHOLD = 5;
+const _transientCircuitBreaker = new Map<string, { count: number; firstAt: number; lastAt: number }>();
+
+function recordTransientFailure(providerName: string): void {
+  const key = providerName.toLowerCase();
+  const now = Date.now();
+  let entry = _transientCircuitBreaker.get(key);
+  if (!entry || now - entry.firstAt > TRANSIENT_CIRCUIT_BREAKER_TTL_MS) {
+    entry = { count: 1, firstAt: now, lastAt: now };
+    _transientCircuitBreaker.set(key, entry);
+    return;
+  }
+  entry.count++;
+  entry.lastAt = now;
+}
+
+function isProviderCircuitBroken(providerName: string): boolean {
+  const key = providerName.toLowerCase();
+  const entry = _transientCircuitBreaker.get(key);
+  if (!entry) return false;
+  const now = Date.now();
+  if (now - entry.firstAt > TRANSIENT_CIRCUIT_BREAKER_TTL_MS) {
+    _transientCircuitBreaker.delete(key);
+    return false;
+  }
+  return entry.count >= TRANSIENT_CIRCUIT_BREAKER_THRESHOLD;
+}
+
+function resetTransientCircuitBreaker(providerName: string): void {
+  _transientCircuitBreaker.delete(providerName.toLowerCase());
+}
+
+function resetAllTransientCircuitBreakers(): void {
+  _transientCircuitBreaker.clear();
+}
+
 /** Reset permanent failure tracking at the start of each request. */
 function resetSessionPermanentFailures(): void {
   _sessionPermanentFailures.clear();
@@ -3466,6 +3510,13 @@ async function runV1ApiWithTools(
       log.debug("[V1-API-WITH-TOOLS] │ provider: " + providerName + " skipped — permanently failed earlier in this request");
       continue;
     }
+
+    // Bug #116/#90: Skip providers with an open transient circuit breaker.
+    // Unlike permanent failures, these auto-recover after the TTL window expires.
+    if (isProviderCircuitBroken(providerName)) {
+      log.debug("[V1-API-WITH-TOOLS] │ provider: " + providerName + " skipped — transient circuit breaker open");
+      continue;
+    }
     // FIX: Skip models that are rate-limited per model-ranker
     if (modelRankerFns?.isRateLimited(providerName, modelForProvider)) {
       log.warn('[V1-API-WITH-TOOLS] ┌─ RATE LIMITED ────────────────');
@@ -3543,11 +3594,17 @@ async function runV1ApiWithTools(
             config.onToolExecution?.(toolDef.name, args, toolResult);
 
             // Track for no-progress loop detection
-            const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success);
+            // Bug #111/#84: Pass the real error string so loop-abort steer has
+            // concrete failure history instead of empty/placeholder entries.
+            const _toolError: unknown = toolResult.error;
+            const toolErrorMsg = typeof _toolError === 'string'
+              ? _toolError
+              : (typeof _toolError === 'object' && _toolError !== null && 'message' in _toolError ? String((_toolError as { message: unknown }).message) : undefined);
+            const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success, toolErrorMsg);
             if (loopMsg) {
               log.warn(`[V1-API-WITH-TOOLS] Loop detected: ${loopMsg}`);
               // Bug #41: emit categorized loop-abort steer so the LLM knows WHY
-              // the loop was triggered (binary_missing, wrong_tool_name, timeout, unknown)
+              // the loop was triggered (binary_missing, tool_failing, mixed, unknown)
               // and gets a concrete suggestion for what to do next.
               const abortSteer = wireLoopAbortSteer({
                 consecutive: loopState.consecutiveFailures,
@@ -4464,6 +4521,21 @@ Based on what you have learned, continue working on the original task. Take the 
             log.error("[V1-API-WITH-TOOLS] │ remaining: " + (uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).filter(p => !isProviderPermanentlyFailed(p)).join(", ") || "NONE"));
             log.error("[V1-API-WITH-TOOLS] └───────────────────────────────");
             continue;
+          }
+
+          // Bug #116/#90: Record transient/rate-limit failures in the process-level
+          // circuit breaker. After N transient failures within a TTL window, the
+          // provider is temporarily skipped (not permanently banned). This prevents
+          // the "sticky permanent failure" pattern where a single transient outage
+          // disables a provider for the rest of the process lifetime.
+          if (errorClass === "transient" || errorClass === "rate_limit") {
+            recordTransientFailure(providerName);
+            if (isProviderCircuitBroken(providerName)) {
+              log.warn("[V1-API-WITH-TOOLS] Circuit breaker OPEN for provider: " + providerName + " — temporarily skipping (TTL " + TRANSIENT_CIRCUIT_BREAKER_TTL_MS / 1000 + "s)", {
+                transientFailures: _transientCircuitBreaker.get(providerName.toLowerCase()),
+              });
+              continue;
+            }
           }
           
           // "Controller is already closed" = stream controller dead (idle timeout,

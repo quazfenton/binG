@@ -3262,6 +3262,435 @@ The existing `auto-continue-detector.ts` has 8 signal types covering most Pass-5
 | `lib/orchestra/mastra/agent-loop.ts` | Add ToolLoopAgent init logging (#81) |
 | `lib/management/process-memory-monitor.ts` | Document `withMemoryThrottle` adoption needed (#79) |
 
+---
+
+## Pass-8: Fresh Log Audit — Additional OPEN Bugs
+
+### #110: Tool result parser loses real error when `error` is an object
+
+**Category:** Tools / Error Handling  
+**Severity:** 🟠 High  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log:4743`, `8104`, `10247`, `10296`, `10450`, and 28 more entries log:
+  `Unknown error — tool result has keys: [success, output, exitCode, error, _recoveryHint], no error field`.
+- Occurred for:
+  - `bash_execute`: 27 occurrences
+  - `read_files`: 5 occurrences
+  - `read_file`: 1 occurrence
+- The tool result contains `success:false` and an `error` object, but the parser only extracts string errors or object errors with `message`.
+
+**Root Cause:**
+
+`web/lib/chat/vercel-ai-streaming.ts:213-226` treats `{ success:false, error:{...} }` as unextractable unless `error.message` exists. That discards structured errors and logs an opaque “no error field” message even though the `error` key exists.
+
+**Impact:**
+
+- Loop aborts and consecutive failure tracking receive generic `repeated failure` errors instead of actionable messages.
+- The LLM cannot distinguish permission errors, path errors, missing binaries, timeouts, or sandbox failures.
+- Debugging degraded tasks requires opening raw logs.
+
+**Suggested Fix:**
+
+- Preserve the current string/message extraction.
+- Add a structured-object fallback:
+  - `JSON.stringify(errorObj)`
+  - selected fields such as `code`, `status`, `type`, `reason`, `path`, `exitCode`, `stderr`
+  - `String(errorObj)` as last resort.
+- Also preserve `_recoveryHint` in the extracted `errorMsg` or SSE payload so the LLM sees the recovery hint.
+
+**Files:** `web/lib/chat/vercel-ai-streaming.ts`, `web/lib/orchestra/steer-service.ts`
+
+---
+
+### #111: Loop-abort steer sometimes has empty failure history
+
+**Category:** Tool Loop / Steering  
+**Severity:** 🟠 High  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log:10353` and `13250` show:
+  `kind:"loop_abort"` with `failedTools:[]`, even though `consecutive:3`.
+- There are 18 total loop-abort events; 9 have empty `failedTools`.
+
+**Root Cause:**
+
+`web/lib/orchestra/unified-agent-service.ts:3552-3557` builds the abort steer from `loopState.recentFailures`. When that array is empty or stale, `wireLoopAbortSteer()` still emits an abort with `abortReason:"unknown"` and no concrete failure list.
+
+**Impact:**
+
+- The LLM gets only a generic instruction: “Review the recent tool-call errors…”
+- No binary/path/tool-name/timeout classification is possible.
+- Human debugging is harder because the abort event omits the actual failed tools.
+
+**Suggested Fix:**
+
+- Before emitting `loop_abort`, ensure the last failed tool result is appended to `loopState.recentFailures`.
+- If recent failures are unavailable, fall back to the last 3 tool executions and mark them as `error:"unknown"` rather than `failedTools:[]`.
+- Add a health metric counting loop aborts with empty failure history.
+
+**Files:** `web/lib/orchestra/unified-agent-service.ts`, `web/lib/orchestra/steer-service.ts`
+
+---
+
+### #112: VFS ownership transfer has null row during cookie fast-path
+
+**Category:** VFS / Auth  
+**Severity:** 🟡 Med  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log:1677`, `1714`, `11408`, and `21551` log:
+  `VFS ownership transfer iteration failed (non-fatal)` with `Cannot read properties of null (reading 'cnt')`.
+- Occurs during anonymous-to-authenticated VFS ownership transfer.
+
+**Root Cause:**
+
+`web/lib/auth/transfer-anon-vfs.ts:108-137` catches per-row transfer errors and logs them as non-fatal. The null `cnt` suggests a stale or malformed owner/session row survived the candidate scan.
+
+**Impact:**
+
+- Transfer can still complete through other candidates, but each null row creates noisy warnings and may leave some files untransferred.
+- The user can see inconsistent anonymous/authenticated workspace state.
+
+**Suggested Fix:**
+
+- Filter null owner rows before calling `virtualFilesystem.transferOwnership()`.
+- Log the candidate source and count of skipped null rows.
+- Add a bounded retry for malformed candidate rows only if the DB can produce a valid owner ID.
+
+**Files:** `web/lib/auth/transfer-anon-vfs.ts`, `lib/virtual-filesystem/*`
+
+---
+
+### #113: LLM repeatedly calls tools with missing required args
+
+**Category:** Tool Validation / Prompting  
+**Severity:** 🟡 Med  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- The log contains repeated validation failures where the LLM invokes tools without required arguments, especially path-bearing tools like `list_files`.
+- These failures consume tool-call budget and increase consecutive failure risk.
+
+**Root Cause:**
+
+Tool schemas and validation reject missing required args, but the LLM does not always receive a concise corrective steer before retrying. The current tool result can be too generic for the model to infer the missing field.
+
+**Impact:**
+
+- Preventable tool failures.
+- Wasted token budget and time.
+- Higher chance of loop-abort when multiple missing-argument calls happen in sequence.
+
+**Suggested Fix:**
+
+- On `INVALID_ARGS` or validation failures, inject a steer that names the missing required field and shows the expected call shape.
+- Add a test fixture for `list_files` called without `path`.
+- Consider adding schema examples to the system prompt for high-frequency tools.
+
+**Files:** `web/lib/tools/router.ts`, `web/lib/chat/steer-service.ts`, tool schema files under `web/lib/chat/tools/*`
+
+---
+
+### #114: Daytona quota cleanup is not enough for persistent disk/concurrency exhaustion
+
+**Category:** Sandbox / Provider Resilience  
+**Severity:** 🟠 High  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log:4718`, `8100`, and `10279` log:
+  `Total disk limit exceeded. Maximum allowed: 30GiB`.
+- Daytona provider has cleanup logic, but repeated failures still reach the orchestrator and fail sandbox creation.
+
+**Root Cause:**
+
+`web/lib/sandbox/providers/daytona-provider.ts:186-218` cleans up stale sandboxes and retries once, but the log shows the account still exceeds quota. There is no graceful fallback to another sandbox provider or a user-facing quota explanation when cleanup cannot free enough capacity.
+
+**Impact:**
+
+- Code tasks fail before the LLM can execute commands.
+- Cleanup may destroy useful sandboxes without guaranteeing recovery.
+- The user sees sandbox creation failures rather than a clear quota state.
+
+**Suggested Fix:**
+
+- Track quota cleanup result and whether retry succeeded.
+- If cleanup fails to free quota, fail over to an alternate sandbox provider if configured.
+- Return a structured quota error to the LLM so it can avoid creating more sandboxes.
+- Surface quota health in `/api/health?detailed`.
+
+**Files:** `web/lib/sandbox/providers/daytona-provider.ts`, `web/lib/sandbox/providers/index.ts`, `web/lib/orchestra/unified-agent-service.ts`
+
+---
+
+### #115: VFS sandbox sync repeatedly references deleted sandboxes
+
+**Category:** VFS / Sandbox Sync  
+**Severity:** 🟡 Med  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log` contains 2198 `VFS:SandboxSync` warnings like:
+  `Cannot list sandbox <id> directory: Sandbox with ID or name <id> not found`.
+- These reference 34 unique sandbox IDs.
+
+**Root Cause:**
+
+The VFS sync layer retains sandbox references after the sandbox has been destroyed or expired. It logs each failed lookup as a warning rather than reconciling the reference.
+
+**Impact:**
+
+- Noisy logs.
+- Repeated failed I/O attempts.
+- Possible delayed snapshot/sync behavior when stale references accumulate.
+
+**Suggested Fix:**
+
+- Treat “sandbox not found” as a reconcilable state.
+- Remove or mark stale sandbox references after a bounded number of failures.
+- Batch cleanup instead of logging every lookup.
+- Add a metric for stale sandbox references by provider.
+
+**Files:** `web/lib/virtual-filesystem/vfs-sandbox-sync.ts`, `web/lib/sandbox/providers/*`
+
+---
+
+### #116: Provider permanent failure is too sticky after a single auth/API error
+
+**Category:** LLM Provider Health / SelfHeal  
+**Severity:** 🟠 High  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- Logs show repeated `PERMANENT ERROR` and `will not retry` behavior after provider/API failures.
+- Some providers become unavailable for the rest of the process even when the failure could be transient or configuration-scoped.
+
+**Root Cause:**
+
+Provider health state is persisted aggressively. A single hard auth/API failure can disable a provider without enough distinction between:
+- missing API key,
+- invalid API key,
+- rate limit,
+- invalid model,
+- transient provider outage.
+
+**Impact:**
+
+- Provider pool shrinks during long sessions.
+- The LLM falls back to weaker or overloaded models.
+- A temporary outage can cause long-lived degradation.
+
+**Suggested Fix:**
+
+- Separate permanent auth failures from transient provider failures.
+- Add circuit-breaker TTLs instead of process-lifetime bans for non-auth errors.
+- Surface provider health state in `/api/health?detailed`.
+- Allow manual/provider config reset without restarting the process.
+
+**Files:** `packages/shared/agent/unified-agent-service.ts`, `web/lib/chat/llm-provider-health.ts`, `web/lib/chat/llm-fallback-coordinator.ts`
+
+---
+
+### #117: Completion telemetry can report zero response length after successful tool activity
+
+**Category:** LLM Telemetry / Streaming  
+**Severity:** 🟡 Med  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log:4763`:
+  `provider:"google", model:"gemini-3.1-flash-lite-preview", toolCount:15, responseLength:0`.
+- `web/logs/run.log:8137`:
+  `provider:"ninerouter", model:"kc/kilo-auto/free", toolCount:14, responseLength:0`.
+
+**Root Cause:**
+
+The completion finished and tools ran, but the captured assistant text length was zero. This can happen when the model only emits tool calls or when the streaming/text capture path does not record non-text responses.
+
+**Impact:**
+
+- Telemetry under-reports useful work.
+- Auto-continuation may misclassify tool-only completions.
+- Quality scoring cannot distinguish “done via tools” from “empty response.”
+
+**Suggested Fix:**
+
+- Record `toolCount` and `textLength` separately.
+- Treat `toolCount > 0 && textLength === 0` as `tool_only`, not `empty_response`.
+- Continue only when `toolCount === 0` and the task state still needs work.
+
+**Files:** `web/lib/chat/chat-metrics.ts`, `web/lib/orchestra/unified-agent-service.ts`, `web/lib/chat/llm-continuation.ts`
+
+---
+
+### #118: Repeated sandbox provider initialization churn
+
+**Category:** Sandbox / Lifecycle  
+**Severity:** 🟡 Med  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log` contains 3384 `getSandboxProvider called with type` entries.
+- The same providers are initialized repeatedly across the run.
+
+**Root Cause:**
+
+Provider registry calls appear to reinitialize providers instead of reusing a stable singleton/cached instance.
+
+**Impact:**
+
+- Startup latency on sandbox creation.
+- More chances for transient provider init failures.
+- Noisy logs and unnecessary provider-side API calls.
+
+**Suggested Fix:**
+
+- Cache initialized provider instances by type.
+- Add an init-once guard with health reset on explicit provider reload.
+- Log provider reuse vs. init to distinguish normal reuse from repeated initialization.
+
+**Files:** `web/lib/sandbox/providers/index.ts`, `web/lib/sandbox/providers/*`
+
+---
+
+### #119: Plain-text fallback can still return invalid JSON
+
+**Category:** LLM Provider / Fallback  
+**Severity:** 🟠 High  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- `web/logs/run.log:2755`, `6085`, `12635`, `12851`, and `16794` log:
+  `callLLM: plain-text fallback also failed` with `Invalid JSON response`.
+- There are 32 `Invalid JSON response` occurrences in the log.
+
+**Root Cause:**
+
+The fallback path assumes a provider can reliably return parseable JSON. Some ninerouter/OpenRouter responses still violate the expected shape.
+
+**Impact:**
+
+- Orchestrator cannot continue after fallback.
+- User gets abrupt failure instead of a degraded but usable response.
+- Invalid JSON from fallback is indistinguishable from primary-provider JSON failure.
+
+**Suggested Fix:**
+
+- Add provider-specific fallback routing away from ninerouter for JSON-only orchestration.
+- Parse partial JSON defensively when possible.
+- Return a structured invalid-JSON steer to the next turn instead of hard-failing.
+- Track invalid JSON by provider/model.
+
+**Files:** `web/lib/orchestra/unified-agent-service.ts`, `web/lib/chat/llm-fallback-coordinator.ts`, `web/lib/chat/llm-provider-health.ts`
+
+---
+
+### #120: Rate limiting is not normalized across providers
+
+**Category:** LLM Provider Health  
+**Severity:** 🟡 Med  
+**Status:** ⬜ OPEN
+
+**Evidence:**
+
+- Logs include rate-limit-like failures across multiple models/providers.
+- These failures currently feed the same failure path as other provider errors.
+
+**Root Cause:**
+
+Provider errors are not normalized into a common `rate_limited` category with retry-after handling.
+
+**Impact:**
+
+- Rate-limited providers may be marked permanently unhealthy.
+- Fallback decisions are less accurate.
+- The LLM can retry too quickly into the same throttled provider.
+
+**Suggested Fix:**
+
+- Normalize 429 and rate-limit messages into a dedicated provider error type.
+- Respect `Retry-After` headers where available.
+- Add exponential backoff per provider/model.
+- Keep rate-limited providers temporarily unavailable instead of permanently failed.
+
+**Files:** `web/lib/chat/llm-provider-health.ts`, `web/lib/chat/llm-fallback-coordinator.ts`, `packages/shared/agent/unified-agent-service.ts`
+
+---
+
+### Pass-8 Summary Table
+
+| # | Category | Severity | Title | Status |
+|---|----------|----------|-------|--------|
+| 110 | Tools | 🟠 High | Tool result parser loses real error when `error` is an object | ⬜ OPEN |
+| 111 | Tool Loop | 🟠 High | Loop-abort steer sometimes has empty failure history | ⬜ OPEN |
+| 112 | VFS/Auth | 🟡 Med | VFS ownership transfer has null row during cookie fast-path | ⬜ OPEN |
+| 113 | Tool Validation | 🟡 Med | LLM repeatedly calls tools with missing required args | ⬜ OPEN |
+| 114 | Sandbox | 🟠 High | Daytona quota cleanup is not enough for persistent exhaustion | ⬜ OPEN |
+| 115 | VFS/Sandbox | 🟡 Med | VFS sandbox sync repeatedly references deleted sandboxes | ⬜ OPEN |
+| 116 | Provider Health | 🟠 High | Provider permanent failure is too sticky after one auth/API error | ⬜ OPEN |
+| 117 | Telemetry | 🟡 Med | Completion telemetry reports zero response length after tool activity | ⬜ OPEN |
+| 118 | Sandbox Lifecycle | 🟡 Med | Repeated sandbox provider initialization churn | ⬜ OPEN |
+| 119 | LLM Fallback | 🟠 High | Plain-text fallback can still return invalid JSON | ⬜ OPEN |
+| 120 | Provider Health | 🟡 Med | Rate limiting is not normalized across providers | ⬜ OPEN |
+
+---
+
+### Pass-8 Top-3 ROI Fixes
+
+| Rank | Bug | Fix | Impact |
+|------|-----|-----|--------|
+| 1 | **#110** (opaque tool errors) | Extract structured `error` objects and preserve `_recoveryHint` | Turns generic repeated failures into actionable LLM feedback |
+| 2 | **#111** (empty loop-abort history) | Feed loop abort from concrete failed-tool history or last tool calls | Makes loop-abort recoverable instead of generic |
+| 3 | **#116/#119** (sticky provider failures + invalid JSON fallback) | Separate auth/transient/rate-limit errors and route ninerouter fallbacks away from JSON-only orchestration | Reduces hard stops and provider-pool shrinkage |
+
+---
+
+### Cross-Cutting Theme: Failures Are Visible, But Not Actionable
+
+Pass-8 shows the system is already detecting many failure modes: tool failures, loop aborts, VFS stale references, provider failures, and quota exhaustion. The main gap is converting those detections into structured, recoverable feedback.
+
+Recommended pattern for all Pass-8 bugs:
+
+1. **Classify** the error into a typed category.
+2. **Preserve** the original structured payload instead of replacing it with a generic string.
+3. **Steer** the LLM with the specific next action.
+4. **Back off** or **fail over** when the error is external/provider/resource-bound.
+5. **Expose** counters in `/api/health?detailed` so degraded behavior is measurable.
+
+---
+
+### Files Modified by This Pass
+
+| File | Change |
+|------|--------|
+| `web/lib/chat/vercel-ai-streaming.ts` | Extract structured tool `error` objects and preserve `_recoveryHint` (#110) |
+| `web/lib/orchestra/unified-agent-service.ts` | Ensure loop abort receives concrete failure history (#111) |
+| `web/lib/orchestra/steer-service.ts` | Improve loop-abort fallback when history is incomplete (#111) |
+| `web/lib/auth/transfer-anon-vfs.ts` | Skip/filter null ownership candidates (#112) |
+| `web/lib/tools/router.ts` | Add missing-arg validation steers (#113) |
+| `web/lib/chat/tools/*` | Add examples for required args on common tools (#113) |
+| `web/lib/sandbox/providers/daytona-provider.ts` | Return structured quota failures and provider failover signal (#114) |
+| `web/lib/sandbox/providers/index.ts` | Add provider health/quota surface (#114, #118) |
+| `web/lib/virtual-filesystem/vfs-sandbox-sync.ts` | Reconcile stale sandbox references (#115) |
+| `packages/shared/agent/unified-agent-service.ts` | Normalize provider failures and invalid JSON fallback (#116, #119, #120) |
+| `web/lib/chat/llm-provider-health.ts` | Separate auth, rate-limit, invalid-model, and transient failures (#116, #120) |
+| `web/lib/chat/llm-fallback-coordinator.ts` | Avoid ninerouter JSON-only fallback when invalid JSON risk is high (#119) |
+| `web/lib/chat/chat-metrics.ts` | Add `tool_only` vs `empty_response` telemetry (#117) |
+
 
 ---
 
@@ -3493,3 +3922,353 @@ The Pass-5 patch list is supplemented with these NEW critical-path items:
 - **Highest-multiplier follow-ups:** #84 (makes #83's regression detectable) + #91 (cross-references #83 with #45 mid-stream stall pattern)
 
 > **Combined Pass-5 + Pass-6 status:** 14 Pass-5 OPEN bugs (#69-#82) + 11 Pass-6 OPEN bugs (#83-#91, X1, X2) = 25 open bugs. The audit is now comprehensive: every "stops at step 1" symptom the user has reported maps to at least one OPEN bug in this document.
+
+---
+
+## Session Fix Log (2026-06-15 Afternoon) — Code Inspection Pass
+
+**Source:** Direct code inspection of `web/lib/orchestra/mastra/agent-loop.ts`, `packages/shared/agent/orchestration/plan-act-verify.ts`, `web/lib/chat/vercel-ai-streaming.ts`, `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts`, `web/lib/drivers/pi/pi-cli-session.ts`, `web/components/enhanced-diff-viewer.tsx`, `web/lib/mcp/architecture-integration.ts`, `packages/shared/agent/first-response-routing.ts`, `web/lib/chat/llm-continuation.ts`, `web/lib/chat/auto-continue-detector.ts`, `web/lib/orchestra/unified-agent-service.ts`.
+**Method:** Line-by-line code inspection for bugs, bad handling, and unintended outcomes — not log-grepping.
+**Scope:** Agent loop execution paths, VFS/sandbox sync, continuation logic, Phase 3 retry, sandbox ID routing.
+
+### New Issues Found
+
+| # | Area | Severity | Issue | Status |
+|---|------|----------|-------|--------|
+| OC-17 | Agent Loop | 🟠 High | `executeTaskStreaming` calls `buildSystemPrompt()` before `cachedWorkspaceSnapshot` is set — system prompt always gets `'(loading...)'` as workspace snapshot | ⬜ OPEN |
+| OC-18 | Agent Loop | 🟠 High | Streaming path (`ToolLoopAgent`) has no loop-detection — fallback `executeManual` resets loop state, but streaming path bypasses it entirely | ⬜ OPEN |
+| OC-19 | Streaming | 🔴 Critical | Phase 3 retry (`vercel-ai-streaming.ts:2757`) sends NO tools and NO system prompt — degraded to text-only, cannot make tool calls | ⬜ OPEN |
+| OC-20 | Streaming | 🟠 High | Phase 3 has no idle timeout guard — if retry model goes silent mid-stream, no abort fires | ⬜ OPEN |
+| OC-21 | Streaming | 🟠 High | Phase 3 completion metadata missing `actualProvider`/`actualModel` — callers expecting these fields get stale values | ⬜ OPEN |
+| OC-22 | Continuation | 🔴 Critical | `detectNeedsMoreTurns()` is never called from any server-side execution path — V1 API uses a 3-tool sliding window that misses 10+ stall patterns | ⬜ OPEN |
+| OC-23 | Continuation | 🟠 High | `shouldAutoContinue()` in `llm-continuation.ts` is dead code — no caller exists in any execution path | ⬜ OPEN |
+| OC-24 | Continuation | 🟡 Med | `runV1Orchestrated` never calls `detectNeedsMoreTurns` — the richer stall signals are lost when fallback to V1 API occurs | ⬜ OPEN |
+| OC-25 | VFS | 🟠 High | Sandbox ID regex patterns (5-7 char alphanumeric) are overly broad — `"abc12"`, `"xyz1234"` would be misidentified as CodeSandbox/Blaxel IDs | ⬜ OPEN |
+| OC-26 | VFS | 🟡 Med | Dead sandbox regex `/sandbox.*not found.../` has no word boundaries — `"my-unsandbox-config-not-found"` matches | ⬜ OPEN |
+| OC-27 | Routing | 🟡 Med | Metadata key mismatch: `runV1ApiWithTools` returns `routing.continue`, `runV1Orchestrated` returns `roleSelection.continue` — client must know which path produced the result | ⬜ OPEN |
+| OC-28 | Routing | 🟡 Med | `DEFAULT_ROUTING.continue: false` silently drops `planSteps`-only LLM signals — LLM can emit `planSteps` with `continue` absent, and `shouldContinue` becomes `false` | ⬜ OPEN |
+| OC-29 | Routing | 🟡 Med | `runV1ApiWithTools` hardcodes `MAX_CONTINUATIONS = 2` ignoring `confidence` level from `detectNeedsMoreTurns` — all signals get equal 2-turn budget | ⬜ OPEN |
+| OC-30 | Diff Viewer | 🟡 Med | `change.path.includes(fileName)` matches partial filenames — `fileName="index"` matches `path/to/index.tsx` | ⬜ OPEN |
+| OC-31 | Bash Tool | 🟠 High | `pi-cli-session.ts` passes `threadId: globalThis.crypto.randomUUID()` (fresh UUID per call) instead of the session ID — breaks VFS output organization and sandbox routing continuity | ⬜ OPEN |
+
+### Detailed Findings
+
+#### 🔴 OC-19 — Phase 3 Retry Sends No Tools or System Prompt
+**File:** `web/lib/chat/vercel-ai-streaming.ts:2757-2781`
+
+```typescript
+const retryOptions: any = {
+  model: retryVercelModel,
+  messages: chatMessages,        // original messages only
+  temperature: temp,
+  maxOutputTokens: maxT,
+  maxRetries: 0,
+  stopWhen: stepCountIs(maxSteps),  // maxSteps=12
+  abortSignal: effectiveSignal,
+  // NO tools!  ← critical omission
+  // NO system! ← critical omission
+};
+```
+
+**Issue:** Phase 3 retry (triggered after 2+ consecutive tool failures) creates a new `streamText` call WITHOUT:
+- `tools` — so no function calling can happen in the retry
+- `system` — so dynamic directives like `CHOOSE_ROLE_DIRECTIVE` are lost
+
+The retry is degraded to text-only mode. This means if a model fails tool calls due to a transient error, the retry can't fix it by retrying with the same tools — it falls back to plain text, which defeats the purpose of the retry mechanism.
+
+**Fix:** Add `tools: mergedTools` and `system: effectiveSystemPrompt` to `retryOptions` so Phase 3 retry is a full retry, not a degraded fallback.
+
+---
+
+#### 🔴 OC-20 — Phase 3 Has No Idle Timeout Guard
+**File:** `web/lib/chat/vercel-ai-streaming.ts:2784-2805`
+
+```typescript
+const retryResult = streamText(retryOptions);
+for await (const retryChunk of retryResult.fullStream) {
+  if (effectiveSignal?.aborted) break;
+  // ... yields text-delta chunks
+  // No idle timeout mechanism! ← main path has rolling idle timeout (lines 1327-1517)
+}
+```
+
+**Issue:** The main stream path has sophisticated idle timeout logic that resets on every token. Phase 3 stream has no equivalent guard. If the retry model produces partial text then goes silent, the stream hangs indefinitely.
+
+**Fix:** Reuse the existing idle timeout infrastructure for Phase 3, or implement a `setTimeout`-based rolling deadline that resets on each chunk.
+
+---
+
+#### 🔴 OC-21 — Phase 3 Completion Metadata Missing `actualProvider`/`actualModel`
+**File:** `web/lib/chat/vercel-ai-streaming.ts:2815-2835`
+
+```typescript
+yield {
+  // ...
+  metadata: {
+    vercelAI: true,
+    provider: betterModel.provider,   // ← NOT actualProvider
+    model: betterModel.model,          // ← NOT actualModel
+    fcFallback: 'model-capability',
+    originalProvider: provider,        // ← note: not `actualProvider`
+    originalModel: modelName,          // ← note: not `actualModel`
+    // ...
+  },
+};
+```
+
+**Issue:** The main finish chunk (lines 2872-2897) includes `actualProvider`/`actualModel` (the provider/model that actually produced the response, after any mid-stream fallback). Phase 3's completion metadata only includes `provider`/`model` (the retry model's identity), not `actualProvider`/`actualModel`. Callers that expect both fields get confusingly named fields that don't distinguish "what we asked" from "what answered."
+
+**Fix:** Set `actualProvider: betterModel.provider` and `actualModel: betterModel.model` in Phase 3's completion metadata, consistent with the main path.
+
+---
+
+#### 🔴 OC-22 — `detectNeedsMoreTurns()` Never Called from Any Server Execution Path
+**Files:** `web/lib/orchestra/unified-agent-service.ts:3234` (`runV1ApiWithTools`), `web/lib/orchestra/unified-agent-service.ts:4638` (`runV1Orchestrated`)
+
+`runV1ApiWithTools` uses a hand-rolled 3-tool sliding window:
+```typescript
+const recentTools = toolInvocations.slice(-3);
+const hasWriteTool = recentTools.some(t => ...);
+const hasReadOnlyTool = recentTools.some(t => ...);
+if (hasWriteTool) break;
+if (!hasReadOnlyTool) break;
+// → triggers continuation
+```
+
+`runV1Orchestrated` uses only `routing.continue` from first-response routing — no signal detection at all.
+
+`detectNeedsMoreTurns` has 12 distinct signals: `read-then-stall`, `deep-research-loop`, `failure-cascade`, `write-verify-loop`, `announced-next-step`, `incomplete-thought`, `step-enumeration`, `planned-multi-step`, `read-many-write-none`, `single-write-silent`, `diff-no-explanation`, `edits-mismatch`, `empty-after-tools`, `unclosed-code-block`, `mid-sentence-cutoff`.
+
+Only `read-many-write-none` is covered by the current V1 API auto-continue. The other 14 patterns are completely invisible to the execution layer, meaning the agent stalls or stops when it should self-correct.
+
+**Fix:** Call `detectNeedsMoreTurns(result)` in both `runV1ApiWithTools` (after each continuation check) and `runV1Orchestrated` (after the orchestrator returns), and use the returned `suggestedReprompt` to steer the follow-up request.
+
+---
+
+#### 🟠 OC-17 — `buildSystemPrompt()` Called Before `cachedWorkspaceSnapshot` Is Set
+**File:** `web/lib/orchestra/mastra/agent-loop.ts:269`
+
+```typescript
+// In executeTaskStreaming (line 269):
+const systemPrompt = this.buildSystemPrompt();  // cachedWorkspaceSnapshot may be '(loading...)'
+
+// In executeManual (line 555):
+this.cachedWorkspaceSnapshot = await buildWorkspaceSnapshot(this.context.userId);
+// ...
+const systemPrompt = this.buildSystemPrompt();  // ← OK here, but this line is never reached from executeTaskStreaming
+```
+
+**Issue:** In the streaming path (`executeTaskStreaming`), `buildSystemPrompt()` is called at line 269 but `cachedWorkspaceSnapshot` is only set inside `executeManual` at line 555 — which is only called when NOT using the streaming path. This means the streaming path always gets `'(loading...)'` as the workspace snapshot in the system prompt.
+
+**Fix:** Await `buildWorkspaceSnapshot` and assign to `this.cachedWorkspaceSnapshot` before calling `buildSystemPrompt()` in `executeTaskStreaming`.
+
+---
+
+#### 🟠 OC-18 — Streaming Path Has No Loop Detection
+**File:** `web/lib/orchestra/mastra/agent-loop.ts:548-550` vs `executeTaskStreaming`
+
+```typescript
+// In executeManual (line 548):
+this.failedToolCalls.clear();
+this.loopState = createLoopDetectorState();  // ← resets loop detection state
+
+// In executeTaskStreaming (line 238):
+this.lastExecutedToolCalls = [];  // ← only resets the tracking array
+```
+
+**Issue:** `executeManual` resets both `failedToolCalls` and `loopState`. `executeTaskStreaming` only resets `lastExecutedToolCalls`. The `loopState` object (used by the loop guard in `shared-agent-context.ts`) is never reset for the streaming path. This means:
+- Loop detection only works for the fallback path (`executeManual`), not the primary streaming path (`ToolLoopAgent`)
+- If the streaming path hits a failure loop, there's no guard to stop it
+
+**Fix:** Reset `this.loopState = createLoopDetectorState()` in `executeTaskStreaming` before each execution.
+
+---
+
+#### 🟠 OC-23 — `shouldAutoContinue()` Is Dead Code
+**File:** `web/lib/chat/llm-continuation.ts` (entire file)
+
+The `shouldAutoContinue()` function and the underlying `detectNeedsMoreTurns()` function are exported but never called from any execution path in the codebase. The V1 API uses a hand-rolled 3-tool check; the orchestrated path uses `routing.continue`. The entire `llm-continuation.ts` module is unreachable server-side code.
+
+**Fix:** Either wire `detectNeedsMoreTurns` into the execution paths (see OC-22) or remove the dead code to avoid confusion.
+
+---
+
+#### 🟠 OC-24 — `runV1Orchestrated` Never Calls `detectNeedsMoreTurns`
+**File:** `web/lib/orchestra/unified-agent-service.ts:4638-5034`
+
+When `runV1Orchestrated` degrades and falls back to `runV1Api`, the `runV1Api` path uses its own simple auto-continue (the 3-tool sliding window). But the richer signals (`failure-cascade`, `announced-next-step`, `step-enumeration`, etc.) that `detectNeedsMoreTurns` would have caught are never:
+- Converted into a `suggestedReprompt` for the fallback request
+- Logged to chat metrics for observability
+- Used to steer the LLM's next turn
+
+**Fix:** Call `detectNeedsMoreTurns(orchestratedResult)` when `runV1Orchestrated` returns, and pass the `suggestedReprompt` into the fallback `runV1Api` call.
+
+---
+
+#### 🟠 OC-25 — Sandbox ID Regex Patterns Too Broad
+**File:** `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts:171-189`
+
+```typescript
+// Pattern at line 171: E2B 18-25 char alphanumeric
+if (/^[a-z0-9]{18,25}$/i.test(sandboxId)) {
+
+// Pattern at line 175: CodeSandbox 6-char code  
+if (/^[a-z0-9]{6}$/i.test(sandboxId)) {
+
+// Pattern at line 179: Blaxel/Runloop/Mistral 5-7 chars
+if (/^[a-z0-9]{5,7}$/i.test(sandboxId)) {
+```
+
+**Issue:** The 5-7 character pattern is extremely broad — matches any random lowercase alphanumeric string like `"abc12"`, `"xyz1234"`, a partial git hash, a hex color code, or any short ID in the system. The 6-char pattern is equally broad (matches `"deadbeef"`, `"a1b2c3"`, etc.). No provider-specific prefix is checked before these patterns, so a random `"abc123"` string could be misidentified as CodeSandbox.
+
+**Fix:** Add provider-specific prefix checks before the length-based patterns:
+```typescript
+// CodeSandbox: starts with "cs_" or "CS_" then 6 hex chars
+if (/^cs_[a-f0-9]{6}$/i.test(sandboxId)) { ... }
+// Blaxel: starts with "bx_" then 5-7 chars
+if (/^bx_[a-z0-9]{5,7}$/i.test(sandboxId)) { ... }
+```
+
+---
+
+#### 🟡 OC-26 — Dead Sandbox Regex Lacks Word Boundaries
+**File:** `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts:473`
+
+```typescript
+if (/sandbox.*not found|not found.*sandbox|security.*exception|exception.*security/i.test(message)) {
+```
+
+**Issue:** The `.*` matches any characters (including none) between words, creating false positives. `"my-unsandbox-config-not-found"` matches `sandbox.*not found`. No word boundary anchors (`\b`) are used, so common strings containing these words match. The comment says "We require both 'sandbox' and 'not found'" but the `.*` allows arbitrary content between them.
+
+**Fix:** Add word boundaries:
+```typescript
+/\b(?:sandbox[^\s]*\s+not[^\s]*\s+found|not[^\s]*\s+found[^\s]*\s*sandbox|security[^\s]*\s+exception|exception[^\s]*\s+security)\b/i
+```
+Or use a stricter phrase-match: `/\bsandbox[^\s]*not found\b|\bnot found[^\s]*sandbox\b|\bsecurity[^\s]*exception\b|\bexception[^\s]*security\b/i`
+
+---
+
+#### 🟡 OC-27 — Metadata Key Mismatch Between Execution Paths
+**File:** `web/lib/orchestra/unified-agent-service.ts:1582, 4411, 5002-5011`
+
+```typescript
+// Line 1582 — client checks roleSelection:
+const roleSelection = result.metadata?.roleSelection;
+if (roleSelection?.continue) { /* auto-continue log */ }
+
+// runV1ApiWithTools returns (line 4411):
+...(routingForClient ? { routing: routingForClient } : {}),
+
+// runV1Orchestrated returns (lines 5002-5011):
+roleSelection: roleSelectMeta ? {
+  continue: roleSelectMeta.continue,
+  // ...
+} : undefined
+```
+
+**Issue:** The client-side check at line 1582 reads `metadata.roleSelection?.continue`. For V1 API results, the auto-continue signal lives at `metadata.routing.continue` (set via `buildRoutingMetadataForClient`), not `roleSelection`. `roleSelection?.continue` is always `undefined` for V1 API results. The client must know which execution path produced the result to check the right key — this is fragile and undocumented.
+
+**Fix:** Normalize the metadata key in `runV1ApiWithTools` to also return `roleSelection.continue` (derived from `routing.continue`) so both paths use the same key.
+
+---
+
+#### 🟡 OC-28 — `DEFAULT_ROUTING.continue: false` Silently Drops Plan-Only LLM Signals
+**File:** `packages/shared/agent/first-response-routing.ts:130`
+
+```typescript
+const DEFAULT_ROUTING: RoutingMetadata = {
+  continue: false,  // ← Always false
+};
+```
+
+**Issue:** `buildRoutingMetadataForClient` (line 344) computes `shouldContinue` as:
+```typescript
+const shouldContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
+```
+If the LLM emits `planSteps` but omits `continue`, `validateAndNormalize` falls through to `DEFAULT_ROUTING.continue = false`. The result is a multi-step plan with zero `continue` signal — auto-continue never fires even though the LLM clearly planned multiple steps.
+
+**Fix:** In `validateAndNormalize`, treat the presence of non-empty `planSteps` as an implicit `continue: true`:
+```typescript
+continue: routing.continue ?? (Array.isArray(routing.planSteps) && routing.planSteps.length > 0),
+```
+
+---
+
+#### 🟡 OC-29 — Hardcoded `MAX_CONTINUATIONS = 2` Ignores Confidence Level
+**File:** `web/lib/orchestra/unified-agent-service.ts:3729-3730`
+
+```typescript
+const MAX_CONTINUATIONS = 2;
+let continuationCount = 0;
+```
+
+**Issue:** `detectNeedsMoreTurns` returns a `confidence` level (`low | medium | high`) and a prioritized `suggestedReprompt`. The hardcoded `MAX_CONTINUATIONS = 2` means:
+- A high-confidence `deep-research-loop` gets the same 2-turn budget as a medium-confidence `step-enumeration`
+- A `failure-cascade` (multiple consecutive failures requiring strategy change) is capped at 2 turns and may not succeed
+
+**Fix:** Use signal-based budget allocation — `high` confidence signals get `MAX_CONTINUATIONS * 2` turns, `medium` gets `MAX_CONTINUATIONS`, `low` skips auto-continue:
+```typescript
+const baseContinuations = { high: 4, medium: 2, low: 0 };
+const confidence = detectNeedsMoreTurns(result).confidence;
+const maxContinuations = baseContinuations[confidence] ?? 2;
+```
+
+---
+
+#### 🟡 OC-30 — `includes(fileName)` Matches Partial Filenames
+**File:** `web/components/enhanced-diff-viewer.tsx:303`
+
+```typescript
+if (change.path === filePath || (change.path && change.path.includes(fileName))) {
+```
+
+**Issue:** `fileName = "index"` matches `path/to/index.tsx`, `path/to/index.js`, and any other file with "index" anywhere in its path. A more precise check would use `endsWith('/' + fileName)` to ensure the filename component matches.
+
+**Fix:**
+```typescript
+const changePath = change.path;
+if (changePath === filePath || (changePath && (changePath.endsWith('/' + fileName) || changePath.endsWith('/' + fileName + '/')))) {
+```
+
+---
+
+#### 🟠 OC-31 — Fresh UUID for `threadId` in Every Bash Call Breaks Session Continuity
+**File:** `web/lib/drivers/pi/pi-cli-session.ts:78-82`
+
+```typescript
+const result = await bashTool.execute({ command }, {
+  messages: [],
+  toolCallId: globalThis.crypto.randomUUID(),
+  threadId: globalThis.crypto.randomUUID(),  // ← fresh UUID every call
+} as any);
+```
+
+**Issue:** `threadId` is generated via `globalThis.crypto.randomUUID()` on **every** bash execution. The function has access to `sessionId` (line 145: `const sessionId = \`cli-${Date.now()}-${...}\``) but does not use it. The bash tool uses `threadId` as `agentId` for sandbox routing (see `bash-tool.ts:755`: `const agentId = (ctx as any).threadId || 'default'`). Each bash command in the same CLI session gets a different `threadId`, breaking:
+- Session continuity in sandbox routing
+- VFS output organization (outputs scattered across different paths)
+- Debugging and tracing that relies on session continuity
+
+**Fix:** Use the session's `sessionId` for `threadId`:
+```typescript
+const result = await bashTool.execute({ command }, {
+  messages: [],
+  toolCallId: globalThis.crypto.randomUUID(),
+  threadId: sessionId,  // ← consistent session ID
+} as any);
+```
+
+---
+
+### Files Modified by This Pass
+
+| File | Change |
+|------|--------|
+| `packages/shared/agent/first-response-routing.ts` | Document `DEFAULT_ROUTING.continue: false` silently drops plan-only LLM signals (#OC-28) |
+| `web/lib/chat/llm-continuation.ts` | Document `shouldAutoContinue` is dead code — no callers in any execution path (#OC-23) |
+| `web/lib/chat/auto-continue-detector.ts` | Document `detectNeedsMoreTurns` never called from server-side execution (#OC-22, #OC-24) |
+| `web/lib/orchestra/unified-agent-service.ts` | Document V1 API hardcoded `MAX_CONTINUATIONS=2` ignoring confidence (#OC-29), metadata key mismatch (#OC-27) |
+| `web/lib/chat/vercel-ai-streaming.ts` | Document Phase 3 sends no tools/system prompt (#OC-19), no idle timeout (#OC-20), incomplete metadata (#OC-21) |
+| `web/lib/orchestra/mastra/agent-loop.ts` | Document `buildSystemPrompt` called before `cachedWorkspaceSnapshot` set (#OC-17), streaming path has no loop detection (#OC-18) |
+| `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts` | Document broad sandbox ID regex patterns (#OC-25), loose dead-sandbox detection regex (#OC-26) |
+| `web/lib/drivers/pi/pi-cli-session.ts` | Document hardcoded random UUID for `threadId` breaks session continuity (#OC-31) |
+| `web/components/enhanced-diff-viewer.tsx` | Document `includes(fileName)` matches partial filenames (#OC-30) |

@@ -1499,9 +1499,10 @@ export class VirtualFilesystemService {
       const db = getDatabase();
       // In JS template literals, '\\\\' → regex literal '%\\%' matches a literal backslash
       // and REPLACE's '\\\\' → SQL literal '\\' → one literal backslash character
-      const backslashCount = (db.prepare(
+      const backslashRow = (db.prepare(
         "SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ? AND path LIKE '%\\\\%'"
-      ).get(normalizedOwnerId) as { cnt: number }).cnt;
+      ).get(normalizedOwnerId)) as { cnt: number } | null;
+      const backslashCount = backslashRow?.cnt ?? 0;
       if (backslashCount > 0) {
         const normalizePaths = db.prepare(
           "UPDATE vfs_workspace_files SET path = REPLACE(path, '\\\\', '/') WHERE owner_id = ? AND path LIKE '%\\\\%'"
@@ -1692,6 +1693,7 @@ export class VirtualFilesystemService {
         `findAnonOwnerIds: maxAgeHours must be >= 0 (got ${maxAgeHours})`
       );
     }
+    try {
     const db = getDatabase();
     let rows: Array<{ owner_id: string }>;
     if (maxAgeHours > 0) {
@@ -1723,6 +1725,18 @@ export class VirtualFilesystemService {
         .all() as Array<{ owner_id: string }>;
     }
     return rows.map((r) => r.owner_id);
+    } catch (err) {
+      // Bug #85 (Pass-6 audit) — return [] instead of letting the error
+      // propagate. The old code returned undefined on DB failure, which
+      // crashed transfer-anon-vfs.ts with "Cannot read properties of
+      // null (reading 'cnt')". Returning [] makes the fallback a clean
+      // no-op.
+      logger.warn(
+        '[VFS] findAnonOwnerIds: DB unavailable, returning empty array',
+        { error: err instanceof Error ? err.message : String(err) }
+      );
+      return [];
+    }
   }
 
   /**
@@ -1740,8 +1754,12 @@ export class VirtualFilesystemService {
 
     const db = getDatabase();
 
-    // Check if source has any data to transfer
-    const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ?').get(normalizedFrom) as { cnt: number }).cnt;
+    // Bug #112/#85: Guard against null result from db.prepare().get().
+    // When the DB is transiently unavailable or the row doesn't exist,
+    // .get() returns null instead of {cnt: 0}, and accessing .cnt
+    // throws "Cannot read properties of null (reading 'cnt')".
+    const countRow = db.prepare('SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ?').get(normalizedFrom) as { cnt: number } | null;
+    const fileCount = countRow?.cnt ?? 0;
     if (fileCount === 0) {
       return { transferredFiles: 0 };
     }

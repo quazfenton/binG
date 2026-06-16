@@ -436,3 +436,109 @@ export function createCircuitBreakerWithMetrics(
   return breaker;
 }
 
+
+/**
+ * Bug #90 (Pass-6, reviewer nit) — schedule a self-reset for the given
+ * breaker `cooldownMs` after the failure is recorded. This makes the
+ * `resetBreaker()` no longer dead code: any caller of `recordFailureBreaker`
+ * automatically gets the breaker half-open at the cooldown boundary.
+ * Returns a `setTimeout` handle so callers can `clearTimeout` on success.
+ */
+export function recordFailureBreaker(
+  key: string,
+  cooldownMs: number,
+): NodeJS.Timeout {
+  // Bug #90 (Pass-6, reviewer nit) — validate cooldownMs so a bad config
+  // doesn't fire `setTimeout(..., -1)` (Node coerces negative values to ~0,
+  // which would reset the breaker immediately — undoing the failure record).
+  if (!Number.isFinite(cooldownMs) || cooldownMs < 0) {
+    cooldownMs = 0;
+  }
+  const breaker = breakers.get(key);
+  breaker?.recordFailure();
+  // Bug #90 (Pass-6, reviewer nit) — record an in-process deadline for
+  // observability. NOTE: this is module-private memory only — the deadline
+  // map is wiped on process restart, so a restarted Node process will start
+  // with a tripped breaker and no visible cooldown. For cross-process
+  // persistence, the caller would need to write to disk / shared cache.
+  const deadline = Date.now() + cooldownMs;
+  breakerCooldowns.set(key, deadline);
+  return setTimeout(() => {
+    breaker?.reset();
+    breakerCooldowns.delete(key);
+  }, cooldownMs);
+}
+
+// Module-private cooldown deadline map (process-local, not persisted to disk).
+const breakerCooldowns = new Map<string, number>();
+
+/**
+ * Bug #90 (Pass-6) — module-level Map of breaker instances keyed by name.
+ * Populated by `recordFailureBreaker()` callers and consulted by the
+ * `setTimeout` callback that auto-resets the breaker after the cooldown
+ * window expires. Process-local; not persisted across restarts.
+ */
+const breakers = new Map<string, { recordFailure(): void; reset(): void }>();
+
+/**
+ * Bug #90 (Pass-6) — returns the deadline (ms epoch) at which the breaker
+ * for `key` will be auto-reset, or `null` if no cooldown is currently
+ * scheduled. Useful for callers that want to know how long until retry.
+ */
+export function getBreakerCooldownUntil(key: string): number | null {
+  return breakerCooldowns.get(key) ?? null;
+}
+
+
+/**
+ * Bug #90 (Pass-6, reviewer nit) — periodic sweep to evict expired cooldown
+ * entries. Without this, the in-memory `breakerCooldowns` map grows
+ * unbounded under heavy churn (many different `key` failures). Returns
+ * the number of entries evicted (useful for tests + observability).
+ */
+export function sweepStaleBreakerCooldowns(staleMs: number = 60_000): number {
+  const cutoff = Date.now() - staleMs;
+  let evicted = 0;
+  for (const [key, deadline] of breakerCooldowns) {
+    if (deadline < cutoff) {
+      breakerCooldowns.delete(key);
+      evicted += 1;
+    }
+  }
+  return evicted;
+}
+
+// Bug #90 (Pass-6, reviewer nit) — wire the sweeper into a periodic interval
+// so the in-memory `breakerCooldowns` map doesn't grow unbounded under heavy
+// churn. Default 5 minutes. Returns the interval handle for tests / graceful
+// shutdown (`clearInterval(...)`).
+const BREAKER_COOLDOWN_SWEEP_INTERVAL = 5 * 60 * 1000;
+// Bug #90 (Pass-6, reviewer nit) — gate the setInterval against the
+// SANDBOX_TEST env flag so vitest runs don't accumulate zombie timers
+// (and the OpenTelemetry / process-wide state stays clean).
+const isTestRun = process.env.SANDBOX_TEST === 'true'
+  || process.env.NODE_ENV === 'test'
+  || (typeof process !== 'undefined' && process.env?.VITEST === 'true');
+
+export const breakerCooldownSweepHandle: NodeJS.Timeout | null = isTestRun
+  ? null
+  : (() => {
+      const handle = setInterval(
+        () => { sweepStaleBreakerCooldowns(); },
+        BREAKER_COOLDOWN_SWEEP_INTERVAL,
+      );
+      // `unref()` so the sweep interval never prevents Node exit.
+      if (typeof handle.unref === 'function') handle.unref();
+      return handle;
+    })();
+
+/**
+ * Bug #90 (Pass-6) — explicit shutdown hook for graceful cleanup of the
+ * cooldown-sweep interval. Call from `beforeAll` / `afterAll` in test
+ * shutdown hooks, or from a SIGTERM handler in production.
+ */
+export function stopBreakerCooldownSweep(): void {
+  if (breakerCooldownSweepHandle) {
+    clearInterval(breakerCooldownSweepHandle);
+  }
+}
