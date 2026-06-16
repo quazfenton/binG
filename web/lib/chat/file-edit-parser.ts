@@ -1016,6 +1016,11 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
     const obj = tolerantJsonParse(jsonStr);
     if (!obj || typeof obj !== 'object') continue;
 
+    // Skip tool_result notifications — these are echoed LLM tool responses
+    // (e.g. {"success": false, "type": "tool_result", ...}), not file writes.
+    const record = obj as Record<string, unknown>;
+    if (record['success'] === false && record['type'] === 'tool_result') continue;
+
     // Resolve tool name from any of the alias field names
     let resolvedToolName: string | undefined;
     for (const field of TOOL_FIELD_NAMES) {

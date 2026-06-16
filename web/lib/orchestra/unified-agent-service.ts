@@ -17,6 +17,7 @@ import type { ToolResult } from '../sandbox/types';
 import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
+import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
@@ -4305,8 +4306,8 @@ Based on what you have learned, continue working on the original task. Take the 
           // Give specific correction prompt based on what detectIncompleteResponse found.
           // NOTE: injectedFeedback sections are empty here (no entries when anyToolFailed is false),
           // but included for future-proofing when both conditions may coexist.
-          feedbackMsg = `[INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
-          userPrompt = 'Please complete your previous response. Start from where you left off or restate your answer clearly.';
+          feedbackMsg = `[STEER] [INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour previous response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
+          userPrompt = 'Continue from where you left off. Complete the remaining work.';
         } else if (successfulToolsButSilent) {
           // Tools ran successfully but the model produced zero follow-up text.
           // Give it the executed tool list so it can summarize for the user.
@@ -4449,6 +4450,108 @@ Based on what you have learned, continue working on the original task. Take the 
             durationMs: duration,
           }));
         } catch { /* best effort */ }
+      }
+
+      // Bug #1 fix: Check shouldAutoContinue for v1-api-with-tools path
+      // This handles: roleSelection.continue=true, empty_tool_args, single_step_read
+      // Previously this only fired in chat/route.ts SSE streaming path.
+      const continuationDecision = shouldAutoContinue({
+        routing: routingForClient ? {
+          continue: routingForClient.continue,
+          stepReprompt: routingForClient.stepReprompt,
+          primaryRole: routingForClient.primaryRole,
+          estimatedSteps: routingForClient.estimatedSteps,
+          planSteps: routingForClient.planSteps,
+        } : undefined,
+        steps: steps.map(s => ({ toolName: s.toolName, args: s.args })),
+        responseText: finalResponse,
+        continuationsSoFar: ((config as any)._autoContinueCount as number) || 0,
+        maxContinuations: 3,
+      });
+
+      if (continuationDecision.continue && continuationDecision.continuationPrompt) {
+        log.info('[V1-API-WITH-TOOLS] shouldAutoContinue triggered', {
+          reason: continuationDecision.reason,
+          continuationsSoFar: continuationDecision.continuationsSoFar,
+        });
+
+        const contMessages = [
+          ...llmMessages,
+          { role: 'assistant', content: finalResponse },
+          { role: 'user', content: continuationDecision.continuationPrompt },
+        ];
+
+        (config as any)._autoContinueCount = continuationDecision.continuationsSoFar;
+
+        try {
+          const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+          let contContent = '';
+          const contToolInvocations: typeof toolInvocations = [];
+
+          for await (const chunk of streamWithConcurrentFallback({
+            provider: providerName,
+            model: modelForProvider,
+            messages: contMessages as any,
+            temperature: config.temperature || 0.7,
+            maxTokens: config.maxTokens || 65536,
+            maxSteps: config.maxSteps || 15,
+            tools: aiSdkTools,
+            toolCallStreaming: true,
+          })) {
+            if (chunk.content) {
+              contContent += chunk.content;
+              config.onStreamChunk?.(chunk.content);
+            }
+            if (chunk.toolInvocations) {
+              for (const inv of chunk.toolInvocations) {
+                if (inv.state !== 'result') continue;
+                contToolInvocations.push({
+                  toolCallId: inv.toolCallId,
+                  toolName: inv.toolName,
+                  args: (inv.args as Record<string, any>) || {},
+                  result: inv.result ?? { success: false, error: 'Tool result was undefined' },
+                });
+              }
+            }
+          }
+
+          if (contContent.trim() || contToolInvocations.length > 0) {
+            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced results', {
+              contentLength: contContent.length,
+              toolCount: contToolInvocations.length,
+            });
+
+            const allSteps = [
+              ...steps,
+              ...contToolInvocations.map(inv => ({
+                toolName: inv.toolName,
+                args: inv.args,
+                result: inv.result,
+              })),
+            ];
+
+            return {
+              success: true,
+              response: (finalResponse + '\n\n' + contContent).trim(),
+              steps: allSteps,
+              totalSteps: allSteps.length,
+              mode: 'v1-api',
+              metadata: {
+                provider: providerName,
+                model: modelForProvider,
+                duration: Date.now() - startTime,
+                toolInvocations: [...toolInvocations, ...contToolInvocations],
+                autoContinued: true,
+                autoContinueReason: continuationDecision.reason,
+                ...(routingForClient ? { routing: routingForClient } : {}),
+              },
+            };
+          }
+        } catch (contErr: any) {
+          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning original response', {
+            error: contErr?.message,
+          });
+        }
       }
 
       return {

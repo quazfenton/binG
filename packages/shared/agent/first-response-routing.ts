@@ -227,7 +227,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       continue:
         normalizeBoolean(parsed.continue) ??
         normalizeBoolean(parsed.requiresAutoReprompt) ??
-        false,
+        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : DEFAULT_ROUTING.continue),
     };
 
     return {
@@ -343,7 +343,13 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  const shouldContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
+  // Bug #2 fix: planSteps >= 2 should force continue: true
+  // The LLM outlined a multi-step plan but may have set continue: false
+  // (DEFAULT_ROUTING.continue defaults to false). This ensures multi-step
+  // plans always trigger auto-continuation.
+  const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
+  const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
+  const shouldContinue = explicitContinue || hasMultiplePlanSteps;
   return {
     stepReprompt: shouldContinue ? generateStepReprompt(routing, 0) : '',
     primaryRole: routing.suggestedRole,

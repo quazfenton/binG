@@ -15,6 +15,7 @@ import { initializeNullclaw, isNullclawAvailable, nullclawIntegration, type Null
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { createOpenCodeEngine } from '@/lib/session/agent/opencode-engine-service';
 import { createLogger } from '@/lib/utils/logger';
+import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 const logger = createLogger('API:AgentV2');
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
     // Parse request
     const body = await request.json();
     const validation = createSessionSchema.safeParse(body);
-    
+
     if (!validation.success) {
       return NextResponse.json(
         { error: 'Invalid request', details: validation.error.errors },
@@ -73,7 +74,16 @@ export async function POST(request: NextRequest) {
 
     const { conversationId, mode, enableNullclaw, enableCloudOffload, enableMCP, timeout } = validation.data;
 
-    logger.info(`Creating V2 session for ${userId}:${conversationId} (mode: ${mode})`);
+    // Resolve authoritative VFS owner from the request — threaded into the
+    // session-manager so the registered workspace handle carries the
+    // authoritative ownerId (instead of falling back to the session lookup
+    // when `_ensureSession()` lazily creates the sandbox/affinity binding).
+    // Safe to call for anonymous users (returns `anon:<sessionId>` ownerId).
+    const ownerResolution = await resolveFilesystemOwner(request);
+
+    logger.info(`Creating V2 session for ${userId}:${conversationId} (mode: ${mode})`, {
+      hasOwnerResolution: !!ownerResolution,
+    });
 
     // Get or create session
     const session = await agentSessionManager.getOrCreateSession(userId, conversationId, {
@@ -82,6 +92,7 @@ export async function POST(request: NextRequest) {
       enableCloudOffload,
       enableMCP,
       timeout,
+      ownerResolution,
     });
 
     // Initialize Nullclaw if enabled

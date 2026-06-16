@@ -418,10 +418,37 @@ export const STREAM_TIMEOUTS = {
   // > thinkPingMs and < idleTimeoutMs so the stall steer fires between the
   // thinking ping and the hard idle abort.
   stallSteerMs: parseInt(process.env.LLM_STREAM_STALL_STEER_MS || '30000', 10),
+  // Bug #17 (active-text override): when the model is actively generating
+  // `text` or `reasoning` (lastActivityType ∈ {'text', 'reasoning'}), the
+  // default 30s stall-steer threshold is too aggressive — slow providers
+  // can legitimately take 30-90s between tokens while composing a long
+  // passage. Use this higher threshold (default 60s) for the active-text
+  // case so legitimate ongoing output is not interrupted by a stall steer.
+  // The shorter `stallSteerMs` still applies when the stream is silent
+  // (no activity at all), so a genuinely hung stream still gets the
+  // injection within 30s.
+  textStallSteerMs: parseInt(process.env.LLM_STREAM_TEXT_STALL_STEER_MS || '60000', 10),
   // Bug #45: mid-stream stall detection threshold. A stream that goes
   // stallThresholdMs+ between chunks with no meaningful content is
   // treated as effectively silent.
   stallThresholdMs: parseInt(process.env.LLM_STREAM_STALL_THRESHOLD_MS || '30000', 10),
+  // Bug #13 (Phase 2 wall-clock budget): strict timeout for the Phase 2
+  // text-mode fallback re-stream. Phase 2 retries the same prompt with
+  // text-mode tool instructions (no native function calling). If Phase 2
+  // exceeds this budget, we abort and let the upper-layer SelfHeal retry
+  // with feedback instead of letting the user wait indefinitely.
+  // Default 15s — Phase 2 is supposed to be a quick "re-parse the same
+  // content as text" retry, not a full second completion. Per-model
+  // overrides live in MODEL_SERVER_TIMEOUT_OVERRIDES.phase2MaxDurationMs.
+  phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '15000', 10),
+  // Bug #13 (Phase 1 text-length gate): if Phase 1 already produced more
+  // than this many chars of text in prose, the model is clearly answering
+  // in prose (not trying to call tools). Re-streaming in Phase 2 would
+  // just duplicate the same prose — skip the Phase 2 round-trip entirely
+  // and let the text-mode parser extract any file edits from the
+  // existing textContent (or just return Phase 1's response as-is).
+  // Default 10K chars (~2K tokens) — a full answer in prose is usually <5K chars.
+  phase1TextCharsSkipPhase2: parseInt(process.env.LLM_STREAM_PHASE1_TEXT_CHARS_SKIP_PHASE2 || '10000', 10),
 } as const;
 
 /**
@@ -465,6 +492,17 @@ export interface ModelServerTimeoutOverride {
   timeoutMs: number;
   /** Per-model TTFT ceiling. Falls back to STREAM_TIMEOUTS.firstTokenTimeoutMs when undefined. */
   firstTokenTimeoutMs?: number;
+  /**
+   * Bug #13 (Pass-5 audit follow-up) — per-model Phase 2 text-mode
+   * fallback wall-clock budget. Models with very long Phase 1 outputs
+   * (e.g. reasoning-heavy models that emit 20K+ chars of prose) can
+   * benefit from a longer Phase 2 ceiling so the text-mode re-stream
+   * has time to complete. Falls back to STREAM_TIMEOUTS.phase2MaxDurationMs
+   * (15s default) when undefined. Honored as a HARD CEILING — the
+   * override can only WIDEN the budget relative to the global default,
+   * never tighten it (a value < 15s is treated as null by the helper).
+   */
+  phase2MaxDurationMs?: number;
 }
 const MODEL_SERVER_TIMEOUT_OVERRIDES: ReadonlyArray<ModelServerTimeoutOverride> = [
   { substring: 'deepseek-v4-flash', timeoutMs: 30000, firstTokenTimeoutMs: 60000 },
@@ -514,6 +552,33 @@ export function getModelFirstTokenTimeoutMs(modelId: string): number | null {
   for (const { substring, firstTokenTimeoutMs } of MODEL_SERVER_TIMEOUT_OVERRIDES) {
     if (firstTokenTimeoutMs !== undefined && lastSegment.endsWith(substring)) {
       return firstTokenTimeoutMs;
+    }
+  }
+  return null;
+}
+
+/**
+ * Bug #13 — look up the model-specific Phase 2 text-mode fallback
+ * max-duration override. Returns `null` when no override matches, so
+ * the caller falls back to the global STREAM_TIMEOUTS.phase2MaxDurationMs
+ * (15s default). Mirrors `getModelFirstTokenTimeoutMs` but for the
+ * Phase 2 budget. The override is a HARD CEILING — a value < the global
+ * default is treated as `null` to prevent an override from accidentally
+ * tightening the budget.
+ */
+export function getModelPhase2MaxDurationMs(modelId: string): number | null {
+  if (!modelId) return null;
+  const lastSegment = modelId.toLowerCase().split('/').pop() ?? '';
+  // Use STREAM_TIMEOUTS.phase2MaxDurationMs (parsed at module load from
+  // LLM_STREAM_PHASE2_MAX_DURATION_MS) as the "widens only" threshold
+  // — avoids the duplicated source of truth of re-parsing the env var.
+  const globalDefault = STREAM_TIMEOUTS.phase2MaxDurationMs;
+  for (const { substring, phase2MaxDurationMs } of MODEL_SERVER_TIMEOUT_OVERRIDES) {
+    if (phase2MaxDurationMs !== undefined && lastSegment.endsWith(substring)) {
+      // Override must be >= the global default — a smaller value would
+      // tighten the budget, which is the opposite of what an override
+      // is for. Treat it as null and fall through to the global default.
+      return phase2MaxDurationMs >= globalDefault ? phase2MaxDurationMs : null;
     }
   }
   return null;
@@ -1461,7 +1526,17 @@ export async function* streamWithVercelAI(
   let thinkPingIntervalId: NodeJS.Timeout | null = null;
   const THINK_PING_MS = thinkPingMs;
   const STALL_STEER_MS = STREAM_TIMEOUTS.stallSteerMs;
+  // Bug #17 (active-text override): higher threshold for streams that are
+  // actively generating text/reasoning but slowly. See STREAM_TIMEOUTS
+  // comment for rationale.
+  const TEXT_STALL_STEER_MS = STREAM_TIMEOUTS.textStallSteerMs;
   let stallSteerFiredThisSilence = false;
+  // Bug #92s-trace (debug instrumentation): tracks whether the
+  // [IDLE-APPROACH] warn has fired for the current silence period. Reset
+  // on any activity, just like stallSteerFiredThisSilence. Prevents
+  // duplicate warns at every THINK_PING_MS tick (20s default) once the
+  // stream crosses the 75% idle-timeout threshold.
+  let idleApproachWarnedThisSilence = false;
 
   const startThinkPingInterval = () => {
     if (thinkPingIntervalId || THINK_PING_MS <= 0) return;
@@ -1479,19 +1554,66 @@ export async function* streamWithVercelAI(
           lastActivityDetail: lastActivityDetail.slice(0, 40),
         });
       }
+      // Bug #92s-trace (debug instrumentation): log a warning when a
+      // stream approaches the idle timeout (75% of IDLE_TIMEOUT_MS = 56.25s
+      // with default settings). This helps diagnose whether a long response
+      // (e.g. the 92s response from BUGS2.md) was:
+      //   (a) a legitimate long generation — the idle clock was being reset
+      //       by continuous text activity, so the 92s is NOT a timeout
+      //   (b) a timeout that fired — the idle clock was NOT being reset,
+      //       so the stream was aborted at 75s (and the 92s is impossible)
+      // The log includes lastActivityTime, silenceMs, and lastActivityType
+      // so operators can correlate the warning with the stream's actual
+      // activity pattern. Fires ONCE per silence period (reset on any
+      // activity, just like the stall-steer) to avoid log spam — with
+      // THINK_PING_MS=20s and threshold=56s, a silent stream would
+      // otherwise warn at 56s, 76s, 96s, etc.
+      const idleApproachThreshold = IDLE_TIMEOUT_MS * 0.75;
+      if (silenceMs >= idleApproachThreshold && !idleApproachWarnedThisSilence) {
+        idleApproachWarnedThisSilence = true;
+        chatLogger.warn('[IDLE-APPROACH] Stream approaching idle timeout', {
+          lastActivityTime,
+          silenceMs,
+          lastActivityType,
+          lastActivityDetail: lastActivityDetail.slice(0, 40),
+          idleTimeoutMs: IDLE_TIMEOUT_MS,
+          thresholdMs: idleApproachThreshold,
+          approachingIdleTimeout: true,
+        });
+      }
       // Bug #45: if silence exceeds the stall-steer threshold, inject a
       // [STEER] stall_detected hint. Fires once per silence period; resets
       // on any activity.
-      if (silenceMs >= STALL_STEER_MS && !stallSteerFiredThisSilence) {
+      //
+      // Bug #17 (active-text override): the 30s default is too aggressive
+      // when the model is ACTIVELY generating text or reasoning (just
+      // slowly). Slow providers can legitimately take 30-90s between
+      // tokens while composing a long passage; firing a stall-steer in
+      // the middle of that would interrupt legitimate output. We pick
+      // the higher TEXT_STALL_STEER_MS (60s default) for those states,
+      // and keep the tighter STALL_STEER_MS (30s) for genuinely silent
+      // streams (no activity at all). The override only widens the
+      // window — it never tightens it.
+      const isActiveText = lastActivityType === 'text' || lastActivityType === 'reasoning';
+      const effectiveStallSteerMs = isActiveText ? TEXT_STALL_STEER_MS : STALL_STEER_MS;
+      if (silenceMs >= effectiveStallSteerMs && !stallSteerFiredThisSilence) {
         stallSteerFiredThisSilence = true;
         thinkPingQueue.push({
           type: 'stall_steer',
           elapsedMs: silenceMs,
           lastActivityType: lastActivityType,
         });
-        chatLogger.warn('[STALL-STEER] Model silent for >30s; injecting stall steer', {
+        chatLogger.warn('[STALL-STEER] Model silent beyond stall-steer threshold; injecting stall steer', {
           silenceMs,
           lastActivityType,
+          // Operators can see whether the active-text override was applied
+          // by reading this flag + the threshold used. When `true` the
+          // stream was actively generating text/reasoning and we held off
+          // on the steer until TEXT_STALL_STEER_MS (60s default).
+          activeTextOverride: isActiveText,
+          effectiveThresholdMs: effectiveStallSteerMs,
+          stallSteerMs: STALL_STEER_MS,
+          textStallSteerMs: TEXT_STALL_STEER_MS,
         });
       }
     }, THINK_PING_MS);
@@ -2184,6 +2306,10 @@ while (thinkPingQueue.length > 0) {
       // Bug #45: any arriving chunk resets the stall-steer flag. The stall
       // only fires during absolute silence (>30s with no chunks at all).
       stallSteerFiredThisSilence = false;
+      // Bug #92s-trace: also reset the [IDLE-APPROACH] warn flag so the
+      // next silence period can warn again if it crosses 75% of the idle
+      // timeout.
+      idleApproachWarnedThisSilence = false;
       const chunk = streamChunk as any;
 
       switch (chunk.type as string) {
@@ -2719,6 +2845,26 @@ const steps = await finalResult.steps;
         // recover the call. So we only trigger Phase 2 when at least one available
         // (or attempted) tool is in the file-edit set; otherwise we leave Phase 1's
         // result alone and let the upper-layer SelfHeal retry with feedback instead.
+        //
+        // Bug #13 (Phase 1 text-length gate): if Phase 1 already produced
+        // more than `phase1TextCharsSkipPhase2` chars of text in prose, the
+        // model is clearly answering in prose (not trying to call tools).
+        // Re-streaming in Phase 2 would just duplicate the same prose and
+        // waste 15s of wall-clock time. Skip the Phase 2 round-trip and
+        // let the text-mode parser extract any file edits from the
+        // existing textContent (or just return Phase 1's response as-is).
+        const phase1TextLength = textContent?.length || 0;
+        const phase1TextSkipThreshold = STREAM_TIMEOUTS.phase1TextCharsSkipPhase2;
+        const skipPhase2ForProse = phase1TextLength > phase1TextSkipThreshold;
+        if (skipPhase2ForProse) {
+          chatLogger.info('[FC-GATE] Phase 2 SKIPPED: Phase 1 already produced a full prose answer', {
+            provider,
+            model: modelName,
+            phase1TextLength,
+            threshold: phase1TextSkipThreshold,
+            reason: 'phase1_text_chars_skip_phase2',
+          });
+        }
         const supportsFC = (vercelModel as any)?.supports?.functionCalling;
         const FILE_EDIT_TOOLS = new Set([
           'write_file', 'batch_write', 'apply_diff', 'delete_file',
@@ -2756,7 +2902,30 @@ const steps = await finalResult.steps;
             || (allToolCallsFailed && (!textContent || textContent.length < 20) && fileEditToolFailed)
             || (noOutputAtAll && fileEditToolAvailable);
 
-          if (triggerFallback) {
+          if (triggerFallback && !skipPhase2ForProse) {
+            // Bug #13 (Phase 2 wall-clock budget): create a dedicated
+            // AbortController for the Phase 2 fallback stream so we can
+            // enforce the `phase2MaxDurationMs` ceiling independently of
+            // the primary stream's controllers. The ceiling is the MAX of
+            // the global default and the per-model override (overrides
+            // can only widen, never tighten — enforced in the helper).
+            const phase2OverrideMs = getModelPhase2MaxDurationMs(modelName);
+            const phase2BudgetMs = phase2OverrideMs ?? STREAM_TIMEOUTS.phase2MaxDurationMs;
+            const phase2Controller = new AbortController();
+            const phase2StartTime = Date.now();
+            const phase2Timer = setTimeout(() => {
+              if (!phase2Controller.signal.aborted) {
+                chatLogger.warn('[FC-GATE] Phase 2 budget exceeded; aborting fallback re-stream', {
+                  provider,
+                  model: modelName,
+                  budgetMs: phase2BudgetMs,
+                  elapsedMs: Date.now() - phase2StartTime,
+                });
+                phase2Controller.abort(new Error(
+                  `Phase 2 text-mode fallback exceeded ${phase2BudgetMs}ms budget`
+                ));
+              }
+            }, phase2BudgetMs);
             chatLogger.warn('[FC-GATE] Phase 2: Retrying in text-mode (file-edit tools only)', {
               provider,
               model: modelName,
@@ -2781,6 +2950,16 @@ const steps = await finalResult.steps;
               fallbackStreamOptions.system = textModeInstructions;
             }
 
+            // Bug #13 (follow-up): merge phase2Controller.signal into the
+            // fallback's abort signal so the wall-clock budget actually
+            // aborts the network request, not just logs the abort.
+            // AbortSignal.any throws on undefined elements, so filter.
+            const phase2AbortSources: AbortSignal[] = [effectiveSignal, phase2Controller.signal]
+              .filter((s): s is AbortSignal => !!s);
+            fallbackStreamOptions.abortSignal = phase2AbortSources.length > 1
+              ? AbortSignal.any(phase2AbortSources)
+              : phase2AbortSources[0];
+
             try {
               const fallbackResult = streamText(fallbackStreamOptions);
               for await (const fallbackChunk of fallbackResult.fullStream) {
@@ -2797,13 +2976,26 @@ const steps = await finalResult.steps;
               chatLogger.info('[FC-GATE] Phase 2 fallback completed', {
                 provider,
                 model: modelName,
+                elapsedMs: Date.now() - phase2StartTime,
+                budgetMs: phase2BudgetMs,
               });
             } catch (fallbackError: any) {
               chatLogger.error('[FC-GATE] Phase 2 fallback failed', {
                 provider,
                 model: modelName,
                 error: fallbackError.message,
+                elapsedMs: Date.now() - phase2StartTime,
+                budgetMs: phase2BudgetMs,
               });
+            } finally {
+              // Clear the budget timer to avoid a pending setTimeout
+              // in the event loop after Phase 2 completes. The
+              // phase2Controller is also aborted defensively so any
+              // in-flight stream sees the abort.
+              clearTimeout(phase2Timer);
+              if (!phase2Controller.signal.aborted) {
+                phase2Controller.abort();
+              }
             }
           }
         }

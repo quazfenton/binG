@@ -1294,6 +1294,25 @@ export class VirtualFilesystemService {
       const throttleState = (globalThis as any)[throttleKey] as
         | { firstSeenAt: number; lastLoggedAt: number; count: number }
         | undefined;
+      // Bug #4 fix: When the path is a bare filename (no workspace/ prefix),
+      // log at DEBUG level instead of WARN since the caller will prepend scopePath.
+      // The warn was misleading - writes succeed because scopePath is prepended
+      // client-side, making the "out of scope" log noise rather than a real error.
+      const isBareRelativePath = !inputPath.includes('/') ||
+        (/^[^/]+$/.test(inputPath)) ||
+        (/^(src|lib|app|components|pages|public|tests?|docs?|scripts?|config)\//i.test(inputPath));
+
+      if (isBareRelativePath && workspacePrefix?.startsWith('workspace/sessions/')) {
+        // Log at debug - this is expected when LLM writes to relative paths
+        // The scopePath will be prepended by the caller
+        logger.debug('[VFS normalizePath] bare relative path detected - scopePath should be prepended by caller', {
+          inputPath,
+          expectedScope: workspacePrefix,
+          hint: `Use canonical path like '${workspacePrefix}/${inputPath}' or let the tool layer prepend scopePath.`,
+        });
+        return normalizedPath; // Allow bare relative paths
+      }
+
       if (!throttleState) {
         (globalThis as any)[throttleKey] = { firstSeenAt: now, lastLoggedAt: now, count: 1 };
         logger.warn(withDetectionTerms(

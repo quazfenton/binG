@@ -48,6 +48,8 @@ export interface ContinuationDecision {
     | 'role_selection_continue_true'
     | 'empty_tool_args_detected'
     | 'single_step_read_pattern'
+    | 'plan_steps_remaining'
+    | 'single_write_then_stop'
     | 'no_continuation_needed'
     | 'max_continuations_reached';
   /**
@@ -62,6 +64,27 @@ export interface ContinuationDecision {
    * turn. Used by the route layer to enforce a hard cap.
    */
   continuationsSoFar: number;
+}
+
+const WRITE_TOOL_HINTS = [
+  'write_file',
+  'batch_write',
+  'create_file',
+  'writeTo',
+  'write_files',
+] as const;
+
+const WRITE_FILE_PREFIX_TOOLS = [
+  'file.write',
+  'file.batch_write',
+  'file.create',
+] as const;
+
+function isWriteToolStep(step: { toolName?: string }): boolean {
+  const name = (step.toolName || '').toLowerCase();
+  if (WRITE_TOOL_HINTS.includes(name as (typeof WRITE_TOOL_HINTS)[number])) return true;
+  if (WRITE_FILE_PREFIX_TOOLS.includes(name as (typeof WRITE_FILE_PREFIX_TOOLS)[number])) return true;
+  return false;
 }
 
 /**
@@ -152,6 +175,7 @@ export function shouldAutoContinue(input: {
     stepReprompt?: string;
     primaryRole?: string;
     estimatedSteps?: number;
+    planSteps?: Array<{ description?: string }>;
   };
   steps?: ReadonlyArray<{ toolName?: string; args?: Record<string, unknown> }>;
   responseText?: string;
@@ -173,6 +197,7 @@ export function shouldAutoContinue(input: {
 
   const steps = input.steps ?? [];
   const routing = input.routing;
+  const planStepsCount = routing?.planSteps?.length ?? routing?.estimatedSteps ?? 0;
 
   // 1. roleSelection.continue === true → continue with the plan's next step
   if (routing?.continue === true) {
@@ -210,6 +235,37 @@ export function shouldAutoContinue(input: {
         '[AUTO-CONTINUE] You read a file in the previous turn but did not take a follow-up action. ' +
         'Based on the file content, proceed with the next step of the task ' +
         '(e.g., write the file, edit it, or run the next command).',
+      continuationsSoFar: continuationsSoFar + 1,
+    };
+  }
+
+  // 4. Plan steps remaining (Bug #11): routing outlined multiple steps
+  //    but the model only completed 1 tool call. Auto-continue so the
+  //    model finishes the remaining steps.
+  if (planStepsCount >= 2 && steps.length >= 1 && steps.length < planStepsCount) {
+    return {
+      continue: true,
+      reason: 'plan_steps_remaining',
+      continuationPrompt:
+        `[AUTO-CONTINUE] You completed step ${steps.length} of ${planStepsCount}. Continue with the remaining steps of the plan. ` +
+        'Pick up from where you left off and complete the remaining work.',
+      continuationsSoFar: continuationsSoFar + 1,
+    };
+  }
+
+  // 5. Single write then stop (Bug #11 variant): one batch_write/write_file
+  //    was used, but the task likely needs more files. If there were exactly
+  //    1 write-tool step and the response ended with finishReason=stop (no
+  //    more tool calls), the model "wrote 3 files and died."
+  const writeSteps = steps.filter(isWriteToolStep);
+  if (writeSteps.length === 1 && steps.length <= 2 && planStepsCount <= 1) {
+    return {
+      continue: true,
+      reason: 'single_write_then_stop',
+      continuationPrompt:
+        '[AUTO-CONTINUE] You wrote files but the original task may need more. ' +
+        'Review what you created and check if additional files (e.g., package.json, README, ' +
+        'tests, configuration) or further edits are needed to make the project complete and runnable.',
       continuationsSoFar: continuationsSoFar + 1,
     };
   }
