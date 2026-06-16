@@ -1,3 +1,6 @@
+// @audit-phantom-L4593: L4593 is a drift target, NOT a canonical Stage 2
+// surface. Canonical Stage 2 surface is the do-while(false) band L1475..L1712
+// in route.ts (cascade Q3/Q5 cross-cut).
 /**
  * Unified Agent Service
  *
@@ -182,10 +185,34 @@ import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, hasMutationSuffix, hasReadSuffi
  * Centralizes the two magic strings so a future typo (`Override` vs `override`)
  * fails at module load / type-check, not silently at a log site.
  */
-const PROMPT_SOURCE = {
+export const PROMPT_SOURCE = {
   OVERRIDE: 'override',
   NO_OVERRIDE: 'no-override',
 } as const;
+
+// exported so route.ts SSE payload emitters can reuse the discriminator without redefining it.
+export const Q2_LIFT_REASON: 'SSE-payload discriminator reuse' = 'SSE-payload discriminator reuse';
+
+export type PromptSource = typeof PROMPT_SOURCE.OVERRIDE | typeof PROMPT_SOURCE.NO_OVERRIDE;
+
+
+/**
+ * Option-3 audit-grade discriminator (Q3 followup closure):
+ * Map a `String | null` to the `'override' | 'no-override'` sentinel so
+ * downstream telemetry can distinguish caller-requested (non-null string)
+ * from caller-skipped (null) without depending on tsc-narrowed types
+ * or breaking the `@audit pinned field name composedPromptSource` contract.
+ *
+ * Convention: any non-null STRING value is treated as caller-requested
+ * (`OVERRIDE`). The orchestrator's `composedPrompt = null` branch falls
+ * into `NO_OVERRIDE` even when the upstream empty-string booking applies,
+ * because that booking only fires AFTER the helper returns.
+ */
+export function stringOrNullToPromptSource(
+  value: string | null | undefined,
+): typeof PROMPT_SOURCE.OVERRIDE | typeof PROMPT_SOURCE.NO_OVERRIDE {
+  return value == null ? PROMPT_SOURCE.NO_OVERRIDE : PROMPT_SOURCE.OVERRIDE;
+}
 
 let _hasOpenCodeSDKPackageCache: boolean | undefined;
 function _hasOpenCodeSDKPackageCheck(): boolean {
@@ -3728,7 +3755,7 @@ async function runV1ApiWithTools(
         toolCount: toolIds.length,
         promptLength: composedPrompt?.length ?? 0,
         // @audit pinned field name composedPromptSource
-        composedPromptSource: composedPrompt === null ? PROMPT_SOURCE.NO_OVERRIDE : PROMPT_SOURCE.OVERRIDE,
+        composedPromptSource: stringOrNullToPromptSource(composedPrompt),
         hasRag: !!ragContext,
       });
 

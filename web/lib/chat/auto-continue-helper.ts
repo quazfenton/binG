@@ -36,6 +36,10 @@
 import { shouldAutoContinue, type ContinuationDecision } from './llm-continuation';
 import { detectNeedsMoreTurns, type DetectableResult } from './auto-continue-detector';
 import { createLogger } from '@/lib/utils/logger';
+// Re-export Single-Source-of-Truth: ContinueDecision originates in
+// llm-continuation.ts (the canonical Stage 0/1 module). auto-continue-helper
+// re-exports the same name so backward compat imports keep resolving.
+export { type ContinueDecision, type ContinuationDecision, type ContinuationReason } from '@/lib/chat/llm-continuation';
 
 const log = createLogger('AutoContinue');
 

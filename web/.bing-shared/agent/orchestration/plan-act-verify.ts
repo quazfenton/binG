@@ -594,7 +594,7 @@ export class PlanActVerifyOrchestrator {
     // history and consumed upstream by route.ts to force the selected role.
     this.sdkTools['choose_role'] = aiTool({
       description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
-      parameters: z.object({
+      inputSchema: z.object({
         role: z.string().describe('The target expert role to adopt (e.g., debugger, architect, reviewer, tester, researcher, coder).'),
         reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
         recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages for failure-context bias.'),
@@ -718,6 +718,13 @@ export class PlanActVerifyOrchestrator {
 
         // ── Thread tool results into conversation history for next step ──
         if (llmResponse.text || llmResponse.toolCalls?.length) {
+          // AUDIT-restored token yield (prior syntax-error-cascade splice dropped
+          // this line; 5 active consumers — bin.ts, route.ts, modal-client.ts,
+          // unified-agent-service.ts, use-enhanced-chat.ts — match `case 'token'`
+          // and `event.type === 'token'`, so the streaming-text cascade wasn't
+          // closed without it). Fires BEFORE assistant-message construction so
+          // SSE/consumer chains stream incremental assistant text correctly.
+          if (llmResponse.text) yield { type: 'token', content: llmResponse.text };
           // 1. Assistant message — the model's response text + any tool calls it made.
           //    AI SDK v6 requires the AssistantModelMessage content to be a string
           //    OR an array of content parts. Tool calls MUST be expressed as

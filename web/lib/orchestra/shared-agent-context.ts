@@ -18,6 +18,32 @@ import { stripScopePrefixForDisplay } from '@/lib/virtual-filesystem/path-normal
 // abort payload for the final SSE event so the UI can show a banner.
 import { safeSteer, wireLoopAbortSteer } from '@/lib/orchestra/steer-service';
 
+// Patterns that should be stripped from error messages sent to the client UI.
+// These may contain internal paths, stack frames, or credential-like strings
+// that are useful for server-side diagnostics but should not leak to SSE consumers.
+const SANITIZE_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\/(?:home|usr|opt|var|tmp)\/[^\s'"`,;)]+/g, replacement: '[path]' },
+  { pattern: /(?:api[_-]?key|token|secret|password|credential|auth)["']?\s*[:=]\s*["']?[^\s'"`,;)]+/gi, replacement: '[redacted]' },
+  { pattern: /at\s+[^\s(]+\s*\([^)]*\)/g, replacement: '[stack-frame]' },
+  { pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, replacement: '[email]' },
+  { pattern: /(?:Bearer|Basic|ApiKey)\s+[^\s'"`,;)]+/gi, replacement: '[redacted-auth]' },
+];
+
+function sanitizeToolError(error: string): string {
+  let sanitized = error;
+  for (const { pattern, replacement } of SANITIZE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, replacement);
+  }
+  // Truncate to 200 chars — Anything longer is likely a stack trace or verbose output
+  // that won't help the UI. The full error is still in server logs.
+  if (sanitized.length > 200) {
+    sanitized = sanitized.slice(0, 200) + '...';
+  }
+  return sanitized;
+}
+
+export { sanitizeToolError };
+
 export { normalizeToolArgs, tolerantJsonParse };
 
 const log = createLogger('SharedAgentContext');
@@ -287,7 +313,7 @@ function buildLoopAbortResult(
     // Take the last 3 entries (most recent failures are most relevant).
     const tail = state.recentFailures.slice(-3);
     for (const entry of tail) {
-      failedTools.push({ name: entry.name, error: entry.error || 'repeated failure' });
+      failedTools.push({ name: entry.name, error: sanitizeToolError(entry.error || 'repeated failure') });
     }
   } else {
     // Fallback: derive entries from the count map (failures with no captured

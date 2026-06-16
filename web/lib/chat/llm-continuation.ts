@@ -248,6 +248,34 @@ function isSingleReadOnlyStep(steps: ReadonlyArray<{ toolName?: string }>): bool
  * @returns A `ContinuationDecision` describing whether to continue and
  *   what prompt to use
  */
+
+// === Stage 0/1 single-source-of-truth (cascade Q2 helper, option-C) ===
+// ContinueDecisionBase is the canonical struct consumed by route.ts'
+// do-while(false) band gate; both `ContinueDecision` (new surface) and
+// `ContinuationDecision` (legacy surface) derive from this base so the
+// two names remain runtime-equivalent at the type level.
+
+export type ContinuationReason =
+  | 'plan_steps_remaining'
+  | 'single_step_read_pattern'
+  | 'max_iterations'
+  | 'user_stop'
+  | 'agent_stop'
+  | 'resolved';
+
+export interface ContinueDecisionBase {
+  continue: boolean;
+  reason?: ContinuationReason;
+  clearedCount?: number;
+  finalIteration?: number;
+}
+
+// option-C: both names derive from the same base type so callers can
+// import either name and get identical runtime + compile-time semantics.
+export type ContinueDecision = ContinueDecisionBase;
+export type ContinuationDecision = ContinueDecisionBase;
+
+
 export function shouldAutoContinue(input: {
   routing?: {
     continue?: boolean;

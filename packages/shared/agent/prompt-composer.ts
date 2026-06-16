@@ -15,6 +15,30 @@ import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabil
 import { SYSTEM_PROMPTS, type AgentRole } from './system-prompts';
 
 // ============================================================================
+// Q3 + Q5: audit-grade defaults — single source of truth for tests + renames.
+// ============================================================================
+
+/** Q3: default header for `generateDynamicToolBlock`'s options.header field. */
+
+// @audit-Q3-Q5-composer-lift: DEFAULT_DYNAMIC_HEADER + RULES_BLOCK promoted from
+// module-private consts to `export const` so the same single-source-of-truth
+// criterion applied at the unified-agent-service.ts cascade lift also applies
+// to the composer surface (cascade Q3 + Q5 cross-cut).
+export const DEFAULT_DYNAMIC_HEADER = 'AVAILABLE CAPABILITIES';
+
+/**
+ * Q5: default 3-rule block emitted by `generateDynamicToolBlock` after the
+ * capabilities list. Rule 4 (about metadata) is appended inline based on
+ * `showMetadata` so the const stays composable.
+ */
+export const RULES_BLOCK = [
+  '## Rules',
+  '1. Use the MOST SPECIFIC tool for the job',
+  '2. Chain tools logically: search → read → analyze → write',
+  '3. NEVER fabricate tool output — always call the actual tool',
+].join('\n');
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -228,12 +252,8 @@ export function generateToolBlock(toolIds: string[]): string {
       lines.push(`- **${cap.id}** — ${cap.description}`);
     }
     lines.push('');
-  }
-
-  lines.push('## Rules');
-  lines.push('1. Use the MOST SPECIFIC tool for the job');
-  lines.push('2. Chain tools logically: search → read → analyze → write');
-  lines.push('3. NEVER fabricate tool output — always call the actual tool');
+  }      // Q5: see RULES_BLOCK above — single source so renames + test assertions stay co-located.
+      lines.push(RULES_BLOCK);
 
   return lines.join('\n');
 }
@@ -387,7 +407,8 @@ export function generateDynamicToolBlock(
     allowedTools,
     excludedTools,
     showMetadata = false,
-    header = 'AVAILABLE CAPABILITIES',
+    // Q3: see DEFAULT_DYNAMIC_HEADER above — single source so renames are safe.
+    header = DEFAULT_DYNAMIC_HEADER,
   } = options;
   let caps = ALL_CAPABILITIES;
   if (allowedTools) caps = caps.filter((c) => allowedTools.includes(c.id));
