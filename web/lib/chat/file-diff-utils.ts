@@ -780,9 +780,13 @@ export function extractFileWritesFromLLMResponse(
     }
   }
 
+  // Bug #9: Filter out project-name hallucinations (paths with no extension,
+  // no directory separator, and empty content — e.g. "coding-agent-tui").
+  const filtered = writes.filter(w => !isLikelyProjectName(w.path, w.content));
+
   // Deduplicate by path (keep last write for each path)
   const deduped = new Map<string, { path: string; content: string }>();
-  for (const w of writes) deduped.set(w.path, w);
+  for (const w of filtered) deduped.set(w.path, w);
   return Array.from(deduped.values());
 }
 

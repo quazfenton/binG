@@ -3992,10 +3992,27 @@ Based on what you have learned, continue working on the original task. Take the 
             const scopePrefix = config.scopePath || 'workspace';
             for (const edit of textEdits) {
               if (edit.path && edit.content) {
+                // Bug #20: Session cross-contamination guard. If the LLM's
+                // extracted path references a different session folder
+                // (e.g. workspace/sessions/001/... when current is 002),
+                // rewrite it to use the current session prefix.
+                let editPath = edit.path;
+                const sessionMatch = editPath.match(/^workspace\/sessions\/(\d{3,})\//);
+                const currentSessionId = config.conversationId || '';
+                if (sessionMatch && sessionMatch[1] !== currentSessionId) {
+                  log.info('[V1-API-WITH-TOOLS] Cross-session path detected — rewriting to current session', {
+                    originalPath: editPath,
+                    rewritenSession: currentSessionId,
+                  });
+                  editPath = editPath.replace(
+                    `workspace/sessions/${sessionMatch[1]}`,
+                    `workspace/sessions/${currentSessionId}`,
+                  );
+                }
+                if (!editPath.startsWith(scopePrefix)) {
+                  editPath = `${scopePrefix}/${editPath}`;
+                }
                 try {
-                  const editPath = edit.path.startsWith(scopePrefix)
-                    ? edit.path
-                    : `${scopePrefix}/${edit.path}`;
                   await virtualFilesystem.writeFile(ownerId, editPath, edit.content);
                 } catch { /* best effort */ }
               }

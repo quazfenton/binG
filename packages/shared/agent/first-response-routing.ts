@@ -166,13 +166,8 @@ export function stripRoutingMarkers(responseText: string): string {
 }
 
 /** Default routing for when parsing fails — safe conservative defaults.
-<<<<<<< Updated upstream
- * The `continue` flag is resolved through resolveDefaultContinue() at
- * module-top scope (single source of truth for the env-aware default). */
-=======
  * The `continue` flag is resolved through resolveDefaultContinue(), so the
  * env-aware default-on behavior is the single source of truth. */
->>>>>>> Stashed changes
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -181,13 +176,9 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-<<<<<<< Updated upstream
-  // Resolved via resolveDefaultContinue() — see env contract on the helper.
-=======
   // Resolved via resolveDefaultContinue() so the env-aware default is
   // the single source of truth shared with the validateAndNormalize
   // fallback path.
->>>>>>> Stashed changes
   continue: resolveDefaultContinue(),
 };
 
@@ -402,12 +393,7 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  // Bug #2 fix: planSteps >= 2 should force continue: true
-  // The LLM outlined a multi-step plan but may have set continue: false.
-  // resolveDefaultContinue() (env-aware, the single source of truth)
-  // returns true unless LLM_AUTO_CONTINUE_DEFAULT=false is explicitly set,
-  // so multi-step plans still trigger auto-continuation in the new
-  // default-true behavior.
+  // planSteps >= 2 forces continue under env-default-on; explicit routing.continue with > 0 plan steps takes priority. See resolveDefaultContinue docblock.
   const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
   const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
   const shouldContinue = explicitContinue || hasMultiplePlanSteps;

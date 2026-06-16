@@ -71,9 +71,24 @@ interface ProviderEntry {
   healthCheck?: (provider: SandboxProvider) => Promise<boolean>
 }
 
-const providerRegistry = new Map<SandboxProviderType, ProviderEntry>()
+// Bug #8 fix: Use globalThis singleton for the provider registry so Next.js
+// hot-reload doesn't re-create 251 instances. On re-evaluation, the module
+// checks if the registry already exists on globalThis and reuses it.
+declare global {
+  var __sandboxProviderRegistry__: Map<SandboxProviderType, ProviderEntry> | undefined;
+  var __sandboxProvidersInited__: boolean | undefined;
+}
+
+const providerRegistry = globalThis.__sandboxProviderRegistry__ ?? (globalThis.__sandboxProviderRegistry__ = new Map<SandboxProviderType, ProviderEntry>());
 
 function initializeRegistry() {
+  // Bug #8: Skip re-initialization on hot-reload. The registry persists on
+  // globalThis so re-evaluating this module doesn't create duplicate entries.
+  if (globalThis.__sandboxProvidersInited__) {
+    log.debug('Provider registry already initialized — skipping (hot-reload guard)');
+    return;
+  }
+  globalThis.__sandboxProvidersInited__ = true;
   // Register providers with priority (lower = higher priority in fallback chain)
   // Use async factory functions for lazy initialization to avoid SDK import errors in tests
 
