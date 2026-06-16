@@ -679,7 +679,7 @@ export function detectHealingTrigger(
     if (allSameCategory) {
       return {
         detected: true,
-        reason: 'Stuck in loop - same failure repeated 3+ times',
+        reason: 'Stuck in loop — same failure repeated 3+ times',
         healingMode: 'replan',
         prompt: 'You appear stuck in a loop. Stop and reconsider the approach. Break down the task differently.',
       };
@@ -696,7 +696,7 @@ export function detectHealingTrigger(
     };
   }
   
-  // Detect incomplete response - use enhanced detection
+  // Detect incomplete response — use enhanced detection
   const incompleteDetection = detectIncompleteResponse(lastResponse);
   if (incompleteDetection.detected) {
     return {

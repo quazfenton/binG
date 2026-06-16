@@ -13,6 +13,28 @@
 
 import { tryRepairJson, extractFirstJsonObject } from './spec-parser-utils';
 
+// ─── Env-Aware Default ──────────────────────────────────────────────────────────────
+
+/**
+ * Single source of truth for the env-aware continuation default.
+ *
+ * Contract: returns `true` unless the operator explicitly sets
+ * `LLM_AUTO_CONTINUE_DEFAULT=false` (literal, case-sensitive). Any other
+ * value — unset, empty, "0", "FALSE" (case-mismatched) — defers to
+ * default-on because the discriminator is `!== 'false'`.
+ *
+ * Runtime: declared at module-top so DEFAULT_ROUTING (cached at module
+ * load) and validateAndNormalize fallback path both reach the same
+ * definition. The `typeof process !== 'undefined'` guard prevents a
+ * ReferenceError in browser/Worker bundles (this package has no
+ * `browser` export condition to gate server-only loading).
+ */
+export function resolveDefaultContinue(): boolean {
+  return typeof process !== 'undefined'
+    && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
+}
+
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 export type TaskClassification = 'code' | 'research' | 'planning' | 'debugging' | 'review' | 'multi-step';
@@ -119,8 +141,8 @@ export function stripRoutingMarkers(responseText: string): string {
 }
 
 /** Default routing for when parsing fails — safe conservative defaults.
- * Bug #70: `continue` defaults to true (env-tunable via LLM_AUTO_CONTINUE_DEFAULT)
- * so multi-step agent tasks auto-continue instead of stopping at step 1. */
+ * The `continue` flag is resolved through resolveDefaultContinue() at
+ * module-top scope (single source of truth for the env-aware default). */
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -129,7 +151,8 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-  continue: typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false',
+  // Resolved via resolveDefaultContinue() — see env contract on the helper.
+  continue: resolveDefaultContinue(),
 };
 
 /**
