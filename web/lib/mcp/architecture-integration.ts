@@ -1493,7 +1493,23 @@ export async function callMCPToolFromAI_SDK(
     // NEW: Check if it's a bash/stdio shell tool (bash_execute)
     if (toolName === 'bash_execute') {
       const { createBashTool } = await import('../bash/bash-tool');
-      const sessionId = normalizeSessionId(args.conversationId || userId || '000');
+      // Bug fix (was silently falling back to '000'): the previous code
+      // used `args.conversationId || userId || '000'` which masked
+      // missing-userId bugs by substituting the literal string '000' as
+      // the session id. That string then propagated as the VFS ownerId
+      // (visible as `[VFS] getWorkspaceVersion called { ownerId: '000' }`
+      // in the logs) and caused cross-session workspace contamination.
+      // Throw loudly so the missing-userId case is fixed at the call
+      // site instead of being papered over downstream.
+      const sessionIdSource = args.conversationId || userId;
+      if (!sessionIdSource) {
+        throw new Error(
+          '[architecture-integration] bash_execute requires a userId or conversationId; ' +
+          'both are missing. This is a caller bug — the tool dispatcher must pass ' +
+          'an authenticated identity.'
+        );
+      }
+      const sessionId = normalizeSessionId(sessionIdSource);
       const scopePath = `workspace/sessions/${sessionId}`;
 
       // Get filesystem state for command routing

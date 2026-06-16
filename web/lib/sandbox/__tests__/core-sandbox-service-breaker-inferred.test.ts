@@ -69,8 +69,8 @@ vi.mock('@bing/platform/env', async () => {
 
 import { SandboxService } from '../core-sandbox-service';
 
-const BREAKER_KEY = 'sandbox';
 const PRIMARY = 'daytona'; // any non-inferred provider; doesn't matter for the carve-out test
+const BREAKER_KEY = `sandbox:${PRIMARY}`; // Pass-6 follow-up: per-provider key
 
 describe('SandboxService breaker + inferred-provider carve-out (Pass-7)', () => {
   beforeEach(() => {
@@ -232,9 +232,24 @@ describe('SandboxService breaker + inferred-provider carve-out (Pass-7)', () => 
     expect(fakeProvider.getSandbox).toHaveBeenCalledWith(nonInferredId);
   });
 
-  it('CONTROL: breaker closed + UUID → primary probe runs normally, no throw', async () => {
-    // Breaker is NOT tripped. UUID falls through to primary probe, which
-    // succeeds (returns the handle via the mock's getSandbox).
+  it('CONTROL: breaker closed + non-inferred id → primary probe runs normally, no throw', async () => {
+    // Breaker is NOT tripped. Non-inferred id falls through to the
+    // primary probe, which succeeds (returns the handle via the mock's
+    // getSandbox).
+    //
+    // ISOLATION NOTE: previous tests in this file trip the breaker
+    // with `recordFailureBreaker('sandbox', 60_000)`. The deadline is
+    // stored as a real-wall-clock timestamp (~1.78e12), but
+    // `vi.useFakeTimers()` resets the fake clock to 0 on each call, so
+    // `vi.advanceTimersByTime(120_000)` only advances the fake clock
+    // to 120_000ms — far short of the real-timestamp deadline. The
+    // `sweepStaleBreakerCooldowns(0)` in `beforeEach` therefore can't
+    // evict the entry (deadline > fake-now). The cleanest fix is to
+    // spy on `getBreakerCooldownUntil` for this test only and force
+    // it to return null, simulating a closed breaker.
+    const cbModule = await import('@/lib/utils/circuit-breaker');
+    const spy = vi.spyOn(cbModule, 'getBreakerCooldownUntil').mockReturnValue(null);
+
     const service = new SandboxService();
     (service as any).primaryProviderType = PRIMARY;
 
@@ -247,6 +262,7 @@ describe('SandboxService breaker + inferred-provider carve-out (Pass-7)', () => 
       err = e;
     }
 
+    spy.mockRestore();
     expect(err).toBeNull();
     expect(handle).toBe(fakeProviderHandle);
     // Primary probe ran.

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/init-db.js",
     "dev": "next dev",
     "dev:ws": "tsx server.ts",
     "dev:standard": "node scripts/run-dev-mode.js standard",
@@ -29,6 +30,7 @@
     "backup:local": "BACKUP_PROVIDER=local node scripts/backup-database.js",
     "backup:s3": "BACKUP_PROVIDER=s3 node scripts/backup-database.js",
     "backend:init": "node scripts/init-backend.js",
+    "db:init": "node scripts/init-db.js",
     "export-telemetry": "tsx scripts/export-model-telemetry.ts"
   },
   "dependencies": {

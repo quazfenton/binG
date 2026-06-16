@@ -308,11 +308,20 @@ export class SandboxService {
     //     modal, mistral, etc.) inferred from its ID prefix, we can
     //     still resolve it even when the primary's breaker is open.
     //   - primary probe: guarded (this is the fix the user asked for).
-    //   - fallback chain: guarded (redundant safety net, no harm).
-    const sandboxBreakerCooldown = getBreakerCooldownUntil('sandbox')
-    if (sandboxBreakerCooldown > Date.now()) {
-      const remainingMs = sandboxBreakerCooldown - Date.now()
-      log.warn('[SandboxService] sandbox circuit breaker is open, short-circuiting primary probe', {
+    //   - fallback chain: guarded by a per-provider pre-check inside the
+    //     loop (see below) so a daytona trip doesn't short-circuit
+    //     nullclaw/opensandbox/local-pty.
+    //
+    // Per-provider breaker key (Pass-6 follow-up): the key is now
+    // `sandbox:${providerType}` instead of a single global `'sandbox'`.
+    // A daytona limit trip only short-circuits daytona, not the rest
+    // of the fallback chain. This matches the per-sandbox pattern in
+    // `sandbox-filesystem-sync.ts`.
+    const primaryBreakerKey = `sandbox:${this.primaryProviderType}`
+    const primaryBreakerCooldown = getBreakerCooldownUntil(primaryBreakerKey)
+    if (primaryBreakerCooldown > Date.now()) {
+      const remainingMs = primaryBreakerCooldown - Date.now()
+      log.warn(`[SandboxService] ${primaryBreakerKey} circuit breaker is open, short-circuiting primary probe`, {
         remainingMs,
         primaryProvider: this.primaryProviderType,
       })
@@ -362,9 +371,28 @@ export class SandboxService {
     }
 
     // Try all configured providers (excluding primary which we already tried).
-    // The circuit-breaker pre-check is at the top of this function (see above)
-    // so the fallback chain is also short-circuited when the breaker is open.
+    //
+    // Pass-6 follow-up: the breaker pre-check is now wired INTO this loop
+    // (before the per-provider try block) so a tripped provider's
+    // `getSandbox` call is skipped entirely — we don't pay the cost of a
+    // doomed attempt, we just `continue` to the next provider. Combined
+    // with the per-provider breaker key (`sandbox:${fallbackType}`), a
+    // daytona limit trip only skips daytona in this loop, not the rest
+    // of the chain.
     for (const fallbackType of configuredProviders.filter(t => t !== this.primaryProviderType)) {
+      // Pre-check the per-provider breaker BEFORE the try block. If this
+      // specific provider's breaker is open, skip it without attempting
+      // the round trip (avoids the cost of a doomed attempt).
+      const fallbackBreakerKey = `sandbox:${fallbackType}`
+      const fallbackBreakerCooldown = getBreakerCooldownUntil(fallbackBreakerKey)
+      if (fallbackBreakerCooldown > Date.now()) {
+        log.debug(`[SandboxService] ${fallbackBreakerKey} circuit breaker is open, skipping this fallback provider`, {
+          remainingMs: fallbackBreakerCooldown - Date.now(),
+          sandboxId,
+        })
+        // continue to next provider
+        continue
+      }
       try {
         const fallback = await getSandboxProvider(fallbackType)
         await fallback.getSandbox(sandboxId)
@@ -385,10 +413,12 @@ export class SandboxService {
             `(limitType=${fallbackErr?.limitType ?? 'unknown'}) — falling through`,
             { sandboxId, provider: fallbackType, limitType: fallbackErr?.limitType },
           );
-        // Bug #87 follow-up (Pass-6) — trip the circuit breaker so the
-        // next call short-circuits instead of re-hitting the same dead
-        // provider. 60s cooldown matches the arcade-service (#88) convention.
-        recordFailureBreaker('sandbox', 60_000)
+        // Bug #87 follow-up (Pass-6) — trip THIS provider's circuit breaker
+        // so the next call skips it. 60s cooldown matches the
+        // arcade-service (#88) convention. Per-provider key means a
+        // daytona trip only short-circuits daytona, not the rest of the
+        // chain.
+        recordFailureBreaker(fallbackBreakerKey, 60_000)
         }
         // continue to next provider
       }
@@ -406,29 +436,34 @@ export class SandboxService {
     log.info(`Creating workspace for user ${userId}${config ? ' with custom config' : ''}`)
     let handle: SandboxHandle | null = null
 
-    // Bug #87 follow-up (Pass-7) — pre-check the circuit breaker BEFORE
-    // attempting to create a new sandbox. The breaker trips when
-    // existing-sandbox resolution has been failing repeatedly (see the
-    // `recordFailureBreaker('sandbox', 60_000)` calls in
-    // `resolveProviderForSandbox`). Without this pre-check, a tripped
-    // breaker would still allow new sandboxes to be created, which
-    // can re-trip the breaker on the very first call. Sharing the same
-    // breaker key (`'sandbox'`) ties the create path to the resolve
-    // path so a backend that's down for resolution is also avoided for
-    // creation. The warm-pool acquire path is also short-circuited
-    // (the warm pool is itself a backend that would fail in the same
-    // conditions).
-    const sandboxBreakerCooldown = getBreakerCooldownUntil('sandbox')
+    // Bug #87 follow-up (Pass-7) — pre-check the PRIMARY provider's circuit
+    // breaker BEFORE attempting to create a new sandbox. The breaker trips
+    // when existing-sandbox resolution has been failing repeatedly (see
+    // the `recordFailureBreaker(`sandbox:${fallbackType}`, 60_000)` calls
+    // in `resolveProviderForSandbox`). Without this pre-check, a tripped
+    // primary breaker would still allow new sandboxes to be created, which
+    // can re-trip the breaker on the very first call.
+    //
+    // Per-provider breaker key (Pass-6 follow-up): the key is now
+    // `sandbox:${this.primaryProviderType}` instead of a single global
+    // `'sandbox'`. A daytona limit trip only short-circuits daytona, not
+    // the rest of the candidate list. The warm-pool acquire path is also
+    // short-circuited (the warm pool is itself the primary provider's
+    // backend that would fail in the same conditions). Per-provider
+    // pre-checks inside the direct-chain loop below handle the fallback
+    // providers.
+    const primaryBreakerKey = `sandbox:${this.primaryProviderType}`
+    const sandboxBreakerCooldown = getBreakerCooldownUntil(primaryBreakerKey)
     if (sandboxBreakerCooldown > Date.now()) {
       const remainingMs = sandboxBreakerCooldown - Date.now()
-      log.warn('[SandboxService] sandbox circuit breaker is open, short-circuiting createWorkspace', {
+      log.warn(`[SandboxService] ${primaryBreakerKey} circuit breaker is open, short-circuiting createWorkspace`, {
         remainingMs,
         primaryProvider: this.primaryProviderType,
         userId,
       })
       throw new Error(`Sandbox circuit breaker is open for ${Math.ceil(remainingMs / 1000)}s`)
     }
-    
+
     // P1 FIX: Honor explicit provider in config if provided
     const explicitProvider = config?.provider as SandboxProviderType | undefined;
     const preferredType = explicitProvider 
@@ -454,7 +489,21 @@ export class SandboxService {
       } catch (error: any) {
         log.warn(`Warm pool unavailable; falling back to provider chain: ${error.message}`)
         let lastError: unknown = error
+        let lastFailedType: SandboxProviderType | null = null
         for (const providerType of candidateTypes) {
+          // Pre-check the per-provider breaker BEFORE the try block. If
+          // this specific provider's breaker is open, skip it without
+          // attempting the round trip.
+          const providerBreakerKey = `sandbox:${providerType}`
+          const providerBreakerCooldown = getBreakerCooldownUntil(providerBreakerKey)
+          if (providerBreakerCooldown > Date.now()) {
+            log.debug(`[SandboxService] ${providerBreakerKey} circuit breaker is open, skipping this provider`, {
+              remainingMs: providerBreakerCooldown - Date.now(),
+              userId,
+            })
+            // continue to next provider
+            continue
+          }
           try {
             log.debug(`Attempting to create sandbox with provider: ${providerType}`)
             handle = await this.createSandboxWithProvider(providerType, userId, config)
@@ -463,25 +512,43 @@ export class SandboxService {
             break
           } catch (providerError: any) {
             lastError = providerError
+            lastFailedType = providerType
             const message = providerError instanceof Error ? providerError.message : String(providerError)
             log.warn(`Provider failed (${providerType}): ${message}; trying next fallback`)
           }
         }
         if (lastError) {
           log.error(`All providers failed for workspace creation`, lastError as Error)
-          // Bug #87 follow-up (Pass-7) — trip the circuit breaker so
-          // the next call (resolve OR create) short-circuits instead
-          // of re-hitting the same dead providers. 60s cooldown
-          // matches the existing `resolveProviderForSandbox` breaker
-          // trip and the arcade-service (#88) convention.
-          recordFailureBreaker('sandbox', 60_000)
+          // Bug #87 follow-up (Pass-7) — trip the LAST failed provider's
+          // circuit breaker so the next call (resolve OR create)
+          // short-circuits just that provider, not the whole chain.
+          // 60s cooldown matches the existing
+          // `resolveProviderForSandbox` breaker trip and the
+          // arcade-service (#88) convention.
+          if (lastFailedType) {
+            recordFailureBreaker(`sandbox:${lastFailedType}`, 60_000)
+          }
           throw lastError
         }
       }
     } else {
       log.debug('Using direct provider chain (warm pool disabled or custom config)')
       let lastError: unknown = null
+      let lastFailedType: SandboxProviderType | null = null
       for (const providerType of candidateTypes) {
+        // Pre-check the per-provider breaker BEFORE the try block. If
+        // this specific provider's breaker is open, skip it without
+        // attempting the round trip.
+        const providerBreakerKey = `sandbox:${providerType}`
+        const providerBreakerCooldown = getBreakerCooldownUntil(providerBreakerKey)
+        if (providerBreakerCooldown > Date.now()) {
+          log.debug(`[SandboxService] ${providerBreakerKey} circuit breaker is open, skipping this provider`, {
+            remainingMs: providerBreakerCooldown - Date.now(),
+            userId,
+          })
+          // continue to next provider
+          continue
+        }
         try {
           log.debug(`Attempting to create sandbox with provider: ${providerType}`)
           handle = await this.createSandboxWithProvider(providerType, userId, config)
@@ -490,18 +557,22 @@ export class SandboxService {
           break
         } catch (providerError: any) {
           lastError = providerError
+          lastFailedType = providerType
           const message = providerError instanceof Error ? providerError.message : String(providerError)
           log.warn(`Provider failed (${providerType}): ${message}; trying next fallback`)
         }
       }
       if (lastError) {
         log.error(`All providers failed for workspace creation`, lastError as Error)
-        // Bug #87 follow-up (Pass-7) — trip the circuit breaker so
-        // the next call (resolve OR create) short-circuits instead
-        // of re-hitting the same dead providers. 60s cooldown
-        // matches the existing `resolveProviderForSandbox` breaker
-        // trip and the arcade-service (#88) convention.
-        recordFailureBreaker('sandbox', 60_000)
+        // Bug #87 follow-up (Pass-7) — trip the LAST failed provider's
+        // circuit breaker so the next call (resolve OR create)
+        // short-circuits just that provider, not the whole chain.
+        // 60s cooldown matches the existing
+        // `resolveProviderForSandbox` breaker trip and the
+        // arcade-service (#88) convention.
+        if (lastFailedType) {
+          recordFailureBreaker(`sandbox:${lastFailedType}`, 60_000)
+        }
         throw lastError
       }
     }
