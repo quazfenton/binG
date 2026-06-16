@@ -1572,6 +1572,26 @@ const config: UnifiedAgentConfig = {
                 // preserves the fileEdits check while adding 15+ signals across
                 // 4 factor groups). The helper handles counter management and
                 // max-continuations enforcement internally.
+                // Boundary invariant: result.response is the latest post-processUnifiedAgentRequest
+                // view; iterContent is the cumulative streamed state (streamState.buffer + result.response).
+                // They are equal when streamState.buffer is empty (i.e. immediately after a flush),
+                // but diverge while the buffer holds holdback chars. Consumers reading autoDecision:
+                //   - input.responseText (= iterContent) -> use for "total assistant content so far"
+                //   - input.result.response             -> use for "latest post-processUnifiedAgentRequest view"
+                // Runtime divergence diagnostic (warn-only) so audit logs surface the divergence
+                // rather than silently treating the two as interchangeable.
+                if (
+                  streamState.buffer &&
+                  typeof result.response === 'string' &&
+                  iterContent !== result.response
+                ) {
+                  chatLogger.warn('[AUTO-CONTINUE] boundary divergence: iterContent != result.response', {
+                    requestId,
+                    bufferLen: streamState.buffer.length,
+                    iterContentLen: iterContent.length,
+                    resultResponseLen: result.response.length,
+                  });
+                }
                 const autoDecision = decideAutoContinue({
                   requestId,
                   routing: result.metadata?.routing,
@@ -1586,6 +1606,12 @@ const config: UnifiedAgentConfig = {
 
                 // Hoisted (dedup): shared between the [AUTO-CONTINUE] log payload
                 // (computed before the `if (autoDecision.continue)` branch so the
+                  // Single source of truth: lives next to its only consumer so it is not
+                  // computed on no-continue iterations. If a future out-of-branch
+                  // telemetry needs it, hoist + add a JSDoc anchoring the invariant.
+                  const isPreviousAssistantEmpty =
+                    previousAssistantContent.length === 0 ||
+                    previousAssistantContent.trim() === '';
                 // empty-follow-up audit field stays a forward-precise metric, not
                 // an inferred-from-responseLength approximation) and the
                 // conversationHistory assistant-message append below.
@@ -1600,9 +1626,7 @@ const config: UnifiedAgentConfig = {
                     forceSignal: autoDecision.forceSignal,
                     advancedDetectorForce: autoDecision.forcedBy === 'advanced',
                     continuationsSoFar: autoDecision.continuationsSoFar,
-                    nextResponseEmpty:
-                      previousAssistantContent.length === 0 ||
-                      previousAssistantContent.trim() === '',
+                    nextResponseEmpty: isPreviousAssistantEmpty,
                   });
                   emit(SSE_EVENT_TYPES.CONTINUE, {
                     requestId,

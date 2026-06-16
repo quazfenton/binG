@@ -247,7 +247,11 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
       // resolveDefaultContinue() contract — see docblock.
-      continue: parsed.continue !== undefined ? parsed.continue : (parsed.planSteps.length >= 2 ? true : resolveDefaultContinue()),
+      // Multi-step plans force continuation even when the parsed payload
+      // explicitly says continue: false (conflicting signal from the LLM).
+      continue: Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2
+        ? true
+        : (parsed.continue !== undefined ? parsed.continue : resolveDefaultContinue()),
     };
 
     return {

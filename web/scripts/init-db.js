@@ -360,7 +360,9 @@ function main() {
       .sort();
 
     for (const filename of migrationFiles) {
-      const version = filename.split(/[_-]/)[0];
+      // Use the full stem (filename without .sql) as the version key so
+      // files like `001_foo.sql` and `001_bar.sql` don't collide.
+      const version = filename.replace(/\.sql$/, '');
       if (executed.has(version)) {
         migrationsSkipped++;
         continue;

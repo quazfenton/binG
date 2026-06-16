@@ -464,6 +464,7 @@ export function recordFailureBreaker(
   const deadline = Date.now() + cooldownMs;
   breakerCooldowns.set(key, deadline);
   return setTimeout(() => {
+    if (breakerCooldowns.get(key) !== deadline) return;
     breaker?.reset();
     breakerCooldowns.delete(key);
   }, cooldownMs);

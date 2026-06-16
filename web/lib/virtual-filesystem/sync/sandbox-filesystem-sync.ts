@@ -781,9 +781,10 @@ class SandboxFilesystemSync {
         if (isSandboxInaccessible(message)) {
           this.stopSync(sandboxId);
           logger.info(`[SandboxSync] Stopped sync for removed/inaccessible sandbox ${sandboxId} (writeFile path)`);
-          // Break out of the file loop too: every remaining file would just
-          // fail the same way against an inaccessible sandbox.
-          break;
+          // Return immediately: every remaining file would just fail the same
+          // way against an inaccessible sandbox, and post-loop state updates
+          // (lastSyncVersions, failure counters) must not run after stopSync.
+          return;
         }
       }
     }

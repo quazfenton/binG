@@ -74,6 +74,7 @@ export class ArcadeService {
     if (this.consecutive401s > 0) this.consecutive401s = 0;
     if (this.disabled && this.credFailuresDisabled) {
       this.disabled = false;
+      arcadeServiceDisabled = false;
       this.credFailuresDisabled = false;
       this.disabledReason = null;
     }

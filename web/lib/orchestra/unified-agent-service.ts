@@ -3624,10 +3624,11 @@ async function runV1ApiWithTools(
             // Track for no-progress loop detection
             // Bug #111/#84: Pass the real error string so loop-abort steer has
             // concrete failure history instead of empty/placeholder entries.
-            const _toolError: unknown = toolResult.error;
-            const toolErrorMsg = typeof _toolError === 'string'
-              ? _toolError
-              : (typeof _toolError === 'object' && _toolError !== null && 'message' in _toolError ? String((_toolError as { message: unknown }).message) : undefined);
+            // Use extractToolError helper + fallback to output for cases where
+            // the error message lives in output rather than the error field.
+            const toolErrorMsg =
+              extractToolError(toolResult) ||
+              (typeof toolResult.output === 'string' ? toolResult.output : undefined);
             const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success, toolErrorMsg);
             if (loopMsg) {
               log.warn(`[V1-API-WITH-TOOLS] Loop detected: ${loopMsg}`);
@@ -4746,6 +4747,8 @@ Based on what you have learned, continue working on the original task. Take the 
             toolInvocations: accumulatedToolInvocations,
             autoContinued: true,
             autoContinueIterations: autoContinueIteration,
+            // Pass anyToolFailed through so client can auto-retry on tool failure
+            ...(accumulatedToolInvocations.length > 0 && accumulatedToolInvocations.some((inv: any) => isFailedToolInvocation(inv)) ? { anyToolFailed: true } : {}),
             ...(routingForClient ? { routing: routingForClient } : {}),
           },
         };

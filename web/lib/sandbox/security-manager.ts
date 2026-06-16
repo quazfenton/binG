@@ -49,7 +49,7 @@ export class SandboxSecurityManager {
   // expansion, subshells, arithmetic). Bug #81 — removal is safe because
   // DANGEROUS_COMMAND_PARTIALS blocks eval/source, and schema validation prevents
   // injection through tool arguments.
-  private static readonly SHELL_METADATA_CHARS = ['`'];
+  private static readonly SHELL_METADATA_CHARS = ['`', '$'];
 
 
   // Input size limits

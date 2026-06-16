@@ -54,17 +54,21 @@ const fcSuccessCache = new Map<string, FCSuccessEntry>();
  * Call this when a model successfully invokes tools.
  */
 export function recordFCSuccess(provider: string, modelName: string, toolCallCount: number = 1): void {
+  const normalizedToolCallCount =
+    Number.isFinite(toolCallCount) && toolCallCount > 0
+      ? Math.floor(toolCallCount)
+      : 1;
   const key = `${provider.toLowerCase()}:${modelName.toLowerCase()}`;
   const existing = fcSuccessCache.get(key);
   if (existing) {
     existing.successCount++;
     existing.lastSuccessAt = Date.now();
-    existing.toolCallCount += toolCallCount;
+    existing.toolCallCount += normalizedToolCallCount;
   } else {
     fcSuccessCache.set(key, {
       successCount: 1,
       lastSuccessAt: Date.now(),
-      toolCallCount,
+      toolCallCount: normalizedToolCallCount,
     });
   }
 }

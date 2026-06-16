@@ -92,11 +92,21 @@ const CATEGORY_LABELS: Record<string, string> = {
  * Compose a full system prompt for a role with dynamic tool injection.
  */
 export function composeRoleWithTools(
-  role: AgentRole,
+  role: AgentRole | undefined,
   options: Omit<ComposeRoleOptions, 'toolStrategy'> & { availableTools: string[] }
-): string {
-  const sections = getRoleSections(role);
-  if (!sections) return SYSTEM_PROMPTS[role] || '';
+): string | null {
+  // (1) Caller did NOT request a role override.
+  if (role === undefined) return null;
+  // (2) No canonical prompt registered for this role \u2014 configuration error.
+  const sectionsForRole = getRoleSections(role);
+  if (!sectionsForRole && !SYSTEM_PROMPTS[role]) {
+    throw new Error(`[prompt-composer] no canonical prompt registered for role "${role}"`);
+  }
+  // (3) sections-missing: fall back to SYSTEM_PROMPTS[role] (guard (2) ensures it exists).
+  if (!sectionsForRole) {
+    return SYSTEM_PROMPTS[role]!;
+  }
+  const sections = sectionsForRole;
 
   // Filter tools to only include those available to this role
   const toolBlock = generateToolBlock(options.availableTools);
@@ -118,9 +128,19 @@ export function composeRoleWithTools(
 /**
  * Compose a role prompt from sections with optional overrides.
  */
-export function composeRole(role: AgentRole, options: ComposeRoleOptions = {}): string {
-  const base = getRoleSections(role);
-  if (!base) return SYSTEM_PROMPTS[role] || '';
+export function composeRole(role: AgentRole | undefined, options: ComposeRoleOptions = {}): string | null {
+  // (1) Caller did NOT request a role override.
+  if (role === undefined) return null;
+  // (2) No canonical prompt registered for this role \u2014 configuration error.
+  const baseForRole = getRoleSections(role);
+  if (!baseForRole && !SYSTEM_PROMPTS[role]) {
+    throw new Error(`[prompt-composer] no canonical prompt registered for role "${role}"`);
+  }
+  // (3) sections-missing: fall back to SYSTEM_PROMPTS[role] (guard (2) ensures it exists).
+  if (!baseForRole) {
+    return SYSTEM_PROMPTS[role]!;
+  }
+  const base = baseForRole;
 
   const ctx: PromptContext = {
     roleName: String(role),

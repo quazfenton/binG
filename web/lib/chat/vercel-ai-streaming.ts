@@ -198,29 +198,23 @@ The previous attempt(s) may have failed due to: malformed arguments, missing req
  * and killed the agent.
  *
  * The fix inverts the priority:
- *   1. `_recoveryHint` presence → success (the injector set it on the
- *      success path with a non-fatal recovery hint; treat as positive).
- *   2. `success === true`      → success (source of truth, even when
+ *   1. `success === true`      → success (source of truth, even when
  *      `error` is explicitly `null`).
- *   3. `success === false`     → failure (use the legacy error extraction).
- *   4. Legacy fallback (no `success` field): truthy `error` → failure,
+ *   2. `success === false`     → failure (use the legacy error extraction).
+ *      `_recoveryHint` is appended to the error message, NOT used to
+ *      reclassify a failure as success.
+ *   3. Legacy fallback (no `success` field): truthy `error` → failure,
  *      otherwise → success.
  *
  * Returns a structured result so callers can both log the outcome AND
  * forward the original error message when the tool did actually fail.
  */
 export type ToolResultClassification =
-  | { isFailure: false; reason: 'success_true' | 'recovery_hint' | 'no_error_field' }
+  | { isFailure: false; reason: 'success_true' | 'no_error_field' }
   | { isFailure: true; reason: 'success_false' | 'error_string' | 'error_object' | 'unknown_shape'; errorMsg: string };
 
 export function classifyToolResult(toolResult: any): ToolResultClassification {
-  // Priority 1: _recoveryHint is a positive signal — even on success===false,
-  // the injector attached a recovery hint meaning the executor has a non-fatal
-  // recoverable path the LLM can use on the next turn.
-  if (toolResult?._recoveryHint) {
-    return { isFailure: false, reason: 'recovery_hint' };
-  }
-  // Priority 2: success:true is the source of truth, even when error is
+  // Priority 1: success:true is the source of truth, even when error is
   // explicitly null. Many tools (bash_execute, etc.) return
   // { success: true, output, exitCode, error: null } on success.
   if (toolResult?.success === true) {

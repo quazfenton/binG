@@ -1310,6 +1310,9 @@ export class VirtualFilesystemService {
           expectedScope: workspacePrefix,
           hint: `Use canonical path like '${workspacePrefix}/${inputPath}' or let the tool layer prepend scopePath.`,
         });
+        if (normalizedPath.length > MAX_PATH_LENGTH) {
+          throw new Error(`Path exceeds max length (${MAX_PATH_LENGTH})`);
+        }
         return normalizedPath; // Allow bare relative paths
       }
 

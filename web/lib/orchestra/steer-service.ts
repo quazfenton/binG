@@ -991,8 +991,10 @@ export const incompleteConfidenceThreshold = {
 // categorizeAbortReason() inspects the last N failed tool calls and picks
 // the dominant failure mode:
 //   - binary_missing    — all N failures are ENOENT for the same binary
-//   - tool_failing   — all N failures are capability_not_found / alias_rewrite
-//   - timeout           — all N failures are idle_timeout / TIMEOUT-TTFT
+//   - tool_failing      — dominant pattern is the same tool failing repeatedly
+//                         (not ENOENT — tool exists but results are broken)
+//   - mixed             — failures span 2+ distinct categories (e.g. one ENOENT
+//                         + one timeout + one not_found)
 //   - unknown           — anything else (mixed, or unclassifiable)
 //
 // wireLoopAbortSteer() builds the [STEER] prompt + a structured abort
