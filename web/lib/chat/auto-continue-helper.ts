@@ -166,56 +166,48 @@ export function needsMoreTurnsDetector(
 }
 
 export interface AutoContinueInput {
-  /** Stable identifier for the request — used as the counter key. */
   requestId: string;
-  /** Routing metadata from the first-response parse. */
-  routing: any;
-  /** Steps (tool invocations) from the completed turn. */
-  steps: any[];
-  /** The final assistant text. */
-  responseText: string;
-  /**
-   * Optional result object — passed to the detector so it can inspect
-   * fileEdits, tool results, etc. May be undefined for the very first
-   * call before the result is finalized.
-   */
-  result?: any;
-  /**
-   * Optional detector override. Defaults to `defaultFileEditDetector`,
-   * which forces a continuation if the result contains file edits.
-   * Pass `() => null` to disable the detector entirely.
-   */
+  iteration?: number;
+  // Optional shape: the Stage 3 caller passes only `requestId + iteration`. Other
+  // fields remain available so the full decision logic keeps working when invoked
+  // from wider callers.
+  routing?: AutoContinueRouting;
+  steps?: AutoContinueStep[];
+  responseText?: string;
+  result?: AutoContinueResultData;
   detectorFn?: AutoContinueDetectorFn;
-  /**
-   * Optional ADVANCED detector, evaluated alongside `detectorFn`. Both
-   * are called; whichever returns `{ force: true, ... }` fires the
-   * continuation, with the advanced detector's reason taking priority
-   * when both fire.
-   *
-   * Use this to opt-in to richer signal coverage WITHOUT losing the
-   * fileEdits-only check. The canonical advanced detector is
-   * `needsMoreTurnsDetector` (also exported here), which wraps
-   * `detectNeedsMoreTurns` and inspects 15+ signals across 4 factor
-   * groups (read-then-stall, deep-research-loop, mid-sentence-cutoff,
-   * etc.). Passing `needsMoreTurnsDetector` here is the migration
-   * target for `app/api/chat/route.ts:79`'s `maybeDetectorContinuation`.
-   */
   advancedDetectorFn?: AutoContinueDetectorFn;
-  /** Optional logger — defaults to the module-level logger. */
-  onLog?: (msg: string, meta?: any) => void;
+  onLog?: AutoContinueOnLog;
 }
 
-export interface AutoContinueDecision {
-  /** True if the caller should issue a follow-up LLM call. */
-  continue: boolean;
-  /** Reason from shouldAutoContinue (e.g. 'incomplete_response'). */
-  reason?: string;
+// Stage 0/1 contract alignment (cascade Q3 + Q5): the legacy
+// `AutoContinueDecision` shape now EXTENDS `ContinueDecisionBase` from
+// `./llm-continuation` via TypeScript interface inheritance. This is
+// the structural-fix for Q1 + Q5: the `decideAutoContinue` return
+// type is `AutoContinueDecision` (which IS-A `ContinueDecision` via
+// inheritance), so typed gates downstream (route.ts `autoDecision.continue`,
+// runV1ApiWithTools.test.ts `decision.reason` + `decision.clearedCount`
+// reads) see the canonical surface area spelled out by the base.
+// Excess fields (`forceSignal`, `forcedBy`, `continuationsSoFar`,
+// `continuationPrompt`) live on the structural superset and are still
+// readable from `autoDecision.<field>` in route.ts without casts.
+
+// Q1-Q5 cascade structural fix: extend the INTERFACE anchor
+// (ContinueDecisionBase) rather than the type alias (ContinueDecision).
+// TypeScript supports interface extension of type aliases via structural
+// resolution, but the cross-file interface-vs-type-alias path can be
+// brittle when package-sync forks resolve differently. `ContinueDecisionBase`
+// is the literal `interface` declaration in `./llm-continuation`, so
+// extending it directly pins to the canonical surface without alias hops.
+export interface AutoContinueDecision extends ContinueDecisionBase {
   /** True if the detector forced the continuation (vs the LLM decision). */
   forceSignal: boolean;
   /** New counter value (post-increment if continue=true). */
   continuationsSoFar: number;
   /** The continuation prompt to feed into the next LLM call. */
   continuationPrompt?: string;
+  /** Which detector branch fired (when forceSignal=true). */
+  forcedBy?: 'base' | 'advanced';
 }
 
 /**
@@ -263,6 +255,8 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       reason: 'max_continuations_reached',
       forceSignal: false,
       continuationsSoFar,
+      clearedCount: continuationsSoFar,
+      finalIteration: MAX_CONTINUATIONS,
     };
   }
 
@@ -319,6 +313,8 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
         : undefined,
       continuationsSoFar: newCount,
       continuationPrompt: continuationDecision.continuationPrompt,
+      clearedCount: newCount,
+      finalIteration: MAX_CONTINUATIONS,
     };
   }
 
@@ -330,5 +326,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     forceSignal: false,
     forcedBy: undefined,
     continuationsSoFar,
+    clearedCount: continuationsSoFar,
+    finalIteration: MAX_CONTINUATIONS,
   };
 }

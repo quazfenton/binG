@@ -1461,22 +1461,22 @@ const config: UnifiedAgentConfig = {
      * @audit-A2-stitch for the recurrence intent.
      */
     
-// @audit-Stage3-process-caller-typed-DEFERRED-pending-Stage0-1-collision:
-// currentConfig shape TBD-until-auto-continue-helper.ts-vs-llm-continuation.ts
-// ContinueDecision collision resolves (this turn: collision resolved by re-export
-// from llm-continuation.ts as canonical).
-async function runAutoContinueLoop(
-  config: { requestId: string; iteration: number; maxIterations: number },
-  options: {
-    decide: (state: { requestId: string; iteration: number }) => Promise<ContinueDecision>;
-  },
-): Promise<{ continue: boolean; finalIteration: number }> {
- requestId: string; iteration: number; maxIterations: number },
-      options: { decide: (state: typeof config) => Promise<{ continue: boolean }> },
-    ): Promise<{ continue: boolean; finalIteration: number }> {
-      const result = await options.decide(config);
-      return { continue: result.continue, finalIteration: config.iteration };
-    }
+// @audit-Stage3-process-caller-typed-DEFERRED-pending-helper-migration:
+// processUnifiedAgentRequest(currentConfig) at L1501 below is the singular Stage 3
+// target. The runAutoContinueLoop helper stub was REMOVED in this turn because the
+// prior declaration had an orphan second decl (syntax catastrophe). The current
+// loop uses inline `decideAutoContinue(...)` directly + the `autoDecision.continue`
+// gate; a future Stage 3 retype can re-introduce runAutoContinueLoop with a
+// single-function declaration + `decide: (state) => Promise<ContinueDecision>`
+// signature. Until then, do-while(false) + sole-break gate at L1706-bound band
+// preserves the single-shot semantics.
+
+// @audit-phantom-L2053: L2053 is a drift target (NOT canonical Stage 2 surface).
+//   Canonical Stage 2 = do-while(false) band L1475..L1712 (gate at L1706 in this file).
+//   Drift points into orchestration block L2045..L2065 (executeWithOrchestrationMode);
+//   rotated under post-drift comment insertions (@audit-A2-splice-stub, @audit-Q2-lift,
+//   the Stage 3 marker block above).
+//   Pair: @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
 
               // Server-side continuation gate.
               // do/while(false) runs ONCE unless `break;` (sole, at L1706) exits mid-body.
@@ -1509,7 +1509,38 @@ async function runAutoContinueLoop(
 
                 // Call the LLM
                 result = await 
-// @audit-Stage3-process-caller-typed: processUnifiedAgentRequest(currentConfig) at L1501 is the singular Stage 3 target; currentConfig shape is `Promise<unknown>` (post-Stage-2 stub) and the migration to `ContinueDecision` is gated on Stage 0/1 collision resolution in auto-continue-helper.ts (ContinueDecision already declared locally; resolution required before typed retype).
+// @audit-Stage3-process-caller-typed-DEFERRED-pending-Stage0-1-collision:
+// processUnifiedAgentRequest(currentConfig) at L1501 is the singular Stage 3 target.
+// currentConfig type spelling (verbatim, future retype anchor):
+//   `UnifiedAgentConfig` — imported from '@/lib/orchestra/unified-agent-service'
+//   (see import line at L36: `import { processUnifiedAgentRequest,
+//   type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';`).
+//   Declared in route.ts:         `const config: UnifiedAgentConfig = { ... };` (L1306)
+//   Re-aliased as:                `let currentConfig = config;` (L1444) — typed
+//                                  via assignment inference, retains the
+//                                  UnifiedAgentConfig canon type from L1306.
+// Migration intent (Stage 3 retype): align `currentConfig` to consume the typed
+//   `ContinueDecision` contract (drawn from `@/lib/chat/llm-continuation` via
+//   `@/lib/chat/auto-continue-helper`'s re-export) so the AutoContinueDecision
+//   return type unifies with the gate's `autoDecision.continue` read at L1706.
+// Forward-reference block (Stage 0/1 collision): the `ContinueDecision` name
+//   collided across auto-continue-helper.ts (was locally declared pre-cascade)
+//   vs llm-continuation.ts (where `ContinueDecisionBase` + `ContinueDecision`
+//   + `ContinuationDecision` derived aliases now originate). Suffix
+//   `-DEFERRED-pending-Stage0-1-collision` preserved on this marker as
+//   historical context — a future reader grepping `@audit-Stage3-process-caller-typed`
+//   + this suffix can find the gating rationale without rediscovering it.
+// Status note: Stage 0/1 collision is RESOLVED in the cascade's prior turn
+//   (dedup landed in llm-continuation.ts + re-export from auto-continue-helper.ts).
+//   Suffix preserved here for grep-historical detectability; the LIVE block
+//   on the Stage 3 retype is the `currentConfig: UnifiedAgentConfig` typing
+//   itself (not the collision).
+// Resolution surface (post-cascade reference): the typed contract on the
+//   helper side is `interface AutoContinueDecision extends ContinueDecisionBase`
+//   in auto-continue-helper.ts; the canonical base lives in llm-continuation.ts.
+//   Stage 3 retype aligns `currentConfig` to consume this typed contract
+//   so the gate's `autoDecision.continue` read at L1706 sees the same
+//   surface area.
 processUnifiedAgentRequest(currentConfig);
                 sendStep(`Iteration ${iteration + 1}`, result.success ? 'completed' : 'failed');
 

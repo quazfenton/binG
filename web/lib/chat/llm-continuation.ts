@@ -24,49 +24,25 @@ import { resolveDefaultContinue } from '@bing/shared/agent/first-response-routin
  * follow-up LLM call (this module is read-only).
  *
  * USAGE:
- *   const decision = shouldAutoContinue({
- *     routing: result.metadata?.routing,
- *     steps: result.steps,
- *     responseText: streamingContentBuffer,
- *     maxContinuations: 3,
- *   });
- *   if (decision.continue) {
- *     // Issue a follow-up LLM call with decision.continuationPrompt
+ *   const decision = shouldAutoContinue({...});
+ *
+ *   if (decision.continue && decision.continuationPrompt) {
+ *     // Issue a follow-up LLM call with the prompt
  *   }
  *
  * SAFETY: This module is PURE — it does not call any LLM, does not
- * mutate state, and does not throw. The route layer is the single
- * integration point that decides whether to act on the recommendation.
+ * mutate state, and does not throw.
+ *
+ * TYPE CONTRACT (Stage 0/1 single-source-of-truth, cascade Q2 + Q3):
+ *   The canonical struct is `ContinueDecisionBase` → `ContinueDecision`
+ *   (new surface) and `ContinuationDecision` (legacy surface) are
+ *   aliases for the same base. The reason enum is `ContinuationReason`.
+ *   Older `ContinuationDecision`-consumers (route.ts continuous-flow,
+ *   auto-continue-helper detectors) read the same struct via either
+ *   name. `decision.continuationPrompt` and `decision.continuationsSoFar`
+ *   are still populated by `shouldAutoContinue` as extras (TS structural
+ *   subtyping tolerates them on object literals typed against the base).
  */
-
-export interface ContinuationDecision {
-  /** Whether the route should issue a follow-up LLM call. */
-  continue: boolean;
-  /**
-   * The reason for the continuation. Surfaced in logs and metadata
-   * so operators can understand WHY the chat is being continued.
-   */
-  reason:
-    | 'role_selection_continue_true'
-    | 'empty_tool_args_detected'
-    | 'single_step_read_pattern'
-    | 'plan_steps_remaining'
-    | 'single_write_then_stop'
-    | 'no_continuation_needed'
-    | 'max_continuations_reached';
-  /**
-   * The prompt to send to the LLM for the continuation turn. Only
-   * populated when `continue === true`. The route layer should prepend
-   * this to the next user message (or send as a separate user turn)
-   * depending on its streaming architecture.
-   */
-  continuationPrompt: string;
-  /**
-   * The number of continuations that have already happened in this
-   * turn. Used by the route layer to enforce a hard cap.
-   */
-  continuationsSoFar: number;
-}
 
 const WRITE_TOOL_HINTS = [
   'write_file',
@@ -250,14 +226,28 @@ function isSingleReadOnlyStep(steps: ReadonlyArray<{ toolName?: string }>): bool
  */
 
 // === Stage 0/1 single-source-of-truth (cascade Q2 helper, option-C) ===
-// ContinueDecisionBase is the canonical struct consumed by route.ts'
+// `ContinueDecisionBase` is the canonical struct consumed by route.ts'
 // do-while(false) band gate; both `ContinueDecision` (new surface) and
 // `ContinuationDecision` (legacy surface) derive from this base so the
 // two names remain runtime-equivalent at the type level.
-
+// `clearedCount` + `finalIteration` are now OPTIONAL: per-call
+// construction sites that build `{ continue, reason }` shapes should not
+// be forced to supply numbers; Q5 caller-leak risk is mitigated by
+// consumers reading optional fields with `?? 0` defaults rather than
+// asserting presence.
+// `ContinuationReason` is the union of EVERY literal `shouldAutoContinue`
+// actually emits, so the typed-discriminator contract works end-to-end:
+// route.ts SSE payload schema + runV1ApiWithTools.test.ts's
+// `decision.reason === 'single_step_read_pattern'` discriminator check
+// both compile against the typed enum, not against `string`.
 export type ContinuationReason =
-  | 'plan_steps_remaining'
+  | 'role_selection_continue_true'
+  | 'empty_tool_args_detected'
   | 'single_step_read_pattern'
+  | 'plan_steps_remaining'
+  | 'single_write_then_stop'
+  | 'no_continuation_needed'
+  | 'max_continuations_reached'
   | 'max_iterations'
   | 'user_stop'
   | 'agent_stop'
@@ -266,8 +256,41 @@ export type ContinuationReason =
 export interface ContinueDecisionBase {
   continue: boolean;
   reason?: ContinuationReason;
-  clearedCount?: number;
-  finalIteration?: number;
+  // Q5 strict: clearedCount + finalIteration are now REQUIRED metrics on the
+  // typed decision base so route.ts's Stage 3 do-while(false) band gate can
+  // rely on the metric fields without undefined-leak. Consumers that build
+  // ad-hoc decisions must supply both. shouldAutoContinue + decideAutoContinue
+  // (in auto-continue-helper.ts) now populate them at every return site.
+  //
+  // SEMANTIC ANCHORS (Q5 strict — added after the reviewer's naming-clarity flag):
+  // - clearedCount: per-return-path semantics:
+  //     * `continue: false` paths (max_continuations_reached, no_continuation_needed,
+  //       role_selection_continue_true false-branch equivalents): equals input
+  //       `continuationsSoFar` (PRE-decision snapshot — the counter at the moment
+  //       the decision fired; "this many were in-flight").
+  //     * `continue: true` paths (role_selection_continue_true, empty_tool_args_detected,
+  //       single_step_read_pattern, plan_steps_remaining, single_write_then_stop,
+  //       env-default-on with shouldContinue:true): equals `continuationsSoFar + 1`
+  //       (POST-increment — this decision IS the Nth continuation being dispatched).
+  //     * `decideAutoContinue continue: true`: equals `incrementContinuationCount(requestId)`
+  //       return value (POST-increment; decides through the helper's own counter).
+  //     * `decideAutoContinue continue: false`: equals input counter (PRE-decision snapshot).
+  //     NOT "how many were cleared/terminated by the gate" — clear/clearance semantics
+  //     require a separate tally that the helper does not maintain. Skip the
+  //     consumer-side `?? 0` default; the value is always populated.
+  // - finalIteration:
+  //     The env-hard continuation cap in effect at the decision site. For
+  //     shouldAutoContinue path: the local `maxContinuations` input (default 3,
+  //     env LLM_MAX_CONTINUATIONS_PER_TURN). For decideAutoContinue path: the
+  //     module-level MAX_CONTINUATIONS (= 3 default). These two are equivalent
+  //     because decideAutoContinue calls shouldAutoContinue with
+  //     `maxContinuations: MAX_CONTINUATIONS`. NOT a 0-indexed iteration slot
+  //     count — to get that reading, subtract 1 at the consumer. Name is stable
+  //     for cascade-marker continuity; downstream readers should anchor on this
+  //     JSDoc instead of treating "finalIteration" as the last 0-indexed
+  //     iteration number.
+  clearedCount: number;
+  finalIteration: number;
 }
 
 // option-C: both names derive from the same base type so callers can
@@ -299,6 +322,8 @@ export function shouldAutoContinue(input: {
       reason: 'max_continuations_reached',
       continuationPrompt: '',
       continuationsSoFar,
+      clearedCount: continuationsSoFar,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -318,6 +343,8 @@ export function shouldAutoContinue(input: {
       reason: shouldContinue ? 'plan_steps_remaining' : 'no_continuation_needed',
       continuationPrompt: shouldContinue ? 'Continue with the plan.' : '',
       continuationsSoFar,
+      clearedCount: continuationsSoFar,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -331,6 +358,8 @@ export function shouldAutoContinue(input: {
       reason: 'role_selection_continue_true',
       continuationPrompt: basePrompt,
       continuationsSoFar: continuationsSoFar + 1,
+      clearedCount: continuationsSoFar + 1,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -344,6 +373,8 @@ export function shouldAutoContinue(input: {
         'Please provide the required arguments for the tool and retry. ' +
         'If you no longer need to call that tool, proceed with the next step of the plan.',
       continuationsSoFar: continuationsSoFar + 1,
+      clearedCount: continuationsSoFar + 1,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -367,6 +398,8 @@ export function shouldAutoContinue(input: {
         'Based on the information you gathered, proceed with the next step of the task ' +
         '(e.g., write or edit the file, run a command, or summarize your findings).',
       continuationsSoFar: continuationsSoFar + 1,
+      clearedCount: continuationsSoFar + 1,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -381,6 +414,8 @@ export function shouldAutoContinue(input: {
         `[AUTO-CONTINUE] You completed step ${steps.length} of ${planStepsCount}. Continue with the remaining steps of the plan. ` +
         'Pick up from where you left off and complete the remaining work.',
       continuationsSoFar: continuationsSoFar + 1,
+      clearedCount: continuationsSoFar + 1,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -398,6 +433,8 @@ export function shouldAutoContinue(input: {
         'Review what you created and check if additional files (e.g., package.json, README, ' +
         'tests, configuration) or further edits are needed to make the project complete and runnable.',
       continuationsSoFar: continuationsSoFar + 1,
+      clearedCount: continuationsSoFar + 1,
+      finalIteration: maxContinuations,
     };
   }
 
@@ -406,5 +443,7 @@ export function shouldAutoContinue(input: {
     reason: 'no_continuation_needed',
     continuationPrompt: '',
     continuationsSoFar,
+    clearedCount: continuationsSoFar,
+    finalIteration: maxContinuations,
   };
 }

@@ -57,7 +57,7 @@ export function makeSseChunk(
 ): SsePromptChunk;
 export function makeSseChunk(
   kind: 'continuation',
-  continue: boolean,
+  shouldContinue: boolean,
   reason: string | undefined,
   iteration: number,
 ): SseContinuationChunk;
