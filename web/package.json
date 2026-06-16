@@ -222,7 +222,7 @@
     "vm2": "^3.11.4",
     "web-tree-sitter": "^0.26.8",
     "webdav": "^5.8.0",
-    "ws": "^8.19.0",
+    "ws": "^8.21.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -246,7 +246,7 @@
     "@vitest/eslint-plugin": "^1.6.9",
     "acorn": "^8.16.0",
     "critters": "^0.0.25",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.1",
     "esbuild-loader": "^4.4.3",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
