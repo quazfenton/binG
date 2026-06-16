@@ -77,7 +77,7 @@ export interface AutoContinueDetectorOverride {
 }
 
 export type AutoContinueDetectorFn = (
-  result: any,
+  result: DetectableResult | undefined,
   continuationDecision: ContinuationDecision,
 ) => AutoContinueDetectorOverride | null;
 

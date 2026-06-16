@@ -53,7 +53,7 @@ import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
-import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
+import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 // Bug #86 (Pass-6 audit): wire detectNeedsMoreTurns() from the
 // auto-continue-detector module. The detector is the single source of truth
 // for "did the LLM stop too early?" — it inspects 17+ named signals
@@ -64,7 +64,7 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // detector here lets us auto-recover from the "1 max tool call" failure
 // mode the user reported — the detector sees the LLM's silence + tool
 // pattern and re-prompts with a specific next-step.
-import { detectNeedsMoreTurns } from '@/lib/chat/auto-continue-detector';
+
 /**
  * Bug #86 (Pass-6, reviewer nits #2 + #3) — small named helper that runs
  * `detectNeedsMoreTurns` against the current `result` and returns an
@@ -76,103 +76,8 @@ import { detectNeedsMoreTurns } from '@/lib/chat/auto-continue-detector';
  * signal can fire (reviewer nit #3). Previously the call hardcoded
  * `fileEdits: []` which silently disabled that signal.
  */
-// CONSOLIDATION TODO: This function and the simpler edits-mismatch
-// sibling at line ~188 are both candidates for replacement by the
-// `advancedDetectorFn` parameter on `decideAutoContinue` (helper
-// exported from `@/lib/chat/auto-continue-helper`). The canonical
-// value to pass is `needsMoreTurnsDetector` (also exported from the
-// helper), which wraps `detectNeedsMoreTurns` with 15+ signals across
-// 4 factor groups.
-//
-// Migration sketch:
-//
-//   decideAutoContinue({
-//     requestId,
-//     routing,
-//     steps,
-//     responseText,
-//     result,
-//     advancedDetectorFn: needsMoreTurnsDetector,
-//     // detectorFn stays default (defaultFileEditDetector); the OR'd
-//     // composition preserves the fileEdits check while adding the
-//     // richer signal set. Advanced reason wins when both fire.
-//   });
-//
-// Adopting it would also let this layer replace its local
-// `continuationCounters` Map (line ~133) and env-tunable MAX constant
-// (line ~141) with the helper's equivalents. Not migrated yet because
-// route.ts is on the LLM hot path — captured as a future consolidation
-// when team capacity allows.
-function maybeDetectorContinuation(
-  iterContent: string,
-  result: { steps?: any[]; fileEdits?: Array<{ path: string; content?: string; diff?: string; action?: string }> },
-  shouldAutoContinue: { continue: boolean; reason: string },
-  normalizeStepArgs: (args: any) => Record<string, any>,
-  log: { info: (msg: string, data?: any) => void; warn: (msg: string, data?: any) => void },
-): { force: true; prompt?: string; signals?: string[]; confidence?: 'low' | 'medium' | 'high' } | null {
-  try {
-    const detection = detectNeedsMoreTurns({
-      success: true,
-      response: iterContent,
-      steps: (result.steps ?? []).map((s: any) => ({
-        toolName: s.toolName,
-        args: normalizeStepArgs(s.args),
-        result: s.result ?? { success: true },
-      })),
-      fileEdits: result.fileEdits ?? [],  // Reviewer nit #3: pass REAL fileEdits
-    });
-    if (detection.needsMoreTurns && !shouldAutoContinue.continue) {
-      log.info('[AUTO-CONTINUE] detector override (shouldAutoContinue missed)', {
-        signals: detection.signals,
-        confidence: detection.confidence,
-        suggestedReprompt: detection.suggestedReprompt,
-      });
-      return {
-        force: true,
-        prompt: detection.suggestedReprompt,
-        signals: detection.signals,
-        confidence: detection.confidence,
-      };
-    }
-    if (detection.needsMoreTurns) {
-      log.info('[AUTO-CONTINUE] detector agrees with shouldAutoContinue', {
-        signals: detection.signals,
-        confidence: detection.confidence,
-      });
-    }
-    return null;
-  } catch (detectorErr) {
-    log.warn('[AUTO-CONTINUE] detector threw (non-fatal)', {
-      error: detectorErr instanceof Error ? detectorErr.message : String(detectorErr),
-    });
-    return null;
-  }
-}
-
-
-// =========================================================================
-// Auto-continuation counter
-// =========================================================================
-// Tracks how many continuations have been triggered per requestId so the
-// max-continuations cap in `shouldAutoContinue` actually fires across
-// iterations. Entries are cleaned up when the cap is reached or when the
-// request finishes.
-const continuationCounters = new Map<string, number>();
-
 /**
- * Maximum number of auto-continuations allowed per request turn. Read once at
- * module load from `LLM_MAX_CONTINUATIONS_PER_TURN` (with a NaN/negative guard
- * falling back to 3) so the cap is consistent across all requests and doesn't
- * re-parse the env var on every loop iteration.
- */
-const parsedMaxContinuations = parseInt(process.env.LLM_MAX_CONTINUATIONS_PER_TURN || '3', 10);
-const MAX_CONTINUATIONS =
-  Number.isFinite(parsedMaxContinuations) && parsedMaxContinuations > 0
-    ? parsedMaxContinuations
-    : 3;
-
-/**
- * Normalize a step's `args` field for the `shouldAutoContinue` helper.
+ * Normalize a step's `args` field for the `shouldAutoContinue` / `decideAutoContinue` helper.
  * Stream results sometimes encode args as JSON strings (e.g. `"{}"`); parse
  * them so the helper's `Object.keys(s.args).length === 0` check sees the
  * real shape. Pass-through for objects; return `undefined` for non-parseable
@@ -194,55 +99,6 @@ function normalizeStepArgs(value: unknown): Record<string, unknown> | undefined 
     }
   }
   return undefined;
-}
-
-/**
- * Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small named helper
- * for readability. The helper forwards the REAL `result.fileEdits ?? []`
- * (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
- * actually fire. Returns `null` when the detector has no opinion; callers
- * coalesce with `?? { force: false }` at the call site.
- */
-function maybeDetectorContinuation(
-  result: { fileEdits?: unknown[] } | undefined,
-  continuationDecision: { continue: boolean; reason?: string },
-  log: { debug: (msg: string, ctx?: unknown) => void },
-): { force: boolean; reason?: string } | null {
-  // Bug #86 (Pass-6, reviewer nit #2) — forwards the REAL `result.fileEdits ?? []`
-  // (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
-  // actually fire. Bug #86 (Pass-6, reviewer nit #1) — extracted to a small
-  // named helper for readability. Returns `null` when the detector has no
-  // opinion (no edits, or shouldAutoContinue already said stop); callers
-  // coalesce with `?? { force: false }` at the call site.
-  const edits = result?.fileEdits ?? [];
-  if (!Array.isArray(edits) || edits.length === 0) {
-    return null;
-  }
-  // NOTE: we deliberately do NOT gate on continuationDecision.continue here.
-  // The detector's job is to override shouldAutoContinue when there's an
-  // edits-mismatch. The caller's OR combines both signals so the detector
-  // CAN force a continuation even when shouldAutoContinue said stop.
-  //
-  // Carve-out: if shouldAutoContinue said stop because the max-continuations
-  // cap was reached, the detector should NOT force another iteration — the
-  // cap is the safety net that prevents infinite loops.
-  if (continuationDecision.reason === 'max_continuations_reached') {
-    log.debug('[maybeDetectorContinuation] suppressed: max_continuations_reached', {
-      editCount: edits.length,
-    });
-    return null;
-  }
-  // Only log the forward when the detector is actually overriding
-  // shouldAutoContinue (i.e. shouldAutoContinue said stop). When both
-  // signals agree, the auto-continue block's normal flow already covers
-  // the case and the log would be redundant noise.
-  if (!continuationDecision.continue) {
-    log.debug('[maybeDetectorContinuation] forwarding edits-mismatch signal', {
-      editCount: edits.length,
-      reason: continuationDecision.reason,
-    });
-  }
-  return { force: true, reason: 'edits-mismatch' };
 }
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
@@ -1579,10 +1435,11 @@ const config: UnifiedAgentConfig = {
               };
 
               // Server-side continuation loop: re-invoke the LLM with the
-              // continuation prompt as the next user message when shouldAutoContinue
-              // returns continue: true. Tracks continuationsSoFar across iterations
-              // via the module-level continuationCounters Map. Accumulates content,
-              // steps, and fileEdits across iterations. Emits SSE events for each
+              // continuation prompt as the next user message when decideAutoContinue
+              // returns continue: true. Counter management is handled internally by
+              // the helper (requestId-keyed Map in auto-continue-helper.ts).
+              // Accumulates content, steps, and fileEdits across iterations. Emits
+              // SSE events for each
               // iteration so the client sees real-time streaming for the continuation.
               let currentConfig = config;
               let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>> | undefined;
@@ -1710,59 +1567,44 @@ const config: UnifiedAgentConfig = {
                 }
 
                 // Auto-continue check: should we re-invoke the LLM?
-                const previousContinuations = continuationCounters.get(requestId) ?? 0;
-                const continuationDecision = shouldAutoContinue({
+                // Uses the shared decideAutoContinue helper with the richer
+                // needsMoreTurnsDetector as the advanced detector (OR-composition:
+                // preserves the fileEdits check while adding 15+ signals across
+                // 4 factor groups). The helper handles counter management and
+                // max-continuations enforcement internally.
+                const autoDecision = decideAutoContinue({
+                  requestId,
                   routing: result.metadata?.routing,
                   steps: (result.steps ?? []).map((s: any) => ({
                     toolName: s.toolName,
                     args: normalizeStepArgs(s.args),
                   })),
                   responseText: iterContent,
-                  continuationsSoFar: previousContinuations,
+                  result: {
+                    fileEdits: (result as any)?.fileEdits ?? [],
+                  },
+                  advancedDetectorFn: needsMoreTurnsDetector,
                 });
-                // Bug #86 (Pass-6) — wire the detector-override helper. The
-                // helper forwards real `result.fileEdits ?? []` so the
-                // edits-mismatch signal can actually fire. Coalesce with
-                // `?? { force: false }` so the default path is unchanged.
-                const detectorOverride = maybeDetectorContinuation(
-                  result,
-                  continuationDecision,
-                  chatLogger,
-                ) ?? { force: false }
-                // Bug #86 (Pass-6 audit) — when the existing shouldAutoContinue
-                // says "don't continue" but the detector sees a clear signal
-                // that the LLM stopped too early (e.g. read-then-stall,
-                // single-write-silent, deep-research-loop, announced-next-step),
-                // force a follow-up turn with the detector's suggestedReprompt.
 
-                if ((continuationDecision.continue || detectorOverride.force) && iteration < MAX_CONTINUATIONS - 1) {
-                  // Signal continuation
-                  continuationCounters.set(requestId, continuationDecision.continuationsSoFar);
+                if (autoDecision.continue) {
                   chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {
                     requestId,
                     iteration: iteration + 1,
-                    reason: detectorOverride.force
-                      ? `detector:${(detectorOverride.signals || []).join('+')}`
-                      : continuationDecision.reason,
-                    continuationsSoFar: continuationDecision.continuationsSoFar,
-                    detectorSignals: detectorOverride.signals,
-                    detectorConfidence: detectorOverride.confidence,
+                    reason: autoDecision.reason,
+                    forceSignal: autoDecision.forceSignal,
+                    continuationsSoFar: autoDecision.continuationsSoFar,
                   });
                   emit(SSE_EVENT_TYPES.CONTINUE, {
                     requestId,
                     iteration: iteration + 1,
-                    reason: detectorOverride.force
-                      ? `detector:${(detectorOverride.signals || []).join('+')}`
-                      : continuationDecision.reason,
-                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                    reason: autoDecision.reason,
+                    continuationsSoFar: autoDecision.continuationsSoFar,
                   });
                   emit(SSE_EVENT_TYPES.STEP, {
                     type: 'continuation',
                     iteration: iteration + 1,
-                    reason: detectorOverride.force
-                      ? `detector:${(detectorOverride.signals || []).join('+')}`
-                      : continuationDecision.reason,
-                    prompt: (detectorOverride.prompt ?? continuationDecision.continuationPrompt ?? '').slice(0, 200),
+                    reason: autoDecision.reason,
+                    prompt: (autoDecision.continuationPrompt ?? '').slice(0, 200),
                     timestamp: Date.now(),
                   });
                   const previousAssistantContent = typeof result.response === 'string'
@@ -1773,20 +1615,17 @@ const config: UnifiedAgentConfig = {
                     conversationHistory: [
                       ...(currentConfig.conversationHistory || []),
                       { role: 'assistant', content: previousAssistantContent },
-                      { role: 'user', content: detectorOverride.prompt ?? continuationDecision.continuationPrompt ?? 'Continue from where you left off.' },
+                      { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
                     ],
                   };
                   iteration++;
                 } else {
                   result.metadata = result.metadata || {};
                   result.metadata.continuationDecision = {
-                    continue: continuationDecision.continue,
-                    reason: continuationDecision.reason,
-                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                    continue: autoDecision.continue,
+                    reason: autoDecision.reason,
+                    continuationsSoFar: autoDecision.continuationsSoFar,
                   };
-                  if (continuationDecision.continue || continuationDecision.reason === 'max_continuations_reached') {
-                    continuationCounters.delete(requestId);
-                  }
                   break;
                 }
               } while (false);
@@ -2037,7 +1876,7 @@ const config: UnifiedAgentConfig = {
               streamState.parser.unclosedPositions.clear();
             } catch (error: any) {
               // Clean up the continuation counter on error so it doesn't leak.
-              continuationCounters.delete(requestId);
+              clearContinuationCount(requestId);
               // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
               if (streamState.buffer.trim().length > 0) {
                 try {
@@ -2152,12 +1991,12 @@ const config: UnifiedAgentConfig = {
 
                 controller.close();
                 // Clean up the continuation counter on success so it doesn't leak.
-                continuationCounters.delete(requestId);
+                clearContinuationCount(requestId);
               } catch (error: any) {
                 enqueue('error', { message: error.message });
                 controller.close();
                 // Clean up the continuation counter on error so it doesn't leak.
-                continuationCounters.delete(requestId);
+                clearContinuationCount(requestId);
               }
             },
           });

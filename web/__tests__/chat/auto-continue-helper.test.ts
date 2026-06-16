@@ -152,7 +152,7 @@ describe('needsMoreTurnsDetector', () => {
     expect(decision).toBeNull();
   });
 
-  it('fires on edits-mismatch when fileEdits present but response is thin (Factor 3)', () => {
+  it('fires \'single-write-silent\' for thin-response single-write completion (Factor 3)', () => {
     const result = makeResult({
       steps: [{ toolName: 'write_file', args: { path: 'a.ts', content: 'x' }, result: { success: true } }],
       response: 'Updated.',
@@ -162,8 +162,10 @@ describe('needsMoreTurnsDetector', () => {
       continue: false, reason: 'no_continuation_needed',
       continuationPrompt: '', continuationsSoFar: 0,
     } as any);
-    expect(decision?.force).toBe(true);
-    expect(['edits-mismatch', 'single-write-silent']).toContain(decision?.reason);
+    // single-write-silent fires FIRST in detection order; edits-mismatch
+    // also fires (fileEdits.length > 0 + responseLen < 100) but appears
+    // second. needsMoreTurnsDetector returns det.signals[0] as the reason.
+    expect(decision).toEqual({ force: true, reason: 'single-write-silent' });
   });
 });
 

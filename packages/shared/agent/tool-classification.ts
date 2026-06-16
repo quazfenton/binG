@@ -111,12 +111,15 @@ export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
- * Capability-style dotted prefixes: `domain.action`. Matched via direct
- * equality test (the dotted form is preserved during normalization \u2014 we
- * do NOT replace `.` with `_`). This is the union of all dotted names
- * that appear in any of the read or write sets above, exposed
- * separately so the dotted-match path in consumers doesn't filter
- * the larger sets itself.
+ * Capability-style dotted read-only prefixes: `domain.action`,
+ * drawn from the snake_case entries in READ_ONLY_TOOL_NAMES above.
+ * Matched via direct equality (the dotted form is preserved during
+ * normalization — we do NOT replace `.` with `_`) so the dotted-match
+ * path in consumers can short-circuit with `.has()` without paying
+ * the lower-case + hyphen-to-underscore cost of normalizeToolName().
+ * The Set contents are an inline subset of the dotted members of
+ * READ_ONLY_TOOL_NAMES; always derive from the array literal below,
+ * not from a count remembered in this JSDoc.
  */
 export const CAPABILITY_PREFIX_TOOLS: ReadonlySet<string> = new Set<string>([  'file.read',
   'file.list',

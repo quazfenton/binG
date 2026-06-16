@@ -1,29 +1,4 @@
 /**
- * Single source of truth for the env-aware continuation default.
- *
- * Contract: returns true unless the operator explicitly sets
- * `LLM_AUTO_CONTINUE_DEFAULT=false` (literal, case-sensitive). Any other
- * value — unset, empty, "0", "FALSE" (case-mismatched) — defers to
- * default-on because the discriminator is `!== 'false'`.
- *
- * Referenced from:
- *   - DEFAULT_ROUTING.continue (cached at module load)
- *   - validateAndNormalize fallback path (per-step recompute)
- *
- * Runtime: safe in any environment because the `typeof process !==
- * 'undefined'` guard below protects against undeclared `process` in
- * browser bundles (this package has no `browser` export condition to
- * enforce server-only loading, so the guard is the load-bearing safety).
- */
-function resolveDefaultContinue(): boolean {
-  // Defensive access: tests/edge environments may not have process defined.
-  // Default env-aware flag is on (=== 'false' string opt-out only).
-  // typeof guard protects against undeclared `process` in browser bundles
-  // (this package has no `browser` export condition to gate server-only).
-  return typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
-}
-
-/**
  * First-Response Routing Parser
  *
  * Parses structured routing metadata embedded in the LLM's first response.
