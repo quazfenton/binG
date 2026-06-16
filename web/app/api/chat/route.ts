@@ -54,6 +54,74 @@ import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
 import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
+// Bug #86 (Pass-6 audit): wire detectNeedsMoreTurns() from the
+// auto-continue-detector module. The detector is the single source of truth
+// for "did the LLM stop too early?" — it inspects 17+ named signals
+// (read-then-stall, single-write-silent, deep-research-loop, etc.) and
+// returns a rich TurnDetectionResult with confidence + suggestedReprompt.
+// shouldAutoContinue() (from llm-continuation) is a thin boolean wrapper
+// and doesn't surface the detector's signal-level detail. Wiring the
+// detector here lets us auto-recover from the "1 max tool call" failure
+// mode the user reported — the detector sees the LLM's silence + tool
+// pattern and re-prompts with a specific next-step.
+import { detectNeedsMoreTurns } from '@/lib/chat/auto-continue-detector';
+/**
+ * Bug #86 (Pass-6, reviewer nits #2 + #3) — small named helper that runs
+ * `detectNeedsMoreTurns` against the current `result` and returns an
+ * optional {force: true, prompt, signals, confidence} override when the
+ * detector sees an LLM-stops-too-early signal that `shouldAutoContinue`
+ * missed. Returns `null` when no override applies (or on detector error).
+ *
+ * Real `result.fileEdits` is forwarded so the detector's `edits-mismatch`
+ * signal can fire (reviewer nit #3). Previously the call hardcoded
+ * `fileEdits: []` which silently disabled that signal.
+ */
+function maybeDetectorContinuation(
+  iterContent: string,
+  result: { steps?: any[]; fileEdits?: Array<{ path: string; content?: string; diff?: string; action?: string }> },
+  shouldAutoContinue: { continue: boolean; reason: string },
+  normalizeStepArgs: (args: any) => Record<string, any>,
+  log: { info: (msg: string, data?: any) => void; warn: (msg: string, data?: any) => void },
+): { force: true; prompt?: string; signals?: string[]; confidence?: 'low' | 'medium' | 'high' } | null {
+  try {
+    const detection = detectNeedsMoreTurns({
+      success: true,
+      response: iterContent,
+      steps: (result.steps ?? []).map((s: any) => ({
+        toolName: s.toolName,
+        args: normalizeStepArgs(s.args),
+        result: s.result ?? { success: true },
+      })),
+      fileEdits: result.fileEdits ?? [],  // Reviewer nit #3: pass REAL fileEdits
+    });
+    if (detection.needsMoreTurns && !shouldAutoContinue.continue) {
+      log.info('[AUTO-CONTINUE] detector override (shouldAutoContinue missed)', {
+        signals: detection.signals,
+        confidence: detection.confidence,
+        suggestedReprompt: detection.suggestedReprompt,
+      });
+      return {
+        force: true,
+        prompt: detection.suggestedReprompt,
+        signals: detection.signals,
+        confidence: detection.confidence,
+      };
+    }
+    if (detection.needsMoreTurns) {
+      log.info('[AUTO-CONTINUE] detector agrees with shouldAutoContinue', {
+        signals: detection.signals,
+        confidence: detection.confidence,
+      });
+    }
+    return null;
+  } catch (detectorErr) {
+    log.warn('[AUTO-CONTINUE] detector threw (non-fatal)', {
+      error: detectorErr instanceof Error ? detectorErr.message : String(detectorErr),
+    });
+    return null;
+  }
+}
+
 
 // =========================================================================
 // Auto-continuation counter
@@ -1635,21 +1703,55 @@ const config: UnifiedAgentConfig = {
                   chatLogger,
                 ) ?? { force: false }
 
+<<<<<<< Updated upstream
                 if ((continuationDecision.continue || detectorOverride.force) && iteration < MAX_CONTINUATIONS - 1) {
                   // Signal continuation
                   continuationCounters.set(requestId, continuationDecision.continuationsSoFar);
                   chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {
+=======
+                // Bug #86 (Pass-6 audit) — when the existing shouldAutoContinue
+                // says "don't continue" but the detector sees a clear signal
+                // that the LLM stopped too early (e.g. read-then-stall,
+                // single-write-silent, deep-research-loop, announced-next-step),
+                // force a follow-up turn with the detector's suggestedReprompt.
+                // The detector inspects 17+ named signals with high/medium
+                // confidence levels and produces a tight contextual reprompt
+  // Bug #86 (Pass-6, reviewer nits #2 + #3) — extracted to a named helper
+  // `maybeDetectorContinuation()` so the chat-route loop body stays readable.
+  // Forwards real `result.fileEdits` so the detector's `edits-mismatch` signal
+  // can fire (previously hardcoded to `fileEdits: []` which silently disabled it).
+  const detectorOverride = maybeDetectorContinuation(
+    iterContent,
+    result,
+    continuationDecision,
+    normalizeStepArgs,
+    log,
+  ) ?? { force: false };
+// Bug #86 (Pass-6, reviewer nits #1 + #2) — the detector override is now
+// computed by `maybeDetectorContinuation()` (extracted helper at line 79)
+// and forwards real `result.fileEdits` so the edits-mismatch signal can
+// fire. Below: log the continuation decision via the CONTINUE SSE event so
+// downstream consumers can render the detector-prompted continuation.
+emit(SSE_EVENT_TYPES.CONTINUE, {
+>>>>>>> Stashed changes
                     requestId,
                     iteration: iteration + 1,
-                    reason: continuationDecision.reason,
+                    reason: detectorOverride.force
+                      ? `detector:${(detectorOverride.signals || []).join('+')}`
+                      : continuationDecision.reason,
                     continuationsSoFar: continuationDecision.continuationsSoFar,
+                    detectorSignals: detectorOverride.signals,
+                    detectorConfidence: detectorOverride.confidence,
+                    usedDetectorPrompt: detectorOverride.prompt ?? null,
                   });
                   // Emit a marker event so the client knows a continuation is happening
                   emit(SSE_EVENT_TYPES.STEP, {
                     type: 'continuation',
                     iteration: iteration + 1,
-                    reason: continuationDecision.reason,
-                    prompt: continuationDecision.continuationPrompt.slice(0, 200),
+                    reason: detectorOverride.force
+                      ? `detector:${(detectorOverride.signals || []).join('+')}`
+                      : continuationDecision.reason,
+                    prompt: continuationPrompt.slice(0, 200),
                     timestamp: Date.now(),
                   });
                   // Build the next config with the continuation prompt as a new user message
@@ -1661,7 +1763,7 @@ const config: UnifiedAgentConfig = {
                     conversationHistory: [
                       ...(currentConfig.conversationHistory || []),
                       { role: 'assistant', content: previousAssistantContent },
-                      { role: 'user', content: continuationDecision.continuationPrompt },
+                      { role: 'user', content: continuationPrompt },
                     ],
                   };
                   iteration++;

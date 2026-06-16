@@ -467,7 +467,7 @@ export const STREAM_TIMEOUTS = {
   // and let the text-mode parser extract any file edits from the
   // existing textContent (or just return Phase 1's response as-is).
   // Default 10K chars (~2K tokens) — a full answer in prose is usually <5K chars.
-  phase1TextCharsSkipPhase2: parseInt(process.env.LLM_STREAM_PHASE1_TEXT_CHARS_SKIP_PHASE2 || '10000', 10),
+
 } as const;
 
 /**
@@ -2896,18 +2896,10 @@ const steps = await finalResult.steps;
         // waste 15s of wall-clock time. Skip the Phase 2 round-trip and
         // let the text-mode parser extract any file edits from the
         // existing textContent (or just return Phase 1's response as-is).
-        const phase1TextLength = textContent?.length || 0;
-        const phase1TextSkipThreshold = STREAM_TIMEOUTS.phase1TextCharsSkipPhase2;
-        const skipPhase2ForProse = phase1TextLength > phase1TextSkipThreshold;
-        if (skipPhase2ForProse) {
-          chatLogger.info('[FC-GATE] Phase 2 SKIPPED: Phase 1 already produced a full prose answer', {
-            provider,
-            model: modelName,
-            phase1TextLength,
-            threshold: phase1TextSkipThreshold,
-            reason: 'phase1_text_chars_skip_phase2',
-          });
-        }
+        // Bug #13: the 10K-char phase1TextCharsSkipPhase2 gate was removed.
+        // Phase 2 now runs whenever the fallback conditions below are met,
+        // regardless of Phase 1 text length. See the env var removal at
+        // STREAM_TIMEOUTS (line ~462).
         const supportsFC = (vercelModel as any)?.supports?.functionCalling;
         const FILE_EDIT_TOOLS = new Set([
           'write_file', 'batch_write', 'apply_diff', 'delete_file',
@@ -2945,7 +2937,7 @@ const steps = await finalResult.steps;
             || (allToolCallsFailed && (!textContent || textContent.length < 20) && fileEditToolFailed)
             || (noOutputAtAll && fileEditToolAvailable);
 
-          if (triggerFallback && !skipPhase2ForProse) {
+          if (triggerFallback) { // Bug #13: removed !skipPhase2ForProse gate
             // Bug #13 (Phase 2 wall-clock budget): create a dedicated
             // AbortController for the Phase 2 fallback stream so we can
             // enforce the `phase2MaxDurationMs` ceiling independently of

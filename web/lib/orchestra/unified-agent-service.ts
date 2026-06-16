@@ -227,6 +227,28 @@ log.info('[UnifiedAgent] env-var fingerprint (routing-affecting)', _envFingerpri
 let _selfHealProvider: string | null = null;
 let _selfHealModel: string | null = null;
 
+// Bug #12 (Pass-8): Session-scoped provider cache. When a non-primary provider
+// succeeds, cache it per conversation so subsequent requests in the same session
+// reuse it instead of re-running the full provider selection (which hits the
+// 429'd primary every time). TTL is 10 minutes; entries auto-expire.
+const _sessionProviderCache = new Map<string, { provider: string; model: string; confirmedAt: number }>();
+const SESSION_PROVIDER_CACHE_TTL_MS = 10 * 60 * 1000;
+
+export function getLastWorkingProvider(conversationId?: string): { provider: string; model: string } | null {
+  if (!conversationId) return null;
+  const entry = _sessionProviderCache.get(conversationId);
+  if (!entry) return null;
+  if (Date.now() - entry.confirmedAt > SESSION_PROVIDER_CACHE_TTL_MS) {
+    _sessionProviderCache.delete(conversationId);
+    return null;
+  }
+  return { provider: entry.provider, model: entry.model };
+}
+
+export function recordLastWorkingProvider(conversationId: string, provider: string, model: string): void {
+  _sessionProviderCache.set(conversationId, { provider, model, confirmedAt: Date.now() });
+}
+
 /**
  * Resolve dynamic default provider/model using model-ranker.
  * Shared across all execution paths to avoid hardcoding 'mistral'/'mistral-large-latest'.
@@ -3304,8 +3326,12 @@ async function runV1ApiWithTools(
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
   // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
   const _dynamicDefaults = await resolveDynamicDefaults();
-  const primaryProvider = config.provider || _dynamicDefaults.provider;
-  const primaryModel = config.model || _dynamicDefaults.model;
+  // Bug #12 (Pass-8): Check session-scoped provider cache first. If a previous
+  // request in this conversation found a working provider, prefer it over the
+  // default to avoid re-hitting the 429'd primary every time.
+  const sessionProvider = getLastWorkingProvider(config.conversationId);
+  const primaryProvider = config.provider || sessionProvider?.provider || _dynamicDefaults.provider;
+  const primaryModel = config.model || sessionProvider?.model || _dynamicDefaults.model;
   // FIX: Reset SelfHeal cache at start of each request to prevent cross-request
   // leakage. Without this, a prior request's fallback provider could silently
   // replace a healthy primary in a different request's SelfHeal retry.
@@ -3723,6 +3749,14 @@ async function runV1ApiWithTools(
     // Dedup guard in appendAutoInjectPowers prevents double injection.
 
     let response = '';
+    // Bug #21 (Pass-8): Phase 1 time-budget. If the stream produces >5K chars
+    // of text with 0 tool calls and exceeds 30s, abort early — the model is
+    // clearly writing everything in prose and the Phase 2 text-mode extraction
+    // can handle what's already been collected. Without this guard, the user
+    // waits 92s for a single skeleton response.
+    const _phase1StartTime = Date.now();
+    const _PHASE1_BUDGET_MS = parseInt(process.env.V1_PHASE1_BUDGET_MS || '30000', 10);
+    const _PHASE1_TEXT_THRESHOLD = parseInt(process.env.V1_PHASE1_TEXT_THRESHOLD || '5000', 10);
 
     try {
       log.info('[V1-API-WITH-TOOLS] Calling streamWithConcurrentFallback...');
@@ -3741,6 +3775,15 @@ async function runV1ApiWithTools(
         if (chunk.content) {
           response += chunk.content;
           config.onStreamChunk?.(chunk.content);
+          // Bug #21 (Pass-8): Phase 1 time-budget check. If we have lots of
+          // text but zero tool calls and the budget is exceeded, abort early.
+          if (toolInvocations.length === 0 && response.length > _PHASE1_TEXT_THRESHOLD && Date.now() - _phase1StartTime > _PHASE1_BUDGET_MS) {
+            log.warn('[V1-API-WITH-TOOLS] Phase 1 time-budget exceeded — aborting early (text-only, no tools)', {
+              responseLength: response.length,
+              durationMs: Date.now() - _phase1StartTime,
+            });
+            break;
+          }
         }
 
         if (chunk.toolInvocations) {
@@ -3933,6 +3976,11 @@ Based on what you have learned, continue working on the original task. Take the 
       // FIX: Save successful provider/model for SelfHeal retries to skip dead primary
       _selfHealProvider = providerName;
       _selfHealModel = modelForProvider;
+      // Bug #12 (Pass-8): Cache per-session so subsequent requests reuse the
+      // working provider instead of hitting the 429'd primary every time.
+      if (config.conversationId) {
+        recordLastWorkingProvider(config.conversationId, providerName, modelForProvider);
+      }
         log.info(`V1 API (with tools): Fallback provider succeeded`, {
           primaryProvider,
           primaryModel,

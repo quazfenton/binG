@@ -890,8 +890,14 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
   }
 
   // Include web_search tool — enables web search via SearXNG or DuckDuckGo
+  // Bug #6 (Pass-8): Only include web_search when there's actually a search
+  // backend available. If Nullclaw has no container and no SearXNG/DuckDuckGo
+  // provider is configured, omit the tool so the LLM never selects it and gets
+  // 3 "success: false" results that pollute the context.
   // Note: role_selection is omitted from the MCP tool assembly — choose_role in the AI SDK
   // toolset (vercel-ai-tools.ts) is the canonical implementation.
+  const hasNullclawSearch = nullclawTools.some((t: any) => t?.function?.name === 'nullclaw:search' || t?.function?.name === 'web.search' || t?.function?.name === 'web_search');
+  const hasSearchProvider = !!process.env.SEARXNG_URL || !!process.env.DUCKDUCKGO_API_KEY || hasNullclawSearch;
   const webSearchTools: Array<{
     type: 'function'
     function: {
@@ -899,7 +905,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       description?: string
       parameters: any
     }
-  }> = [{
+  }> = hasSearchProvider ? [{
     type: 'function' as const,
     function: {
       name: 'web_search',
@@ -919,7 +925,11 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
         required: ['query'],
       },
     },
-  }];
+  }] : [];
+
+  if (!hasSearchProvider) {
+    logger.warn('[MCP-Tools] web_search omitted — no search backend available (Nullclaw has no container, no SearXNG/DuckDuckGo configured)');
+  }
 
   const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools, ...webSearchTools]
 
