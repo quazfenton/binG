@@ -1,3 +1,4 @@
+import { READ_ONLY_TOOL_NAMES, CAPABILITY_PREFIX_TOOLS, normalizeToolName, isReadOnlyTool, isWriteTool } from '@bing/shared/agent/tool-classification';
 /**
  * LLM Continuation Helper
  *
@@ -130,46 +131,21 @@ function hasEmptyToolArgs(steps: ReadonlyArray<{ args?: Record<string, unknown> 
  * `list_dir` alias forms. All three are kept because providers emit
  * different variants.
  */
-const READ_ONLY_TOOL_HINTS = [
-  // canonical snake_case filesystem reads
-  'read_file',
-  'read_url',
-  'list_files',
-  'list_directory',
-  'list_dir',
-  'ls',
-  // search / grep family
-  'search_files',
-  'grep',
-  'glob',
-  'find',
-  'search_code',
-  'grep_code',
-  // web fetches / searches
-  'web_search',
-  'web_fetch',
-] as const;
+
 
 /**
  * Capability-style dotted names: `domain.action`. Matched via the
  * `canonical === prefix` direct-compare path (the dotted form is
  * preserved after canonicalization — we do NOT replace `.` with `_`).
  */
-const READ_ONLY_FILE_PREFIX_TOOLS = [
-  'file.read',
-  'file.list',
-  'file.search',
-  'repo.search',
-  'web.search',
-  'web.fetch',
-] as const;
+
 
 /**
  * Canonicalize a raw tool name for hint matching:
  *   - lowercase
  *   - whitespace stripped
  *
- * We intentionally do NOT replace `.` with `_` here: `READ_ONLY_FILE_PREFIX_TOOLS`
+ * We intentionally do NOT replace `.` with `_` here: `CAPABILITY_PREFIX_TOOLS`
  * keeps its dotted form (e.g. `'file.read'`) and matches the canonicalized name
  * directly. If we collapsed `.` to `_`, the PREFIX list would only match via the
  * compressed check, which is less obvious.
@@ -199,11 +175,11 @@ function isReadOnlyStep(step: { toolName?: string }): boolean {
   const canonical = _canonicalToolName(step.toolName || '');
   if (!canonical) return false;
   const compressed = _compressUnderscores(canonical);
-  for (const hint of READ_ONLY_TOOL_HINTS) {
+  for (const hint of READ_ONLY_TOOL_NAMES) {
     if (canonical === hint) return true;
     if (compressed && compressed === _compressUnderscores(hint)) return true;
   }
-  for (const prefix of READ_ONLY_FILE_PREFIX_TOOLS) {
+  for (const prefix of CAPABILITY_PREFIX_TOOLS) {
     if (canonical === prefix) return true;
     if (compressed && compressed === _compressUnderscores(prefix)) return true;
   }
@@ -213,7 +189,7 @@ function isReadOnlyStep(step: { toolName?: string }): boolean {
 /**
  * Map a raw tool name to a human-friendly description for use in the
  * continuation prompt. Categories cover the entries in
- * READ_ONLY_TOOL_HINTS / READ_ONLY_FILE_PREFIX_TOOLS — anything not
+ * READ_ONLY_TOOL_NAMES / CAPABILITY_PREFIX_TOOLS — anything not
  * in the map falls back to the canonicalized form. Why a map rather
  * than blanket text? The LLM-side prompt quality is better with named
  * categories ("a web search" reads as English; "a web_search" does not).
@@ -331,7 +307,7 @@ export function shouldAutoContinue(input: {
   //    directory listing, web search, grep/glob/find, etc.) but didn't act
   //    on it. Auto-continue with a steer to take the next action. The
   //    prompt wording is generic now that the detector covers more than
-  //    just `read_file` — see READ_ONLY_TOOL_HINTS for the full set.
+  //    just `read_file` — see READ_ONLY_TOOL_NAMES for the full set.
   if (isSingleReadOnlyStep(steps)) {
     const rawToolName = steps[0]?.toolName || '';
     // Sanitize the raw provider name so camelCase / dotted variants

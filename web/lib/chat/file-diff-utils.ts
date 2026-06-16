@@ -625,6 +625,18 @@ export function extractFileWritesFromLLMResponse(
   const writes: Array<{ path: string; content: string }> = [];
   const scopePath = options.scopePath || 'workspace';
 
+  // Bug #9: Guard against project-name hallucinations (e.g. "coding-agent-tui"
+  // written as a 0-byte file). A path with no extension AND no directory
+  // separator AND empty/minimal content is almost certainly a project name
+  // the LLM mentioned in prose, not a real file it intends to create.
+  function isLikelyProjectName(filePath: string, fileContent: string): boolean {
+    const basename = filePath.split('/').pop() || filePath;
+    const hasExtension = /\.\w{1,10}$/.test(basename);
+    const hasDirSeparator = filePath.includes('/');
+    const isEmptyContent = !fileContent || fileContent.trim().length === 0;
+    return !hasExtension && !hasDirSeparator && isEmptyContent;
+  }
+
   // Pattern 1: echo "content" > file or echo 'content' > file in bash blocks
   const bashBlockPattern = /```(?:bash|sh|shell)\s*\n([\s\S]*?)```/gi;
   let bashBlockMatch;

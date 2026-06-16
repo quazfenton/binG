@@ -62,6 +62,13 @@ vi.mock('@/lib/tools', () => ({
 
 vi.mock('@/lib/chat/enhanced-llm-service', () => ({
   streamWithConcurrentFallback: vi.fn().mockImplementation(async function* (options: any) {
+<<<<<<< Updated upstream
+=======
+    // When tools are provided, yield a read_file tool result with text that
+    // includes a [ROLE_SELECT] prose marker (bypasses old auto-continuation loop
+    // and SelfHeal, reaching the decideAutoContinue path). When no tools (the
+    // runV1ApiCompletion path used by most existing tests), yield plain text.
+>>>>>>> Stashed changes
     if (options?.tools) {
       yield {
         content: 'I read the file. [ROLE_SELECT] continue',
@@ -463,10 +470,22 @@ describe('V1-API with tools auto-continuation SSE', () => {
 
     const result = await processUnifiedAgentRequest(config);
 
+<<<<<<< Updated upstream
+=======
+    // The mock stream yields a read_file tool result with text that
+    // contains [ROLE_SELECT] (prose, not structured — so hasRoleSelectMarker
+    // is true but parsedRouting.found is false). The old auto-continuation
+    // loop is skipped, SelfHeal is skipped (response non-empty), and the
+    // decideAutoContinue loop fires single_step_read_pattern.
+>>>>>>> Stashed changes
     expect(result.success).toBe(true);
     expect(result.mode).toBe('v1-api');
     expect(result.response).toContain('I read the file.');
 
+<<<<<<< Updated upstream
+=======
+    // Find SSE continuation events (JSON payloads with type: 'continuation')
+>>>>>>> Stashed changes
     const continuationEvents = streamChunks.filter((c) => {
       try {
         const p = JSON.parse(c);

@@ -553,6 +553,9 @@ export async function GET(req: NextRequest) {
           if (typeof (virtualFilesystem as any).ensureWorkspace === 'function') {
             await (virtualFilesystem as any).ensureWorkspace(owner.ownerId);
             log(`[${requestId}] Eagerly initialized workspace for anonymous owner — breaking WORKSPACE_NOT_READY loop`);
+            // Bug #7 fix: Mark this owner as initialized so future requests
+            // skip the WORKSPACE_NOT_READY path entirely.
+            (globalThis as any)[initDoneKey] = true;
             // Re-export the now-initialized snapshot and return success
             // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
             // file edits on the very next read.
@@ -594,10 +597,11 @@ export async function GET(req: NextRequest) {
               },
             });
             return withAnonSessionCookie(initResponse, owner);
-          }
-        } catch (initErr: any) {
-          logWarn(`[${requestId}] Eager workspace init failed (falling back to WORKSPACE_NOT_READY): ${initErr?.message}`);
-        }
+           }
+          } // end of else (not already initialized)
+         } catch (initErr: any) {
+           logWarn(`[${requestId}] Eager workspace init failed (falling back to WORKSPACE_NOT_READY): ${initErr?.message}`);
+         }
         log(`[${requestId}] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized`);
         const notReadyResponse = NextResponse.json({
           success: false,

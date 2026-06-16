@@ -1018,8 +1018,14 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
 
     // Skip tool_result notifications — these are echoed LLM tool responses
     // (e.g. {"success": false, "type": "tool_result", ...}), not file writes.
+    // Bug #19 fix: also skip ANY JSON block with "success": false — these
+    // are tool failure notifications (web_search returning no results, etc.)
+    // and should never be treated as file-write instructions. Previously only
+    // blocks with BOTH success:false AND type:tool_result were skipped, but
+    // the parser extracted project names (e.g. coding-agent-tui) from JSON
+    // with only success:false and no type field, creating 0-byte files.
     const record = obj as Record<string, unknown>;
-    if (record['success'] === false && record['type'] === 'tool_result') continue;
+    if (record['success'] === false) continue;
 
     // Resolve tool name from any of the alias field names
     let resolvedToolName: string | undefined;

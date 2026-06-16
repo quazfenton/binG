@@ -2790,6 +2790,15 @@ while (thinkPingQueue.length > 0) {
               const { recordRateLimitError } = await import('@/lib/providers/model-ranker');
               recordRateLimitError(provider, modelName);
             } catch { /* best-effort */ }
+            // Bug #5 fix: Also record 429 in the per-provider circuit breaker
+            // so the unified-agent-service fallback chain skips this provider
+            // on the next request. Without this, the v1-api path keeps trying
+            // the 429'd primary on every subsequent request.
+            try {
+              const { circuitBreakerManager } = await import('@/lib/middleware/circuit-breaker');
+              const breaker = circuitBreakerManager.getBreaker(provider);
+              breaker.recordFailure(new Error(`429 rate limit from ${provider}/${modelName}`));
+            } catch { /* circuit-breaker best-effort */ }
             // Bug #3 (Pass-8): Clear FC-GATE positive cache on 429 — provider
             // rotation may change the model's FC support.
             clearFCGateCache(provider, modelName);
@@ -2910,6 +2919,15 @@ const steps = await finalResult.steps;
           .map((tc: any) => tc.name);
         const fileEditToolFailed = failedToolNames.some((n: string) => FILE_EDIT_TOOLS.has(n));
         const fileEditToolAvailable = availableToolNames.some((n) => FILE_EDIT_TOOLS.has(n));
+        // Bug #3 fix: Track whether ANY tool call succeeded in Phase 1.
+        // If the model made at least one successful tool call, Phase 2
+        // text-mode fallback is unnecessary and wasteful (it re-streams
+        // the entire response in text-mode, taking 30-92s, and produces
+        // duplicate writes). Only run Phase 2 when ALL tool calls failed
+        // or no tool calls were made.
+        const anyToolCallSucceeded = allToolCalls.some((tc: any) =>
+          tc?.result && tc.result.success !== false && !tc.result.error
+        );
 
         if (supportsFC === undefined) {
           const allToolCallsFailed = allToolCalls.length > 0 && allToolCalls.every((tc: any) => {
@@ -2933,9 +2951,15 @@ const steps = await finalResult.steps;
           // Gate: text-mode can only substitute when a file-edit tool was actually
           // attempted-and-failed, OR (in the silent-output case) when at least one
           // file-edit tool was available so the model has *something* to express in text.
-          const triggerFallback = hasToolCallPattern
+          // Bug #3 fix: Skip Phase 2 entirely when ANY Phase 1 tool call succeeded.
+          // Running Phase 2 after a successful tool call wastes 30-92s and causes
+          // duplicate writes (Bug #15/48). Phase 2 is only useful as a recovery
+          // mechanism when ALL tools failed or no calls were made.
+          const triggerFallback = !anyToolCallSucceeded && (
+            hasToolCallPattern
             || (allToolCallsFailed && (!textContent || textContent.length < 20) && fileEditToolFailed)
-            || (noOutputAtAll && fileEditToolAvailable);
+            || (noOutputAtAll && fileEditToolAvailable)
+          );
 
           if (triggerFallback) { // Bug #13: removed !skipPhase2ForProse gate
             // Bug #13 (Phase 2 wall-clock budget): create a dedicated

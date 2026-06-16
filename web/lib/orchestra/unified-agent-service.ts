@@ -171,6 +171,7 @@ import { buildSessionScopeSteerPrompt } from './steer-service';
 // degradation chain shows when the v1-api text-mode fallback fired. The
 // sessionId is passed through config.conversationId / config.userId / 'default'.
 import { recordDegradation } from '@/lib/observability/degradation-tracker';
+import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, hasMutationSuffix, hasReadSuffix } from '@bing/shared/agent/tool-classification';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
@@ -398,27 +399,9 @@ function invalidateDynamicDefaultsCache(): void {
  * to avoid false positives from substring matching (e.g. 'read' in 'thread.read').
  * These are used by the auto-continuation loop in runV1ApiWithTools.
  */
-const WRITE_TOOL_NAMES = new Set([
-  'write_file', 'edit_file', 'apply_diff', 'applydiff',
-  'delete_file', 'batch_write', 'write_files',
-  'batchwrite', 'writefiles',
-  'str_replace', 'replace_in_file',
-  'execute_bash', 'execute_command', 'execute', 'bash',
-  'shell', 'terminal', 'run',
-  'sandbox_execute', 'sandbox_shell', 'sandbox_session',
-  'mcp_tool', 'mcp_execute',
-  // Canonical capability-style names
-  'file.write', 'file.delete', 'file.batch_write',
-]);
 
-const READ_ONLY_TOOL_NAMES = new Set([
-  'read_file', 'list_directory', 'list_dir', 'ls',
-  'search_files', 'grep', 'glob', 'find',
-  'search_code', 'grep_code',
-  'web_search', 'web_fetch',
-  // Canonical capability-style names
-  'file.read', 'file.list',
-]);
+
+
 
 /**
  * Classify a provider error into permanent vs transient vs rate-limit.
@@ -3850,15 +3833,11 @@ async function runV1ApiWithTools(
         const hasWriteTool = recentTools.some(t => {
           const name = t.toolName?.toLowerCase() || '';
           // Exact match first, then suffix-based for future capability-style tools
-          return WRITE_TOOL_NAMES.has(name) ||
-                 name.endsWith('.write') || name.endsWith('.create') ||
-                 name.endsWith('.delete') || name.endsWith('.edit');
+          return WRITE_TOOL_NAMES.has(name) || hasMutationSuffix(name);
         });
         const hasReadOnlyTool = recentTools.some(t => {
           const name = t.toolName?.toLowerCase() || '';
-          return READ_ONLY_TOOL_NAMES.has(name) ||
-                 name.endsWith('.read') || name.endsWith('.list') ||
-                 name.endsWith('.search');
+          return READ_ONLY_TOOL_NAMES.has(name) || hasReadSuffix(name);
         });
 
         // Don't continue if: the model already wrote files, or didn't read anything

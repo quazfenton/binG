@@ -1,4 +1,29 @@
 /**
+ * Single source of truth for the env-aware continuation default.
+ *
+ * Contract: returns true unless the operator explicitly sets
+ * `LLM_AUTO_CONTINUE_DEFAULT=false` (literal, case-sensitive). Any other
+ * value — unset, empty, "0", "FALSE" (case-mismatched) — defers to
+ * default-on because the discriminator is `!== 'false'`.
+ *
+ * Referenced from:
+ *   - DEFAULT_ROUTING.continue (cached at module load)
+ *   - validateAndNormalize fallback path (per-step recompute)
+ *
+ * Runtime: safe in any environment because the `typeof process !==
+ * 'undefined'` guard below protects against undeclared `process` in
+ * browser bundles (this package has no `browser` export condition to
+ * enforce server-only loading, so the guard is the load-bearing safety).
+ */
+function resolveDefaultContinue(): boolean {
+  // Defensive access: tests/edge environments may not have process defined.
+  // Default env-aware flag is on (=== 'false' string opt-out only).
+  // typeof guard protects against undeclared `process` in browser bundles
+  // (this package has no `browser` export condition to gate server-only).
+  return typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
+}
+
+/**
  * First-Response Routing Parser
  *
  * Parses structured routing metadata embedded in the LLM's first response.
@@ -141,8 +166,13 @@ export function stripRoutingMarkers(responseText: string): string {
 }
 
 /** Default routing for when parsing fails — safe conservative defaults.
+<<<<<<< Updated upstream
  * The `continue` flag is resolved through resolveDefaultContinue() at
  * module-top scope (single source of truth for the env-aware default). */
+=======
+ * The `continue` flag is resolved through resolveDefaultContinue(), so the
+ * env-aware default-on behavior is the single source of truth. */
+>>>>>>> Stashed changes
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -151,7 +181,13 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
+<<<<<<< Updated upstream
   // Resolved via resolveDefaultContinue() — see env contract on the helper.
+=======
+  // Resolved via resolveDefaultContinue() so the env-aware default is
+  // the single source of truth shared with the validateAndNormalize
+  // fallback path.
+>>>>>>> Stashed changes
   continue: resolveDefaultContinue(),
 };
 
@@ -250,7 +286,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       continue:
         normalizeBoolean(parsed.continue) ??
         normalizeBoolean(parsed.requiresAutoReprompt) ??
-        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : DEFAULT_ROUTING.continue),
+        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : resolveDefaultContinue()),
     };
 
     return {
@@ -367,9 +403,11 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   continue: boolean;
 } {
   // Bug #2 fix: planSteps >= 2 should force continue: true
-  // The LLM outlined a multi-step plan but may have set continue: false
-  // (DEFAULT_ROUTING.continue defaults to false). This ensures multi-step
-  // plans always trigger auto-continuation.
+  // The LLM outlined a multi-step plan but may have set continue: false.
+  // resolveDefaultContinue() (env-aware, the single source of truth)
+  // returns true unless LLM_AUTO_CONTINUE_DEFAULT=false is explicitly set,
+  // so multi-step plans still trigger auto-continuation in the new
+  // default-true behavior.
   const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
   const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
   const shouldContinue = explicitContinue || hasMultiplePlanSteps;

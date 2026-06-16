@@ -33,34 +33,12 @@
  */
 
 import { detectIncompleteResponse } from '@bing/shared/agent/feedback-injection';
+import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, isReadOnlyTool, isWriteTool } from '@bing/shared/agent/tool-classification';
 
 // ── Tool name classification sets ────────────────────────────────────────
 
 /** Tools that modify the filesystem or execute commands (count as "writes") */
-export const WRITE_TOOL_NAMES = new Set([
-  'write_file', 'edit_file', 'apply_diff', 'applydiff',
-  'delete_file', 'batch_write', 'write_files',
-  'batchwrite', 'writefiles',
-  'str_replace', 'replace_in_file',
-  'execute_bash', 'execute_command', 'execute', 'bash',
-  'shell', 'terminal', 'run',
-  'sandbox_execute', 'sandbox_shell', 'sandbox_session',
-  'mcp_tool', 'mcp_execute',
-  // Canonical capability-style names
-  'file.write', 'file.delete', 'file.batch_write',
-  'bash.execute',
-]);
-
 /** Tools that only gather information (count as "reads") */
-export const READ_ONLY_TOOL_NAMES = new Set([
-  'read_file', 'list_directory', 'list_dir', 'ls',
-  'search_files', 'grep', 'glob', 'find',
-  'search_code', 'grep_code',
-  'web_search', 'web_fetch',
-  // Canonical capability-style names
-  'file.read', 'file.list',
-  'repo.search',
-]);
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
