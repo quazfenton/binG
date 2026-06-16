@@ -1760,8 +1760,11 @@ function extractFileEditsRaw(content: string): FileEdit[] {
 
   // Deduplicate by path (first occurrence wins)
   // This handles cases where multiple parsers match the same file or LLM outputs duplicates
+  // Bug #9 (Pass-8): Skip paths that look like project names (no extension, no
+  // slash separator, short alphanumeric) — these are LLM-projected titles, not files.
   const dedupedEdits = new Map<string, FileEdit>();
   for (const edit of allEdits) {
+    if (looksLikeProjectName(edit.path)) continue;
     // Only set if path not already in map (first wins)
     if (!dedupedEdits.has(edit.path) && 'content' in edit) {
       dedupedEdits.set(edit.path, edit as FileEdit);
@@ -2723,6 +2726,13 @@ export function extractFencedDeleteBlocks(content: string): DeleteEdit[] {
  * 
  * EXPORTED for use in client-side validation (hooks/use-enhanced-chat.ts)
  */
+export function looksLikeProjectName(path: string): boolean {
+  if (!path || path.startsWith('/') || path.includes('/') || path.includes('\\')) return false;
+  if (/\.\w{1,4}$/.test(path)) return false;
+  if (path.length > 40) return false;
+  return /^[a-zA-Z0-9_-]+$/.test(path);
+}
+
 export function isValidExtractedPath(path: string): boolean {
   if (!path || path.length === 0 || path.length > 300) return false;
 
@@ -3362,10 +3372,122 @@ export function extractJsonLikePathContent(content: string): FileEdit[] {
 }
 
 // ---------------------------------------------------------------------------
+// Bug #9/#15/#19 guards — text-mode extraction hardening
+// ---------------------------------------------------------------------------
+
+/**
+ * Bug #9 (project-name hallucination guard): returns true if `path` looks
+ * like a project name (no file extension, no `/` or `\` separator). When
+ * the LLM writes prose like "the project `coding-agent-tui`" and the
+ * text-mode parser extracts it, we'd create a 0-byte file with that
+ * name. This guard flags such paths so we can skip them.
+ *
+ * The guard is bypassed when `path` appears in `explicitToolCalls` (the
+ * LLM's actual tool-call paths) — those are legitimate references even
+ * if they look like project names (e.g. a `create_file` with a bare
+ * filename like `package.json`).
+ */
+export function looksLikeProjectName(path: string, explicitToolCalls: string[] = []): boolean {
+  if (!path) return false;
+  // If the path is in the LLM's explicit tool calls, trust it
+  if (explicitToolCalls.some((p) => p === path || p.endsWith('/' + path))) {
+    return false;
+  }
+  // Must have NO file extension (e.g. `.ts`, `.js`, `.md`)
+  const hasExtension = /\.[a-zA-Z0-9]{1,10}$/.test(path);
+  // Must have NO path separator (`/` or `\`)
+  const hasSeparator = path.includes('/') || path.includes('\\');
+  // Must not be a single-character name (too short to be a real path)
+  const isTooShort = path.length < 2;
+  return !hasExtension && !hasSeparator && !isTooShort;
+}
+
+/**
+ * Bug #19 (tool_result JSON block stripping): removes JSON objects that
+ * look like echoed LLM tool results from `content` before any path
+ * extraction runs. The text-mode parser would otherwise scan these
+ * blocks for file paths and potentially create files from tool-result
+ * data.
+ *
+ * Matches JSON objects with `"type": "tool_result"` (with or without
+ * `"success"` field). Uses balanced-brace matching to handle nested
+ * objects correctly. Replaces matched blocks with empty strings.
+ */
+export function stripToolResultBlocks(content: string): string {
+  if (!content) return content;
+  let result = '';
+  let i = 0;
+  while (i < content.length) {
+    // Look for a JSON object start
+    if (content[i] === '{') {
+      // Find the matching close brace
+      let depth = 0;
+      let j = i;
+      let inString = false;
+      let escape = false;
+      while (j < content.length) {
+        const c = content[j];
+        if (escape) { escape = false; j++; continue; }
+        if (c === '\\') { escape = true; j++; continue; }
+        if (c === '"') { inString = !inString; j++; continue; }
+        if (!inString) {
+          if (c === '{') depth++;
+          else if (c === '}') { depth--; if (depth === 0) break; }
+        }
+        j++;
+      }
+      if (depth === 0 && j > i) {
+        const jsonStr = content.slice(i, j + 1);
+        // Check if it looks like a tool_result block
+        if (/"type"\s*:\s*"tool_result"/.test(jsonStr)) {
+          // Skip this block (replace with nothing)
+          i = j + 1;
+          continue;
+        }
+      }
+    }
+    result += content[i];
+    i++;
+  }
+  return result;
+}
+
+/**
+ * Bug #15 (post-forceExtract dedup pass): when `forceExtract` is true,
+ * we bypass the per-key dedup to catch all edits. But this means
+ * duplicate writes to the same path (with different content) all get
+ * added. This function dedupes by path only (first-wins), preserving
+ * the original edit's content.
+ *
+ * Used as a post-processing pass at the end of `parseFilesystemResponse`
+ * when `forceExtract` is true, so we still catch all edits but don't
+ * produce duplicates.
+ */
+function dedupByPathFirstWins<T extends { path: string }>(edits: T[]): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const edit of edits) {
+    if (seen.has(edit.path)) continue;
+    seen.add(edit.path);
+    result.push(edit);
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Main Parser Function
 // ---------------------------------------------------------------------------
 
-export function parseFilesystemResponse(content: string, forceExtract: boolean = false): ParsedFilesystemResponse {
+export function parseFilesystemResponse(
+  content: string,
+  forceExtract: boolean = false,
+  explicitToolCalls: string[] = [],
+): ParsedFilesystemResponse {
+  // Bug #19: strip tool_result JSON blocks before any path extraction.
+  // This prevents the parser from creating files from echoed LLM tool
+  // results (e.g. {"type": "tool_result", "success": true, ...}).
+  const sanitizedContent = stripToolResultBlocks(content);
+
   const writes = new Map<string, FileEdit>();
   const diffs = new Map<string, PatchEdit>();
   const applyDiffs = new Map<string, ApplyDiffOperation>();
@@ -3373,53 +3495,84 @@ export function parseFilesystemResponse(content: string, forceExtract: boolean =
   const folders = new Set<string>();
 
   // When forceExtract is true, bypass deduplication to catch all edits
-  // This is used for final parse after stream completes to catch any remaining edits
+  // This is used for final parse after stream completes to catch any remaining edits.
+  // Bug #15: a post-forceExtract dedup pass (at the end of this function)
+  // dedupes by path (first-wins) to avoid duplicate file writes.
   const skipDeduplication = forceExtract;
 
+  // Bug #9: project-name hallucination guard — skip paths that look like
+  // project names (no extension, no separator) unless they're in the
+  // LLM's explicit tool calls.
+  const guardProjectName = (path: string): boolean => {
+    return !looksLikeProjectName(path, explicitToolCalls);
+  };
+
   const addWrite = (edit: FileEdit) => {
+    if (!guardProjectName(edit.path)) return;
     const key = `${edit.path}::${edit.content}`;
     // When forceExtract is true, always add (skip deduplication)
     if (skipDeduplication || !writes.has(key)) writes.set(key, edit);
   };
   const addDiff = (edit: PatchEdit) => {
+    if (!guardProjectName(edit.path)) return;
     const key = `${edit.path}::${edit.diff}`;
     // When forceExtract is true, always add (skip deduplication)
     if (skipDeduplication || !diffs.has(key)) diffs.set(key, edit);
   };
   const addApplyDiff = (edit: ApplyDiffOperation) => {
+    if (!guardProjectName(edit.path)) return;
     const key = `${edit.path}::${edit.search}::${edit.replace}`;
     // When forceExtract is true, always add (skip deduplication)
     if (skipDeduplication || !applyDiffs.has(key)) applyDiffs.set(key, edit);
   };
 
-  for (const edit of extractFileEdits(content)) addWrite(edit);
-  for (const edit of extractFsActionWrites(content)) addWrite(edit);
-  for (const edit of extractTopLevelWrites(content)) addWrite(edit);
-  for (const edit of extractBashHereDocWrites(content)) addWrite(edit);
-  for (const edit of extractFilenameHintCodeBlocks(content)) addWrite(edit);
-  for (const edit of extractFencedDiffEdits(content)) addDiff(edit);
-  for (const edit of extractFencedFileEdits(content)) addWrite(edit);
-  for (const edit of extractFencedMkdirEdits(content)) {
-    if (edit.path) folders.add(edit.path);
+  for (const edit of extractFileEdits(sanitizedContent)) addWrite(edit);
+  for (const edit of extractFsActionWrites(sanitizedContent)) addWrite(edit);
+  for (const edit of extractTopLevelWrites(sanitizedContent)) addWrite(edit);
+  for (const edit of extractBashHereDocWrites(sanitizedContent)) addWrite(edit);
+  for (const edit of extractFilenameHintCodeBlocks(sanitizedContent)) addWrite(edit);
+  for (const edit of extractFencedDiffEdits(sanitizedContent)) addDiff(edit);
+  for (const edit of extractFencedFileEdits(sanitizedContent)) addWrite(edit);
+  for (const edit of extractFencedMkdirEdits(sanitizedContent)) {
+    if (edit.path && guardProjectName(edit.path)) folders.add(edit.path);
   }
-  for (const edit of extractFencedDeleteBlocks(content)) deletes.add(edit.path);
-  for (const edit of extractFsActionPatches(content)) addDiff(edit);
-  for (const edit of extractPatchEdits(content)) addDiff(edit);
-  for (const edit of extractApplyDiffOperations(content)) addApplyDiff(edit);
-  for (const edit of extractFsActionDeletes(content)) deletes.add(edit);
-  for (const edit of extractDeleteEdits(content)) deletes.add(edit.path);
-  for (const folder of extractFolderCreateEdits(content)) folders.add(folder);
+  for (const edit of extractFencedDeleteBlocks(sanitizedContent)) {
+    if (guardProjectName(edit.path)) deletes.add(edit.path);
+  }
+  for (const edit of extractFsActionPatches(sanitizedContent)) addDiff(edit);
+  for (const edit of extractPatchEdits(sanitizedContent)) addDiff(edit);
+  for (const edit of extractApplyDiffOperations(sanitizedContent)) addApplyDiff(edit);
+  for (const edit of extractFsActionDeletes(sanitizedContent)) {
+    if (guardProjectName(edit)) deletes.add(edit);
+  }
+  for (const edit of extractDeleteEdits(sanitizedContent)) {
+    if (guardProjectName(edit.path)) deletes.add(edit.path);
+  }
+  for (const folder of extractFolderCreateEdits(sanitizedContent)) {
+    if (guardProjectName(folder)) folders.add(folder);
+  }
   // New patterns — O(1) gated extractors with Map dedup
-  for (const edit of extractCodeBlockFirstLineFilename(content)) addWrite(edit);
-  for (const edit of extractExplicitCreateCommands(content)) addWrite(edit);
-  for (const edit of extractJsonLikePathContent(content)) addWrite(edit);
+  for (const edit of extractCodeBlockFirstLineFilename(sanitizedContent)) addWrite(edit);
+  for (const edit of extractExplicitCreateCommands(sanitizedContent)) addWrite(edit);
+  for (const edit of extractJsonLikePathContent(sanitizedContent)) addWrite(edit);
+
+  // Bug #15: post-forceExtract dedup pass. When `forceExtract` is true,
+  // we bypass per-key dedup to catch all edits, but this means duplicate
+  // writes to the same path (with different content) all get added. This
+  // pass dedupes by path (first-wins) so we still catch all edits but
+  // don't produce duplicates that would cause double-writes downstream.
+  const finalWrites = forceExtract ? dedupByPathFirstWins(Array.from(writes.values())) : Array.from(writes.values());
+  const finalDiffs = forceExtract ? dedupByPathFirstWins(Array.from(diffs.values())) : Array.from(diffs.values());
+  const finalApplyDiffs = forceExtract ? dedupByPathFirstWins(Array.from(applyDiffs.values())) : Array.from(applyDiffs.values());
+  const finalDeletes = forceExtract ? Array.from(deletes).filter((p) => guardProjectName(p)) : Array.from(deletes);
+  const finalFolders = forceExtract ? Array.from(folders).filter((p) => guardProjectName(p)) : Array.from(folders);
 
   return {
-    writes: Array.from(writes.values()),
-    diffs: Array.from(diffs.values()),
-    applyDiffs: Array.from(applyDiffs.values()),
-    deletes: Array.from(deletes.values()),
-    folders: Array.from(folders.values()),
+    writes: finalWrites,
+    diffs: finalDiffs,
+    applyDiffs: finalApplyDiffs,
+    deletes: finalDeletes,
+    folders: finalFolders,
   };
 }
 

@@ -3943,17 +3943,24 @@ Based on what you have learned, continue working on the original task. Take the 
 
       // Text-mode file extraction: if response has text but no tool calls,
       // parse for ```file: / ```diff: blocks and apply to VFS
+      // Bug #4 (Pass-8): Use canonical ownerId construction (userId$conversationId
+      // format) and always prepend scopePath. Bare paths like "src/agent.js"
+      // get prepended server-side so VFS normalizePath never rejects them.
       if (response && toolInvocations.length === 0) {
         try {
           const { extractFileEdits } = await import('../chat/file-edit-parser');
           const { virtualFilesystem } = await import('../virtual-filesystem/index.server');
           const textEdits = extractFileEdits(response);
           if (textEdits.length > 0) {
-            const ownerId = config.userId || config.filesystemOwnerId || '1';
+            const ownerId = config.filesystemOwnerId
+              || (config.userId ? `${config.userId}$${config.conversationId || 'default'}` : 'default');
+            const scopePrefix = config.scopePath || 'workspace';
             for (const edit of textEdits) {
               if (edit.path && edit.content) {
                 try {
-                  const editPath = config.scopePath ? `${config.scopePath}/${edit.path}` : edit.path;
+                  const editPath = edit.path.startsWith(scopePrefix)
+                    ? edit.path
+                    : `${scopePrefix}/${edit.path}`;
                   await virtualFilesystem.writeFile(ownerId, editPath, edit.content);
                 } catch { /* best effort */ }
               }
@@ -4306,8 +4313,12 @@ Based on what you have learned, continue working on the original task. Take the 
           // Give specific correction prompt based on what detectIncompleteResponse found.
           // NOTE: injectedFeedback sections are empty here (no entries when anyToolFailed is false),
           // but included for future-proofing when both conditions may coexist.
+          // Bug #16 fix: the feedback message is self-contained with the
+          // [STEER] [INCOMPLETE-RESPONSE-FEEDBACK] prefix and the
+          // instruction to complete the response. The retry path
+          // (retryMessages below) uses `feedbackMsg` directly — no
+          // `userPrompt` is needed for this branch.
           feedbackMsg = `[STEER] [INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour previous response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
-          userPrompt = 'Continue from where you left off. Complete the remaining work.';
         } else if (successfulToolsButSilent) {
           // Tools ran successfully but the model produced zero follow-up text.
           // Give it the executed tool list so it can summarize for the user.
@@ -4368,19 +4379,28 @@ Based on what you have learned, continue working on the original task. Take the 
         // Track retries so we don't loop forever
         (config as any)._toolFailureRetryCount = retryCount + 1;
 
-        // CRITICAL: Build a ModelMessage-schema-valid retry sequence.
-        // Bug fixed: `{role:'assistant', content:''}` is rejected by Vercel
-        // AI SDK provider adapters (empty assistant content), and a stray
-        // `{role:'system'}` AFTER an assistant turn violates the ordering
-        // contract on newer providers (caused
-        //   "Invalid prompt: The messages do not match the ModelMessage[] schema")
-        // Instead: keep the existing conversation as-is and append a single
-        // user message that carries BOTH the steering feedback and the
-        // continuation prompt. This is provider-agnostic and ModelMessage-safe.
-        const combinedUserPrompt = `${feedbackMsg}\n\n---\n\n${userPrompt}`;
+        // Bug #16 fix (option 2 — safer): the INCOMPLETE-RESPONSE-FEEDBACK
+        // is injected as a standalone user message with a `[STEER]`
+        // prefix, instead of being combined with the continuation prompt
+        // and injected as a user message that "replaces" the user
+        // message body. The previous implementation combined `feedbackMsg`
+        // + `userPrompt` into `combinedUserPrompt`, which meant the
+        // feedback was the entire content of the new user message.
+        //
+        // The fix keeps the `user` role (to avoid the "stray
+        // {role:'system'} AFTER an assistant turn violates the ordering
+        // contract" schema issue) but makes the feedback a standalone
+        // message that starts with `[STEER] [INCOMPLETE-RESPONSE-FEEDBACK]`.
+        // The LLM can then clearly distinguish the feedback from a normal
+        // user message and treat it as a steering signal.
+        //
+        // The `feedbackMsg` already contains the full feedback text
+        // including the instruction to complete the response, so the
+        // `userPrompt` ("Continue from where you left off…") is now
+        // redundant — the feedback message is self-contained.
         const retryMessages = [
           ...messages,
-          { role: 'user' as const, content: combinedUserPrompt },
+          { role: 'user' as const, content: feedbackMsg },
         ];
 
         try {

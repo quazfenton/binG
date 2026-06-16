@@ -11,6 +11,7 @@
  */
 
 import type { WorkspaceSession, SandboxConfig } from './types';
+import type { FilesystemOwnerResolution } from '../virtual-filesystem/resolve-filesystem-owner';
 import {
   getSession as storeGetSession,
   getSessionByUserId as storeGetSessionByUserId,
@@ -72,7 +73,25 @@ export class SandboxServiceBridge {
     return session;
   }
 
-  async getOrCreateSession(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
+  async getOrCreateSession(
+    userId: string,
+    config?: SandboxConfig,
+    /**
+     * Optional full FilesystemOwnerResolution — carries the auth source
+     * ('jwt' | 'session' | 'anonymous'), isAuthenticated flag, and the
+     * anonSessionId cookie value. Threaded through from the chat route
+     * (which already resolves it via resolveFilesystemOwner) and from
+     * the sandbox gateways so the bridge can apply source-aware logic
+     * (e.g. log the auth source, gate features by source, attach the
+     * resolution to the session metadata for downstream consumers).
+     *
+     * Backward-compatible: existing callers passing only userId + config
+     * continue to work unchanged. Callers that pass the full resolution
+     * (route.ts:2383, sandbox/agent/gateway.ts, sandbox/terminal/gateway.ts)
+     * get the full context downstream.
+     */
+    ownerContext?: FilesystemOwnerResolution,
+  ): Promise<WorkspaceSession> {
     // Check for existing active session
     const existing = storeGetSessionByUserId(userId);
     if (existing) {

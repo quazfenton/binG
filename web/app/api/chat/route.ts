@@ -2380,7 +2380,14 @@ const config: UnifiedAgentConfig = {
 
           let sandboxSession: Awaited<ReturnType<typeof sandboxBridge.getOrCreateSession>> | null = null;
           if (authenticatedUserId && executionPolicy !== 'local-safe') {
-            sandboxSession = await sandboxBridge.getOrCreateSession(authenticatedUserId);
+            // Gap-fix: thread the full ownerResolution (not just filesystemOwnerId)
+      // so the bridge has access to the auth source / isAuthenticated /
+      // anonSessionId for source-aware sandboxing decisions.
+      sandboxSession = await sandboxBridge.getOrCreateSession(
+        authenticatedUserId,
+        undefined,
+        ownerResolution,
+      );
           }
 
           chatLogger.info('Executing v1 agentic tools', { requestId, userId: effectiveAgentUserId }, {

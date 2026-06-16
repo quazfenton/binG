@@ -48,6 +48,25 @@ import { recordSteerInjected } from './chat-metrics';
 import { getModelsForPurpose } from './model-capability-registry';
 import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm-compat';
 
+// Bug #3 (Pass-8): FC-GATE positive cache — records models that have successfully
+// used tool calls. When supportsFC is unknown but a model has a fresh positive
+// cache entry, we skip the expensive two-phase strategy and go directly to
+// tool-calling mode. Cache is cleared on 429/rate-limit errors since provider
+// rotation may change FC support. Persisted on globalThis for hot-reload survival.
+const _fcGatePositiveCache = new Map<string, { confirmedAt: number; provider: string }>();
+declare global { var __fcGatePositiveCache__: Map<string, { confirmedAt: number; provider: string }> | undefined; }
+const fcGatePositiveCache = globalThis.__fcGatePositiveCache__ ?? (globalThis.__fcGatePositiveCache__ = _fcGatePositiveCache);
+
+export function recordFCGatePositive(provider: string, modelName: string): void {
+  const key = `${provider}/${modelName}`;
+  fcGatePositiveCache.set(key, { confirmedAt: Date.now(), provider });
+}
+
+export function clearFCGateCache(provider: string, modelName: string): void {
+  const key = `${provider}/${modelName}`;
+  fcGatePositiveCache.delete(key);
+}
+
 /**
  * Tool execution context for Vercel AI SDK tools
  */
@@ -440,7 +459,7 @@ export const STREAM_TIMEOUTS = {
   // Default 15s — Phase 2 is supposed to be a quick "re-parse the same
   // content as text" retry, not a full second completion. Per-model
   // overrides live in MODEL_SERVER_TIMEOUT_OVERRIDES.phase2MaxDurationMs.
-  phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '15000', 10),
+  phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '600000', 10),
   // Bug #13 (Phase 1 text-length gate): if Phase 1 already produced more
   // than this many chars of text in prose, the model is clearly answering
   // in prose (not trying to call tools). Re-streaming in Phase 2 would
@@ -2015,17 +2034,35 @@ export async function* streamWithVercelAI(
           streamOptions.system = textModeInstructions;
         }
       } else if (supportsFC === undefined) {
-        // Model doesn't report this capability — could be unknown provider.
-        // POLICY (per user): always let the model TRY tools first. Don't pre-emptively
-        // strip them based on telemetry. The Phase 2 fallback below already kicks in
-        // after the fact if Phase 1 produces zero usable output.
-        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
-          provider,
-          model: modelName,
-          toolCount,
-          strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
-        });
-        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        // Bug #3 (Pass-8): Check FC-GATE positive cache. If this model previously
+        // made successful tool calls, treat it as FC-capable and skip the
+        // expensive two-phase strategy. Cache has a 30-min TTL and is cleared
+        // on 429/rate-limit errors (provider rotation may change FC support).
+        const fcCacheKey = `${provider}/${modelName}`;
+        const fcCacheEntry = fcGatePositiveCache.get(fcCacheKey);
+        const fcCacheTtlMs = parseInt(process.env.FC_GATE_POSITIVE_TTL_MS || '1800000', 10);
+        const fcCacheHit = !!(fcCacheEntry && (Date.now() - fcCacheEntry.confirmedAt) < fcCacheTtlMs);
+        if (fcCacheHit) {
+          chatLogger.info('[FC-GATE] Function calling CONFIRMED via positive cache — skipping two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            cacheAgeMs: Date.now() - fcCacheEntry.confirmedAt,
+          });
+        } else {
+          // Model doesn't report this capability — could be unknown provider.
+          // POLICY: always let the model TRY tools first. Don't pre-emptively
+          // strip them based on telemetry. The Phase 2 fallback below already
+          // kicks in after the fact if Phase 1 produces zero usable output.
+          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
+            fcCacheHit: false,
+          });
+          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        }
       }
       // === COMMENTED OUT: Auto text-mode based on telemetry ===
       // This was removed in favor of letting the model TRY tools first and only
@@ -2753,6 +2790,9 @@ while (thinkPingQueue.length > 0) {
               const { recordRateLimitError } = await import('@/lib/providers/model-ranker');
               recordRateLimitError(provider, modelName);
             } catch { /* best-effort */ }
+            // Bug #3 (Pass-8): Clear FC-GATE positive cache on 429 — provider
+            // rotation may change the model's FC support.
+            clearFCGateCache(provider, modelName);
           }
           throw (chunk as any).error;
         }
@@ -2827,6 +2867,9 @@ const steps = await finalResult.steps;
           toolsCalled: allToolCalls.length,
           toolNames: allToolCalls.map(tc => tc.name),
         });
+        // Bug #3 (Pass-8): Record positive FC-GATE result so future requests
+        // to this model skip the expensive two-phase strategy.
+        recordFCGatePositive(provider, modelName);
       } else {
         chatLogger.warn('[TOOL-SUMMARY] LLM did NOT call any tools despite tools being available', {
           provider,
