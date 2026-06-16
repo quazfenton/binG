@@ -112,40 +112,142 @@ function hasEmptyToolArgs(steps: ReadonlyArray<{ args?: Record<string, unknown> 
  * "incomplete" and the route should auto-continue.
  */
 /**
- * Read-only tool canonical names. Matched EXACTLY (name === hint) or
- * with the canonical `file.<action>` prefix. We do NOT use substring
- * matching or `endsWith` because a tool named `file.batch_write.file.read`
- * would falsely match as read-only.
+ * Read-only / information-gathering tool names. The collated list matches:
+ *   - snake_case canonical:  `read_file`, `list_files`, `web_search`
+ *   - camelCase variants:    `readFile`, `listFiles`, `webSearch`
+ *   - capability-style dots: `file.read`, `repo.search`, `web.search`
+ *
+ * The hint-matching logic uses three independent paths:
+ *   1. `canonical === hint`    — direct snake_case literal match
+ *   2. `canonical === prefix`  — direct capability-style dotted match
+ *   3. `compressed === _compressUnderscores(...)` — camelCase alias match
+ *
+ * Why not substring matching? `file.batch_write.file.read` would falsely
+ * match as read-only — we want exact-name normalization, not traversal.
+ *
+ * Note: `list_files` is the family name used in `agent-bins/agent-filesystem`
+ * and `__tests__/premature-stoppage`, distinct from `list_directory` /
+ * `list_dir` alias forms. All three are kept because providers emit
+ * different variants.
  */
 const READ_ONLY_TOOL_HINTS = [
+  // canonical snake_case filesystem reads
   'read_file',
+  'read_url',
+  'list_files',
   'list_directory',
   'list_dir',
   'ls',
+  // search / grep family
   'search_files',
   'grep',
   'glob',
   'find',
   'search_code',
   'grep_code',
+  // web fetches / searches
   'web_search',
   'web_fetch',
 ] as const;
 
+/**
+ * Capability-style dotted names: `domain.action`. Matched via the
+ * `canonical === prefix` direct-compare path (the dotted form is
+ * preserved after canonicalization — we do NOT replace `.` with `_`).
+ */
 const READ_ONLY_FILE_PREFIX_TOOLS = [
   'file.read',
   'file.list',
+  'file.search',
+  'repo.search',
+  'web.search',
+  'web.fetch',
 ] as const;
 
+/**
+ * Canonicalize a raw tool name for hint matching:
+ *   - lowercase
+ *   - whitespace stripped
+ *
+ * We intentionally do NOT replace `.` with `_` here: `READ_ONLY_FILE_PREFIX_TOOLS`
+ * keeps its dotted form (e.g. `'file.read'`) and matches the canonicalized name
+ * directly. If we collapsed `.` to `_`, the PREFIX list would only match via the
+ * compressed check, which is less obvious.
+ *
+ * Empty input returns '' so callers can short-circuit.
+ */
+function _canonicalToolName(name: string): string {
+  return (name || '').toLowerCase().trim();
+}
+
+/**
+ * Drop underscores so camelCase variants (`listFiles`, `webSearch`)
+ * compare against compressed hint forms (`listfiles`, `websearch`)
+ * without enumerating every alias by hand.
+ *
+ * Example matches:
+ *   `readFile`   → `readfile`   ↔  `read_file` → `readfile`  ✓
+ *   `webSearch`  → `websearch`  ↔  `web_search`→ `websearch` ✓
+ *   `listFiles`  → `listfiles`  ↔  `list_files`→ `listfiles` ✓
+ *   `fileRead`   → `fileread`   ↔  `file.read` → `fileread`  ✓
+ */
+function _compressUnderscores(name: string): string {
+  return name.replace(/_/g, '');
+}
+
 function isReadOnlyStep(step: { toolName?: string }): boolean {
-  const name = (step.toolName || '').toLowerCase();
-  if (READ_ONLY_TOOL_HINTS.includes(name as (typeof READ_ONLY_TOOL_HINTS)[number])) {
-    return true;
+  const canonical = _canonicalToolName(step.toolName || '');
+  if (!canonical) return false;
+  const compressed = _compressUnderscores(canonical);
+  for (const hint of READ_ONLY_TOOL_HINTS) {
+    if (canonical === hint) return true;
+    if (compressed && compressed === _compressUnderscores(hint)) return true;
   }
-  if (READ_ONLY_FILE_PREFIX_TOOLS.includes(name as (typeof READ_ONLY_FILE_PREFIX_TOOLS)[number])) {
-    return true;
+  for (const prefix of READ_ONLY_FILE_PREFIX_TOOLS) {
+    if (canonical === prefix) return true;
+    if (compressed && compressed === _compressUnderscores(prefix)) return true;
   }
   return false;
+}
+
+/**
+ * Map a raw tool name to a human-friendly description for use in the
+ * continuation prompt. Categories cover the entries in
+ * READ_ONLY_TOOL_HINTS / READ_ONLY_FILE_PREFIX_TOOLS — anything not
+ * in the map falls back to the canonicalized form. Why a map rather
+ * than blanket text? The LLM-side prompt quality is better with named
+ * categories ("a web search" reads as English; "a web_search" does not).
+ */
+function _humanizeToolName(raw: string): string {
+  const canonical = _canonicalToolName(raw);
+  if (!canonical) return 'an info-gathering tool';
+  const CATEGORY_MAP: Record<string, string> = {
+    // filesystem reads
+    read_file: 'a file',
+    read_url: 'a web URL',
+    list_files: 'a directory listing',
+    list_directory: 'a directory listing',
+    list_dir: 'a directory listing',
+    ls: 'a directory listing',
+    // search family
+    search_files: 'a file search',
+    grep: 'a code search',
+    glob: 'a file pattern match',
+    find: 'a filesystem find',
+    search_code: 'a code search',
+    grep_code: 'a code search',
+    // web/network
+    web_search: 'a web search',
+    web_fetch: 'a web fetch',
+    // capability-style
+    'file.read': 'a file',
+    'file.list': 'a directory listing',
+    'file.search': 'a file search',
+    'repo.search': 'a repository search',
+    'web.search': 'a web search',
+    'web.fetch': 'a web fetch',
+  };
+  return CATEGORY_MAP[canonical] || `a ${canonical.replace(/_/g, ' ')} tool`;
 }
 
 function isSingleReadOnlyStep(steps: ReadonlyArray<{ toolName?: string }>): boolean {
@@ -175,7 +277,7 @@ export function shouldAutoContinue(input: {
     stepReprompt?: string;
     primaryRole?: string;
     estimatedSteps?: number;
-    planSteps?: Array<{ description?: string }>;
+    planSteps?: PlanStep[];
   };
   steps?: ReadonlyArray<{ toolName?: string; args?: Record<string, unknown> }>;
   responseText?: string;
@@ -225,16 +327,25 @@ export function shouldAutoContinue(input: {
     };
   }
 
-  // 3. Single-step read pattern → the LLM read something but didn't act
-  //    on it. Auto-continue with a steer to take the next action.
+  // 3. Single-step read pattern → the LLM gathered information (file read,
+  //    directory listing, web search, grep/glob/find, etc.) but didn't act
+  //    on it. Auto-continue with a steer to take the next action. The
+  //    prompt wording is generic now that the detector covers more than
+  //    just `read_file` — see READ_ONLY_TOOL_HINTS for the full set.
   if (isSingleReadOnlyStep(steps)) {
+    const rawToolName = steps[0]?.toolName || '';
+    // Sanitize the raw provider name so camelCase / dotted variants
+    // (`listFiles`, `file.read`) don't leak into the model's context.
+    // Use a small category map for the most common shapes and fall back
+    // to the lowercased snake_case form.
+    const toolName = _humanizeToolName(rawToolName);
     return {
       continue: true,
       reason: 'single_step_read_pattern',
       continuationPrompt:
-        '[AUTO-CONTINUE] You read a file in the previous turn but did not take a follow-up action. ' +
-        'Based on the file content, proceed with the next step of the task ' +
-        '(e.g., write the file, edit it, or run the next command).',
+        `[AUTO-CONTINUE] You called ${toolName} in the previous turn but did not take a follow-up action. ` +
+        'Based on the information you gathered, proceed with the next step of the task ' +
+        '(e.g., write or edit the file, run a command, or summarize your findings).',
       continuationsSoFar: continuationsSoFar + 1,
     };
   }

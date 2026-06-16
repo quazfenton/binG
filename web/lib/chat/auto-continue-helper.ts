@@ -19,15 +19,22 @@
  *     path and a strict improvement for the v1-api-with-tools path.
  *
  * Scope:
- *   - This helper handles the DECISION + COUNTER only.
+ *   - This helper handles the DECISION + COUNTER + DETECTOR-CATALOG.
  *   - The actual stream-and-merge logic stays in each call site because
  *     the two paths use different stream APIs (streamText vs
  *     streamWithConcurrentFallback) and different merge strategies.
  *   - SSE event emission stays in the call sites because the event
  *     shapes differ.
+ *
+ * Detector catalog (newest exports — see decision docs below):
+ *   - defaultFileEditDetector   — basic fileEdits.length > 0 override
+ *   - needsMoreTurnsDetector    — richer detector wrapping
+ *                                  detectNeedsMoreTurns (15+ signals).
+ *                                  Capture-the-best-of-route.ts.
  */
 
 import { shouldAutoContinue, type ContinuationDecision } from './llm-continuation';
+import { detectNeedsMoreTurns, type DetectableResult } from './auto-continue-detector';
 import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('AutoContinue');
@@ -79,22 +86,79 @@ export type AutoContinueDetectorFn = (
  * contains file edits. Mirrors the maybeDetectorContinuation logic
  * in route.ts:111. Returns null if the hard limit was already reached
  * (so the detector never overrides a `max_continuations_reached` stop).
+ *
+ * Result type tightened to `DetectableResult | undefined` for parity
+ * with `needsMoreTurnsDetector`. The v1-api-with-tools call site
+ * already passes DetectableResult-shaped objects; route.ts callers
+ * pass the same shape (success+response+steps[].toolName+optional fileEdits).
  */
 export function defaultFileEditDetector(
-  result: any,
+  result: DetectableResult | undefined,
   continuationDecision: ContinuationDecision,
 ): AutoContinueDetectorOverride | null {
   if (continuationDecision.reason === 'max_continuations_reached') {
     return null;
   }
-  if (
-    result?.fileEdits &&
-    Array.isArray(result.fileEdits) &&
-    result.fileEdits.length > 0
-  ) {
+  if (!result) return null;
+  if (Array.isArray(result.fileEdits) && result.fileEdits.length > 0) {
     return { force: true, reason: 'file_edits_present' };
   }
   return null;
+}
+
+/**
+ * Richer detector: wraps `detectNeedsMoreTurns` from auto-continue-detector.ts.
+ * Inspects ~15+ signals grouped into 4 factors:
+ *
+ *   1. Tool-call patterns   — read-then-stall, deep-research-loop,
+ *                              failure-cascade, write-verify-loop
+ *   2. Explicit signals     — announced-next-step, incomplete-thought,
+ *                              step-enumeration, planned-multi-step
+ *   3. Partial edit det.    — read-many-write-none, single-write-silent,
+ *                              diff-no-explanation, edits-mismatch
+ *   4. Response quality     — empty-after-tools, unclosed-code-block,
+ *                              mid-sentence-cutoff
+ *
+ * "Best consolidation of best parts": this is what route.ts's
+ * `maybeDetectorContinuation` (app/api/chat/route.ts:79) effectively
+ * does inline. Exposing it here as a named helper means route.ts can
+ * later adopt `decideAutoContinue(..., needsMoreTurnsDetector)` as a
+ * drop-in replacement WITHOUT losing the richer signals — the prior
+ * audit identified this as the unification target.
+ *
+ * Returns:
+ *   - `null` if the max was already reached (so the detector never
+ *     overrides a `max_continuations_reached` stop — same safety
+ *     semantics as `defaultFileEditDetector`).
+ *   - `null` if `result` is undefined (no signal source).
+ *   - `{ force: true, reason: <signal-name> }` using the FIRST signal
+ *     that fired. Note: signal order is *detection order* (Factor 1 →
+ *     Factor 2 → Factor 3 → Factor 4), not priority. The full signal
+ *     list lives on `TurnDetectionResult.signals` if a caller needs
+ *     all-firing names; this field is just a single-string reason
+ *     label for run.log and the SSE payload.
+ *
+ * Use this over `defaultFileEditDetector` when:
+ *   - You want read-then-stall / deep-research-loop / mid-sentence-cutoff
+ *     and similar non-fileEdit triggers.
+ *   - You want signal-level granularity in run.log / metrics.
+ *
+ * Use `defaultFileEditDetector` when:
+ *   - You only care about fileEdits.length > 0 (cheap heuristic; no
+ *     deep signal scan; doesn't pull in auto-continue-detector.ts).
+ */
+export function needsMoreTurnsDetector(
+  result: DetectableResult | undefined,
+  continuationDecision: ContinuationDecision,
+): AutoContinueDetectorOverride | null {
+  if (continuationDecision.reason === 'max_continuations_reached') return null;
+  if (!result) return null;
+  const det = detectNeedsMoreTurns(result);
+  if (!det?.needsMoreTurns) return null;
+  return {
+    force: true,
+    reason: det.signals?.[0] ?? 'needs_more_turns',
+  };
 }
 
 export interface AutoContinueInput {
@@ -113,11 +177,26 @@ export interface AutoContinueInput {
    */
   result?: any;
   /**
-   * Optional detector override. Defaults to defaultFileEditDetector,
+   * Optional detector override. Defaults to `defaultFileEditDetector`,
    * which forces a continuation if the result contains file edits.
    * Pass `() => null` to disable the detector entirely.
    */
   detectorFn?: AutoContinueDetectorFn;
+  /**
+   * Optional ADVANCED detector, evaluated alongside `detectorFn`. Both
+   * are called; whichever returns `{ force: true, ... }` fires the
+   * continuation, with the advanced detector's reason taking priority
+   * when both fire.
+   *
+   * Use this to opt-in to richer signal coverage WITHOUT losing the
+   * fileEdits-only check. The canonical advanced detector is
+   * `needsMoreTurnsDetector` (also exported here), which wraps
+   * `detectNeedsMoreTurns` and inspects 15+ signals across 4 factor
+   * groups (read-then-stall, deep-research-loop, mid-sentence-cutoff,
+   * etc.). Passing `needsMoreTurnsDetector` here is the migration
+   * target for `app/api/chat/route.ts:79`'s `maybeDetectorContinuation`.
+   */
+  advancedDetectorFn?: AutoContinueDetectorFn;
   /** Optional logger — defaults to the module-level logger. */
   onLog?: (msg: string, meta?: any) => void;
 }
@@ -165,6 +244,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     responseText,
     result,
     detectorFn = defaultFileEditDetector,
+    advancedDetectorFn,
     onLog,
   } = input;
 
@@ -190,11 +270,31 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     maxContinuations: MAX_CONTINUATIONS,
   });
 
-  // Detector override (file-edit detector by default)
+  // Primary detector override (file-edit detector by default)
   const detectorOverride = detectorFn(result, continuationDecision);
 
+  // Advanced detector override (opt-in richer signal set). When provided,
+  // BOTH detectors are evaluated; whichever returns `force: true` wins,
+  // with the advanced reason taking priority when both fire. The advanced
+  // reason is preferred because it carries a more specific signal name
+  // (e.g. `read-then-stall`) than the basic fileEdits reason
+  // (`file_edits_present`), giving operators sharper run.log signals.
+  const advancedOverride = advancedDetectorFn
+    ? advancedDetectorFn(result, continuationDecision)
+    : null;
+
+  const detectorFired = (detectorOverride?.force ?? false);
+  const advancedFired = (advancedOverride?.force ?? false);
+
+  // Pick the more-specific reason: advanced wins when both fire.
+  const activeOverride = advancedFired
+    ? advancedOverride
+    : detectorFired
+      ? detectorOverride
+      : null;
+
   const shouldContinue =
-    continuationDecision.continue || (detectorOverride?.force ?? false);
+    continuationDecision.continue || (activeOverride !== null);
 
   if (shouldContinue) {
     const newCount = incrementContinuationCount(requestId);
@@ -202,13 +302,14 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       requestId,
       reason: continuationDecision.reason,
       detectorReason: detectorOverride?.reason,
-      forceSignal: detectorOverride?.force ?? false,
+      advancedReason: advancedOverride?.reason,
+      forceSignal: activeOverride !== null,
       continuationsSoFar: newCount,
     });
     return {
       continue: true,
       reason: continuationDecision.reason,
-      forceSignal: detectorOverride?.force ?? false,
+      forceSignal: activeOverride !== null,
       continuationsSoFar: newCount,
       continuationPrompt: continuationDecision.continuationPrompt,
     };

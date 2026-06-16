@@ -135,13 +135,6 @@ async function transferAnonVFS(
       });
       return 0;
     }
-    // Bug #85 (Pass-6 audit) — defensive guard. The fix in findAnonOwnerIds
-    // already returns `[]` on DB error, but this `.filter(x => x != null)`
-    // normalises any unexpected null/undefined that might slip through (e.g.
-    // from a mock or future code path) into an empty array. Without this,
-    // the `.filter` below would throw "Cannot read properties of null".
-    recentAnonOwnerIds = recentAnonOwnerIds.filter((x): x is string => x != null);
-
   };
 
   // FAST PATH

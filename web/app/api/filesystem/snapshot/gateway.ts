@@ -517,6 +517,16 @@ export async function GET(req: NextRequest) {
         // WorkspaceState in the map + DB) and the NEXT read sees success
         // with 0 files, breaking the loop.
         try {
+          // Bug #7 fix: Check if this owner's workspace was already
+          // successfully initialized in a previous request. If so, skip
+          // the WORKSPACE_NOT_READY path entirely — the workspace exists
+          // but may be genuinely empty. This prevents the 188-occurrence
+          // WORKSPACE_NOT_READY spam loop where the client polls every
+          // 30s but keeps hitting the cooldown gate.
+          const initDoneKey = `__vfsInitDone__:${owner.ownerId}`;
+          if ((globalThis as any)[initDoneKey]) {
+            log(`[${requestId}] Workspace already initialized for anonymous owner — skipping WORKSPACE_NOT_READY check`);
+          } else {
           // 5s in-memory cooldown to prevent hammering the DB when the
           // snapshot is polled faster than the init can complete. After
           // the cooldown expires, the next request retries the init.

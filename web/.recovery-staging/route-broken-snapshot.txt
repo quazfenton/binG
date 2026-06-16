@@ -1,0 +1,71 @@
+                      : continuationDecision.reason,
+                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                    detectorSignals: detectorOverride.signals,
+                    detectorConfidence: detectorOverride.confidence,
+                    usedDetectorPrompt: detectorOverride.prompt ?? null,
+                  });
+                    requestId,
+                    iteration: iteration + 1,
+                    reason: detectorOverride.force
+                      ? `detector:${(detectorOverride.signals || []).join('+')}`
+                      : continuationDecision.reason,
+                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                    detectorSignals: detectorOverride.signals,
+                    detectorConfidence: detectorOverride.confidence,
+                    usedDetectorPrompt: detectorOverride.prompt ?? null,
+                  });
+                  // Emit a marker event so the client knows a continuation is happening
+                  emit(SSE_EVENT_TYPES.STEP, {
+                    type: 'continuation',
+                    iteration: iteration + 1,
+                    reason: detectorOverride.force
+                      ? `detector:${(detectorOverride.signals || []).join('+')}`
+                      : continuationDecision.reason,
+                    prompt: continuationPrompt.slice(0, 200),
+                    timestamp: Date.now(),
+                  });
+                  // Build the next config with the continuation prompt as a new user message
+                  const previousAssistantContent = typeof result.response === 'string'
+                    ? result.response
+                    : (iterContent || '');
+                  currentConfig = {
+                    ...currentConfig,
+                    conversationHistory: [
+                      ...(currentConfig.conversationHistory || []),
+                      { role: 'assistant', content: previousAssistantContent },
+                      { role: 'user', content: continuationPrompt },
+                    ],
+                  };
+                  iteration++;
+                } else {
+                  // No continuation needed (or max reached). Break out of loop.
+                  // Surface the decision in result.metadata so the client sees it
+                  // in the DONE event. This replaces the previous post-loop
+                  // auto-continue block (which was dead-weight — the loop is the
+                  // single source of truth for the decision).
+                  result.metadata = result.metadata || {};
+                  result.metadata.continuationDecision = {
+                    continue: continuationDecision.continue,
+                    reason: continuationDecision.reason,
+                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                  };
+                  if (continuationDecision.continue) {
+                    // Full prompt stored server-side only; the client can request
+                    // it via a follow-up endpoint if needed.
+                    result.metadata.continuationPrompt = continuationDecision.continuationPrompt;
+                  }
+                  if (continuationDecision.continue || continuationDecision.reason === 'max_continuations_reached') {
+                    // Max reached (continue: true) or explicit max-reached signal
+                    // (continue: false) — clean up the counter either way to
+                    // prevent memory leaks.
+                    continuationCounters.delete(requestId);
+                  }
+                  break;
+                }
+              } while (iteration < MAX_CONTINUATIONS);
+
+              // Build the final accumulated result for the DONE event
+              if (accumulatedFileEdits.length > 0) {
+                // UnifiedAgentResult.fileEdits is typed as FileEdit[]; assign the
+                // accumulated array directly (any[] is assignable to FileEdit[]).
+                // The `applied`/`extracted` counts are surfaced via result.metadata

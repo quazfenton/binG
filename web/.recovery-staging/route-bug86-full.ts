@@ -76,33 +76,6 @@ import { detectNeedsMoreTurns } from '@/lib/chat/auto-continue-detector';
  * signal can fire (reviewer nit #3). Previously the call hardcoded
  * `fileEdits: []` which silently disabled that signal.
  */
-// CONSOLIDATION TODO: This function and the simpler edits-mismatch
-// sibling at line ~188 are both candidates for replacement by the
-// `advancedDetectorFn` parameter on `decideAutoContinue` (helper
-// exported from `@/lib/chat/auto-continue-helper`). The canonical
-// value to pass is `needsMoreTurnsDetector` (also exported from the
-// helper), which wraps `detectNeedsMoreTurns` with 15+ signals across
-// 4 factor groups.
-//
-// Migration sketch:
-//
-//   decideAutoContinue({
-//     requestId,
-//     routing,
-//     steps,
-//     responseText,
-//     result,
-//     advancedDetectorFn: needsMoreTurnsDetector,
-//     // detectorFn stays default (defaultFileEditDetector); the OR'd
-//     // composition preserves the fileEdits check while adding the
-//     // richer signal set. Advanced reason wins when both fire.
-//   });
-//
-// Adopting it would also let this layer replace its local
-// `continuationCounters` Map (line ~133) and env-tunable MAX constant
-// (line ~141) with the helper's equivalents. Not migrated yet because
-// route.ts is on the LLM hot path — captured as a future consolidation
-// when team capacity allows.
 function maybeDetectorContinuation(
   iterContent: string,
   result: { steps?: any[]; fileEdits?: Array<{ path: string; content?: string; diff?: string; action?: string }> },
@@ -194,55 +167,6 @@ function normalizeStepArgs(value: unknown): Record<string, unknown> | undefined 
     }
   }
   return undefined;
-}
-
-/**
- * Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small named helper
- * for readability. The helper forwards the REAL `result.fileEdits ?? []`
- * (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
- * actually fire. Returns `null` when the detector has no opinion; callers
- * coalesce with `?? { force: false }` at the call site.
- */
-function maybeDetectorContinuation(
-  result: { fileEdits?: unknown[] } | undefined,
-  continuationDecision: { continue: boolean; reason?: string },
-  log: { debug: (msg: string, ctx?: unknown) => void },
-): { force: boolean; reason?: string } | null {
-  // Bug #86 (Pass-6, reviewer nit #2) — forwards the REAL `result.fileEdits ?? []`
-  // (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
-  // actually fire. Bug #86 (Pass-6, reviewer nit #1) — extracted to a small
-  // named helper for readability. Returns `null` when the detector has no
-  // opinion (no edits, or shouldAutoContinue already said stop); callers
-  // coalesce with `?? { force: false }` at the call site.
-  const edits = result?.fileEdits ?? [];
-  if (!Array.isArray(edits) || edits.length === 0) {
-    return null;
-  }
-  // NOTE: we deliberately do NOT gate on continuationDecision.continue here.
-  // The detector's job is to override shouldAutoContinue when there's an
-  // edits-mismatch. The caller's OR combines both signals so the detector
-  // CAN force a continuation even when shouldAutoContinue said stop.
-  //
-  // Carve-out: if shouldAutoContinue said stop because the max-continuations
-  // cap was reached, the detector should NOT force another iteration — the
-  // cap is the safety net that prevents infinite loops.
-  if (continuationDecision.reason === 'max_continuations_reached') {
-    log.debug('[maybeDetectorContinuation] suppressed: max_continuations_reached', {
-      editCount: edits.length,
-    });
-    return null;
-  }
-  // Only log the forward when the detector is actually overriding
-  // shouldAutoContinue (i.e. shouldAutoContinue said stop). When both
-  // signals agree, the auto-continue block's normal flow already covers
-  // the case and the log would be redundant noise.
-  if (!continuationDecision.continue) {
-    log.debug('[maybeDetectorContinuation] forwarding edits-mismatch signal', {
-      editCount: edits.length,
-      reason: continuationDecision.reason,
-    });
-  }
-  return { force: true, reason: 'edits-mismatch' };
 }
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
@@ -1720,25 +1644,31 @@ const config: UnifiedAgentConfig = {
                   responseText: iterContent,
                   continuationsSoFar: previousContinuations,
                 });
-                // Bug #86 (Pass-6) — wire the detector-override helper. The
-                // helper forwards real `result.fileEdits ?? []` so the
-                // edits-mismatch signal can actually fire. Coalesce with
-                // `?? { force: false }` so the default path is unchanged.
-                const detectorOverride = maybeDetectorContinuation(
-                  result,
-                  continuationDecision,
-                  chatLogger,
-                ) ?? { force: false }
+
                 // Bug #86 (Pass-6 audit) — when the existing shouldAutoContinue
                 // says "don't continue" but the detector sees a clear signal
                 // that the LLM stopped too early (e.g. read-then-stall,
                 // single-write-silent, deep-research-loop, announced-next-step),
                 // force a follow-up turn with the detector's suggestedReprompt.
-
-                if ((continuationDecision.continue || detectorOverride.force) && iteration < MAX_CONTINUATIONS - 1) {
-                  // Signal continuation
-                  continuationCounters.set(requestId, continuationDecision.continuationsSoFar);
-                  chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {
+                // The detector inspects 17+ named signals with high/medium
+                // confidence levels and produces a tight contextual reprompt
+  // Bug #86 (Pass-6, reviewer nits #2 + #3) — extracted to a named helper
+  // `maybeDetectorContinuation()` so the chat-route loop body stays readable.
+  // Forwards real `result.fileEdits` so the detector's `edits-mismatch` signal
+  // can fire (previously hardcoded to `fileEdits: []` which silently disabled it).
+  const detectorOverride = maybeDetectorContinuation(
+    iterContent,
+    result,
+    continuationDecision,
+    normalizeStepArgs,
+    log,
+  ) ?? { force: false };
+// Bug #86 (Pass-6, reviewer nits #1 + #2) — the detector override is now
+// computed by `maybeDetectorContinuation()` (extracted helper at line 79)
+// and forwards real `result.fileEdits` so the edits-mismatch signal can
+// fire. Below: log the continuation decision via the CONTINUE SSE event so
+// downstream consumers can render the detector-prompted continuation.
+emit(SSE_EVENT_TYPES.CONTINUE, {
                     requestId,
                     iteration: iteration + 1,
                     reason: detectorOverride.force
@@ -1747,24 +1677,19 @@ const config: UnifiedAgentConfig = {
                     continuationsSoFar: continuationDecision.continuationsSoFar,
                     detectorSignals: detectorOverride.signals,
                     detectorConfidence: detectorOverride.confidence,
+                    usedDetectorPrompt: detectorOverride.prompt ?? null,
                   });
-                  emit(SSE_EVENT_TYPES.CONTINUE, {
-                    requestId,
-                    iteration: iteration + 1,
-                    reason: detectorOverride.force
-                      ? `detector:${(detectorOverride.signals || []).join('+')}`
-                      : continuationDecision.reason,
-                    continuationsSoFar: continuationDecision.continuationsSoFar,
-                  });
+                  // Emit a marker event so the client knows a continuation is happening
                   emit(SSE_EVENT_TYPES.STEP, {
                     type: 'continuation',
                     iteration: iteration + 1,
                     reason: detectorOverride.force
                       ? `detector:${(detectorOverride.signals || []).join('+')}`
                       : continuationDecision.reason,
-                    prompt: (detectorOverride.prompt ?? continuationDecision.continuationPrompt ?? '').slice(0, 200),
+                    prompt: continuationPrompt.slice(0, 200),
                     timestamp: Date.now(),
                   });
+                  // Build the next config with the continuation prompt as a new user message
                   const previousAssistantContent = typeof result.response === 'string'
                     ? result.response
                     : (iterContent || '');
@@ -1773,89 +1698,42 @@ const config: UnifiedAgentConfig = {
                     conversationHistory: [
                       ...(currentConfig.conversationHistory || []),
                       { role: 'assistant', content: previousAssistantContent },
-                      { role: 'user', content: detectorOverride.prompt ?? continuationDecision.continuationPrompt ?? 'Continue from where you left off.' },
+                      { role: 'user', content: continuationPrompt },
                     ],
                   };
                   iteration++;
                 } else {
+                  // No continuation needed (or max reached). Break out of loop.
+                  // Surface the decision in result.metadata so the client sees it
+                  // in the DONE event. This replaces the previous post-loop
+                  // auto-continue block (which was dead-weight — the loop is the
+                  // single source of truth for the decision).
                   result.metadata = result.metadata || {};
                   result.metadata.continuationDecision = {
                     continue: continuationDecision.continue,
                     reason: continuationDecision.reason,
                     continuationsSoFar: continuationDecision.continuationsSoFar,
                   };
+                  if (continuationDecision.continue) {
+                    // Full prompt stored server-side only; the client can request
+                    // it via a follow-up endpoint if needed.
+                    result.metadata.continuationPrompt = continuationDecision.continuationPrompt;
+                  }
                   if (continuationDecision.continue || continuationDecision.reason === 'max_continuations_reached') {
+                    // Max reached (continue: true) or explicit max-reached signal
+                    // (continue: false) — clean up the counter either way to
+                    // prevent memory leaks.
                     continuationCounters.delete(requestId);
                   }
                   break;
                 }
-              } while (false);
-              if (accumulatedSteps.length > 0) {
-                result.steps = accumulatedSteps;
-              }
-              // Post-loop: extract any final edits from the LAST iteration's buffer
-              // and apply session naming detection. The loop already handled VFS
-              // writes and step accumulation; this block runs once after the loop.
-              const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
+              } while (iteration < MAX_CONTINUATIONS);
 
-              // SESSION NAMING: Detect if this is a new single-folder workspace
-              const responseContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '') || '';
-              try {
-                const { detectSingleFolderFromResponse, sessionNameExists } = await import('@/lib/session/session-naming');
-                const detectedFolder = detectSingleFolderFromResponse(responseContent);
-                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
-                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
-                if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
-                  const folderExists = await sessionNameExists(detectedFolder);
-                  if (!folderExists) {
-                    // Capture previousId BEFORE reassignment so the SSE event
-                    // shows the actual rename (previous !== new), not a no-op.
-                    const previousId = resolvedConversationId;
-                    resolvedConversationId = detectedFolder;
-                    requestedScopePath = `workspace/sessions/${detectedFolder}`;
-                    emit(SSE_EVENT_TYPES.FILESYSTEM, {
-                      previousId,
-                      newId: detectedFolder,
-                      reason: 'single-folder-workspace',
-                    });
-                    chatLogger.info('Session folder renamed based on detected workspace structure', {
-                      previousId,
-                      newId: detectedFolder,
-                    });
-                  }
-                }
-              } catch (sessionErr: any) {
-                chatLogger.debug('Session naming detection failed (non-fatal)', {
-                  error: sessionErr instanceof Error ? sessionErr.message : String(sessionErr),
-                });
-              }
-
-              // Final file edits emit (post-stream parse catch-all)
-              if (finalEdits && finalEdits.length > 0) {
-                for (const edit of finalEdits) {
-                  if (!isValidFilePath(edit.path)) continue;
-                  const editContent = edit.content || edit.diff || '';
-                  if (!editContent || editContent.trim().length === 0) continue;
-                  const isPatch = edit.action === 'patch' || !!edit.diff;
-                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
-                    path: edit.path,
-                    status: 'detected',
-                    operation: isPatch ? 'patch' : 'write',
-                    timestamp: Date.now(),
-                    content: edit.content || '',
-                    diff: isPatch ? (edit.diff || '') : undefined,
-                    isFinal: true,
-                  });
-                }
-              }
-
-              // VFS WRITE: Apply final filesystem edits to the virtual filesystem.
-              // This mirrors the per-iteration VFS write in the loop — without this,
-              // edits from the post-stream parse are only emitted as SSE events
-              // (status: 'detected') but NEVER persisted to VFS. Critical for
-              // single-iteration requests where the loop's per-iteration VFS write
-              // may not catch edits that arrived after the last iteration boundary.
-              if (finalEdits.length > 0 && filesystemOwnerId) {
+              // Build the final accumulated result for the DONE event
+              if (accumulatedFileEdits.length > 0) {
+                // UnifiedAgentResult.fileEdits is typed as FileEdit[]; assign the
+                // accumulated array directly (any[] is assignable to FileEdit[]).
+                // The `applied`/`extracted` counts are surfaced via result.metadata
                 // (see appliedEditCount/extractedEditCount below) so the SSE DONE
                 // event still carries the summary the client needs.
                 result.fileEdits = accumulatedFileEdits;
@@ -2539,14 +2417,7 @@ const config: UnifiedAgentConfig = {
 
           let sandboxSession: Awaited<ReturnType<typeof sandboxBridge.getOrCreateSession>> | null = null;
           if (authenticatedUserId && executionPolicy !== 'local-safe') {
-            // Gap-fix: thread the full ownerResolution (not just filesystemOwnerId)
-      // so the bridge has access to the auth source / isAuthenticated /
-      // anonSessionId for source-aware sandboxing decisions.
-      sandboxSession = await sandboxBridge.getOrCreateSession(
-        authenticatedUserId,
-        undefined,
-        ownerResolution,
-      );
+            sandboxSession = await sandboxBridge.getOrCreateSession(authenticatedUserId);
           }
 
           chatLogger.info('Executing v1 agentic tools', { requestId, userId: effectiveAgentUserId }, {

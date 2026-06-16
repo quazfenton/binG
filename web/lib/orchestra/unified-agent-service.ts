@@ -18,6 +18,14 @@ import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
+
+// Bug #1 follow-up: route the v1-api-with-tools auto-continue decision
+// through the shared helper so per-requestId counters, env-tunable
+// MAX_CONTINUATIONS, and the file-edit detector override all match the
+// chat/route.ts SSE streaming path. Closing the six gaps listed in the
+// audit (counter cleanup, requestId keying, hardcoded 3, helper.default,
+// SSE emission) in a single call site change.
+import { decideAutoContinue, defaultFileEditDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
@@ -74,7 +82,7 @@ import {
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';    // [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
 // an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
-import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer, InvalidModelError } from './steer-service';
+import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer, InvalidModelError, buildSteerPrompt, steerFromFinishReason } from './steer-service';
 // Bug #40: per-session orchestration-fallback counter. Incremented in
 // tagResultDegraded so /api/health?detailed can surface the count.
 import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
@@ -4520,36 +4528,140 @@ Based on what you have learned, continue working on the original task. Take the 
         } catch { /* best effort */ }
       }
 
-      // Bug #1 fix: Check shouldAutoContinue for v1-api-with-tools path
-      // This handles: roleSelection.continue=true, empty_tool_args, single_step_read
-      // Previously this only fired in chat/route.ts SSE streaming path.
-      const continuationDecision = shouldAutoContinue({
-        routing: routingForClient ? {
-          continue: routingForClient.continue,
-          stepReprompt: routingForClient.stepReprompt,
-          primaryRole: routingForClient.primaryRole,
-          estimatedSteps: routingForClient.estimatedSteps,
-          planSteps: routingForClient.planSteps,
-        } : undefined,
-        steps: steps.map(s => ({ toolName: s.toolName, args: s.args })),
+      // Bug #10 fix: Wire [STEER] helpers into the v1-api completion handler.
+      // Previously these only fired in the chat/route.ts SSE streaming path.
+      // Now: steerFromFinishReason fires for empty completions and
+      // missing-tool-call patterns, injecting a [STEER] prefix into the
+      // continuation prompt or the final response so the LLM gets actionable
+      // guidance on the next turn.
+      let v1SteerPrompt: string | null = null;
+      const steerTrigger = steerFromFinishReason({
+        finishReason: response.trim() ? undefined : 'stop',
+        availableTools: Object.keys(aiSdkTools || {}).length,
+        provider: providerName,
+        model: modelForProvider,
         responseText: finalResponse,
-        continuationsSoFar: ((config as any)._autoContinueCount as number) || 0,
-        maxContinuations: 3,
+        toolCallsDone: toolInvocations.length,
       });
+      if (steerTrigger) {
+        v1SteerPrompt = buildSteerPrompt(steerTrigger);
+        log.info('[V1-API-WITH-TOOLS] STEER fired', {
+          kind: steerTrigger.kind,
+          promptLength: v1SteerPrompt.length,
+        });
+        // Prepend the steer to the final response so the LLM sees it
+        // on the next turn (or the client can surface it as guidance).
+        if (finalResponse.trim()) {
+          finalResponse = v1SteerPrompt + '\n\n' + finalResponse;
+        } else {
+          finalResponse = v1SteerPrompt;
+        }
+      }
+      // Previously only a single continuation attempt was made. Now we loop up to
+      // MAX_V1_CONTINUATIONS iterations, re-checking shouldAutoContinue after each
+      // continuation turn. This handles: roleSelection.continue=true, empty_tool_args,
+      // single_step_read, plan_steps_remaining, single_write_then_stop.
+      // Uses decideAutoContinue (shared with chat/route.ts) for consistent counter
+      // management and cleanup.
+      const MAX_V1_CONTINUATIONS = parseInt(process.env.LLM_MAX_CONTINUATIONS_PER_TURN || '3', 10);
+      let autoContinueIteration = 0;
+      let accumulatedResponse = finalResponse;
+      let accumulatedSteps = [...steps];
+      let accumulatedToolInvocations = [...toolInvocations];
 
-      if (continuationDecision.continue && continuationDecision.continuationPrompt) {
-        log.info('[V1-API-WITH-TOOLS] shouldAutoContinue triggered', {
-          reason: continuationDecision.reason,
-          continuationsSoFar: continuationDecision.continuationsSoFar,
+      while (autoContinueIteration < MAX_V1_CONTINUATIONS) {
+        const contDecision = decideAutoContinue({
+          requestId,
+          routing: routingForClient ? {
+            continue: routingForClient.continue,
+            stepReprompt: routingForClient.stepReprompt,
+            primaryRole: routingForClient.primaryRole,
+            estimatedSteps: routingForClient.estimatedSteps,
+            planSteps: routingForClient.planSteps,
+          } : undefined,
+          steps: accumulatedSteps.map(s => ({ toolName: s.toolName, args: s.args })),
+          responseText: accumulatedResponse,
+          // Bug-#1 follow-up: pass REAL accumulated file edits so the
+          // defaultFileEditDetector inside decideAutoContinue can FIRE
+          // for the "stops after emitting file edits" failure mode.
+          // Without this, automatically falls through to the LLM decision
+          // only, missing the detector-override path that forces a
+          // continuation when the LLM emitted edits but didn't get the
+          // response format right. WRITE_TOOL_NAMES is the same set used
+          // elsewhere in runV1ApiWithTools for tool classification so the
+          // detector sees a consistent view.
+          result: {
+            fileEdits: accumulatedSteps
+              .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName))
+              .map((s: any) => ({
+                path: typeof s?.args?.path === 'string' ? s.args.path : undefined,
+                action: 'write',
+                toolName: s.toolName,
+              }))
+              .filter((e: any) => typeof e.path === 'string' && e.path.length > 0),
+          },
+        });
+
+        if (!contDecision.continue || !contDecision.continuationPrompt) {
+          break;
+        }
+
+        autoContinueIteration++;
+
+        // Emit SSE `continuation` event so the UI can show a "continuing…"
+        // indicator and operators can spot missed continuations in run.log.
+        // Parity with app/api/chat/route.ts SSE_EVENT_TYPES.CONTINUE
+        // (typed there; raw `config.onStreamChunk` here because the
+        // unified-agent path doesn't use the typed sse-events bus — the
+        // route layer parses the same JSON shape).
+        // sseDelivered is an observability flag; the autoContinueIteration
+        // increment above is unconditional. Without sseDelivered, an SSE
+        // throw would leave this log.info reporting iteration N+1 as "delivered"
+        // even though the client never saw the SSE event. Declared in the
+        // OUTER scope so the log.info's `sseDelivered,` shorthand binding
+        // works regardless of whether config.onStreamChunk is set, and as
+        // a `let` (not const) so the 3-state signal — not-configured /
+        // configured-and-delivered / configured-and-threw — is preserved.
+        let sseDelivered = false;
+        if (config.onStreamChunk) {
+          // JSON.stringify is intentionally OUTSIDE the try block —
+          // it cannot throw on this primitive shape (string/number/
+          // boolean values only — no BigInt, Symbol, or circular refs).
+          // Keeping it inside the try would over-mask any future code
+          // bug (e.g. someone adding a BigInt) as a benign SSE failure.
+          const ssePayload = JSON.stringify({
+            type: 'continuation',
+            requestId,
+            iteration: autoContinueIteration,
+            reason: contDecision.reason,
+            forceSignal: contDecision.forceSignal,
+            continuationsSoFar: contDecision.continuationsSoFar,
+          });
+          try {
+            config.onStreamChunk(ssePayload);
+            sseDelivered = true;
+          } catch (sseErr) {
+            log.debug('[V1-API-WITH-TOOLS] SSE continuation emit failed', {
+              error: sseErr instanceof Error ? sseErr.message : String(sseErr),
+              requestId,
+              iteration: autoContinueIteration,
+            });
+          }
+        }
+
+        log.info('[V1-API-WITH-TOOLS] Auto-continuation loop iteration', {
+          iteration: autoContinueIteration,
+          reason: contDecision.reason,
+          continuationsSoFar: contDecision.continuationsSoFar,
+          forceSignal: contDecision.forceSignal,
+          sseDelivered,
         });
 
         const contMessages = [
           ...llmMessages,
-          { role: 'assistant', content: finalResponse },
-          { role: 'user', content: continuationDecision.continuationPrompt },
+          { role: 'assistant', content: accumulatedResponse },
+          { role: 'user', content: contDecision.continuationPrompt },
         ];
-
-        (config as any)._autoContinueCount = continuationDecision.continuationsSoFar;
 
         try {
           const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
@@ -4587,39 +4699,50 @@ Based on what you have learned, continue working on the original task. Take the 
             log.info('[V1-API-WITH-TOOLS] Auto-continuation produced results', {
               contentLength: contContent.length,
               toolCount: contToolInvocations.length,
+              iteration: autoContinueIteration,
             });
 
-            const allSteps = [
-              ...steps,
-              ...contToolInvocations.map(inv => ({
-                toolName: inv.toolName,
-                args: inv.args,
-                result: inv.result,
-              })),
-            ];
-
-            return {
-              success: true,
-              response: (finalResponse + '\n\n' + contContent).trim(),
-              steps: allSteps,
-              totalSteps: allSteps.length,
-              mode: 'v1-api',
-              metadata: {
-                provider: providerName,
-                model: modelForProvider,
-                duration: Date.now() - startTime,
-                toolInvocations: [...toolInvocations, ...contToolInvocations],
-                autoContinued: true,
-                autoContinueReason: continuationDecision.reason,
-                ...(routingForClient ? { routing: routingForClient } : {}),
-              },
-            };
+            accumulatedResponse = (accumulatedResponse + '\n\n' + contContent).trim();
+            accumulatedSteps.push(...contToolInvocations.map(inv => ({
+              toolName: inv.toolName,
+              args: inv.args,
+              result: inv.result,
+            })));
+            accumulatedToolInvocations.push(...contToolInvocations);
+          } else {
+            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced no output, stopping loop', {
+              iteration: autoContinueIteration,
+            });
+            break;
           }
         } catch (contErr: any) {
-          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning original response', {
+          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning accumulated response', {
             error: contErr?.message,
+            iteration: autoContinueIteration,
           });
+          break;
         }
+      }
+
+      clearContinuationCount(requestId);
+
+      if (autoContinueIteration > 0) {
+        return {
+          success: true,
+          response: accumulatedResponse,
+          steps: accumulatedSteps,
+          totalSteps: accumulatedSteps.length,
+          mode: 'v1-api',
+          metadata: {
+            provider: providerName,
+            model: modelForProvider,
+            duration: Date.now() - startTime,
+            toolInvocations: accumulatedToolInvocations,
+            autoContinued: true,
+            autoContinueIterations: autoContinueIteration,
+            ...(routingForClient ? { routing: routingForClient } : {}),
+          },
+        };
       }
 
       return {

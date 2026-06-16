@@ -134,6 +134,85 @@ describe('shouldAutoContinue', () => {
       });
       expect(decision.continue).toBe(false);
     });
+
+    // ─── NEW: extends single_step_read_pattern to other info-gathering tools ───
+    // An information-gathering tool that returned without follow-up action
+    // is the same "stall after read" symptom regardless of the specific
+    // tool name. Snake_case, camelCase, and capability.dot.case variants
+    // all match via _canonicalToolName + the compressUnderscores alias.
+    //
+    // Note: every test passes `args: { ... }` (not `{}`) because
+    // `hasEmptyToolArgs` would fire BEFORE `isSingleReadOnlyStep` and
+    // shadow the test with reason `empty_tool_args_detected`.
+    it('continues for list_files (snake_case variant of list_directory)', () => {
+      const decision = shouldAutoContinue({
+        steps: [{ toolName: 'list_files', args: { path: 'src/' } }],
+        continuationsSoFar: 0,
+      });
+      expect(decision.continue).toBe(true);
+      expect(decision.reason).toBe('single_step_read_pattern');
+    });
+
+    it('continues for web_search (info-gathering across the network)', () => {
+      const decision = shouldAutoContinue({
+        steps: [{ toolName: 'web_search', args: { query: 'how to parse parquet' } }],
+        continuationsSoFar: 0,
+      });
+      expect(decision.continue).toBe(true);
+      expect(decision.reason).toBe('single_step_read_pattern');
+    });
+
+    it('continues for web_fetch', () => {
+      const decision = shouldAutoContinue({
+        steps: [{ toolName: 'web_fetch', args: { url: 'https://example.com' } }],
+        continuationsSoFar: 0,
+      });
+      expect(decision.continue).toBe(true);
+      expect(decision.reason).toBe('single_step_read_pattern');
+    });
+
+    it('continues for read_url', () => {
+      const decision = shouldAutoContinue({
+        steps: [{ toolName: 'read_url', args: { url: 'https://example.com' } }],
+        continuationsSoFar: 0,
+      });
+      expect(decision.continue).toBe(true);
+      expect(decision.reason).toBe('single_step_read_pattern');
+    });
+
+    it('continues for snake_case canonical names written in camelCase', () => {
+      // The provider sometimes emits `listFiles` / `webSearch` rather than
+      // the snake_case canonical. The detector must treat these uniformly.
+      for (const toolName of ['listFiles', 'webSearch', 'readFile']) {
+        const decision = shouldAutoContinue({
+          steps: [{ toolName, args: { path: 'src/' } }],
+          continuationsSoFar: 0,
+        });
+        expect(decision.continue, `expected continue=true for ${toolName}`).toBe(true);
+        expect(decision.reason, `expected single_step_read_pattern for ${toolName}`).toBe('single_step_read_pattern');
+      }
+    });
+
+    it('continues for capability-style dotted names (file.read, repo.search, web.search)', () => {
+      for (const toolName of ['file.read', 'repo.search', 'web.search', 'web.fetch', 'file.list']) {
+        const decision = shouldAutoContinue({
+          steps: [{ toolName, args: { path: 'src/' } }],
+          continuationsSoFar: 0,
+        });
+        expect(decision.continue, `expected continue=true for ${toolName}`).toBe(true);
+        expect(decision.reason, `expected single_step_read_pattern for ${toolName}`).toBe('single_step_read_pattern');
+      }
+    });
+
+    it('rejects write-family tool names (write_file stays excluded)', () => {
+      const decision = shouldAutoContinue({
+        steps: [{ toolName: 'write_file', args: { path: 'x.ts', content: 'x' } }],
+        continuationsSoFar: 0,
+      });
+      // write_file is a write step (covered in the existing
+      // single-write test), so the read detector must NOT fire here.
+      expect(decision.reason).not.toBe('single_step_read_pattern');
+    });
   });
 
   // ─── NO-CONTINUATION CASES ─────────────────────────────────────────

@@ -591,9 +591,10 @@ export class PlanActVerifyOrchestrator {
     // Unlike tools from config.tools, this one is always available regardless
     // of MCP setup and is self-contained (doesn't delegate to config.executeTool).
     // The result ({ roleAdopted, rolePrompt, ... }) is stored in conversation
-    // history and consumed upstream by route.ts to force the selected role.      this.sdkTools['choose_role'] = aiTool({
+    // history and consumed upstream by route.ts to force the selected role.
+    this.sdkTools['choose_role'] = aiTool({
       description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
-      inputSchema: z.object({
+      parameters: z.object({
         role: z.string().describe('The target expert role to adopt (e.g., debugger, architect, reviewer, tester, researcher, coder).'),
         reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
         recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages for failure-context bias.'),
