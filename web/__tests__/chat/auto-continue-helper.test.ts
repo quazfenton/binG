@@ -8,11 +8,13 @@
  *   - needsMoreTurnsDetector Factor-3 (1): edits-mismatch
  *   - decideAutoContinue (4): full integration end-to-end
  *
- * 14 tests total. The "Factor 4 response quality" and "no signals fire"
- * tests were intentionally dropped: their assertions depended on
- * detector signal ORDER (signal[0] is detection-order, not priority),
- * which makes them brittle to the underlying detector implementation
- * rather than locking the user-facing contract.
+ * 11 tests total (HEADLINE read_file→chat-dies regression moved to
+ * __tests__/orchestra/runV1ApiWithTools.test.ts). The "Factor 4 response
+ * quality" and "no signals fire" tests were intentionally dropped: their
+ * assertions depended on detector signal ORDER (signal[0] is
+ * detection-order, not priority), which makes them brittle to the
+ * underlying detector implementation rather than locking the user-facing
+ * contract.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -358,87 +360,4 @@ describe('decideAutoContinue', () => {
   });
 });
 
-// ─── HEADLINE: read_file → chat dies regression ────────────────────────
-//
-// Bug: After a single read_file tool invocation with no follow-up action
-// and an empty responseText, the LLM stops streaming and the chat
-// appears dead. These three tests are the regression gate that protects
-// against that bug returning in unified-agent-service.ts:4545 (the
-// v1-api-with-tools call site that invokes decideAutoContinue inside its
-// auto-continue loop).
-//
-// Why the assertion `decision.forceSignal === false` matters:
-//   forceSignal reflects whether the DETECTOR forced continuation (vs.
-//   the LLM-side shouldAutoContinue decision). For the headline bug
-//   scenario, the LLM-side trigger (`single_step_read_pattern` from
-//   llm-continuation.ts) must fire. If `forceSignal` were ever true
-//   here, it would mean a detector override is masking the headline
-//   behavior, not the LLM-side trigger. So we lock `forceSignal: false`
-//   to prove the right code path is exercised.
-//
-// Search anchor: "HEADLINE:" — anyone looking for the bug fix can grep
-// this file in one shot.
-describe('HEADLINE: read_file → chat dies regression', () => {
-  it('single read_file step + empty responseText fires single_step_read_pattern', () => {
-    const requestId = 'test-headline-read-only-step';
-    clearContinuationCount(requestId);
-    const accumulatedSteps = [
-      { toolName: 'read_file', args: { path: 'src/app.ts' }, result: { success: true } },
-    ];
-    const decision = decideAutoContinue({
-      requestId,
-      routing: undefined,
-      steps: accumulatedSteps,
-      responseText: '',
-      // No advancedDetectorFn; default fileEdits detector returns null
-      // (no fileEdits). The LLM-side shouldAutoContinue trigger 3
-      // (single_step_read_pattern) must fire here — NOT any detector.
-    });
-    expect(decision.continue).toBe(true);
-    expect(decision.reason).toBe('single_step_read_pattern');
-    expect(decision.forceSignal).toBe(false); // LLM-side trigger, not detector
-    expect(decision.continuationsSoFar).toBe(1);
-    expect(decision.continuationPrompt).toBeTruthy();
-    clearContinuationCount(requestId);
-  });
 
-  // Variant: responseText is short but NOT triggering plan-detection.
-  // Uses a prose-only short sentence without "I'll", "next", "then",
-  // or other plan-words — keeps the test focused on the input shape
-  // rather than detector-signal ordering.
-  it('read_file + short responseText (no plan-words) still fires single_step_read_pattern', () => {
-    const requestId = 'test-headline-read-with-short-text';
-    clearContinuationCount(requestId);
-    const decision = decideAutoContinue({
-      requestId,
-      routing: undefined,
-      steps: [{ toolName: 'read_file', args: { path: 'src/app.ts' } }],
-      responseText: 'Done.', // short, no plan-words — stays in trigger-3 territory
-    });
-    expect(decision.continue).toBe(true);
-    expect(decision.reason).toBe('single_step_read_pattern');
-    expect(decision.forceSignal).toBe(false);
-    clearContinuationCount(requestId);
-  });
-
-  // Variant: broadened coverage — locks in the recently-extended
-  // READ_ONLY_TOOL_HINTS so all info-gathering tools (list_directory,
-  // web_search, etc.) trigger the same headline behavior.
-  it('all info-gathering tool variants trigger single_step_read_pattern', () => {
-    for (const toolName of ['list_directory', 'web_search', 'list_files', 'grep', 'glob']) {
-      // Diagnostic requestId so a per-tool failure is grepable in run.log.
-      const requestId = `test-headline-tool-${toolName.replace(/_/g, '-')}`;
-      clearContinuationCount(requestId);
-      const decision = decideAutoContinue({
-        requestId,
-        routing: undefined,
-        steps: [{ toolName, args: { path: 'src/' } }],
-        responseText: '',
-      });
-      expect(decision.continue, `expected continue=true for ${toolName}`).toBe(true);
-      expect(decision.reason, `expected single_step_read_pattern for ${toolName}`).toBe('single_step_read_pattern');
-      expect(decision.forceSignal, `expected LLM-side trigger (forceSignal=false) for ${toolName}`).toBe(false);
-      clearContinuationCount(requestId);
-    }
-  });
-});
