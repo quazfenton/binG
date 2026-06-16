@@ -68,6 +68,13 @@ export interface RoutingMetadata {
   toolCallOptions: ToolCallOption[];
   specializationRoute: SpecializationRoute;
   planSteps: PlanStep[];
+  /**
+   * Q1 (Issue 1): literal LLM "yes" intent after normalizeBoolean-style coercion.
+   * Resilient to `"false"`-string truthiness traps that `!!routing.continue`
+   * would silently flip. Strict-equality on `continue` and legacy
+   * `requiresAutoReprompt` (both coerced at validateAndNormalize-stamping time).
+   */
+  explicitContinue: boolean;
   continue: boolean;
 }
 
@@ -150,6 +157,10 @@ export const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
+  // Q1: explicitContinue = literal LLM intent; this is a function-level default.
+  // No parsed LLM input exists here, so explicitContinue MUST be false; the
+  // env-aware default still applies to `continue` via resolveDefaultContinue().
+  explicitContinue: false,
   // resolveDefaultContinue() contract — see docblock.
   continue: resolveDefaultContinue(),
 };
@@ -246,6 +257,10 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       toolCallOptions: Array.isArray(parsed.toolCallOptions) ? parsed.toolCallOptions : DEFAULT_ROUTING.toolCallOptions,
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
+      // Q1: explicitContinue = literal LLM "yes" intent; ignore env default here.
+      // Strict-equality on `continue` and `requiresAutoReprompt` so the derivation
+      // stays decoupled from `LLM_AUTO_CONTINUE_DEFAULT` runtime state.
+      explicitContinue: parsed.continue === true || parsed.requiresAutoReprompt === true,
       // resolveDefaultContinue() contract — see docblock.
       // Multi-step plans force continuation even when the parsed payload
       // explicitly says continue: false (conflicting signal from the LLM).
@@ -352,6 +367,31 @@ export function truncateAtFirstRouting(responseText: string): string {
   return truncated;
 }
 
+// ============================================================================
+// Q1: shouldContinue helpers — single source of truth (Issue 1 close).
+// ============================================================================
+
+/** Q1: a "multi-step plan" is one with >= 2 steps (matches the LLM contract). */
+function hasMultiplePlanSteps(routing: RoutingMetadata): boolean {
+  return Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
+}
+
+/**
+ * Q1: Single source of truth for the `shouldContinue` derivation.
+ *
+ * Stamped onto `RoutingMetadata.explicitContinue` at normalize time, so
+ * client builders + any future consumer (orchestrators, telemetry) can
+ * read a coercion-safe boolean. Replaces prior divergent `!!routing.continue`
+ * and inline `hasMultiplePlanSteps` derivation at the call site.
+ *
+ * Returns true when EITHER:
+ *   - the LLM explicitly said `continue: true` (stamped as `explicitContinue`), or
+ *   - the plan has >= 2 steps (multi-step intent overrides a "false" explicit).
+ */
+export function computeShouldContinue(routing: RoutingMetadata): boolean {
+  return routing.explicitContinue || hasMultiplePlanSteps(routing);
+}
+
 /**
  * Build a chat-route-friendly routing metadata payload that includes a
  * `stepReprompt` string. This is the contract the client (use-enhanced-chat.ts)
@@ -367,10 +407,10 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  // planSteps >= 2 forces continue under env-default-on (LLM_AUTO_CONTINUE_DEFAULT default-on); > 0 plan steps + routing.continue = true takes priority. See resolveDefaultContinue docblock.
-  const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
-  const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
-  const shouldContinue = explicitContinue || hasMultiplePlanSteps;
+  // Q1: single source of truth — see computeShouldContinue() above. Resilient
+  // to `routing.continue` string-coercion traps (e.g. `"false"` is truthy
+  // under `!!`; we never re-derive here).
+  const shouldContinue = computeShouldContinue(routing);
   return {
     stepReprompt: shouldContinue ? generateStepReprompt(routing, 0) : '',
     primaryRole: routing.suggestedRole,
