@@ -13,6 +13,67 @@
 #       --checksum forces rsync to compare by checksum (not mtime/size),
 #       so a copy ONLY happens when source and target content actually
 #       differ. --itemize-changes prints a per-file marker
+#       (">f+...... path") so audit/review can see EXACTLY which bytes
+#       get propagated.
+#
+# GUARD (added by RT-001 follow-up): convert the audit-verified pkg→web
+# directionality into a runtime invariant. For each candidate sync file,
+# detect any pkg-side byte that matches a *past* web-side commit's content
+# in HEAD's parent lineage. A match means "the bytes we are about to push
+# downstream already lived on the web side at an earlier commit" — i.e.,
+# a web→pkg revert (the wrong direction), which we REFUSE with exit 3.
+# Replacement for the legacy `cp -av` byte-replacement that silently
+# destroyed intentional local edits on the web-side mirror.
+#
+# Strategy (per file):
+#   1. Source-of-truth is packages/shared/agent/ (canonical). Mirror is
+#      web/.bing-shared/agent/.
+#   2. Compute sha256 of pkg-side and web-side.
+#       - equal -> IN_SYNC, skip.
+#   3. Else, use `rsync --checksum --itemize-changes` (NOT `cp -av`).
+#       --checksum forces rsync to compare by checksum (not mtime/size),
+#       so a copy ONLY happens when source and target content actually
+
+
+# ─── Runtime web→pkg-revert guard ────────────────────────────────────────────
+# Convert the audit-verified pkg→web directionality into a runtime invariant.
+# Refuse any pkg-side byte that matches a past web-side commit's content in
+# the lineage reachable from HEAD (i.e., a web→pkg revert pattern). Exit 3 to
+# signal "wrong-direction sync, investigate" so CI/automation can halt.
+WEB_TO_PKG_GUARD_RC=0
+GUARD_PKG_DIR="${PKG_DIR:-${BASH_SOURCE[0]%/*}/../packages/shared/agent}"
+GUARD_MIRROR_DIR="${MIRROR_DIR:-${BASH_SOURCE[0]%/*}/../web/.bing-shared/agent}"
+GUARD_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo /opt/bing)"
+
+if [ -d "$GUARD_PKG_DIR" ] && [ -d "$GUARD_MIRROR_DIR" ] && [ -d "$GUARD_REPO_ROOT/.git" ]; then
+  for _guard_pkg in "$GUARD_PKG_DIR"/*.ts; do
+    [ -f "$_guard_pkg" ] || continue
+    _guard_bn=$(basename "$_guard_pkg")
+    _guard_mirror="$GUARD_MIRROR_DIR/$_guard_bn"
+    [ -f "$_guard_mirror" ] || continue
+    _guard_pkg_sha=$(sha256sum "$_guard_pkg" | awk '{print $1}')
+    # HEAD itself is allowed (in sync); check HEAD~1..HEAD~10 for ancestor content.
+    # If pkg sha matches any ancestor's content, that constitutes web→pkg revert.
+    for _guard_commit in $(git -C "$GUARD_REPO_ROOT" log HEAD~1 -n 10 --pretty='%H' -- "$_guard_mirror" 2>/dev/null); do
+      _guard_web_sha=$(git -C "$GUARD_REPO_ROOT" show "$_guard_commit:$_guard_mirror" 2>/dev/null | sha256sum | awk '{print $1}')
+      if [ "$_guard_web_sha" = "$_guard_pkg_sha" ]; then
+        echo "[GUARD] REVERT-RISK: $_guard_bn pkg sha matches ancestor web commit $_guard_commit (web→pkg revert). Refusing sync." >&2
+        WEB_TO_PKG_GUARD_RC=1
+        break
+      fi
+    done
+    [ "$WEB_TO_PKG_GUARD_RC" = "1" ] && break
+  done
+fi
+
+if [ "$WEB_TO_PKG_GUARD_RC" = "1" ]; then
+  echo "[GUARD] Refusing sync to prevent web→pkg revert risk. Investigate the listed file/commit before proceeding." >&2
+  echo "[GUARD] Tip: review git log packages/shared/agent/ AND web/.bing-shared/agent/ async; the canonical direction is pkg→web, NOT web→pkg." >&2
+  exit 3
+fi
+# ─── end runtime guard ───────────────────────────────────────────────────────
+
+#       differ. --itemize-changes prints a per-file marker
 #       (>f..t...... foo.ts) making the decision auditable.
 #   4. If `git status` reports the web-side file as having uncommitted
 #      local edits (suggesting an intentional local edit), fall back to

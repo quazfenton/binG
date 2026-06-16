@@ -166,6 +166,7 @@ function verifyUserIdFlow(db) {
   const testSessionHash = crypto.createHash('sha256').update(testSessionId).digest('hex');
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
+  let ok = true;
   try {
     // 1. Signup: insert user
     db.prepare(
@@ -191,7 +192,8 @@ function verifyUserIdFlow(db) {
       .run(testSessionHash);
     if (deleteResult.changes !== 1) {
       console.error(`[init-db]   userId-flow: logout deleted ${deleteResult.changes} sessions, expected 1`);
-      return false;
+      ok = false;
+      return;
     }
 
     // 3. Login: re-create the session for the same user
@@ -206,13 +208,15 @@ function verifyUserIdFlow(db) {
       .get(testSessionHash);
     if (!session) {
       console.error('[init-db]   userId-flow: session lookup returned null after re-login');
-      return false;
+      ok = false;
+      return;
     }
     if (session.user_id !== testUserId) {
       console.error(
         `[init-db]   userId-flow: session.user_id = ${JSON.stringify(session.user_id)}, expected ${testUserId}`,
       );
-      return false;
+      ok = false;
+      return;
     }
 
     // 4b. Resolve: getWorkspaceVersion by owner_id (the exact query that
@@ -222,33 +226,32 @@ function verifyUserIdFlow(db) {
       .get(testUserId);
     if (!workspace) {
       console.error('[init-db]   userId-flow: getWorkspaceVersion returned null for valid user');
-      return false;
+      ok = false;
+      return;
     }
     if (workspace.owner_id === '000') {
       console.error(
         `[init-db]   userId-flow: REGRESSION — getWorkspaceVersion returned ownerId='000' for a real user!`,
       );
-      return false;
+      ok = false;
+      return;
     }
     if (workspace.owner_id !== testUserId) {
       console.error(
         `[init-db]   userId-flow: owner_id = ${JSON.stringify(workspace.owner_id)}, expected ${testUserId}`,
       );
-      return false;
+      ok = false;
+      return;
     }
-
-    // Cleanup: remove the test user/session/workspace so a re-run starts clean
-    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(testUserId);
-    db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(testUserId);
-    db.prepare('DELETE FROM users WHERE id = ?').run(testUserId);
 
     console.log(
       `[init-db]   userId-flow: signup → logout → login → getWorkspaceVersion OK (owner_id=${testUserId.slice(0, 8)}…)`,
     );
-    return true;
   } catch (err) {
     console.error(`[init-db]   userId-flow: unexpected error: ${err.message}`);
-    // Best-effort cleanup
+    ok = false;
+  } finally {
+    // Best-effort cleanup: always remove test rows so a re-run starts clean
     try {
       db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(testUserId);
       db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(testUserId);
@@ -256,7 +259,7 @@ function verifyUserIdFlow(db) {
     } catch {
       // ignore cleanup errors
     }
-    return false;
+    return ok;
   }
 }
 
@@ -269,7 +272,7 @@ function main() {
     Database = require('better-sqlite3');
     Database = Database.default || Database;
   } catch (err) {
-    fatal(`better-sqlite3 is not installed.\n         Run \`pnpm install\` (or \`npm install\`) and try again.\n         Underlying error: ${err.message}`);
+    fatal(`better-sqlite3 is not installed.\n         Run \`pnpm install\` and try again.\n         Underlying error: ${err.message}`);
   }
 
   // 2. Resolve paths
@@ -374,13 +377,11 @@ function main() {
         console.log(`[init-db]   applied migration ${version} (${filename})`);
       } catch (err) {
         const msg = err?.message ?? String(err);
-        // Treat "already exists" as idempotent success (the schema is already there)
+        // Schema drift inside a db.transaction() means the entire migration
+        // rolled back; a partial run must not be recorded as applied.
         if (/duplicate column name/i.test(msg) || /already exists/i.test(msg)) {
-          db.prepare(
-            'INSERT OR IGNORE INTO schema_migrations (version, filename) VALUES (?, ?)',
-          ).run(version, filename);
-          migrationsSkipped++;
-          console.log(`[init-db]   migration ${version} already applied (${msg.split('\n')[0]})`);
+          migrationsFailed++;
+          console.error(`[init-db]   migration ${version} (${filename}) hit schema drift: ${msg.split('\n')[0]}`);
         } else {
           migrationsFailed++;
           console.error(`[init-db]   migration ${version} (${filename}) FAILED: ${msg}`);

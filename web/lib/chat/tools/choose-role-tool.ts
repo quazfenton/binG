@@ -62,3 +62,34 @@ export const chooseRoleCapability = tool({
     };
   },
 });
+
+// ─── Module-load drift-check ───────────────────────────────────────────────
+// Ensure the 9 role IDs documented in the Zod schema.describe()s above stay
+// in lock-step with the canonical SYSTEM_PROMPTS Record from
+// @bing/shared/agent/system-prompts.ts. If a role is renamed/removed upstream,
+// fail-fast here rather than silently splitting the choose-role menu in front of
+// LLMs (which the prior tests already flagged as a regression risk).
+const _DOCUMENTED_CHOOSE_ROLES = [
+  'coder',
+  'reviewer',
+  'planner',
+  'architect',
+  'researcher',
+  'debugger',
+  'specialist',
+  'orchestrator',
+  'simplifier',
+] as const;
+const _CANONICAL_KEYS = Object.keys(SYSTEM_PROMPTS as unknown as Record<string, unknown>);
+const _MISSING_ROLE = (_DOCUMENTED_CHOOSE_ROLES as readonly string[])
+  .find(r => !(_CANONICAL_KEYS as string[]).includes(r));
+if (_MISSING_ROLE) {
+  throw new Error(
+    `[choose-role-tool] drift-check failed: documented role "${_MISSING_ROLE}" is missing from ` +
+    `canonical SYSTEM_PROMPTS (${_CANONICAL_KEYS.length} canonical keys, ` +
+    `${_DOCUMENTED_CHOOSE_ROLES.length} documented choose-roles). ` +
+    `Either rename the role upstream in packages/shared/agent/system-prompts.ts, ` +
+    `or update the 9 IDs documented in the Zod schema.describe()s above.`
+  );
+}
+

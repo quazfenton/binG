@@ -310,6 +310,9 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       continue: true,
       reason: continuationDecision.reason,
       forceSignal: activeOverride !== null,
+      forcedBy: activeOverride !== null
+        ? (advancedFired ? 'advanced' : 'base')
+        : undefined,
       continuationsSoFar: newCount,
       continuationPrompt: continuationDecision.continuationPrompt,
     };
@@ -321,6 +324,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     continue: false,
     reason: continuationDecision.reason,
     forceSignal: false,
+    forcedBy: undefined,
     continuationsSoFar,
   };
 }

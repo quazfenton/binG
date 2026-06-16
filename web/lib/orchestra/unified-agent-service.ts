@@ -1639,12 +1639,22 @@ export async function processUnifiedAgentRequest(
     const isAutoMode = !config.mode || config.mode === 'auto';
     const roleSelection = result.metadata?.roleSelection;
 
-  // Log auto-continue trigger
-  if (roleSelection?.continue) {
+  // Log auto-continue trigger (route through shouldAutoContinue() so the
+  // env-default-on canonical lives in lib/chat/llm-continuation, mirroring
+  // first-response-routing.ts's `?? DEFAULT_ROUTING.continue` policy).
+  const roleAutoDecision = shouldAutoContinue({
+    routing: roleSelection
+      ? { continue: roleSelection.continue,
+          primaryRole: roleSelection.suggestedRole }
+      : undefined,
+    continuationsSoFar: 0,
+  });
+  if (roleAutoDecision.continue) {
     log.info('\x1b[33m[Auto-Continue]\x1b[0m 🔄 triggered by model', {
-      reason: roleSelection.classification || 'multi-step plan detected',
-      suggestedRole: roleSelection.suggestedRole,
-      nextAction: roleSelection.specializationRoute
+      reason: roleSelection?.classification || 'multi-step plan detected',
+      suggestedRole: roleSelection?.suggestedRole,
+      nextAction: roleSelection?.specializationRoute,
+      reasonCode: roleAutoDecision.reason,
     });
   }
 
@@ -1673,7 +1683,7 @@ export async function processUnifiedAgentRequest(
       result.metadata?.fallbackReason != null ||
       result.metadata?.fallbackChain != null;
 
-    if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
+    if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && roleSelection?.continue !== false) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
 
       // For orchestrated modes, retry with text-only fallback
@@ -5166,7 +5176,17 @@ async function runV1Orchestrated(
         continue: parsedRouting.routing.continue,
       });
 
-      if (parsedRouting.routing.continue && parsedRouting.routing.planSteps.length > 0) {
+      // Loose-truthy `routing.continue` was retired: route the gating decision through
+      // `decideAutoContinue(...)` (lib/chat/auto-continue-helper — canonical wrapper
+      // that internally delegates to `shouldAutoContinue` from lib/chat/llm-continuation).
+      // Treats undefined as continue=true so env-default-on canonical lives in one place.
+      const firstResponseAutoDecision = decideAutoContinue({
+        requestId: '',
+        routing: parsedRouting.routing,
+        steps: [],
+        responseText: firstResponseContent || content || '',
+      });
+      if (firstResponseAutoDecision.continue && parsedRouting.routing.planSteps.length > 0) {
         (config as any)._stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
       }
       
@@ -5230,7 +5250,7 @@ async function runV1Orchestrated(
     // role-select auto-continue flow (roleSelectMeta.continue).
     const contentEmpty = !cleanedResponse || !cleanedResponse.trim();
     const shouldFallbackToV1Api =
-      !roleSelectMeta?.continue &&
+      roleSelectMeta?.continue !== false &&
       (budgetExhausted ||
         orchestrationFailed ||
         (contentEmpty && streamedTextLength === 0));

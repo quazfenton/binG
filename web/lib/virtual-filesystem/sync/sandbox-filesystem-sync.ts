@@ -551,8 +551,9 @@ class SandboxFilesystemSync {
 
     if (!Array.isArray(entries)) return;
 
-    // Bug #115/#89: Reset consecutive failure counter on successful sync
-    this.consecutiveSyncFailures.delete(sandboxId);
+    // Bug #115/#89: Consecutive failure counter is managed inside
+    // syncVFSToSandbox so write-side failures can accumulate across ticks
+    // without being reset by the read-side sync.
 
     const files = entries.filter((e) => e.type === 'file');
 
@@ -787,9 +788,6 @@ class SandboxFilesystemSync {
       }
     }
 
-    this.lastSyncVersions.set(sandboxId, currentVersion);
-    logger.info(`[SandboxSync] VFS → Sandbox: synced ${snapshot.files.length} files to sandbox ${sandboxId}`);
-
     // Bug #115/#89 (Pass-6 review): per-tick 5-strike counter. If any
     // writeFile failed during this invocation, increment the counter
     // ONCE and stop the sync if we've hit the threshold. This gives
@@ -805,9 +803,16 @@ class SandboxFilesystemSync {
           { sandboxId, failCount },
         );
       }
+      // Do NOT advance lastSyncVersions on failure so the next tick retries.
+      logger.warn(
+        `[SandboxSync] VFS → Sandbox had write failures; version marker not advanced`,
+        { sandboxId, currentVersion },
+      );
     } else {
-      // Successful sync — reset the counter.
+      // Successful sync — advance version and reset the counter.
+      this.lastSyncVersions.set(sandboxId, currentVersion);
       this.consecutiveSyncFailures.delete(sandboxId);
+      logger.info(`[SandboxSync] VFS → Sandbox: synced ${snapshot.files.length} files to sandbox ${sandboxId}`);
     }
   }
 

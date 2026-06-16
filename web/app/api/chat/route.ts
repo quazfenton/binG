@@ -1575,24 +1575,34 @@ const config: UnifiedAgentConfig = {
                 const autoDecision = decideAutoContinue({
                   requestId,
                   routing: result.metadata?.routing,
-                  steps: (result.steps ?? []).map((s: any) => ({
+                  steps: (result.steps ?? []).map((s) => ({
                     toolName: s.toolName,
                     args: normalizeStepArgs(s.args),
                   })),
                   responseText: iterContent,
-                  result: {
-                    fileEdits: (result as any)?.fileEdits ?? [],
-                  },
+                  result,
                   advancedDetectorFn: needsMoreTurnsDetector,
                 });
 
+                // Hoisted (dedup): shared between the [AUTO-CONTINUE] log payload
+                // (computed before the `if (autoDecision.continue)` branch so the
+                // empty-follow-up audit field stays a forward-precise metric, not
+                // an inferred-from-responseLength approximation) and the
+                // conversationHistory assistant-message append below.
+                const previousAssistantContent = typeof result.response === 'string'
+                  ? result.response
+                  : (iterContent || '');
                 if (autoDecision.continue) {
                   chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {
                     requestId,
                     iteration: iteration + 1,
                     reason: autoDecision.reason,
                     forceSignal: autoDecision.forceSignal,
+                    advancedDetectorForce: autoDecision.forcedBy === 'advanced',
                     continuationsSoFar: autoDecision.continuationsSoFar,
+                    nextResponseEmpty:
+                      previousAssistantContent.length === 0 ||
+                      previousAssistantContent.trim() === '',
                   });
                   emit(SSE_EVENT_TYPES.CONTINUE, {
                     requestId,
@@ -1607,9 +1617,6 @@ const config: UnifiedAgentConfig = {
                     prompt: (autoDecision.continuationPrompt ?? '').slice(0, 200),
                     timestamp: Date.now(),
                   });
-                  const previousAssistantContent = typeof result.response === 'string'
-                    ? result.response
-                    : (iterContent || '');
                   currentConfig = {
                     ...currentConfig,
                     conversationHistory: [

@@ -247,10 +247,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
       // resolveDefaultContinue() contract — see docblock.
-      continue:
-        normalizeBoolean(parsed.continue) ??
-        normalizeBoolean(parsed.requiresAutoReprompt) ??
-        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : resolveDefaultContinue()),
+      continue: parsed.continue !== undefined ? parsed.continue : (parsed.planSteps.length >= 2 ? true : resolveDefaultContinue()),
     };
 
     return {
