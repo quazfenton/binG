@@ -849,14 +849,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           const origModel = String(resolvedBody?.model ?? '');
           const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, retryCount, 'pre-stream');
 
-          // Bug #61: push to synchronous chain ref so the catch block sees the
-          // full rotation history even if setMessages hasn't committed yet.
-          pushChainEntry(fallbackChainRef.current, assistantMessage.id, origProvider, origModel);
-          pushChainEntry(fallbackChainRef.current, assistantMessage.id, selectedProvider, selectedModel);
-
           // Bug #61: record the original (pre-stream) attempt as failure so the
-          // fallback chain metric actually fires in production. Without this the
-          // chat-metrics helper is dead code.
+          // fallback chain metric actually fires in production. emitFallbackOutcome
+          // already calls pushChainEntry for the original provider — do NOT also
+          // push manually or the chain gets duplicate entries.
           emitFallbackOutcome({
             chainRef: fallbackChainRef.current,
             messageId: assistantMessage.id,
@@ -1689,14 +1685,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           const origModel = String(doneMetadata.model ?? '');
                           const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, assistantRetryCount, 'empty-response');
 
-                        // Bug #61: push to synchronous chain ref so the catch block
-                        // sees the full rotation history even if setMessages hasn't
-                        // committed yet.
-                        pushChainEntry(fallbackChainRef.current, assistantMessage.id, origProvider, origModel);
-                        pushChainEntry(fallbackChainRef.current, assistantMessage.id, selectedProvider, selectedModel);
-
                         // Bug #61: record the original (empty-response) attempt
-                        // as failure so the fallback chain metric fires in production.
+                        // as failure. emitFallbackOutcome already calls
+                        // pushChainEntry — do NOT also push manually.
                         emitFallbackOutcome({
                           chainRef: fallbackChainRef.current,
                           messageId: assistantMessage.id,

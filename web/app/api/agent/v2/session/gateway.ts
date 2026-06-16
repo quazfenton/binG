@@ -95,12 +95,20 @@ export async function POST(request: NextRequest) {
       ownerResolution,
     });
 
-    // Initialize Nullclaw if enabled
+    // Initialize Nullclaw if enabled (wrapped in try/catch so a Nullclaw outage
+    // doesn't abort session creation — Issue 2). Logger.error still emits the
+    // failure for telemetry; nullclawAvailable defaults false so the rest of
+    // the session boot path doesn't read unavailable state as available.
     let nullclawAvailable = false;
     if (enableNullclaw) {
-      const { initializeNullclaw, isNullclawAvailable } = await import('@bing/shared/agent/nullclaw-integration');
-      await initializeNullclaw();
-      nullclawAvailable = isNullclawAvailable();
+      try {
+        const { initializeNullclaw, isNullclawAvailable } = await import('@bing/shared/agent/nullclaw-integration');
+        await initializeNullclaw();
+        nullclawAvailable = isNullclawAvailable();
+      } catch (err) {
+        logger.error('Nullclaw initialization failed', err);
+        nullclawAvailable = false;
+      }
     }
 
     // Sync VFS to sandbox

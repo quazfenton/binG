@@ -177,6 +177,16 @@ import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, hasMutationSuffix, hasReadSuffi
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
 // Uses fs.existsSync on node_modules/@opencode-ai/sdk — simpler and more
 // reliable than parsing package.json, works in all deployment contexts.
+/**
+ * Audit-grade discriminator for `composedPromptSource` (Q3 fix).
+ * Centralizes the two magic strings so a future typo (`Override` vs `override`)
+ * fails at module load / type-check, not silently at a log site.
+ */
+const PROMPT_SOURCE = {
+  OVERRIDE: 'override',
+  NO_OVERRIDE: 'no-override',
+} as const;
+
 let _hasOpenCodeSDKPackageCache: boolean | undefined;
 function _hasOpenCodeSDKPackageCheck(): boolean {
   if (_hasOpenCodeSDKPackageCache !== undefined) return _hasOpenCodeSDKPackageCache;
@@ -3716,7 +3726,9 @@ async function runV1ApiWithTools(
       log.info('[V1-API-WITH-TOOLS] Composed role prompt', {
         role: config.role,
         toolCount: toolIds.length,
-        promptLength: composedPrompt?.length ?? 0, composedPromptSource: composedPrompt === null ? 'no-override' : 'override',
+        promptLength: composedPrompt?.length ?? 0,
+        // @audit pinned field name composedPromptSource
+        composedPromptSource: composedPrompt === null ? PROMPT_SOURCE.NO_OVERRIDE : PROMPT_SOURCE.OVERRIDE,
         hasRag: !!ragContext,
       });
 

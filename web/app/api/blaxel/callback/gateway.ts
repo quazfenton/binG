@@ -50,7 +50,11 @@ export async function POST(request: NextRequest) {
       console.warn('[Blaxel Callback] Invalid timestamp header:', { timestamp });
       return NextResponse.json({ error: 'Invalid timestamp header' }, { status: 400 });
     }
-    const drift = Math.abs(Date.now() / 1000 - tsSeconds);
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (tsSeconds > nowSec + MAX_TIMESTAMP_DRIFT_S) {
+      return NextResponse.json({ error: 'Timestamp is in the future' }, { status: 401 });
+    }
+    const drift = Math.abs(nowSec - tsSeconds);
     if (drift > MAX_TIMESTAMP_DRIFT_S) {
       console.warn(
         `${withDetectionTerms(

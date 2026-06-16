@@ -70,10 +70,18 @@ export async function POST(request: NextRequest) {
     // cookie header.
     // `.json()` throws on non-JSON or empty bodies; the `.catch` collapses
     // the throw path to "no body" so the cookie-only fallback applies. The
-    // outer try/catch isn't needed for rejection handling but is kept to
-    // guard against synchronous throws from the property access below.
     let bodyAnonymousSessionId: string | undefined;
-    const body = await request.json().catch(() => ({}));
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      // Malformed JSON — return 400 so clients can distinguish this from a
+      // successful cookie-only path (which uses an empty or omitted body).
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON body' },
+        { status: 400 },
+      );
+    }
     if (body && typeof body === 'object' && typeof (body as any).anonymousSessionId === 'string') {
       // Validate format: must match the expected anon session ID shape
       // (13-digit timestamp + underscore/hyphen + random tail, 6+ chars).

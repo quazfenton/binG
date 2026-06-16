@@ -19,7 +19,15 @@ const MFA_FAIL_CLOSED_LOGOUT_TIMEOUT_MS = 1000;
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON body' },
+        { status: 400 },
+      );
+    }
     const { email, password } = body;
 
     // Validate required fields

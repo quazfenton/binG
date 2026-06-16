@@ -69,10 +69,15 @@ export interface RoutingMetadata {
   specializationRoute: SpecializationRoute;
   planSteps: PlanStep[];
   /**
-   * Q1 (Issue 1): literal LLM "yes" intent after normalizeBoolean-style coercion.
+   * Q1 (Issue 1): literal LLM "yes" intent after strict-equality coercion.
    * Resilient to `"false"`-string truthiness traps that `!!routing.continue`
-   * would silently flip. Strict-equality on `continue` and legacy
-   * `requiresAutoReprompt` (both coerced at validateAndNormalize-stamping time).
+   * would silently flip. `validateAndNormalize` stamps this with
+   * `parsed.continue === true`.
+   *
+   * Q3 audit (post-Issue 1 close): the legacy `requiresAutoReprompt` tier
+   * had ZERO upstream producers in any LLM prompt template or test fixture,
+   * so the OR was dropped from the stamping site — dead code would have
+   * mis-trusted future readers. See `parsed.continue` strict-equality below.
    */
   explicitContinue: boolean;
   continue: boolean;
@@ -120,13 +125,13 @@ export function stripRoutingMarkers(responseText: string): string {
       const beforeMarker = cleaned.slice(0, markerMatch.index);
       const headerRegex = /###?\s*$/;
       const cleanedBefore = beforeMarker.replace(headerRegex, '');
-      
+
       const afterJsonIndex = cleaned.indexOf(jsonBlock, markerMatch.index) + jsonBlock.length;
       let afterJson = cleaned.slice(afterJsonIndex);
-      
+
       // Remove trailing code fences if present
       afterJson = afterJson.replace(/^\s*```?\s*/, '');
-      
+
       cleaned = cleanedBefore + afterJson;
     } else {
       // JSON extraction failed — still strip the marker text so it doesn't leak to users
@@ -178,7 +183,7 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
   const legacyIdx = responseText.indexOf('[ROUTING_METADATA]');
   let markerIndex = -1;
   let markerText = '[ROLE_SELECT]';
-  
+
   if (roleSelectIdx !== -1 && (legacyIdx === -1 || roleSelectIdx <= legacyIdx)) {
     markerIndex = roleSelectIdx;
     markerText = '[ROLE_SELECT]';
@@ -192,7 +197,7 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
   }
 
   const afterMarker = responseText.slice(markerIndex + markerText.length).trim();
-  
+
   const jsonObject = extractFirstJsonObject(afterMarker);
 
   if (!jsonObject) {
@@ -258,9 +263,13 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
       // Q1: explicitContinue = literal LLM "yes" intent; ignore env default here.
-      // Strict-equality on `continue` and `requiresAutoReprompt` so the derivation
-      // stays decoupled from `LLM_AUTO_CONTINUE_DEFAULT` runtime state.
-      explicitContinue: parsed.continue === true || parsed.requiresAutoReprompt === true,
+      // Strict-equality on raw `parsed.continue` (resilient to the
+      // `"false"`-string truthiness trap that `!!routing.continue` would flip).
+      //
+      // Q3 audit (post-Issue 1 close): the legacy `requiresAutoReprompt` tier
+      // had ZERO upstream producers in any LLM prompt template or test fixture,
+      // so the OR was dropped here — dead code would have mis-trusted callers.
+      explicitContinue: parsed.continue === true,
       // resolveDefaultContinue() contract — see docblock.
       // Multi-step plans force continuation even when the parsed payload
       // explicitly says continue: false (conflicting signal from the LLM).
@@ -341,7 +350,7 @@ Continue with this step. If completed, proceed to next steps or conclude.
 
 /**
  * Truncate response at the first [ROLE_SELECT] (or legacy [ROUTING_METADATA]) marker.
- * 
+ *
  * Some LLMs (especially text-mode fallback like gpt-oss) keep generating content after
  * emitting their [ROLE_SELECT] block — e.g. they "simulate" the next turn or repeat the
  * plan in a different format. We only want the prose BEFORE the first marker; everything
@@ -369,6 +378,7 @@ export function truncateAtFirstRouting(responseText: string): string {
 
 // ============================================================================
 // Q1: shouldContinue helpers — single source of truth (Issue 1 close).
+// (Single declaration; earlier duplicates were removed during Q3 cleanup.)
 // ============================================================================
 
 /** Q1: a "multi-step plan" is one with >= 2 steps (matches the LLM contract). */
