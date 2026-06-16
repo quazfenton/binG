@@ -720,6 +720,14 @@ export class PlanActVerifyOrchestrator {
               yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
               // Record the error result so the model can see what went wrong
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: { success: false, error: error.message } });
+              // Bug #14: When a search tool fails, inject a skip-search directive
+              // so the LLM doesn't retry the same broken tool in subsequent steps.
+              const isSearchTool = call.name === 'web_search' || call.name === 'web.search' || call.name === 'nullclaw:search';
+              if (isSearchTool) {
+                pendingVerificationFeedback = (pendingVerificationFeedback || '') +
+                  `\nSearch tool "${call.name}" failed and is unavailable. ` +
+                  `Skip search for the remainder of this plan and proceed with file/workspace tools only.`;
+              }
               // Errors are still activity — don't let error handling trigger idle timeout
               controller.recordActivity();
             }
@@ -871,6 +879,11 @@ Use workspace_graph to understand current workspace state before planning:
 - workspace_graph_diagnostic: Trace service issues to root causes.
 - workspace_graph_find_process: Search for processes by command pattern.
 
+IMPORTANT: Do NOT require web_search as a prerequisite step. web_search may be unavailable
+or may fail transiently. If search is needed, make it OPTIONAL and ensure the plan can
+succeed even if the search step fails. Prefer direct file/workspace tools over search.
+If a search step fails during execution, skip it and proceed with file operations.
+
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
     const response = await this.callLLM(planPrompt, history || []);
     try {
@@ -940,9 +953,10 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             'Use these tools to inspect and verify workspace health before and after making changes.',
           maxOutputTokens: 4000,
           temperature: 0.2,
-          // Allow multiple tool calls per LLM call so the orchestrator can
-          // process a batch of calls in one iteration instead of one-at-a-time.
-          stopWhen: stepCountIs(this.validatedConfig.maxIterations),
+          // NOTE: stopWhen intentionally omitted. The orchestrator's own loop
+          // (lines 687-726) already handles tool execution via executeToolWithHealing.
+          // Setting stopWhen would make generateText auto-execute tools internally
+          // AND then the orchestrator re-executes them — doubling every side effect.
         });
 
         // Extract tool calls from the result
@@ -1027,8 +1041,10 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
   }
 
   private async executeToolWithHealing(name: string, args: any) {
-    // Basic self-healing wrapper
-    const maxRetries = 2;
+    // Bug #14: Search tools that fail once won't succeed on retry (no backend
+    // availability changes mid-request). Skip retries for known-unavailable tools.
+    const isSearchTool = name === 'web_search' || name === 'web.search' || name === 'nullclaw:search';
+    const maxRetries = isSearchTool ? 0 : 2;
     let attempt = 0;
     const toolCallId = `orch-${name}-${Date.now()}`;
 

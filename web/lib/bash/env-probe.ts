@@ -326,10 +326,11 @@ export async function probeAvailableBinariesInSandbox(
               fresh.set(bin, null);
             }
           } catch {
-            // Per-binary failures (timeouts, individual command errors) are
-            // expected for missing binaries. Mark the sandbox as failed
-            // ONLY if the bridge itself is missing or unusable — those are
-            // detected by the outer try/catch below, not here.
+            // Per-binary failures can also indicate a dead/unusable sandbox
+            // where every command returns an error — not just missing binaries.
+            // Flag the sandbox as failed so the host fallback kicks in and
+            // the caller gets a real result instead of all nulls.
+            sandboxFailed = true;
             fresh.set(bin, null);
           }
           resolve();

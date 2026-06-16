@@ -598,6 +598,9 @@ export class UnifiedAgent {
     if (!this.desktopHandle) {
       throw new Error('Desktop not initialized')
     }
+    if (!Number.isFinite(opts.x) || !Number.isFinite(opts.y)) {
+      throw new Error(`Invalid coordinates: x=${opts.x}, y=${opts.y}`)
+    }
 
     await this.desktopHandle.moveMouse(opts.x, opts.y)
   }

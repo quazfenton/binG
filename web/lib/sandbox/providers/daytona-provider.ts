@@ -8,13 +8,21 @@ import { enable as enableDebug } from 'debug';
 // follow-redirects logs full request options (including auth headers) via debug("follow-redirects").
 // debug caches the enabled-set at construction; calling enable() forces a re-read
 // after we strip sensitive namespaces from process.env.DEBUG.
+//
+// NOTE: Instead of mutating process.env.DEBUG in-place (which would permanently
+// strip those namespaces for the entire process), we save the original value and
+// restore it after enabling debug with the filtered set. enableDebug() forces
+// the debug library to re-read process.env.DEBUG immediately, so the filtered
+// namespaces take effect for subsequent log calls even after we restore the env.
 if (process.env.DEBUG) {
   const sensitiveNamespaces = ['http', 'axios', 'daytona', 'follow-redirects', 'needle'];
   const debugVal = process.env.DEBUG;
   const hasSensitive = sensitiveNamespaces.some(ns => debugVal.includes(ns));
   if (hasSensitive) {
+    const originalDebug = process.env.DEBUG;
     process.env.DEBUG = debugVal.split(',').filter(ns => !sensitiveNamespaces.includes(ns.trim())).join(',') || '';
     enableDebug(process.env.DEBUG);
+    process.env.DEBUG = originalDebug;
   }
 }
 

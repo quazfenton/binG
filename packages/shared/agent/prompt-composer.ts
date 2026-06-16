@@ -331,3 +331,104 @@ function extractToolReferences(content: string): string[] {
   const matches = [...content.matchAll(pattern)];
   return Array.from(new Set(matches.map(m => m[1])));
 }
+// ============================================================================
+// Module-level section registry (private Map; exported via CRUD helpers)
+// ============================================================================
+
+const _sectionRegistry = new Map<string, PromptSection>();
+
+/**
+ * Register a section template by id. Used by tests + tooling to override
+ * default section content at runtime.
+ */
+export function registerSection(section: PromptSection): void {
+  _sectionRegistry.set(section.id, section);
+}
+
+/**
+ * Retrieve a registered section template by id. Returns undefined for
+ * unknown sections; caller's responsibility to fall back to defaults.
+ */
+export function getSectionTemplate(id: string): PromptSection | undefined {
+  return _sectionRegistry.get(id);
+}
+
+/**
+ * Clear the section template registry. Intended for testing or cache
+ * invalidation lifecycles.
+ */
+export function invalidateSectionCache(): void {
+  _sectionRegistry.clear();
+}
+
+// ============================================================================
+// Dynamic Tool Block (with options) — wraps the ALL_CAPABILITIES filter
+// ============================================================================
+
+export interface DynamicToolBlockOptions {
+  /** Subset of capability-ids to include; non-listed tools are excluded. */
+  allowedTools?: string[];
+  /** Subset of capability-ids to exclude; applied after allowedTools. */
+  excludedTools?: string[];
+  /** When true, append latency/cost/reliability hint to the Rules section. */
+  showMetadata?: boolean;
+  /** Section header override (default 'AVAILABLE CAPABILITIES'). */
+  header?: string;
+}
+
+/**
+ * Generate a categorized markdown tool block with optional filtering.
+ * Empty string on zero matches (per test conventions).
+ */
+export function generateDynamicToolBlock(
+  options: DynamicToolBlockOptions = {},
+): string {
+  const {
+    allowedTools,
+    excludedTools,
+    showMetadata = false,
+    header = 'AVAILABLE CAPABILITIES',
+  } = options;
+  let caps = ALL_CAPABILITIES;
+  if (allowedTools) caps = caps.filter((c) => allowedTools.includes(c.id));
+  if (excludedTools) caps = caps.filter((c) => !excludedTools.includes(c.id));
+  if (caps.length === 0) return '';
+
+  const groups: Record<string, CapabilityDefinition[]> = {};
+  for (const cap of caps) {
+    if (!groups[cap.category]) groups[cap.category] = [];
+    groups[cap.category].push(cap);
+  }
+
+  const lines: string[] = [`# ${header}`, ''];
+  for (const category of Object.keys(groups).sort()) {
+    lines.push(`## ${CATEGORY_LABELS[category] || category}`);
+    for (const cap of groups[category].sort((a, b) => a.id.localeCompare(b.id))) {
+      lines.push(`- **${cap.id}** \u2014 ${cap.description || cap.name}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('## Rules');
+  lines.push('1. Use the MOST SPECIFIC tool for the job');
+  lines.push('2. Chain tools logically: search \u2192 read \u2192 analyze \u2192 write');
+  lines.push('3. NEVER fabricate tool output \u2014 always call the actual tool');
+  if (showMetadata) {
+    lines.push('4. Consider latency, cost, reliability when choosing tools');
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
+// Tool Hints (compact list, single-line)
+// ============================================================================
+
+/**
+ * Return a single-line summary of available tools for inclusion in
+ * lighter-weight prompts. Returns '' when no tools are listed.
+ */
+export function generateToolHints(toolIds: string[]): string {
+  if (!toolIds || toolIds.length === 0) return '';
+  return `Available tools: ${toolIds.join(', ')}`;
+}

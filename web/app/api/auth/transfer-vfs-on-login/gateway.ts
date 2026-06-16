@@ -75,7 +75,16 @@ export async function POST(request: NextRequest) {
     let bodyAnonymousSessionId: string | undefined;
     const body = await request.json().catch(() => ({}));
     if (body && typeof body === 'object' && typeof (body as any).anonymousSessionId === 'string') {
-      bodyAnonymousSessionId = (body as any).anonymousSessionId;
+      // Validate format: must match the expected anon session ID shape
+      // (13-digit timestamp + underscore/hyphen + random tail, 6+ chars).
+      // Reject crafted/short values that could be used to probe for other
+      // users' anonymous workspaces. The cookie on follow-up requests is
+      // the authoritative source; this body override is only a best-effort
+      // fallback for cookie-rotation edge cases.
+      const raw = (body as any).anonymousSessionId;
+      if (/^\d{13}[_-][A-Za-z0-9_-]{6,}$/.test(raw)) {
+        bodyAnonymousSessionId = raw;
+      }
     }
 
     const result = await transferVFSOnLogin(

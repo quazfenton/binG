@@ -24,7 +24,14 @@ function getSandboxFailureEntry(userId: string): SandboxFailureEntry | undefined
 function setSandboxFailureEntry(userId: string, error: string): void {
   const g = globalThis as any;
   if (!g[USER_FAILURE_TRACKER_KEY]) g[USER_FAILURE_TRACKER_KEY] = {};
-  g[USER_FAILURE_TRACKER_KEY][userId] = { lastFailureAt: Date.now(), error };
+  // Evict entries older than the backoff window to prevent unbounded growth.
+  const now = Date.now();
+  for (const key of Object.keys(g[USER_FAILURE_TRACKER_KEY])) {
+    if (now - g[USER_FAILURE_TRACKER_KEY][key].lastFailureAt > FAILURE_BACKOFF_MS) {
+      delete g[USER_FAILURE_TRACKER_KEY][key];
+    }
+  }
+  g[USER_FAILURE_TRACKER_KEY][userId] = { lastFailureAt: now, error };
 }
 function clearSandboxFailureEntry(userId: string): void {
   const g = globalThis as any;

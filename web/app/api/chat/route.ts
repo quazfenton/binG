@@ -1583,13 +1583,14 @@ const config: UnifiedAgentConfig = {
                 if (
                   streamState.buffer &&
                   typeof result.response === 'string' &&
-                  iterContent !== result.response
+                  !iterContent.endsWith(result.response)
                 ) {
-                  chatLogger.warn('[AUTO-CONTINUE] boundary divergence: iterContent != result.response', {
+                  chatLogger.info('[AUTO-CONTINUE] boundary divergence: iterContent != result.response', {
                     requestId,
                     bufferLen: streamState.buffer.length,
                     iterContentLen: iterContent.length,
-                    resultResponseLen: result.response.length,
+                    iterations: iteration,
+                  resultResponseLen: result.response.length,
                   });
                 }
                 const autoDecision = decideAutoContinue({

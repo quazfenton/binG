@@ -14,7 +14,8 @@ import {
   registerSection,
   getSectionTemplate,
   invalidateSectionCache,
-} from '../packages/shared/agent/prompt-composer';
+} from '@bing/shared/agent/prompt-composer';
+import type { AgentRole } from '@bing/shared/agent/system-prompts';
 
 // Sample monolithic prompt matching the actual format
 const SAMPLE_PROMPT = `# IDENTITY
@@ -199,6 +200,41 @@ Be helpful.`;
       // Should not contain the default tool strategy
       expect(result.length).toBeLessThan(
         composeRole('coder').length
+      );
+    });
+
+    // Pinned under the re-scoped `string | null` return contract:
+    // callers depend on the explicit `null` sentinel to distinguish
+    // "no override requested" from an empty composed prompt.
+    it('returns null when role is undefined (no override requested)', () => {
+      const result = composeRole(undefined);
+      expect(result).toBeNull();
+    });
+
+    it('throws when no canonical prompt is registered for the role', () => {
+      expect(() =>
+        composeRole('not-a-real-role' as AgentRole),
+      ).toThrow(
+        /\[prompt-composer\] no canonical prompt registered for role "not-a-real-role"/,
+      );
+    });
+  });
+
+  // composeRoleWithTools shares the same re-scoped contract as composeRole:
+  // return `null` on no-override, throw on missing-canonical-prompt.
+  describe('composeRoleWithTools', () => {
+    it('returns null when role is undefined (no override requested)', () => {
+      const result = composeRoleWithTools(undefined, { availableTools: [] });
+      expect(result).toBeNull();
+    });
+
+    it('throws when no canonical prompt is registered for the role', () => {
+      expect(() =>
+        composeRoleWithTools('not-a-real-role' as AgentRole, {
+          availableTools: [],
+        }),
+      ).toThrow(
+        /\[prompt-composer\] no canonical prompt registered for role "not-a-real-role"/,
       );
     });
   });

@@ -343,7 +343,11 @@ export class BackgroundExecutor extends EventEmitter {
 
       const timer = setTimeout(() => {
         try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-        settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+        // Wait for the child to actually terminate before settling, otherwise
+        // the process remains as a zombie/orphan and the caller races ahead.
+        proc.on('close', () => {
+          settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+        });
       }, timeoutMs);
 
       let stdout = '';
@@ -359,7 +363,7 @@ export class BackgroundExecutor extends EventEmitter {
 
       proc.on('close', (exitCode: number | null) => {
         clearTimeout(timer);
-        settle({ stdout, stderr, exitCode });
+        if (!resolved) settle({ stdout, stderr, exitCode });
       });
 
       proc.on('error', (error: Error) => {

@@ -1642,12 +1642,26 @@ export async function processUnifiedAgentRequest(
   // Log auto-continue trigger (route through shouldAutoContinue() so the
   // env-default-on canonical lives in lib/chat/llm-continuation, mirroring
   // first-response-routing.ts's `?? DEFAULT_ROUTING.continue` policy).
-  const roleAutoDecision = shouldAutoContinue({
+  // Migrate direct shouldAutoContinue() -> decideAutoContinue() at L1645 (post-PHASE-1
+  // transition) so the roleSelection-driven continuation flows through the same helper as
+  // the canonical L4579 site. Values sourced from `result` (the PHASE 1 tool-execution output
+  // that lives in scope at this transition site) so the fileEdits + base detectors can fire
+  // rather than silently being suppressed. requestId uses a graceful empty-string fallback since
+  // it is not in scope at this transition site today; forceSignal / forcedBy overrides now
+  // flow uniformly across both call sites.
+  const roleAutoDecision = decideAutoContinue({
+    requestId: requestId ?? '',
     routing: roleSelection
       ? { continue: roleSelection.continue,
           primaryRole: roleSelection.suggestedRole }
       : undefined,
-    continuationsSoFar: 0,
+    steps: (result.steps ?? []).map((s) => ({
+      toolName: s.toolName,
+      args: s.args,
+    })),
+    responseText: result.response ?? '',
+    continuationsSoFar: typeof continuationCount === 'number' ? continuationCount : 0,
+    result: { ...result, fileEdits: (result.fileEdits ?? []).filter((fe) => fe && WRITE_TOOL_NAMES.some((n) => fe.toolName === n)) },
   });
   if (roleAutoDecision.continue) {
     log.info('\x1b[33m[Auto-Continue]\x1b[0m 🔄 triggered by model', {
@@ -3697,12 +3711,12 @@ async function runV1ApiWithTools(
       const composedPrompt = composeRoleWithTools(config.role, {
         availableTools: toolIds,
         extras: ragContext ? [{ id: 'rag.knowledge', template: ragContext }] : undefined,
-      });
-      llmMessages.push({ role: 'system', content: composedPrompt + workspaceSnippet });
+      }) ?? '';
+      if (composedPrompt !== null) { llmMessages.push({ role: 'system', content: composedPrompt + workspaceSnippet }); }
       log.info('[V1-API-WITH-TOOLS] Composed role prompt', {
         role: config.role,
         toolCount: toolIds.length,
-        promptLength: composedPrompt.length,
+        promptLength: composedPrompt?.length ?? 0, composedPromptSource: composedPrompt === null ? 'no-override' : 'override',
         hasRag: !!ragContext,
       });
 

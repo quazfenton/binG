@@ -213,7 +213,13 @@ export class SandboxService {
       try {
         autoSuspendService.registerProvider(provider.name, provider as any)
         autoSuspendService.trackActivity(handle.id)
-      } catch { /* non-critical */ }
+      } catch (err: any) {
+        log.warn('autoSuspendService registration failed (sandbox may not be suspended when idle)', {
+          provider: provider.name,
+          sandboxId: handle.id,
+          error: err?.message || String(err),
+        });
+      }
 
       // Start VFS sync for bidirectional file sync between VFS database and sandbox
       try {
@@ -490,6 +496,7 @@ export class SandboxService {
         log.warn(`Warm pool unavailable; falling back to provider chain: ${error.message}`)
         let lastError: unknown = error
         let lastFailedType: SandboxProviderType | null = null
+        const providerErrors: Array<{ provider: SandboxProviderType; error: string }> = []
         for (const providerType of candidateTypes) {
           // Pre-check the per-provider breaker BEFORE the try block. If
           // this specific provider's breaker is open, skip it without
@@ -514,11 +521,13 @@ export class SandboxService {
             lastError = providerError
             lastFailedType = providerType
             const message = providerError instanceof Error ? providerError.message : String(providerError)
+            providerErrors.push({ provider: providerType, error: message })
             log.warn(`Provider failed (${providerType}): ${message}; trying next fallback`)
           }
         }
         if (lastError) {
-          log.error(`All providers failed for workspace creation`, lastError as Error)
+          const summary = providerErrors.map(e => `${e.provider}: ${e.error}`).join('; ')
+          log.error(`All providers failed for workspace creation: ${summary}`, lastError as Error)
           // Bug #87 follow-up (Pass-7) — trip the LAST failed provider's
           // circuit breaker so the next call (resolve OR create)
           // short-circuits just that provider, not the whole chain.
@@ -528,13 +537,15 @@ export class SandboxService {
           if (lastFailedType) {
             recordFailureBreaker(`sandbox:${lastFailedType}`, 60_000)
           }
-          throw lastError
+          const aggregated = new Error(`All sandbox providers failed: ${summary}`)
+          throw aggregated
         }
       }
     } else {
       log.debug('Using direct provider chain (warm pool disabled or custom config)')
       let lastError: unknown = null
       let lastFailedType: SandboxProviderType | null = null
+      const providerErrors: Array<{ provider: SandboxProviderType; error: string }> = []
       for (const providerType of candidateTypes) {
         // Pre-check the per-provider breaker BEFORE the try block. If
         // this specific provider's breaker is open, skip it without
@@ -559,11 +570,13 @@ export class SandboxService {
           lastError = providerError
           lastFailedType = providerType
           const message = providerError instanceof Error ? providerError.message : String(providerError)
+          providerErrors.push({ provider: providerType, error: message })
           log.warn(`Provider failed (${providerType}): ${message}; trying next fallback`)
         }
       }
       if (lastError) {
-        log.error(`All providers failed for workspace creation`, lastError as Error)
+        const summary = providerErrors.map(e => `${e.provider}: ${e.error}`).join('; ')
+        log.error(`All providers failed for workspace creation: ${summary}`, lastError as Error)
         // Bug #87 follow-up (Pass-7) — trip the LAST failed provider's
         // circuit breaker so the next call (resolve OR create)
         // short-circuits just that provider, not the whole chain.
@@ -573,7 +586,8 @@ export class SandboxService {
         if (lastFailedType) {
           recordFailureBreaker(`sandbox:${lastFailedType}`, 60_000)
         }
-        throw lastError
+        const aggregated = new Error(`All sandbox providers failed: ${summary}`)
+        throw aggregated
       }
     }
 

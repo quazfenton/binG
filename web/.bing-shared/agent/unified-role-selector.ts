@@ -794,7 +794,7 @@ export function composeUnifiedRolePrompt(
       prompt = composeRoleWithTools(role as AgentRole, {
         availableTools: opts.availableTools || [],
         extras: opts.extras?.map((s, i) => ({ id: `extra.${i}`, template: s })),
-      });
+      }) ?? '';
     } else {
       // Non-core sets are raw strings today (no section decomposition).
       // Uses module-level getRawPrompt helper instead of duplicating switch logic.

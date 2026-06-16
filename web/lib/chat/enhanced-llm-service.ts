@@ -1120,15 +1120,13 @@ export class EnhancedLLMService {
         // (truly aborts the in-flight HTTP request so API credits aren't
         // wasted). Pass concurrentFallbackMs: 0 to fall back to the legacy
         // in-place speculative fallback inside streamWithVercelAI.
+        // Pass the class-bound findCompatibleModel as the second argument
+        // so the concurrent fallback coordinator can resolve a model ID
+        // the fallback provider's catalog can actually serve.
         const baseStream = streamWithConcurrentFallback({
           ...({
             provider: vercelProvider,
             model: llmRequest.model || 'default',
-            // Pass the class-bound findCompatibleModel so the fallback
-            // handle resolves a model ID the fallback provider can serve.
-            // findCompatibleModelFn is not in VercelStreamOptions, so we
-            // spread through a cast object.
-            findCompatibleModelFn: this.findCompatibleModel.bind(this),
           } as any),
           messages: processedMessages,
           system: systemPrompt || undefined,
@@ -1144,7 +1142,7 @@ export class EnhancedLLMService {
           // Pass abort signal and timeout for cancellation support
           signal: request.signal,
           timeoutMs: request.timeoutMs || 90000,
-        });
+        }, this.findCompatibleModel.bind(this));
 
         // Chain: streamWithAutoContinue detects continuation needs,
         // streamWithServerAutoRePrompt actually re-calls LLM with tool results
