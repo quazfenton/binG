@@ -1,4 +1,5 @@
 import { READ_ONLY_TOOL_NAMES, CAPABILITY_PREFIX_TOOLS, normalizeToolName, isReadOnlyTool, isWriteTool } from '@bing/shared/agent/tool-classification';
+import { resolveDefaultContinue } from '@bing/shared/agent/first-response-routing';
 /**
  * LLM Continuation Helper
  *
@@ -277,16 +278,17 @@ export function shouldAutoContinue(input: {
   const routing = input.routing;
   const planStepsCount = routing?.planSteps?.length ?? routing?.estimatedSteps ?? 0;
 
-  // Env-default-on guard: when no routing metadata is provided AND the
-  // planner didn't enumerate >= 2 plan steps, default to NO continuation.
-  // This makes the previously-implicit heuristic-chain fallback explicit
-  // so future readers don't have to trace the chain to find this branch.
-  // Goal: same observable behavior, with the branch explicit.
-  if (routing == null && planStepsCount < 2) {
+  // Env-default-on guard: when no routing metadata is provided, defer to
+  // resolveDefaultContinue (env-default-aware). Makes the env-default-on
+  // contract load-bearing instead of heuristic-only via the trigger chain.
+  // RT-001 sibling: see also first-response-routing.ts:255 producer
+  // ternary and :373 consumer gate.
+  if (routing == null) {
+    const shouldContinue = resolveDefaultContinue();
     return {
-      continue: false,
-      reason: 'no_continuation_needed',
-      continuationPrompt: '',
+      continue: shouldContinue,
+      reason: shouldContinue ? 'plan_steps_remaining' : 'no_continuation_needed',
+      continuationPrompt: shouldContinue ? 'Continue with the plan.' : '',
       continuationsSoFar,
     };
   }

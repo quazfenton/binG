@@ -84,8 +84,7 @@ describe('needsMoreTurnsDetector', () => {
       continue: false, reason: 'no_continuation_needed',
       continuationPrompt: '', continuationsSoFar: 0,
     } as any);
-    expect(decision?.force).toBe(true);
-    expect(decision?.reason).toMatch(/read-then-stall|read-many-write-none/);
+    expect(decision).toEqual({ force: true, reason: 'read-then-stall' });
   });
 
   it('forces continue when 3+ consecutive reads fire Factor 1 signals (loop or stall)', () => {
@@ -101,11 +100,14 @@ describe('needsMoreTurnsDetector', () => {
       continue: false, reason: 'no_continuation_needed',
       continuationPrompt: '', continuationsSoFar: 0,
     } as any);
-    expect(decision?.force).toBe(true);
-    // Factor 1 candidate signals: deep-research-loop (3+ reads), read-then-stall
-    // (last tool read-only AND no writes), read-many-write-none (read count >= 2,
-    // write count === 0). Detection-order means signal[0] may be any one of these.
-    expect(decision?.reason).toMatch(/deep-research-loop|read-then-stall|read-many-write-none/);
+    // Captured via a one-shot probe of this same fixture:
+    // JSON.stringify(decision) === '{"force":true,"reason":"read-then-stall"}'.
+    // The 3-read fixture satisfies both "deep-research-loop" (3+ reads) and
+    // "read-then-stall" (last tool read-only, no writes); detection-order in
+    // needsMoreTurnsDetector makes the last-read branch win, so
+    // signal[0] === 'read-then-stall'. (See lib/chat/needsMoreTurnsDetector.ts
+    // for the branch order.)
+    expect(decision).toEqual({ force: true, reason: 'read-then-stall' });
   });
 
   // (The "announced-next-step" signal test was dropped: when steps

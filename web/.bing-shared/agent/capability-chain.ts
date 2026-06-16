@@ -275,7 +275,7 @@ export class CapabilityChain {
 
         const result = await executor.execute(step.capability, step.config, {
           stepId,
-          chainName: this.config.name,
+          chainName: this.config.name || 'Unnamed Chain',
           previousResults: Object.fromEntries(results),
         });
 

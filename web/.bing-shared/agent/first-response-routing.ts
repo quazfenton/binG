@@ -13,6 +13,28 @@
 
 import { tryRepairJson, extractFirstJsonObject } from './spec-parser-utils';
 
+// ─── Env-Aware Default ──────────────────────────────────────────────────────────────
+
+/**
+ * Single source of truth for the env-aware continuation default.
+ *
+ * Contract: returns `true` unless the operator explicitly sets
+ * `LLM_AUTO_CONTINUE_DEFAULT=false` (literal, case-sensitive). Any other
+ * value — unset, empty, "0", "FALSE" (case-mismatched) — defers to
+ * default-on because the discriminator is `!== 'false'`.
+ *
+ * Runtime: declared at module-top so DEFAULT_ROUTING (cached at module
+ * load) and validateAndNormalize fallback path both reach the same
+ * definition. The `typeof process !== 'undefined'` guard prevents a
+ * ReferenceError in browser/Worker bundles (this package has no
+ * `browser` export condition to gate server-only loading).
+ */
+export function resolveDefaultContinue(): boolean {
+  return typeof process !== 'undefined'
+    && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
+}
+
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 export type TaskClassification = 'code' | 'research' | 'planning' | 'debugging' | 'review' | 'multi-step';
@@ -119,8 +141,7 @@ export function stripRoutingMarkers(responseText: string): string {
 }
 
 /** Default routing for when parsing fails — safe conservative defaults.
- * Bug #70: `continue` defaults to true (env-tunable via LLM_AUTO_CONTINUE_DEFAULT)
- * so multi-step agent tasks auto-continue instead of stopping at step 1. */
+ * `continue` follows the resolveDefaultContinue() contract — see docblock. */
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -129,7 +150,8 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-  continue: typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false',
+  // resolveDefaultContinue() contract — see docblock.
+  continue: resolveDefaultContinue(),
 };
 
 /**
@@ -224,10 +246,11 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       toolCallOptions: Array.isArray(parsed.toolCallOptions) ? parsed.toolCallOptions : DEFAULT_ROUTING.toolCallOptions,
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
+      // resolveDefaultContinue() contract — see docblock.
       continue:
         normalizeBoolean(parsed.continue) ??
         normalizeBoolean(parsed.requiresAutoReprompt) ??
-        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : DEFAULT_ROUTING.continue),
+        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : resolveDefaultContinue()),
     };
 
     return {
@@ -343,10 +366,7 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  // Bug #2 fix: planSteps >= 2 should force continue: true
-  // The LLM outlined a multi-step plan but may have set continue: false
-  // (DEFAULT_ROUTING.continue defaults to false). This ensures multi-step
-  // plans always trigger auto-continuation.
+  // planSteps >= 2 forces continue under env-default-on (LLM_AUTO_CONTINUE_DEFAULT default-on); > 0 plan steps + routing.continue = true takes priority. See resolveDefaultContinue docblock.
   const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
   const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
   const shouldContinue = explicitContinue || hasMultiplePlanSteps;

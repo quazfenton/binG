@@ -3,6 +3,8 @@
 **/.agent-commits/
 **/.agent-vfs/
 **/heap-snapshots/
+**/.tickets/
+**/.recovery-staging/ 
 
 # dependencies
 **/node_modules/

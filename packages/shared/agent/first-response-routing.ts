@@ -141,8 +141,7 @@ export function stripRoutingMarkers(responseText: string): string {
 }
 
 /** Default routing for when parsing fails — safe conservative defaults.
- * The `continue` flag is resolved through resolveDefaultContinue(), so the
- * env-aware default-on behavior is the single source of truth. */
+ * `continue` follows the resolveDefaultContinue() contract — see docblock. */
 const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
@@ -151,9 +150,7 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-  // Resolved via resolveDefaultContinue() so the env-aware default is
-  // the single source of truth shared with the validateAndNormalize
-  // fallback path.
+  // resolveDefaultContinue() contract — see docblock.
   continue: resolveDefaultContinue(),
 };
 
@@ -249,6 +246,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       toolCallOptions: Array.isArray(parsed.toolCallOptions) ? parsed.toolCallOptions : DEFAULT_ROUTING.toolCallOptions,
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
+      // resolveDefaultContinue() contract — see docblock.
       continue:
         normalizeBoolean(parsed.continue) ??
         normalizeBoolean(parsed.requiresAutoReprompt) ??
@@ -368,7 +366,7 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  // planSteps >= 2 forces continue under env-default-on; explicit routing.continue with > 0 plan steps takes priority. See resolveDefaultContinue docblock.
+  // planSteps >= 2 forces continue under env-default-on (LLM_AUTO_CONTINUE_DEFAULT default-on); > 0 plan steps + routing.continue = true takes priority. See resolveDefaultContinue docblock.
   const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
   const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
   const shouldContinue = explicitContinue || hasMultiplePlanSteps;

@@ -3135,7 +3135,7 @@ If multiple signals match a single subtask, pick the FIRST dominant signal. If s
 | Critical Path | [Subtask chain] |
 
 ## Subtask Decomposition
-```
+~~~
 +---------------+
 | T-001 [p:0]   | Planner: outline approach
 +-------+-------+
@@ -3149,7 +3149,7 @@ If multiple signals match a single subtask, pick the FIRST dominant signal. If s
 +-------+
 |T-004 R| Specialist: domain check
 +-------+
-```
+~~~
 
 ## Per-Subtask Spec
 ### T-[NNN]: [Title]

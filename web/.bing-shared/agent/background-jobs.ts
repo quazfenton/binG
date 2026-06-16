@@ -6,6 +6,9 @@
 
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('BackgroundJobs');
 
 export interface BackgroundJobConfig {
   sandboxId: string;
@@ -118,7 +121,7 @@ export class BackgroundExecutor extends EventEmitter {
           this.emit('error', { jobId, sandboxId, error });
           
           // Log error but continue the loop
-          console.error(`Background job ${jobId} error:`, error.message);
+          log.error(`Background job ${jobId} error:`, error.message);
         }
 
         // Wait for next interval
