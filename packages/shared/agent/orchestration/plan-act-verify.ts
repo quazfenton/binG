@@ -700,7 +700,7 @@ export class PlanActVerifyOrchestrator {
               if (validation.error) {
                 yield { type: 'tool_error', tool: call.name, error: validation.error };
                 // Still record the attempt in history so the model sees the validation failure
-                toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: validation.error });
+                toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, undefined, validation.error) }); // Bug #6 fix (symmetric): route validation-error through buildToolResult so all three push sites (L703, L717, L728) emit the same ToolResult envelope.
                 // Even validation failures represent activity — reset idle timer
                 controller.recordActivity();
                 continue; // Skip this tool, continue with remaining tools
@@ -714,7 +714,7 @@ export class PlanActVerifyOrchestrator {
               yield { type: 'tool_result', tool: call.name, result: structuredResult };
 
               // Record result for conversation history threading
-              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result });
+              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, result, undefined) }); // Bug #6 fix (symmetric): route success through buildToolResult too so both branches produce the same ToolResult shape; LLM sees a consistent schema regardless of success vs. error.
 
               // Track files modified by writeFile/applyDiff for verification
               if ((call.name === 'writeFile' || call.name === 'applyDiff') && normalizedArgs?.path) {
@@ -905,8 +905,18 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
       let depth = 0;
       let start = -1;
       let matchedBalanced = false;
+      let inString = false;
+      let stringQuote = '';
       for (let i = 0; i < text.length; i++) {
         const ch = text[i];
+        if (inString) {
+          // Inside a string literal: brackets are content, only matching quote exits.
+          if (ch === '\\') { i++; continue; } // skip escaped char (relies on for-loop's i++ to land us past the escape)
+          if (ch === stringQuote) { inString = false; stringQuote = ''; }
+          continue;
+        }
+        // Outside a string: brackets are real delimiters, quotes open a string.
+        if (ch === '"' || ch === "'" || ch === '`') { inString = true; stringQuote = ch; continue; }
         if (ch === '[') { if (depth === 0) start = i; depth++; }
         else if (ch === ']') {
           depth--;

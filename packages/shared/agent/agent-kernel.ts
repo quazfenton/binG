@@ -890,7 +890,7 @@ export class AgentKernel extends EventEmitter {
       }
       const taskType = payload.taskType || 'automate';
       const description = payload.description || agent.config.goal;
-      const params = (typeof payload.params === 'object' && payload.params !== null)
+      const params = (typeof payload.params === 'object' && payload.params !== null && !Array.isArray(payload.params) && !(payload.params instanceof Date) && !(payload.params instanceof RegExp))
         ? payload.params
         : {};
 

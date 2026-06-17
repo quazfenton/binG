@@ -403,7 +403,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     const newCount = incrementContinuationCount(requestId);
     log_('[AutoContinue] triggered', {
       requestId,
-      reason: continuationDecision.reason,
+      reason: activeOverride?.reason ?? continuationDecision.reason,
       detectorReason: detectorOverride?.reason,
       advancedReason: advancedOverride?.reason,
       forceSignal: activeOverride !== null,
@@ -411,7 +411,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     });
     return buildDecision({
       shouldContinue: true,
-      reason: continuationDecision.reason,
+      reason: activeOverride?.reason ?? continuationDecision.reason,
       forceSignal: activeOverride !== null,
       forcedBy: activeOverride !== null
         ? (advancedFired ? 'advanced' : 'base')
