@@ -124,7 +124,7 @@ export class BackgroundExecutor extends EventEmitter {
           this.emit('error', { jobId, sandboxId, error });
           
           // Log error but continue the loop
-          log.error(`Background job ${jobId} error:`, error.message);
+          log.error(`Background job ${jobId} error:`, error);
           consecutiveFailures++;
         }
 
@@ -359,9 +359,34 @@ export class BackgroundExecutor extends EventEmitter {
         resolve(value);
       };
 
+      // SIGTERM/SIGKILL graduated escalation — each kill-level attaches a
+      // scope-local close handler via `.once` (NOT `.on`) so the listener
+      // auto-removes after firing. This closes the leak window the prior
+      // codereview flagged: many short-lived processes accumulating stale
+      // `.on` listeners on the EventEmitter. The main `proc.on('close')`
+      // below (the source-of-truth handler) still settles the promise; the
+      // graduated handlers here only clear inner escalation timers and emit
+      // a more descriptive stderr when SIGTERM is ignored. The `resolved`
+      // flag in `settle` makes any duplicate settle call a no-op.
       const timer = setTimeout(() => {
         try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-        settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+        // If SIGTERM is ignored, escalate to SIGKILL after a grace period.
+        const sigkillTimer = setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch { /* may already be dead */ }
+          // Hard timeout: if even SIGKILL doesn't close the process, settle
+          // anyway to prevent the promise from hanging indefinitely.
+          const hardTimeout = setTimeout(() => {
+            settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (forced)`, exitCode: null });
+          }, 5000);
+          proc.once('close', () => {
+            clearTimeout(hardTimeout);
+            settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (escalated)`, exitCode: null });
+          });
+        }, 5000);
+        proc.once('close', () => {
+          clearTimeout(sigkillTimer);
+          settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+        });
       }, timeoutMs);
 
       let stdout = '';
@@ -377,7 +402,7 @@ export class BackgroundExecutor extends EventEmitter {
 
       proc.on('close', (exitCode: number | null) => {
         clearTimeout(timer);
-        settle({ stdout, stderr, exitCode });
+        if (!resolved) settle({ stdout, stderr, exitCode });
       });
 
       proc.on('error', (error: Error) => {

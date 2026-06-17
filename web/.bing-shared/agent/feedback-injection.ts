@@ -675,7 +675,16 @@ export function detectHealingTrigger(
   // Detect stuck in loop (same failure repeated)
   if (recentFailures.length >= 3) {
     const lastThree = recentFailures.slice(-3);
-    const allSameCategory = lastThree.every(f => analyzeFailure(f).category === analyzeFailure(lastThree[0]).category);
+    // Bug #3 fix: cache analyzeFailure per entry once. The previous
+    // implementation called analyzeFailure N+1 times per check (once per
+    // `.every()` iteration + once for the predicate anchor) — so for a
+    // 3-element slice this was 4 calls instead of 1 + 3 reads. Combined
+    // this compounded into O(N²) cumulative cost across the healing
+    // pipeline. Now: one cached mapping, then an O(N) equality scan.
+    const analyzedCategories = lastThree.map((f) => analyzeFailure(f).category);
+    const allSameCategory =
+      analyzedCategories.length > 0 &&
+      analyzedCategories.every((cat) => cat === analyzedCategories[0]);
     if (allSameCategory) {
       return {
         detected: true,

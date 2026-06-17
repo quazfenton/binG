@@ -107,6 +107,7 @@ export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   'file.write',
   'file.delete',
   'file.batch_write',
+  'file.append',
   'bash.execute',
 ]);
 
@@ -135,7 +136,7 @@ export const CAPABILITY_PREFIX_TOOLS: ReadonlySet<string> = new Set<string>([  '
  * `.` is meaningful; only `-` is collapsed.
  */
 export function normalizeToolName(name: string): string {
-  return (name ?? '').toString().toLowerCase().replace(/-/g, '_');
+  return (name ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
 }
 
 /**
@@ -171,7 +172,8 @@ export function hasMutationSuffix(name: string): boolean {
     canonical.endsWith('.write') ||
     canonical.endsWith('.create') ||
     canonical.endsWith('.delete') ||
-    canonical.endsWith('.edit')
+    canonical.endsWith('.edit') ||
+    canonical.endsWith('.append')
   );
 }
 

@@ -13,9 +13,18 @@
  */
 
 import { createCipheriv, createDecipheriv, createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from 'crypto';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'fs';
+import { dirname } from 'path';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('TOTP');
+
+// Module-level cache: `getEncryptionKey()` runs synchronously on every
+// encrypt/decrypt call, so we resolve the 32-byte key once and reuse the same
+// Buffer. Cache is process-local — across instances, set process.env.ENCRYPTION_KEY
+// explicitly to keep TOTP secrets decryptable on every node.
+let cachedKey: Buffer | null = null;
+let paddedWarningEmitted = false; // dedupe the ENCRYPTION_KEY-too-short warning across calls
 
 // TOTP parameters per RFC 6238
 const TOTP_PERIOD = 30; // seconds
@@ -246,20 +255,121 @@ export function decryptTotpSecret(encryptedData: string): string {
  * Get encryption key from environment, padded/truncated to 32 bytes.
  * Reuses the same key as API credential encryption.
  */
+/**
+ * Resolves the 32-byte AES-256-GCM key for at-rest TOTP-secret storage. Resolution
+ * order (first hit wins, results are cached for the process lifetime):
+ *
+ *   Tier 1 — process.env.ENCRYPTION_KEY       (operator's manual override, length-normalised to 32 bytes)
+ *   Tier 2 — `${ENCRYPTION_KEY_FILE:-/var/lib/bing/encryption.key}` on disk (32-byte raw binary)
+ *   Tier 3 — generate 32 random bytes, persist to that path with chmod 0o600 (atomic tmpfile+rename)
+ *   Tier 4 — ephemeral fallback ONLY outside production: a fixed dev buffer (legacy compat,
+ *             does NOT persist across restarts). In production, throws so we never silently
+ *             expose a known key.
+ *
+ * BREAKING CHANGE vs the legacy code path: any user_mfa row whose `totp_secret` was encrypted
+ * under the old static dev fallback will become unreadable. To recover those rows, set
+ * `process.env.ENCRYPTION_KEY='dev-fallback-key-not-for-production'` (or any prefix of it; the
+ * padEnd-to-32 logic normalises the input) BEFORE the new key path is created.
+ */
 function getEncryptionKey(): Buffer {
+  if (cachedKey) return cachedKey;
+
   const env: any = typeof process !== 'undefined' ? process.env : {};
   const ENCRYPTION_KEY = env.ENCRYPTION_KEY;
 
-  if (!ENCRYPTION_KEY) {
-    if (env.NODE_ENV === 'production') {
-      throw new Error('ENCRYPTION_KEY must be set in production for MFA secret encryption');
+  // Tier 1 — env override (manual operator-controlled key).
+  if (ENCRYPTION_KEY) {
+    const envKeyStr = String(ENCRYPTION_KEY);
+    const normalised = Buffer.from(envKeyStr.padEnd(32, '0').slice(0, 32));
+    if (normalised.length !== 32) {
+      throw new Error(`ENCRYPTION_KEY resolved to length ${normalised.length}, expected 32`);
     }
-    // Dev fallback
-    logger.warn('⚠️ ENCRYPTION_KEY not set — TOTP secrets will not persist across restarts');
-    return Buffer.alloc(32, 'dev-fallback-key-not-for-production');
+    // Warn once if the operator's key was shorter than 32 chars and got zero-padded
+    // — the resulting AES-256 key will have less entropy than expected.
+    if (envKeyStr.length < 32 && !paddedWarningEmitted) {
+      logger.warn(
+        `[TOTP] ENCRYPTION_KEY is ${envKeyStr.length} chars long; right-padded to 32 with zeros. ` +
+        `Use a 32-byte (or longer) value for full 256-bit entropy.`,
+      );
+      paddedWarningEmitted = true;
+    }
+    logger.debug('[TOTP] Using ENCRYPTION_KEY from process.env');
+    cachedKey = normalised;
+    return cachedKey;
   }
 
-  return Buffer.from(String(ENCRYPTION_KEY).padEnd(32, '0').slice(0, 32));
+  // Tier 2 / 3 — file persistence (default /var/lib/bing/encryption.key, chmod 0o600).
+  const keyFile: string =
+    process.env['ENCRYPTION_KEY_FILE'] && process.env['ENCRYPTION_KEY_FILE'].length > 0
+      ? process.env['ENCRYPTION_KEY_FILE']
+      : '/var/lib/bing/encryption.key';
+
+  // Tier 2 — try to read existing key.
+  try {
+    if (existsSync(keyFile)) {
+      const buf = readFileSync(keyFile);
+      if (buf.length === 32) {
+        logger.debug(`[TOTP] Read existing 32-byte ENCRYPTION_KEY from ${keyFile}`);
+        cachedKey = buf;
+        return cachedKey;
+      }
+      logger.warn(
+        `[TOTP] ${keyFile} has length ${buf.length}, expected 32 — regenerating with fresh entropy`,
+      );
+    }
+  } catch (err: unknown) {
+    logger.warn(
+      `[TOTP] Could not read ${keyFile}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  // Tier 3 — generate and persist (atomic tmpfile+rename + chmod 0o600).
+  const fresh = randomBytes(32);
+  try {
+    const dir = dirname(keyFile);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    const tmp = `${keyFile}.tmp`;
+    writeFileSync(tmp, fresh, { mode: 0o600 });
+    try { chmodSync(tmp, 0o600); } catch {
+      /* chmod is a no-op on Windows; permissions still land owner-only via the mode flag */
+    }
+    renameSync(tmp, keyFile);
+    try { chmodSync(keyFile, 0o600); } catch {
+      /* idempotent: already 0o600 from tmp on POSIX; nop on Windows */
+    }
+    logger.info(
+      `[TOTP] Generated and persisted new 32-byte ENCRYPTION_KEY at ${keyFile} (mode 0o600)`,
+    );
+    cachedKey = fresh;
+    return cachedKey;
+  } catch (err: unknown) {
+    const reason = err instanceof Error ? err.message : String(err);
+    // Tier 4 — last-resort ephemeral fallback.
+    if (env && env.NODE_ENV === 'production') {
+      throw new Error(
+        `ENCRYPTION_KEY not set AND could not persist to ${keyFile}: ${reason}. ` +
+        `Set process.env.ENCRYPTION_KEY explicitly (recommended for multi-instance deployments) ` +
+        `or fix filesystem permissions on ${keyFile}.`,
+      );
+    }
+    logger.warn(
+      `[TOTP] ENCRYPTION_KEY not set AND could not persist to ${keyFile}: ${reason}. ` +
+      `Using ephemeral dev fallback (TOTP secrets will NOT persist across restarts).`,
+    );
+    cachedKey = Buffer.alloc(32, 'dev-fallback-key-not-for-production');
+    return cachedKey;
+  }
+}
+
+/**
+ * Test-only escape hatch: drop the module-level encryption-key cache so the next
+ * call to getEncryptionKey() re-walks the 4-tier resolver. Not used in production.
+ */
+export function __resetEncryptionKeyCacheForTests(): void {
+  cachedKey = null;
+  paddedWarningEmitted = false;
 }
 
 // ============================================================================

@@ -3496,6 +3496,15 @@ export const AGENT_ROLE_CONFIGS: Record<AgentRole, Omit<AgentRoleConfig, 'id'>> 
     topP: 0.9,
     thinkingMode: 'high',
   },
+  orchestrator: {
+    name: 'Orchestrator',
+    description: 'Decomposes complex tasks, routes subtasks to specialists, sequences outputs',
+    systemPrompt: ORCHESTRATOR_PROMPT,
+    temperature: 0.2,
+    allowTools: true,
+    useHistory: true,
+    topP: 0.85,
+  },
 };
 
 /**
@@ -3567,6 +3576,7 @@ export function composePrompt(roles: AgentRole[], weights?: Record<AgentRole, nu
  * Get role compatibility matrix — which roles work well together in multi-agent workflows.
  */
 export const ROLE_COMPATIBILITY: Record<AgentRole, AgentRole[]> = {
+  orchestrator: ['planner', 'reviewer', 'architect', 'projectManager', 'coder'],
   coder: ['reviewer', 'tester', 'debugger', 'reverseEngineer'],
   reviewer: ['coder', 'securityAuditor', 'performanceEngineer', 'threatModeler'],
   researcher: ['planner', 'dataAnalyst', 'architect', 'knowledgeCurator'],

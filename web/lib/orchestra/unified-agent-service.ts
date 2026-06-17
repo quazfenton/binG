@@ -1676,8 +1676,22 @@ export async function processUnifiedAgentRequest(
     const isAutoMode = !config.mode || config.mode === 'auto';
     const roleSelection = result.metadata?.roleSelection;
 
+  // Bug fix (was silently falling back to '000'): `config.conversationId` and
+  // `config.sessionId` can be set to the literal string '000' by upstream
+  // VFS scope normalization (`composite-session-id.ts:115:
+  //   if (!input || !input.trim()) return '000';`) when the orphan-session
+  // placeholder propagates. Without this guard, '000' flows through to
+  // `decideAutoContinue`'s per-requestId counter and creates a second
+  // counter bucket alongside the route.ts streaming loop's real chat id,
+  // breaking the MAX_CONTINUATIONS=3 cap coordination across the two call
+  // paths (worst case: 6 LLM calls per request). Refuse '000' and fall
+  // through to a fresh `unified-phase1-${Date.now()}` synthetic id.
   const phaseTransitionRequestId =
-    config.conversationId || config.sessionId || `unified-phase1-${Date.now()}`;
+    (config.conversationId && config.conversationId !== '000')
+      ? config.conversationId
+      : (config.sessionId && config.sessionId !== '000')
+        ? config.sessionId
+        : `unified-phase1-${Date.now()}`;
   const autoDecision = decideAutoContinue({
     requestId: phaseTransitionRequestId,
     routing: roleSelection

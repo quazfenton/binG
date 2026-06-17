@@ -17,8 +17,39 @@
 
 import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
+// Tag better-sqlite3 binding-load failures with the same diagnostic taxonomy
+// used by storage/session-store.ts so the in-memory fallback log line states
+// WHY the binding failed, not just THAT it failed.
+import { classifySqliteFailure } from '@/lib/storage/session-store';
 
 const logger = createLogger('ToolCallTracker');
+
+/**
+ * Dynamic-import wrapper around `better-sqlite3`. The previous code used a
+ * naked `require('better-sqlite3')` inside the async initializer — that works
+ * in vitest and in webpack-bundled output, but in pure-Next.js / turbopack ESM
+ * contexts `require` is undefined and the import throws ReferenceError before
+ * the binding can even fail to load. Dynamic `await import(...)` works in any
+ * ESM context (Node ESM, vitest, Next dev, Edge runtime).
+ *
+ * On failure emits a structured warn with `classifySqliteFailure(err)` (see
+ * storage/session-store.ts) so operators can tell apart an arch mismatch, a
+ * missing libc++, an ABI mismatch, or a missing module — not just a vague
+ * "better-sqlite3 unavailable" string.
+ */
+async function tryImportBetterSqlite(): Promise<any> {
+  try {
+    const mod = await import('better-sqlite3');
+    // better-sqlite3 is a CJS module — Node's ESM import wraps the default export.
+    return (mod as any).default ?? mod;
+  } catch (err) {
+    logger.warn(
+      'better-sqlite3 failed to load – falling back to in-memory storage',
+      classifySqliteFailure(err),
+    );
+    return null;
+  }
+}
 
 export interface ToolCallRecord {
   /** The model that made the tool call */
@@ -92,7 +123,13 @@ class ToolCallTracker {
           fs.mkdirSync(dbDir, { recursive: true });
         }
 
-        const Database = require('better-sqlite3');
+        const Database = await tryImportBetterSqlite();
+        if (!Database) {
+          // Wrapper already logged the structured warn; mark initialized so
+          // subsequent recordToolCall paths use the in-memory fallback.
+          this.initialized = true;
+          return;
+        }
         this.db = new Database(dbPath);
 
         // Enable WAL mode for concurrent reads
@@ -122,7 +159,16 @@ class ToolCallTracker {
         this.initialized = true;
         logger.info('Tool call tracker initialized (SQLite)');
       } catch (error) {
-        logger.warn('better-sqlite3 unavailable, using in-memory fallback', error);
+        // The dynamic import above succeeded but `new Database(dbPath)` or
+        // schema setup threw. Classify with the same diagnostic taxonomy so
+        // operators see WHY the SQLite path failed (locked DB, missing dir,
+        // schema mismatch, missing table) and not just a generic error.
+        // Distinct from the binding-load failure above, which the wrapper
+        // already surfaced as a separate warn.
+        logger.warn(
+          'SQLite init failed after import – falling back to in-memory storage',
+          classifySqliteFailure(error),
+        );
         this.initialized = true; // Mark as initialized so we use memory fallback
       }
     })();

@@ -137,12 +137,12 @@ const SIGNAL_PREFIX_RE = new RegExp(
  * so it can match against any phrase within a multi-phrase input.
  */
 const SIGNAL_LOOSE_RE = new RegExp(
-  KW_GROUP_S + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
+  String.raw`(?<![A-Za-z])` + KW_GROUP_S + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
   'iu',
 );
 
 const EXPECTED_LOOSE_RE = new RegExp(
-  KW_GROUP_E + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
+  String.raw`(?<![A-Za-z])` + KW_GROUP_E + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
   'iu',
 );
 
@@ -182,6 +182,15 @@ export function parseRoleReason(raw: unknown): ParsedRoleReason {
     // Multi-phrase input. Try to pair a marker on each phrase.
     const left = phrases[0];
     const right = phrases[1];
+    // Bug #9 fix: surface the 3rd+ phrases that were being silently dropped.
+    // Default: log a warning so operators can spot drift in production logs.
+    // Tests / callers can suppress via `process.env.ROLE_REASON_SILENT_DROPS=true`.
+    if (phrases.length > 2 && process.env.ROLE_REASON_SILENT_DROPS !== 'true') {
+      console.warn(
+        `[role-reason-parser] input has ${phrases.length} phrases; only first two are used for signal/expected. ` +
+        `Extra phrase(s) (${phrases.length - 2}) appended to 'expected': ${phrases.slice(2).join(' | ')}`,
+      );
+    }
 
     const leftSignal = left.match(SIGNAL_PREFIX_RE) ?? left.match(SIGNAL_LOOSE_RE);
     const rightExpected = right.match(EXPECTED_LOOSE_RE);

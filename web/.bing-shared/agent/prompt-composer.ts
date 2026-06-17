@@ -15,6 +15,30 @@ import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabil
 import { SYSTEM_PROMPTS, type AgentRole } from './system-prompts';
 
 // ============================================================================
+// Q3 + Q5: audit-grade defaults — single source of truth for tests + renames.
+// ============================================================================
+
+/** Q3: default header for `generateDynamicToolBlock`'s options.header field. */
+
+// @audit-Q3-Q5-composer-lift: DEFAULT_DYNAMIC_HEADER + RULES_BLOCK promoted from
+// module-private consts to `export const` so the same single-source-of-truth
+// criterion applied at the unified-agent-service.ts cascade lift also applies
+// to the composer surface (cascade Q3 + Q5 cross-cut).
+export const DEFAULT_DYNAMIC_HEADER = 'AVAILABLE CAPABILITIES';
+
+/**
+ * Q5: default 3-rule block emitted by `generateDynamicToolBlock` after the
+ * capabilities list. Rule 4 (about metadata) is appended inline based on
+ * `showMetadata` so the const stays composable.
+ */
+export const RULES_BLOCK = [
+  '## Rules',
+  '1. Use the MOST SPECIFIC tool for the job',
+  '2. Chain tools logically: search → read → analyze → write',
+  '3. NEVER fabricate tool output — always call the actual tool',
+].join('\n');
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -92,11 +116,21 @@ const CATEGORY_LABELS: Record<string, string> = {
  * Compose a full system prompt for a role with dynamic tool injection.
  */
 export function composeRoleWithTools(
-  role: AgentRole,
+  role: AgentRole | undefined,
   options: Omit<ComposeRoleOptions, 'toolStrategy'> & { availableTools: string[] }
-): string {
-  const sections = getRoleSections(role);
-  if (!sections) return SYSTEM_PROMPTS[role] || '';
+): string | null {
+  // (1) Caller did NOT request a role override.
+  if (role === undefined) return null;
+  // (2) No canonical prompt registered for this role \u2014 configuration error.
+  const sectionsForRole = getRoleSections(role);
+  if (!sectionsForRole && !SYSTEM_PROMPTS[role]) {
+    throw new Error(`[prompt-composer] no canonical prompt registered for role "${role}"`);
+  }
+  // (3) sections-missing: fall back to SYSTEM_PROMPTS[role] (guard (2) ensures it exists).
+  if (!sectionsForRole) {
+    return SYSTEM_PROMPTS[role]!;
+  }
+  const sections = sectionsForRole;
 
   // Filter tools to only include those available to this role
   const toolBlock = generateToolBlock(options.availableTools);
@@ -118,9 +152,19 @@ export function composeRoleWithTools(
 /**
  * Compose a role prompt from sections with optional overrides.
  */
-export function composeRole(role: AgentRole, options: ComposeRoleOptions = {}): string {
-  const base = getRoleSections(role);
-  if (!base) return SYSTEM_PROMPTS[role] || '';
+export function composeRole(role: AgentRole | undefined, options: ComposeRoleOptions = {}): string | null {
+  // (1) Caller did NOT request a role override.
+  if (role === undefined) return null;
+  // (2) No canonical prompt registered for this role \u2014 configuration error.
+  const baseForRole = getRoleSections(role);
+  if (!baseForRole && !SYSTEM_PROMPTS[role]) {
+    throw new Error(`[prompt-composer] no canonical prompt registered for role "${role}"`);
+  }
+  // (3) sections-missing: fall back to SYSTEM_PROMPTS[role] (guard (2) ensures it exists).
+  if (!baseForRole) {
+    return SYSTEM_PROMPTS[role]!;
+  }
+  const base = baseForRole;
 
   const ctx: PromptContext = {
     roleName: String(role),
@@ -208,12 +252,8 @@ export function generateToolBlock(toolIds: string[]): string {
       lines.push(`- **${cap.id}** — ${cap.description}`);
     }
     lines.push('');
-  }
-
-  lines.push('## Rules');
-  lines.push('1. Use the MOST SPECIFIC tool for the job');
-  lines.push('2. Chain tools logically: search → read → analyze → write');
-  lines.push('3. NEVER fabricate tool output — always call the actual tool');
+  }      // Q5: see RULES_BLOCK above — single source so renames + test assertions stay co-located.
+      lines.push(RULES_BLOCK);
 
   return lines.join('\n');
 }
@@ -310,4 +350,131 @@ function extractToolReferences(content: string): string[] {
   const pattern = /`([a-z]+\.[a-z-_]+)`/g;
   const matches = [...content.matchAll(pattern)];
   return Array.from(new Set(matches.map(m => m[1])));
+}
+// ============================================================================
+// Module-level section registry (private Map; exported via CRUD helpers)
+// ============================================================================
+
+const _sectionRegistry = new Map<string, PromptSection>();
+
+/**
+ * Register a section template by id. Used by tests + tooling to override
+ * default section content at runtime.
+ */
+export function registerSection(section: PromptSection): void {
+  _sectionRegistry.set(section.id, section);
+}
+
+/**
+ * Retrieve a registered section template by id. Returns undefined for
+ * unknown sections; caller's responsibility to fall back to defaults.
+ */
+export function getSectionTemplate(id: string): PromptSection | undefined {
+  return _sectionRegistry.get(id);
+}
+
+/**
+ * Clear the section template registry. Intended for testing or cache
+ * invalidation lifecycles.
+ */
+export function invalidateSectionCache(): void {
+  _sectionRegistry.clear();
+}
+
+// ============================================================================
+// Dynamic Tool Block (with options) — wraps the ALL_CAPABILITIES filter
+// ============================================================================
+
+export interface DynamicToolBlockOptions {
+  /** Subset of capability-ids to include; non-listed tools are excluded. */
+  allowedTools?: string[];
+  /** Subset of capability-ids to exclude; applied after allowedTools. */
+  excludedTools?: string[];
+  /** When true, append latency/cost/reliability hint to the Rules section. */
+  showMetadata?: boolean;
+  /** Section header override (default 'AVAILABLE CAPABILITIES'). */
+  header?: string;
+}
+
+/**
+ * Generate a categorized markdown tool block with optional filtering.
+ * Empty string on zero matches (per test conventions).
+ */
+// Bug #8 dedup state: warn only once per unique overlap key in prod (persists
+// across calls so we don't spam logs when the same overlap recurs). Keyed by
+// sorted overlap id list to be order-insensitive.
+const warnedOverlaps = new Set<string>();
+export function generateDynamicToolBlock(
+  options: DynamicToolBlockOptions = {},
+): string {
+  const {
+    allowedTools,
+    excludedTools,
+    showMetadata = false,
+    // Q3: see DEFAULT_DYNAMIC_HEADER above — single source so renames are safe.
+    header = DEFAULT_DYNAMIC_HEADER,
+  } = options;
+  // Bug #8 fix: detect allowedTools ∩ excludedTools overlap and warn (or throw in dev).
+  // Without this guard, a tool listed in BOTH arrays is silently dropped because
+  // the filter order runs `allowedTools` first then `excludedTools` excludes it again.
+  // This ambiguity is easy to miss at call sites — fail loudly in dev, warn once per
+  // unique overlap pattern in prod (keyed by sorted overlap ids) to avoid log spam
+  // when the same overlap is detected across many calls.
+  if (allowedTools && excludedTools && allowedTools.length > 0 && excludedTools.length > 0) {
+    const overlap = allowedTools.filter((id) => excludedTools.includes(id));
+    if (overlap.length > 0) {
+      const msg = `[prompt-composer] allowedTools and excludedTools overlap on ${overlap.length} id(s): ${overlap.join(', ')}. These are treated as excluded (filter order: allowed → excluded). Pass them in only ONE list to avoid silent filtering.`;
+      if (process.env.NODE_ENV === 'production') {
+        const overlapKey = [...overlap].sort().join('|');
+        if (!warnedOverlaps.has(overlapKey)) {
+          warnedOverlaps.add(overlapKey);
+          console.warn(msg);
+        }
+      } else {
+        throw new Error(msg);
+      }
+    }
+  }
+  let caps = ALL_CAPABILITIES;
+  if (allowedTools) caps = caps.filter((c) => allowedTools.includes(c.id));
+  if (excludedTools) caps = caps.filter((c) => !excludedTools.includes(c.id));
+  if (caps.length === 0) return '';
+
+  const groups: Record<string, CapabilityDefinition[]> = {};
+  for (const cap of caps) {
+    if (!groups[cap.category]) groups[cap.category] = [];
+    groups[cap.category].push(cap);
+  }
+
+  const lines: string[] = [`# ${header}`, ''];
+  for (const category of Object.keys(groups).sort()) {
+    lines.push(`## ${CATEGORY_LABELS[category] || category}`);
+    for (const cap of groups[category].sort((a, b) => a.id.localeCompare(b.id))) {
+      lines.push(`- **${cap.id}** \u2014 ${cap.description || cap.name}`);
+    }
+    lines.push('');
+  }
+
+  lines.push('## Rules');
+  lines.push('1. Use the MOST SPECIFIC tool for the job');
+  lines.push('2. Chain tools logically: search \u2192 read \u2192 analyze \u2192 write');
+  lines.push('3. NEVER fabricate tool output \u2014 always call the actual tool');
+  if (showMetadata) {
+    lines.push('4. Consider latency, cost, reliability when choosing tools');
+  }
+
+  return lines.join('\n');
+}
+
+// ============================================================================
+// Tool Hints (compact list, single-line)
+// ============================================================================
+
+/**
+ * Return a single-line summary of available tools for inclusion in
+ * lighter-weight prompts. Returns '' when no tools are listed.
+ */
+export function generateToolHints(toolIds: string[]): string {
+  if (!toolIds || toolIds.length === 0) return '';
+  return `Available tools: ${toolIds.join(', ')}`;
 }

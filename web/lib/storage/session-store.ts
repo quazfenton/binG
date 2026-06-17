@@ -51,63 +51,220 @@ let stmtDelete: BetterSqlite3.Statement | null = null
 let stmtAllActive: BetterSqlite3.Statement | null = null
 let stmtCleanup: BetterSqlite3.Statement | null = null
 
-try {
-  const { default: getDatabase } = require('../database/connection') as { default: () => BetterSqlite3.Database }
-  db = getDatabase()
+// ---------------------------------------------------------------------------
+// Native-binding diagnostics
+// ---------------------------------------------------------------------------
+// `require('../database/connection')` can throw for several distinct reasons.
+// The bare warn line used to swallow every possibility under the same
+// `[session-store] better-sqlite3 unavailable` text, leaving operators no way
+// to tell apart a CPU-arch mismatch from a missing libc++ from an ESM/CJS
+// require mismatch. The classifier below tags each failure mode so the warn
+// log states WHY, not just THAT the binding failed.
+type SqliteFailureKind =
+  | 'arch-mismatch'
+  | 'libc-missing'
+  | 'abi-mismatch'
+  | 'native-not-built'
+  | 'module-not-installed'
+  | 'cjs-of-esm'
+  | 'sqlite-runtime-error'
+  | 'unknown'
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sandbox_sessions (
-      sessionId   TEXT PRIMARY KEY,
-      sandboxId   TEXT NOT NULL,
-      userId      TEXT NOT NULL,
-      ptySessionId TEXT,
-      cwd         TEXT NOT NULL,
-      createdAt   TEXT NOT NULL,
-      lastActive  TEXT NOT NULL,
-      status      TEXT NOT NULL DEFAULT 'creating'
+export interface SqliteFailure {
+  kind: SqliteFailureKind
+  reason: string
+  hint: string
+}
+
+/**
+ * Best-effort classification of a failure encountered while requiring or
+ * initializing better-sqlite3. Combines `message`, `code`, and `name` into a
+ * single haystack so a check on `err.code === 'ERR_REQUIRE_ESM'` does not
+ * silently miss the actual message text.
+ *
+ * Pure function — exported for direct unit testing without needing vi.mock
+ * on the better-sqlite3 native module.
+ */
+export function classifySqliteFailure(err: unknown): SqliteFailure {
+  const e = err as { message?: string; code?: string; name?: string } | null
+  const haystack =
+    `${e?.message ?? ''} ${e?.code ?? ''} ${e?.name ?? ''}`.toLowerCase()
+
+  // SqliteError instances mean the binding loaded but a SQL operation failed
+  // (locked DB, permission denied, file-system error, etc.) — distinctly
+  // different from a binding-load failure and a different remediation path.
+  if (err instanceof Error && err.name === 'SqliteError') {
+    return {
+      kind: 'sqlite-runtime-error',
+      reason: e?.message ?? haystack,
+      hint:
+        'better-sqlite3 loaded but a SQL operation failed (database locked, missing directory, permission denied, or schema mismatch); check DATABASE_PATH and filesystem permissions',
+    }
+  }
+  if (
+    /wrong architecture|incorrect elf|not a valid (win32|mach-o)|invalid target|mach-o .* but.+ is required/.test(
+      haystack
     )
-  `)
+  ) {
+    return {
+      kind: 'arch-mismatch',
+      reason: e?.message ?? haystack,
+      hint:
+        'better-sqlite3 .node binary was built for a different CPU architecture (x64 vs arm64, macOS vs Linux); run `pnpm rebuild better-sqlite3` to recompile against the current arch',
+    }
+  }
+  if (
+    /glibc[_\s]?\d|libstdc\+\+|libc\+\+|libc\.so\.1|cannot open shared object|libgcc_s\.so|libcrypto\.so|libssl\.so/.test(
+      haystack
+    )
+  ) {
+    return {
+      kind: 'libc-missing',
+      reason: e?.message ?? haystack,
+      hint:
+        'a native shared library (libc++ / libstdc++ / libssl) is missing; on Alpine run `apk add libstdc++`, on Debian/Ubuntu install `libc6` + `libssl3`, then `pnpm rebuild better-sqlite3`',
+    }
+  }
+  if (
+    /node_module_version|the module '[^']+' was compiled against a different node|abi version/i.test(
+      haystack
+    )
+  ) {
+    return {
+      kind: 'abi-mismatch',
+      reason: e?.message ?? haystack,
+      hint:
+        'better-sqlite3 was compiled against a different Node.js version; run `pnpm rebuild better-sqlite3` to recompile against the current NODE_MODULE_VERSION',
+    }
+  }
+  if (
+    /could not locate the bindings|bindings? (file)? .* did not match|the specified module could not be found|enoent/.test(
+      haystack
+    )
+  ) {
+    return {
+      kind: 'native-not-built',
+      reason: e?.message ?? haystack,
+      hint:
+        'the prebuilt .node binary is missing or invalid for this platform; try `pnpm install --force better-sqlite3` then `pnpm rebuild better-sqlite3`',
+    }
+  }
+  if (/cannot find module 'better-sqlite3'|cannot find package 'better-sqlite3'/.test(haystack)) {
+    return {
+      kind: 'module-not-installed',
+      reason: e?.message ?? haystack,
+      hint:
+        'better-sqlite3 is not declared as a dependency; add it with `pnpm add better-sqlite3` and rebuild',
+    }
+  }
+  if (/err_require_esm|require\(\) of es module|\berm\b.*esm/.test(haystack)) {
+    return {
+      kind: 'cjs-of-esm',
+      reason: e?.message ?? haystack,
+      hint:
+        'a CJS require() tried to import an ESM module; replace the require() with a dynamic import() or upgrade better-sqlite3 to a CJS-compatible prebuild',
+    }
+  }
+  return {
+    kind: 'unknown',
+    reason: e?.message ?? String(err),
+    hint:
+      'rebuild better-sqlite3 (`pnpm rebuild`) and verify the active Node.js version has a matching prebuild in the better-sqlite3 release matrix',
+  }
+}
 
-  // Indexes
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_userId ON sandbox_sessions(userId)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_status ON sandbox_sessions(status)`)
+/**
+ * Wrap the `require('../database/connection')` call — the line that historically
+ * swallowed every failure under a single vague warn message. If the require
+ * itself throws (CJS/ESM mismatch, missing module, native binding failure
+ * surfacing from connection.ts), classify and warn with structured fields
+ * before returning null so the caller can fall back to the in-memory store.
+ *
+ * Pure Node ESM-safe: uses the same `require(...)` pattern connection.ts uses.
+ */
+function tryRequireDatabaseConnection():
+  | { default: () => BetterSqlite3.Database }
+  | null {
+  try {
+    return require('../database/connection') as { default: () => BetterSqlite3.Database }
+  } catch (requireErr) {
+    useSqlite = false
+    log.warn(
+      '[session-store] better-sqlite3 binding failed to load – falling back to in-memory store',
+      classifySqliteFailure(requireErr),
+    )
+    return null
+  }
+}
 
-  // Prepare statements
-  stmtInsert = db.prepare(`
-    INSERT OR REPLACE INTO sandbox_sessions
-      (sessionId, sandboxId, userId, ptySessionId, cwd, createdAt, lastActive, status)
-    VALUES
-      (@sessionId, @sandboxId, @userId, @ptySessionId, @cwd, @createdAt, @lastActive, @status)
-  `)
+const connection = tryRequireDatabaseConnection()
+if (connection) {
+  try {
+    const { default: getDatabase } = connection
+    db = getDatabase()
 
-  stmtGet = db.prepare(`
-    SELECT * FROM sandbox_sessions
-    WHERE sessionId = ? AND lastActive > datetime('now', '-4 hours')
-  `)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sandbox_sessions (
+        sessionId   TEXT PRIMARY KEY,
+        sandboxId   TEXT NOT NULL,
+        userId      TEXT NOT NULL,
+        ptySessionId TEXT,
+        cwd         TEXT NOT NULL,
+        createdAt   TEXT NOT NULL,
+        lastActive  TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'creating'
+      )
+    `)
 
-  stmtGetByUser = db.prepare(`
-    SELECT * FROM sandbox_sessions
-    WHERE userId = ? AND status = 'active' AND lastActive > datetime('now', '-4 hours')
-    LIMIT 1
-  `)
+    // Indexes
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_userId ON sandbox_sessions(userId)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_status ON sandbox_sessions(status)`)
 
-  stmtDelete = db.prepare(`DELETE FROM sandbox_sessions WHERE sessionId = ?`)
+    // Prepare statements
+    stmtInsert = db.prepare(`
+      INSERT OR REPLACE INTO sandbox_sessions
+        (sessionId, sandboxId, userId, ptySessionId, cwd, createdAt, lastActive, status)
+      VALUES
+        (@sessionId, @sandboxId, @userId, @ptySessionId, @cwd, @createdAt, @lastActive, @status)
+    `)
 
-  stmtAllActive = db.prepare(`
-    SELECT * FROM sandbox_sessions
-    WHERE status = 'active' AND lastActive > datetime('now', '-4 hours')
-  `)
+    stmtGet = db.prepare(`
+      SELECT * FROM sandbox_sessions
+      WHERE sessionId = ? AND lastActive > datetime('now', '-4 hours')
+    `)
 
-  stmtCleanup = db.prepare(`DELETE FROM sandbox_sessions WHERE lastActive <= datetime('now', '-4 hours')`)
+    stmtGetByUser = db.prepare(`
+      SELECT * FROM sandbox_sessions
+      WHERE userId = ? AND status = 'active' AND lastActive > datetime('now', '-4 hours')
+      LIMIT 1
+    `)
 
-  // Initial cleanup
-  stmtCleanup.run()
+    stmtDelete = db.prepare(`DELETE FROM sandbox_sessions WHERE sessionId = ?`)
 
-  useSqlite = true
-  console.log('[session-store] Using SQLite for session persistence')
-} catch (_err) {
-  useSqlite = false
-  console.warn('[session-store] better-sqlite3 unavailable – falling back to in-memory store')
+    stmtAllActive = db.prepare(`
+      SELECT * FROM sandbox_sessions
+      WHERE status = 'active' AND lastActive > datetime('now', '-4 hours')
+    `)
+
+    stmtCleanup = db.prepare(`DELETE FROM sandbox_sessions WHERE lastActive <= datetime('now', '-4 hours')`)
+
+    // Initial cleanup
+    stmtCleanup.run()
+
+    useSqlite = true
+    console.log('[session-store] Using SQLite for session persistence')
+  } catch (initErr) {
+    // The require above succeeded but the DB schema setup or
+    // `getDatabase()` itself raised. Treat as a binding/runtime failure and
+    // surface the same diagnostic taxonomy so the operator isn't told it's
+    // "better-sqlite3 unavailable" when in reality it was a permission
+    // problem during db.exec.
+    useSqlite = false
+    log.warn(
+      '[session-store] SQLite initialization failed after require – falling back to in-memory store',
+      classifySqliteFailure(initErr),
+    )
+  }
 }
 
 // ============================================================================

@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
+
 import { GET as callbackGET, POST as callbackPOST } from './callback/gateway';
 import { GET as mcpGET, POST as mcpPOST, PATCH as mcpPATCH, DELETE as mcpDELETE } from './mcp/gateway';
 
