@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
 
 import { getAntigravityOAuthUrl } from '@/lib/providers/antigravity-provider';
 import { verifyAuth } from '@/lib/auth/jwt';

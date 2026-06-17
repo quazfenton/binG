@@ -1508,7 +1508,6 @@ const config: UnifiedAgentConfig = {
                 );
 
                 // Call the LLM
-                result = await 
 // @audit-Stage3-process-caller-typed-APPLIED:
 // processUnifiedAgentRequest(currentConfig) at L1501 is the Stage 3 retype target.
 // Status: APPLIED in this turn (suffix promoted from
@@ -1537,7 +1536,7 @@ const config: UnifiedAgentConfig = {
 //
 // Pair: @audit-phantom-L2053 in route.ts (canonical Stage 2 band reference).
 //        @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
-processUnifiedAgentRequest(currentConfig);
+                result = await processUnifiedAgentRequest(currentConfig);
                 sendStep(`Iteration ${iteration + 1}`, result.success ? 'completed' : 'failed');
 
                 // Accumulate this iteration's result

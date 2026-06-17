@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 import { GET as workflowsGET } from './n8n/workflows/gateway';
 import { POST as executePOST } from './n8n/workflows/[id]/execute/gateway';
 import { GET as executionsGET } from './n8n/workflows/[id]/executions/gateway';

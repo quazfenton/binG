@@ -227,6 +227,19 @@ const getBlaxelCodegenToolDefinitions = (): Array<{
 
 const logger = createLogger('MCP:Integration')
 
+// AI-SDK-only routing tools. choose_role (and its alias role_selection) are
+// registered exclusively in the Vercel AI SDK toolset
+// (/opt/bing/web/lib/chat/vercel-ai-tools.ts:553-555); they are NOT MCP
+// tools. When the orchestrator/dispatcher fan-out attempts them via
+// callMCPToolFromAI_SDK as a defensive fallback (see
+// architecture-integration.ts:897 and 1448-1449 comments), the MCP registry
+// lookup fails and produces spurious `success: false, duration: 0` log noise.
+// The short-circuit below suppresses that noise — the AI SDK execute() path
+// (/opt/bing/web/lib/chat/tools/choose-role-tool.ts → chooseRoleCapability)
+// handles the role switch. Keep this list narrow: only tools whose canonical
+// registration is in the Vercel AI SDK toolset.
+const AI_SDK_ONLY_TOOLS = new Set(['choose_role', 'role_selection']);
+
 // Redact sensitive or large fields from tool args for logging/tracing
 
 // ── Zod → JSON Schema converter ───────────────────────────────────────────
@@ -1271,6 +1284,36 @@ export async function callMCPToolFromAI_SDK(
       toolName = canonicalToolName;
     }
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
+
+    // AI-SDK-only routing tools (choose_role + role_selection alias) live in
+    // the Vercel AI SDK toolset, not the MCP tool assembly. Skip the MCP
+    // registry lookup so the typical
+    //   `MCP tool result: <tool> { success: false, duration: 0 }`
+    // log noise doesn't mislead operators. The AI SDK execute() path
+    // (/opt/bing/web/lib/chat/tools/choose-role-tool.ts → chooseRoleCapability)
+    // handles the role switch — see canonical registration at
+    // /opt/bing/web/lib/chat/vercel-ai-tools.ts:553-555. The fail-safe
+    // fallback chain still operates over other tools (the canonical chain in
+    // non-union routing); we only skip the misleading log noise here.
+    if (AI_SDK_ONLY_TOOLS.has(canonicalToolName)) {
+      logger.debug(`[MCP] Hand-off to AI SDK toolset: ${canonicalToolName} (skipping MCP registry lookup)`, {
+        requestedName: toolName,
+        canonicalName: canonicalToolName,
+      });
+      return {
+        success: true,
+        // Explicit sentinel so future consumers (analytics, telemetry,
+        // operator dashboards) can distinguish a real MCP success from a
+        // deliberate MCP-skip hand-off. Downstream code that doesn't know
+        // about this flag treats the result as a normal success.
+        __aiSdkOnly: true,
+        output: JSON.stringify({
+          routedTo: 'ai_sdk_toolset',
+          tool: canonicalToolName,
+          note: 'Hand-off to Vercel AI SDK toolset; MCP path is intentionally not used.',
+        }),
+      };
+    }
 
     // Tools that should never be cached but trigger invalidation
     const writeTools = ['write_file', 'batch_write', 'apply_diff', 'delete_file', 'move_file'];

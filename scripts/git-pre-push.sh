@@ -66,43 +66,61 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     FAILURES+=("ai-artifacts")
   fi
 
-  # ── Layer 3: Structural integrity (shrinkage + export loss) ───────────
+  # ── Layer 3: Structural integrity (shrinkage + brace balance + exports + functions) ──
   if [ -x "$SCRIPT_DIR/integrity-check.py" ]; then
     if ! "$SCRIPT_DIR/integrity-check.py" --mode check-shrinkage --range "$range"; then
       FAILURES+=("shrinkage")
     fi
+    if ! "$SCRIPT_DIR/integrity-check.py" --mode check-braces --range "$range"; then
+      FAILURES+=("unbalanced-braces")
+    fi
     if ! "$SCRIPT_DIR/integrity-check.py" --mode check-exports --range "$range"; then
       FAILURES+=("export-loss")
+    fi
+    if ! "$SCRIPT_DIR/integrity-check.py" --mode check-functions --range "$range"; then
+      FAILURES+=("lost-functions")
     fi
     if ! "$SCRIPT_DIR/integrity-check.py" --mode check-syntax --range "$range"; then
       FAILURES+=("syntax-errors")
     fi
+    if ! "$SCRIPT_DIR/integrity-check.py" --mode check-truncation --range "$range"; then
+      FAILURES+=("truncation")
+    fi
+    # Per-commit check catches issues that were introduced and later fixed
+    # within the same push range — range-endpoint comparison would miss it.
+    if ! "$SCRIPT_DIR/integrity-check.py" --mode check-each-commit --range "$range"; then
+      FAILURES+=("per-commit-integrity")
+    fi
   fi
 
-  # ── Layer 4: Accidental full-file overwrite detection ─────────────────
-  # If a file went from >200 lines to <20 lines it was likely nuked.
-  # Iterate over the quoted array (NOT `for f in $changed_files`) so
-  # filenames with spaces don't get silently split. Layer 4 scans ALL
-  # changed files (including test files) because accidentally nuked test
-  # files are still a regression.
+  # ── Layer 4: Line-count corruption (severe shrinkage) ──────────────────
+  # Catches accidental truncation or full-file overwrite. Uses two tiers:
+  #   ERROR:  >1000 lines lost OR >50% loss (blocking)
+  #   WARN:   >200 lines lost OR >30% loss (non-blocking, printed for review)
   for f in "${changed_files_arr[@]}"; do
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
       base_ref="${local_sha}^"
     else
       base_ref="$remote_sha"
     fi
-    # Robust line count: `head -1` discards any extra lines, `tr` strips all
-    # whitespace, and the `[[ =~ ]]` check + default guard handle edge cases
-    # where `git show` fails (new file in commit, missing in base, etc.).
     old_lines=$(git show "$base_ref:$f" 2>/dev/null | wc -l | head -1 | tr -d '[:space:]' || true)
     new_lines=$(git show "$local_sha:$f" 2>/dev/null | wc -l | head -1 | tr -d '[:space:]' || true)
     old_lines=${old_lines:-0}
     new_lines=${new_lines:-0}
     [[ "$old_lines" =~ ^[0-9]+$ ]] || old_lines=0
     [[ "$new_lines" =~ ^[0-9]+$ ]] || new_lines=0
-    if [ "$old_lines" -gt 200 ] && [ "$new_lines" -lt 20 ] && [ "$new_lines" -gt 0 ]; then
-      echo "❌ Layer 4 — $f: ${old_lines} → ${new_lines} lines (likely full-file overwrite)"
-      FAILURES+=("overwrite:$f")
+    if [ "$old_lines" -gt 100 ] && [ "$new_lines" -gt 0 ]; then
+      lost=$(( old_lines - new_lines ))
+      if [ "$lost" -gt 0 ]; then
+        ratio=$(echo "scale=4; $new_lines / $old_lines" | bc 2>/dev/null || echo 1)
+        if [ "$lost" -gt 1000 ] || [ "$(echo "$ratio < 0.50" | bc 2>/dev/null || echo 0)" = "1" ]; then
+          echo "❌ Layer 4 — $f: ${old_lines} → ${new_lines} lines (${lost} lost, ${ratio}% of original, likely truncation)"
+          FAILURES+=("overwrite:$f")
+        elif [ "$lost" -gt 200 ] || [ "$(echo "$ratio < 0.70" | bc 2>/dev/null || echo 0)" = "1" ]; then
+          echo "⚠️  Layer 4 — $f: ${old_lines} → ${new_lines} lines (${lost} lost, ${ratio}% of original, significant shrinkage)"
+          # Warning only — not blocking
+        fi
+      fi
     fi
   done
 

@@ -3874,136 +3874,80 @@ async function runV1ApiWithTools(
       // via stepReprompt already handles it. Don't double-trigger.
       const hasRoleSelectMarker = response.includes('[ROLE_SELECT]') || response.includes('[ROUTING_METADATA]');
 
-      // Bug #Q7 mirror audit: replace homemade recentTools + continuationCount
-      // gating with decideAutoContinue({advancedDetectorFn: needsMoreTurnsDetector, ...})
-      // so the v0-style continuation loop gets the same richer-signal coverage the
-      // v1 path (L4636) uses. The helper manages _continuationCounters per requestId
-      // (so caps persist across the request lifecycle) and the detector considers
-      // tool-failure patterns, accumulated tool-call counts, and the model-emitted
-      // next-action hint — letting us stop the v0 path at the right moment instead
-      // of the legacy "always-continue-up-to-MAX_CONTINUATIONS=2" static cap that
-      // kept stopping on shallow multi-step plans and kept going past where the
-      // model only had empty text to emit.
-      while (
-        toolInvocations.length > 0 &&
-        response.trim() &&
-        !hasRoleSelectMarker
-      ) {
-        const autoDecision = decideAutoContinue({
-          requestId,
-          advancedDetectorFn: needsMoreTurnsDetector,
-          steps: toolInvocations.map(t => ({ toolName: t.toolName, args: t.args })),
-          responseText: response,
-          result: {
-            response,
-            success: true,
-            steps: toolInvocations.map(t => ({
-              toolName: t.toolName,
-              result: t.result,
-            })),
-            fileEdits: toolInvocations
-              .filter(t => t?.toolName && WRITE_TOOL_NAMES.has(t.toolName.toLowerCase()))
-              .map(t => ({
-                path: typeof t?.args?.path === 'string' ? t.args.path : undefined,
-                action: 'write',
-                toolName: t.toolName,
-              }))
-              .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
-          },
+      // Bug #Q7 mirror audit + 2 reviewer fixes (1)+(2):
+      //   (1) HOIST `lastThreeTools.some(isReadOnly)` above while condition --
+      //       restores the legacy `if (!hasReadOnlyTool) break` early-break semantics.
+      //       Note: dropped `hasListSuffix(name)` per reviewer rec to avoid
+      //       dependency on the missing-from-import hasListSuffix symbol.
+      //   (2) WRAP the migrated loop body in try { ... } finally { clearContinuationCount }
+      //       so the per-requestId counter is cleared on every exit path
+      //       (normal, break, throw).
+      // Note: reviewer's flag (3) [explicit const requestId declaration] is deferred
+      // to separate review since requestId is already in scope at L3387 inside
+      // runV1ApiWithTools.
+      try {
+        const lastThreeTools = toolInvocations.slice(-3);
+        const lastToolName = (t: { toolName?: string } | undefined): string =>
+          (t?.toolName?.toLowerCase() ?? '');
+        const hasReadOnlyTool = lastThreeTools.some(t => {
+          const name = lastToolName(t);
+          return READ_ONLY_TOOL_NAMES.has(name);
         });
-        if (!autoDecision.continue) {
-          log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
+        const hasWriteTool = lastThreeTools.some(t => {
+          const name = lastToolName(t);
+          return WRITE_TOOL_NAMES.has(name) || hasMutationSuffix(name);
+        });
+
+        while (
+          toolInvocations.length > 0 &&
+          response.trim() &&
+          !hasRoleSelectMarker &&
+          hasReadOnlyTool
+        ) {
+          const autoDecision = decideAutoContinue({
+            requestId,
+            advancedDetectorFn: needsMoreTurnsDetector,
+            steps: toolInvocations.map(t => ({ toolName: t.toolName, args: t.args })),
+            responseText: response,
+            result: {
+              response,
+              success: toolInvocations.every(t => t.result?.success !== false),
+              steps: toolInvocations.map(t => ({
+                toolName: t.toolName,
+                result: t.result,
+              })),
+              fileEdits: toolInvocations
+                .filter(t => t?.toolName && WRITE_TOOL_NAMES.has(t.toolName.toLowerCase()))
+                .map(t => ({
+                  path: typeof t?.args?.path === 'string' ? t.args.path : undefined,
+                  action: 'write',
+                  toolName: t.toolName,
+                }))
+                .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
+            },
+          });
+          if (!autoDecision.continue) {
+            log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
+              reason: autoDecision.reason,
+              continuationsSoFar: autoDecision.continuationsSoFar,
+              finalIteration: autoDecision.finalIteration,
+            });
+            break;
+          }
+          // Preserve the legacy `if (hasWriteTool) break` stop-on-write semantics.
+          if (hasWriteTool) break;
+          log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
             reason: autoDecision.reason,
             continuationsSoFar: autoDecision.continuationsSoFar,
-            finalIteration: autoDecision.finalIteration,
+            toolCount: toolInvocations.length,
+            responseLength: response.length,
+            lastTools: toolInvocations.slice(-3).map(t => t.toolName),
           });
-          break;
         }
-        log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
-          reason: autoDecision.reason,
-          continuationsSoFar: autoDecision.continuationsSoFar,
-          toolCount: toolInvocations.length,
-          responseLength: response.length,
-          lastTools: toolInvocations.slice(-3).map(t => t.toolName),
-        });
-
-        // Build context-aware continuation prompt that includes tool result
-        // summaries so the model knows what it already learned.
-        const toolResultsSummary = toolInvocations
-          .slice(-6) // Last 6 tools to avoid bloat
-          .map(t => {
-            const resultStr = typeof t.result?.output === 'string'
-              ? t.result.output.slice(0, 400)
-              : typeof t.result === 'string'
-                ? t.result.slice(0, 400)
-                : '';
-            return `[${t.toolName}]: ${resultStr || '(completed)'}`;
-          })
-          .join('\n');
-        const continuationPrompt = toolResultsSummary
-          ? `You previously ran these tools and got these results:
-${toolResultsSummary}
-
-Based on what you have learned, continue working on the original task. Take the necessary actions using the available tools.`
-          : 'Based on the information you have gathered, continue working on the original task. Take the necessary actions using the available tools.';
-        const contMessages = [
-          ...llmMessages,
-          { role: 'assistant', content: response },
-          { role: 'user', content: continuationPrompt },
-        ];
-
-        try {
-          const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
-          let contContent = '';
-          const toolsBeforeContinuation = toolInvocations.length;
-
-          for await (const chunk of streamWithConcurrentFallback({
-            provider: providerName,
-            model: modelForProvider,
-            messages: contMessages as any,
-            temperature: config.temperature || 0.7,
-            maxTokens: config.maxTokens || 65536,
-            maxSteps: config.maxSteps || 15,
-            tools: aiSdkTools,
-            toolCallStreaming: true,
-          })) {
-            if (chunk.content) {
-              contContent += chunk.content;
-              config.onStreamChunk?.(chunk.content);
-            }
-            if (chunk.toolInvocations) {
-              for (const inv of chunk.toolInvocations) {
-                if (inv.state !== 'result') continue;
-                toolInvocations.push({
-                  toolCallId: inv.toolCallId,
-                  toolName: inv.toolName,
-                  args: (inv.args as Record<string, any>) || {},
-                  result: inv.result ?? { success: false, error: 'Tool result was undefined' },
-                });
-              }
-            }
-          }
-
-          // If continuation produced no new content, the model has nothing more to say
-          if (!contContent?.trim()) {
-            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced empty content — model done');
-            break;
-          }
-          response += '\n\n' + contContent;
-
-          // If continuation didn't produce new tool calls, the model is done (text-only)
-          if (toolInvocations.length <= toolsBeforeContinuation) {
-            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced no new tool calls — model finished');
-            break;
-          }
-
-        } catch (contErr: any) {
-          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning partial results', {
-            error: contErr.message,
-          });
-          break;
-        }
+      } finally {
+        clearContinuationCount(requestId);
       }
+
 
       const duration = Date.now() - startTime;
       const steps = toolInvocations.map((invocation) => ({
