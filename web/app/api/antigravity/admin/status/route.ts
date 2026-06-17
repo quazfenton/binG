@@ -8,6 +8,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
 
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { isMasterAccountConfigured, getMasterAccountInfo } from '@/lib/database/antigravity-accounts';

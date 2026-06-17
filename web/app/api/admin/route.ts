@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 import { GET as rolesGET, POST as rolesPOST, DELETE as rolesDELETE } from './roles/gateway';
 
 // GET /api/admin/roles

@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
 
 import { exchangeCodeForTokens } from '@/lib/providers/antigravity-provider';
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';

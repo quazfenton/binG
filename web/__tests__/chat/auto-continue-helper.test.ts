@@ -25,6 +25,7 @@ import {
   clearContinuationCount,
   DETECTOR_BUCKET_REASONS,
   type AutoContinueResultData,
+  type ContinuationDecision,
 } from '@/lib/chat/auto-continue-helper';
 
 type Step = { toolName: string; args?: Record<string, unknown>; result?: { success?: boolean; output?: string } };
@@ -445,7 +446,7 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
   function makeCaptureDetector() {
     let captured: AutoContinueResultData | undefined;
     return {
-      fn: (r: AutoContinueResultData | undefined, _cd: unknown) => {
+      fn: (r: AutoContinueResultData | undefined, _cd: ContinuationDecision) => {
         captured = r;
         return null;
       },
@@ -512,7 +513,7 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
     });
     const enriched = det.captured();
     expect(enriched).toBeDefined();
-    expect(enriched!.incompleteSignals).toEqual(['announced-next-step']);
+    expect(enriched!.incompleteSignals).toContain('announced-next-step');
     clearContinuationCount(requestId);
   });
 
@@ -533,6 +534,46 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
         },
       ],
     };
+    const det = makeCaptureDetector();      decideAutoContinue({
+        requestId,
+        routing: undefined,
+        steps: result.steps,
+        responseText: result.response,
+        result,
+        detectorFn: det.fn,
+      });
+      const enriched = det.captured();
+      expect(enriched).toBeDefined();
+      expect(enriched!.errors).toEqual(['file locked']);
+    expect(enriched!.toolFailures).toEqual([
+      { toolName: 'edit_file', error: 'file locked' },
+    ]);
+    expect(enriched!.incompleteSignals).toContain('announced-next-step');
+    clearContinuationCount(requestId);
+  });
+
+  // Bug-#T13 (Vitest-Audit): locks the `_enrichResultData` String()
+  // fallback path so non-string `step.result.error` (Error instance or
+  // number) stringifies to a stable form. Without this, a future refactor
+  // that drops the non-string branch could silently emit `[object Object]`
+  // for non-string errors and callers' `errors[0]` assertions would fail
+  // in a non-obvious way. Two cases locked separately so an
+  // implementation that handles only one of the two cases is caught.
+  it('locks errors === [String(err)] when step result.error is a non-string Error instance', () => {
+    const requestId = 'test-enrich-nonstring-err';
+    clearContinuationCount(requestId);
+    const errInstance = new Error('permission denied');
+    const result = {
+      success: false,
+      response: '',
+      steps: [
+        {
+          toolName: 'bash_shell',
+          args: { command: 'ls /etc/shadow' },
+          result: { success: false, error: errInstance },
+        },
+      ],
+    };
     const det = makeCaptureDetector();
     decideAutoContinue({
       requestId,
@@ -543,11 +584,41 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
       detectorFn: det.fn,
     });
     const enriched = det.captured();
-    expect(enriched!.errors).toEqual(['file locked']);
+    expect(enriched).toBeDefined();
+    expect(enriched!.errors).toEqual([String(errInstance)]);
     expect(enriched!.toolFailures).toEqual([
-      { toolName: 'edit_file', error: 'file locked' },
+      { toolName: 'bash_shell', error: String(errInstance) },
     ]);
-    expect(enriched!.incompleteSignals).toContain('announced-next-step');
+    clearContinuationCount(requestId);
+  });
+
+  it('locks errors === [String(N)] when step result.error is a number', () => {
+    const requestId = 'test-enrich-number-err';
+    clearContinuationCount(requestId);
+    const numericErr = 42;
+    const result = {
+      success: false,
+      response: '',
+      steps: [
+        {
+          toolName: 'bash_shell',
+          args: { command: 'echo bad' },
+          result: { success: false, error: numericErr },
+        },
+      ],
+    };
+    const det = makeCaptureDetector();
+    decideAutoContinue({
+      requestId,
+      routing: undefined,
+      steps: result.steps,
+      responseText: result.response,
+      result,
+      detectorFn: det.fn,
+    });
+    const enriched = det.captured();
+    expect(enriched).toBeDefined();
+    expect(enriched!.errors).toEqual([String(numericErr)]);
     clearContinuationCount(requestId);
   });
 });

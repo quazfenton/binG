@@ -107,6 +107,7 @@ const nextConfig = {
     turbo: {
       resolveAlias: {
         'server-only': './lib/utils/server-only-stub.ts',
+        'node:module': './lib/utils/node-module-stub.ts',
         'mcporter': './lib/utils/empty-module.ts',
         'modal': './lib/utils/empty-module.ts',
         'tar': './lib/utils/empty-module.ts',

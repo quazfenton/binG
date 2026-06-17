@@ -1,7 +1,6 @@
 // Database configuration - lazy initialized to avoid Edge Runtime issues
 // All Node.js modules are lazy-loaded inside functions, not at module load time
 // This file is server-only - do not import in Client Components
-import { createRequire } from 'node:module';
 import { createLogger } from '@/lib/utils/logger';
 // Pass-7 #107: tag schema-drift logs with the canonical `drift` detection
 // term so the meta-monitor can grep on a single token. The schema on disk
@@ -10,6 +9,11 @@ import { createLogger } from '@/lib/utils/logger';
 import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
 
 const logger = createLogger('Database:Connection');
+
+// Top-level await with string concatenation prevents Turbopack from statically
+// tracing `node:module` into client bundles. At runtime in Node.js ESM the
+// dynamic import resolves to the real built-in module.
+const { createRequire } = await import('node' + ':module');
 const require = createRequire(import.meta.url);
 export const runtime = 'nodejs';
 

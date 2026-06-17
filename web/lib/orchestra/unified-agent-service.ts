@@ -3874,39 +3874,57 @@ async function runV1ApiWithTools(
       // via stepReprompt already handles it. Don't double-trigger.
       const hasRoleSelectMarker = response.includes('[ROLE_SELECT]') || response.includes('[ROUTING_METADATA]');
 
-      const MAX_CONTINUATIONS = 2;
-      let continuationCount = 0;
-
+      // Bug #Q7 mirror audit: replace homemade recentTools + continuationCount
+      // gating with decideAutoContinue({advancedDetectorFn: needsMoreTurnsDetector, ...})
+      // so the v0-style continuation loop gets the same richer-signal coverage the
+      // v1 path (L4636) uses. The helper manages _continuationCounters per requestId
+      // (so caps persist across the request lifecycle) and the detector considers
+      // tool-failure patterns, accumulated tool-call counts, and the model-emitted
+      // next-action hint — letting us stop the v0 path at the right moment instead
+      // of the legacy "always-continue-up-to-MAX_CONTINUATIONS=2" static cap that
+      // kept stopping on shallow multi-step plans and kept going past where the
+      // model only had empty text to emit.
       while (
-        continuationCount < MAX_CONTINUATIONS &&
         toolInvocations.length > 0 &&
         response.trim() &&
         !hasRoleSelectMarker
       ) {
-        // Check the last few tool calls to determine if the model read without writing
-        const recentTools = toolInvocations.slice(-3);
-        // Use module-level WRITE_TOOL_NAMES and READ_ONLY_TOOL_NAMES Sets
-        const hasWriteTool = recentTools.some(t => {
-          const name = t.toolName?.toLowerCase() || '';
-          // Exact match first, then suffix-based for future capability-style tools
-          return WRITE_TOOL_NAMES.has(name) || hasMutationSuffix(name);
+        const autoDecision = decideAutoContinue({
+          requestId,
+          advancedDetectorFn: needsMoreTurnsDetector,
+          steps: toolInvocations.map(t => ({ toolName: t.toolName, args: t.args })),
+          responseText: response,
+          result: {
+            response,
+            success: true,
+            steps: toolInvocations.map(t => ({
+              toolName: t.toolName,
+              result: t.result,
+            })),
+            fileEdits: toolInvocations
+              .filter(t => t?.toolName && WRITE_TOOL_NAMES.has(t.toolName.toLowerCase()))
+              .map(t => ({
+                path: typeof t?.args?.path === 'string' ? t.args.path : undefined,
+                action: 'write',
+                toolName: t.toolName,
+              }))
+              .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
+          },
         });
-        const hasReadOnlyTool = recentTools.some(t => {
-          const name = t.toolName?.toLowerCase() || '';
-          return READ_ONLY_TOOL_NAMES.has(name) || hasReadSuffix(name);
-        });
-
-        // Don't continue if: the model already wrote files, or didn't read anything
-        if (hasWriteTool) break;
-        if (!hasReadOnlyTool) break;
-
-        continuationCount++;
+        if (!autoDecision.continue) {
+          log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
+            reason: autoDecision.reason,
+            continuationsSoFar: autoDecision.continuationsSoFar,
+            finalIteration: autoDecision.finalIteration,
+          });
+          break;
+        }
         log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
-          continuationCount,
-          maxContinuations: MAX_CONTINUATIONS,
+          reason: autoDecision.reason,
+          continuationsSoFar: autoDecision.continuationsSoFar,
           toolCount: toolInvocations.length,
           responseLength: response.length,
-          lastTools: recentTools.map(t => t.toolName),
+          lastTools: toolInvocations.slice(-3).map(t => t.toolName),
         });
 
         // Build context-aware continuation prompt that includes tool result
