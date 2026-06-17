@@ -23,6 +23,8 @@ import {
   defaultFileEditDetector,
   needsMoreTurnsDetector,
   clearContinuationCount,
+  DETECTOR_BUCKET_REASONS,
+  type AutoContinueResultData,
 } from '@/lib/chat/auto-continue-helper';
 
 type Step = { toolName: string; args?: Record<string, unknown>; result?: { success?: boolean; output?: string } };
@@ -374,39 +376,22 @@ describe('decideAutoContinue', () => {
 // This test locks the no-result fallback so future refactors don't accidentally
 // break the carve-out shape used at `unified-agent-service.ts` Sites 3+4.
 describe('Audit-Q7: Sites 3+4 carve-out — no `result` arg falls through to routing.continue', () => {
-  // Detector-bucket denylist: any reason string a detector might emit. Locked
-  // from grep of `defaultFileEditDetector` + `needsMoreTurnsDetector` + the
-  // 15 signal names emitted by `detectNeedsMoreTurns` in `auto-continue-detector.ts`.
-  // If a new signal is added there, this list needs to grow accordingly.
-  const DETECTOR_BUCKET_REASONS = [
-    'file_edits_present',            // defaultFileEditDetector
-    'needs_more_turns',              // needsMoreTurnsDetector fallback
-    'read-then-stall',
-    'deep-research-loop',
-    'failure-cascade',
-    'write-verify-loop',
-    'announced-next-step',
-    'incomplete-thought',
-    'step-enumeration',
-    'planned-multi-step',
-    'read-many-write-none',
-    'single-write-silent',
-    'diff-no-explanation',
-    'edits-mismatch',
-    'empty-after-tools',
-    'unclosed-code-block',
-    'mid-sentence-cutoff',
-  ];
+  // Bug fix (Audit Item 3) — detector-bucket denylist is now the imported
+  // `DETECTOR_BUCKET_REASONS` Set<string> from auto-continue-helper.ts
+  // (single source of truth). If a new signal is added to
+  // `detectNeedsMoreTurns`, the helper's `DETECTOR_BUCKET_REASONS` set
+  // is updated — this test automatically picks up the new slot without
+  // any change here.
 
   function assertNotDetectorReason(reason: string | undefined) {
     expect(reason).toBeDefined();
-    if (DETECTOR_BUCKET_REASONS.includes(String(reason))) {
+    if (DETECTOR_BUCKET_REASONS.has(String(reason))) {
       throw new Error(
         "decision.reason '" + reason + "' is a detector-derived bucket; the LLM routing " +
         "signal should drive Sites 3+4's decision (no result arg passes through " +
         "to detectors, both return null, so reason MUST come from " +
         "shouldAutoContinue / parsedRouting.routing.continue passthrough). " +
-        "See DETECTOR_BUCKET_REASONS constant above for the canonical list.",
+        "See DETECTOR_BUCKET_REASONS exported Set in auto-continue-helper.ts for the canonical list.",
       );
     }
   }
@@ -436,5 +421,134 @@ describe('Audit-Q7: Sites 3+4 carve-out — no `result` arg falls through to rou
   // detectors fire' describe block above for the helper-internal precedence rule.
   // Sites 3+4 only needs the passthrough assertions above; a co-fire no-op
   // test would be redundant with that lock.
+});
+
+// ─── Integration test for `_enrichResultData` enrichment contract ──────────
+// The helper enriches a caller-supplied result with `errors`, `toolFailures`,
+// and `incompleteSignals` arrays BEFORE passing it to detectors. This describe
+// block locks the contract via a capture-detector: when a custom detectorFn is
+// supplied, it receives the enriched object (AutoContinueResultData) and we
+// can assert on each enrichment field directly WITHOUT exposing
+// `_enrichResultData` as a public export.
+//
+// A future refactor that drops the enrichment (e.g. relaying `result` raw to
+// detectors, or removing any of the three populated fields) would fail these
+// assertions because the capture would show empty arrays / undefined.
+// This block is the whitebox contract guarantee for callers that depend on
+// rich signals driving the soft gate.
+describe('_enrichResultData via decideAutoContinue integration (capture-detector)', () => {
+  // makeCaptureDetector: closure that records the (result, contDecision) tuple
+  // passed to the detectorFn, then returns null (no override) so the soft
+  // gate defers to `shouldAutoContinue`'s LLM signal. Captured through a let
+  // binding so the assertion closure can inspect it after decideAutoContinue
+  // returns.
+  function makeCaptureDetector() {
+    let captured: AutoContinueResultData | undefined;
+    return {
+      fn: (r: AutoContinueResultData | undefined, _cd: unknown) => {
+        captured = r;
+        return null;
+      },
+      captured: () => captured,
+    };
+  }
+
+  it('populates errors[0] === String(err) and toolFailures[0].toolName when a step has result.error', () => {
+    const requestId = 'test-enrich-errors';
+    clearContinuationCount(requestId);
+    // Step with explicit `error` field set on `result`; the enrichment helper
+    // stringifies it and pairs it with the step's toolName.
+    const result = {
+      success: false,
+      response: '',
+      steps: [
+        {
+          toolName: 'bash_shell',
+          args: { command: 'ls /etc/shadow' },
+          result: { success: false, error: 'permission denied' },
+        },
+      ],
+    };
+    const det = makeCaptureDetector();
+    decideAutoContinue({
+      requestId,
+      routing: undefined,
+      steps: result.steps,
+      responseText: result.response,
+      result,
+      detectorFn: det.fn,
+    });
+    const enriched = det.captured();
+    expect(enriched).toBeDefined();
+    expect(enriched!.errors).toEqual(['permission denied']);
+    expect(enriched!.toolFailures).toEqual([
+      { toolName: 'bash_shell', error: 'permission denied' },
+    ]);
+    clearContinuationCount(requestId);
+  });
+
+  it("populates incompleteSignals === ['announced-next-step'] when responseText contains \"I'll now proceed\"", () => {
+    const requestId = 'test-enrich-signals';
+    clearContinuationCount(requestId);
+    // Empty steps (so Factor 1 signals don't fire), single response that
+    // triggers the announced-next-step regex via `\\bi'll now\\b` (first
+    // alternation in `_enrichResultData`'s incompleteSignals derivation).
+    const result = {
+      success: true,
+      response: "I'll now proceed to write the file.",
+      steps: [],
+    };
+    const det = makeCaptureDetector();
+    decideAutoContinue({
+      requestId,
+      // routing.continue:false keeps the LLM signal from forcing, so the
+      // detector sees the enriched shape without being short-circuited by
+      // shouldAutoContinue's hard cap or env-default paths.
+      routing: { continue: false },
+      steps: result.steps,
+      responseText: result.response,
+      result,
+      detectorFn: det.fn,
+    });
+    const enriched = det.captured();
+    expect(enriched).toBeDefined();
+    expect(enriched!.incompleteSignals).toEqual(['announced-next-step']);
+    clearContinuationCount(requestId);
+  });
+
+  it('composes errors + toolFailures + incompleteSignals when a step fails AND text announces a next step', () => {
+    const requestId = 'test-enrich-combo';
+    clearContinuationCount(requestId);
+    // Combined provenance: failed step (errors + toolFailures) AND a
+    // responseText variant ("Now I'll continue …") that hits the
+    // announced-next-step signal via the `\\bnow i('ll| will)\\b` alternation.
+    const result = {
+      success: false,
+      response: "Now I'll continue with the next step.",
+      steps: [
+        {
+          toolName: 'edit_file',
+          args: { path: 'src/a.ts' },
+          result: { success: false, error: 'file locked' },
+        },
+      ],
+    };
+    const det = makeCaptureDetector();
+    decideAutoContinue({
+      requestId,
+      routing: undefined,
+      steps: result.steps,
+      responseText: result.response,
+      result,
+      detectorFn: det.fn,
+    });
+    const enriched = det.captured();
+    expect(enriched!.errors).toEqual(['file locked']);
+    expect(enriched!.toolFailures).toEqual([
+      { toolName: 'edit_file', error: 'file locked' },
+    ]);
+    expect(enriched!.incompleteSignals).toContain('announced-next-step');
+    clearContinuationCount(requestId);
+  });
 });
 

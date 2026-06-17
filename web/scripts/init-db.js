@@ -383,18 +383,21 @@ function main() {
         // Schema drift inside a db.transaction() means the entire migration
         // rolled back; a partial run must not be recorded as applied.
         //
-        // Bug fix — drift-tolerance: `lib/database/schema.sql` is the
-        // current-fingerprint schema and intentionally pre-creates columns
-        // (e.g. `token_version` on `users`) and tables that several
-        // migrations later try to add via `ALTER TABLE ADD COLUMN`. On a
-        // clean dev DB, those migrations would otherwise hard-fail with
-        // `duplicate column name: ...` / `... already exists` even though
-        // their intent is already satisfied. Mark these as APPLIED (so a
-        // re-run doesn't keep retrying) instead of counting them as
-        // failures. Genuine errors — e.g. `no such column/table` raised
-        // by a migration BEFORE running — still fall through to the hard
-        // failure branch below.
-        if (/duplicate column name/i.test(msg) || /already exists/i.test(msg)) {
+        // Bug fix — drift-tolerance (column-only): `lib/database/schema.sql`
+        // is the current-fingerprint schema and intentionally pre-creates
+        // columns (e.g. `token_version` on `users`) that several migrations
+        // later try to add via `ALTER TABLE ADD COLUMN`. On a clean dev
+        // DB, those migrations would otherwise hard-fail with
+        // `duplicate column name: ...` even though their intent is already
+        // satisfied. Mark COLUMN-level drift as APPLIED so a re-run doesn't
+        // keep retrying. Table / index `... already exists` failures are
+        // intentionally NOT drift-tolerated — a future regression where
+        // two migrations race on the same name (one creating a duplicate
+        // table or index) MUST surface as a hard failure, not be silently
+        // swallowed. Genuine errors — e.g. `no such column/table` raised
+        // by a migration BEFORE running — also still fall through to the
+        // hard failure branch below.
+        if (/duplicate column name/i.test(msg)) {
           try {
             db.prepare(
               'INSERT OR IGNORE INTO schema_migrations (version, filename) VALUES (?, ?)',

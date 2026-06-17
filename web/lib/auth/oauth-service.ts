@@ -1,5 +1,4 @@
 import { randomUUID, createCipheriv, createDecipheriv, randomBytes, createHash } from 'crypto';
-import { getDatabase } from '../database/connection';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12; // 96-bit IV per NIST SP 800-38D (standard for GCM)
@@ -105,12 +104,15 @@ export class OAuthService {
   private schemaEnsured = false;
 
   constructor() {
-    this.db = getDatabase();
-    if (this.db) {
-      this.ensureSchema();
-    } else {
+    // Lazily init db to avoid pulling connection.ts into client bundles
+    import('../database/connection').then(mod => {
+      this.db = mod.getDatabase();
+      if (this.db) {
+        this.ensureSchema();
+      }
+    }).catch(() => {
       console.warn('[OAuthService] Database not ready, schema will be ensured on first use');
-    }
+    });
   }
 
   private ensureSchema(): void {

@@ -10,8 +10,6 @@ import { MicrosandboxProvider } from '../local/microsandbox-provider'
 import { BlaxelProvider } from './blaxel-provider'
 import { SpritesProvider } from './sprites-provider'
 import { CodeSandboxProvider } from './codesandbox-provider'
-import { E2BProvider } from './e2b-provider'
-import { DaytonaProvider } from './daytona-provider'
 import { RunloopProvider } from './runloop-provider'
 import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as DesktopHandle } from '../../computer/e2b-desktop-provider-enhanced'
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics, getCircuitStateName } from '@/lib/utils/circuit-breaker'
@@ -885,7 +883,8 @@ export { WebContainerSpawnProvider } from './webcontainer-spawn-provider'
 export { OpenSandboxProvider } from './opensandbox-provider'
 export { OpenSandboxCodeInterpreterProvider } from './opensandbox-code-interpreter-provider'
 export { OpenSandboxAgentSandboxProvider } from './opensandbox-agent-sandbox-provider'
-export { E2BProvider, E2BGitIntegration, createE2BGitIntegration } from './e2b-provider'
+// E2BProvider is lazy-initialized via asyncFactory above; import directly
+// from './e2b-provider' if a static reference is needed.
 export { createAmpService, executeAmpTask } from '../spawn/e2b-amp-service'
 export { CodexSchemas, createCodexService, executeCodexTask } from '../spawn/e2b-codex-service'
 // export { MistralAgentProvider } from './mistral/mistral-agent-provider' // Lazy export

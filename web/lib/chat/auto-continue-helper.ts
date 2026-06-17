@@ -33,13 +33,80 @@
  *                                  Capture-the-best-of-route.ts.
  */
 
-import { shouldAutoContinue, type ContinuationDecision, type ContinueDecisionBase } from './llm-continuation';
+import { shouldAutoContinue, type ContinuationDecision, type ContinueDecisionBase, type ContinuationReason } from './llm-continuation';
 import { detectNeedsMoreTurns, type DetectableResult } from './auto-continue-detector';
 import { createLogger } from '@/lib/utils/logger';
 // Re-export Single-Source-of-Truth: ContinueDecision originates in
 // llm-continuation.ts (the canonical Stage 0/1 module). auto-continue-helper
 // re-exports the same name so backward compat imports keep resolving.
 export { type ContinueDecision, type ContinuationDecision, type ContinuationReason } from '@/lib/chat/llm-continuation';
+
+/**
+ * Pre-existing TS2304 fix — Stage 0/1 contract types defined here so
+ * `AutoContinueInput`'s `routing` / `steps` / `onLog` slots type-check.
+ * Mirrors the shapes passed by `route.ts` and other callers; keep aligned
+ * with ContinueDecisionBase's Q5 strict semantic anchors in
+ * `llm-continuation.ts`. The shapes below are intentionally permissive
+ * (every field optional except `toolName`) so callers with partial context
+ * (Audit-Q7 Sites 3+4 carve-out: `decideAutoContinue({ routing, steps: [],
+ * responseText })` with no `result`) still satisfy the type.
+ */
+export type AutoContinueRouting = {
+  continue?: boolean;
+  stepReprompt?: string;
+  primaryRole?: string;
+  estimatedSteps?: number;
+  /** Plan steps array — each step has at minimum an `action` discriminator. */
+  planSteps?: Array<{ action?: string }>;
+};
+
+export type AutoContinueStep = {
+  toolName?: string;
+  args?: Record<string, unknown>;
+  result?: {
+    success?: boolean;
+    error?: unknown;
+    output?: unknown;
+    [key: string]: unknown;
+  };
+};
+
+export type AutoContinueOnLog = (
+  msg: string,
+  meta?: Record<string, unknown>,
+) => void;
+
+/**
+ * Pre-existing TS2322 fix — combined reason union for AutoContinueDecision.
+ * Inherits every ContinuationReason literal from `llm-continuation.ts` AND
+ * extends with the 17 detector-bucket reason strings from
+ * `auto-continue-detector.ts` (mirror of `DETECTOR_BUCKET_REASONS`).
+ * The two reason sets share no overlap — the union is intentional so
+ * callers can read `decision.reason` as a single canonical telemetry
+ * label regardless of whether the LLM routing or a detector branch fired.
+ * AutoContinueDecision declares `reason?: AutoContinueReason` (via Omit
+ * extension) so a single field carries both sets without discriminator
+ * gymnastics at the read site.
+ */
+export type AutoContinueReason =
+  | ContinuationReason
+  | 'file_edits_present'
+  | 'needs_more_turns'
+  | 'read-then-stall'
+  | 'deep-research-loop'
+  | 'failure-cascade'
+  | 'write-verify-loop'
+  | 'announced-next-step'
+  | 'incomplete-thought'
+  | 'step-enumeration'
+  | 'planned-multi-step'
+  | 'read-many-write-none'
+  | 'single-write-silent'
+  | 'diff-no-explanation'
+  | 'edits-mismatch'
+  | 'empty-after-tools'
+  | 'unclosed-code-block'
+  | 'mid-sentence-cutoff';
 
 const log = createLogger('AutoContinue');
 
@@ -60,6 +127,226 @@ export const MAX_CONTINUATIONS = parseInt(
   process.env.LLM_MAX_CONTINUATIONS_PER_TURN || '3',
   10,
 );
+
+/**
+ * Bug fix (Audit Item 2) — `AutoContinueResultData` extends
+ * `DetectableResult` with three WRAPPER-DERIVED signal arrays that the
+ * detectors inspect:
+ *
+ *   - `errors`                : all tool-failure stringified messages
+ *                                extracted from `steps[].result.error`
+ *                                or `steps[].result.success === false`.
+ *   - `toolFailures`          : `{ toolName, error }` pairs for the
+ *                                same set of steps, useful for
+ *                                "failure-cascade" and similar
+ *                                pattern-name signal emission.
+ *   - `incompleteSignals`     : responseText-derived heuristic signal
+ *                                names (`announced-next-step`,
+ *                                `step-enumeration`,
+ *                                `planned-multi-step`,
+ *                                `unclosed-code-block`,
+ *                                `mid-sentence-cutoff`). Mirrors a
+ *                                subset of `detectNeedsMoreTurns`
+ *                                Factor 2 + Factor 4 so the wrapper
+ *                                pre-computes them and the detector
+ *                                consumes the pre-computed array.
+ *
+ * Pre-computation matters: previously the wrapper only relayed
+ * `fileEdits` / `steps` / `stepCount` / `maxSteps` / `toolResults` to
+ * the detector, so Factor 1 (tool-call patterns) was the only thing
+ * that actually fired. With these arrays pre-populated, the soft gate
+ * trips on real signals (a written-failed tool chain, a mid-sentence
+ * truncation, a planned-next-step prompt). The 17 detector-bucket
+ * reason names enumerate in `DETECTOR_BUCKET_REASONS` below — every
+ * emitted reason MUST match one of those 17 slots.
+ *
+ * Why not just call `detectNeedsMoreTurns` directly inside the wrapper?
+ *   - The detectors (`defaultFileEditDetector`,
+ *     `needsMoreTurnsDetector`) take
+ *     `(result: DetectableResult, continuationDecision)` — keeping the
+ *     wrapper transparent to the typed detector signature avoids
+ *     breaking every existing callsite. The enrichment is best-effort:
+ *     if a future caller passes a `result` whose `steps` /
+ *     `responseText` are partial, the wrapper still passes the original
+ *     shape to the detector and appends the enriched fields as
+ *     additional candidates.
+ */
+export interface AutoContinueResultData extends DetectableResult {
+  errors: string[];
+  toolFailures: Array<{ toolName: string; error: string }>;
+  incompleteSignals: string[];
+}
+
+/**
+ * Single source of truth (Audit Item 3) — detector-derived bucket reason
+ * strings emitted by `defaultFileEditDetector` (file_edits_present) and
+ * `needsMoreTurnsDetector` (needs_more_turns + the 15 signal names from
+ * `detectNeedsMoreTurns` in `auto-continue-detector.ts`).
+ *
+ * Exported as `Set<string>` so audit tests (e.g. Audit-Q7 Sites 3+4
+ * carve-out in `__tests__/chat/auto-continue-helper.test.ts`) can
+ * assert their decision does NOT come from a detector. If a new signal
+ * is added to `detectNeedsMoreTurns`, this set MUST grow in lockstep —
+ * the asserted contract is "any string a detector emits is in this set".
+ */
+export const DETECTOR_BUCKET_REASONS: Set<string> = new Set<string>([
+  'file_edits_present',           // defaultFileEditDetector
+  'needs_more_turns',             // needsMoreTurnsDetector fallback (signal[0] undefined)
+  'read-then-stall',
+  'deep-research-loop',
+  'failure-cascade',
+  'write-verify-loop',
+  'announced-next-step',
+  'incomplete-thought',
+  'step-enumeration',
+  'planned-multi-step',
+  'read-many-write-none',
+  'single-write-silent',
+  'diff-no-explanation',
+  'edits-mismatch',
+  'empty-after-tools',
+  'unclosed-code-block',
+  'mid-sentence-cutoff',
+]);
+
+/**
+ * Single source of truth (Audit Item 3) — `ContinuationReason` literals
+ * from `llm-continuation.ts`. Exported as `Set<string>` so audit tests
+ * can assert their decision IS driven by an LLM routing signal (vs a
+ * detector-derived bucket). Mirror of the typed `ContinuationReason`
+ * union — kept as Set<string> because TS doesn't allow `Set<ContinuationReason>`
+ * to widen for `.includes(string)` checks without a cast.
+ */
+export const SHOULD_AUTO_CONTINUE_REASONS: Set<string> = new Set<string>([
+  'role_selection_continue_true',
+  'empty_tool_args_detected',
+  'single_step_read_pattern',
+  'plan_steps_remaining',
+  'single_write_then_stop',
+  'no_continuation_needed',
+  'max_continuations_reached',
+  'max_iterations',
+  'user_stop',
+  'agent_stop',
+  'resolved',
+]);
+
+/**
+ * Bug fix (Audit Item 2) — derive `AutoContinueResultData` fields from
+ * the wrapper's `steps` + `responseText` inputs. Called inside
+ * `decideAutoContinue` BEFORE invoking the detectors so both the basic
+ * (`defaultFileEditDetector`) and the advanced (`needsMoreTurnsDetector`)
+ * detector see the enriched shape. The 17 detector-bucket reason names
+ * correspond 1:1 to the signal names this helper can pre-compute plus
+ * the existing Factor 1 (tool-call patterns) and Factor 3 (partial
+ * edits) signals that the underlying `detectNeedsMoreTurns` keeps
+ * deriving directly.
+ *
+ * Best-effort: never throws. If `result` / `steps` / `responseText` are
+ * sparse, the returned object still has the required shape with empty
+ * arrays — the detectors tolerate that (return null or fall through).
+ */
+function _enrichResultData(
+  result: DetectableResult | undefined,
+  steps: ReadonlyArray<{ toolName?: string; result?: { success?: boolean; error?: unknown } }> | undefined,
+  responseText: string | undefined,
+): AutoContinueResultData {
+  const stepsToUse = steps ?? result?.steps ?? [];
+  const resolvedSteps = (Array.isArray(stepsToUse) ? stepsToUse : []) as Array<{
+    toolName?: string;
+    result?: { success?: boolean; error?: unknown };
+  }>;
+  const responseResolved = (responseText ?? result?.response ?? '').toString();
+
+  const errors: string[] = [];
+  const toolFailures: Array<{ toolName: string; error: string }> = [];
+  for (const s of resolvedSteps) {
+    const sr = s?.result;
+    if (!sr) continue;
+    if (sr.success !== false && !sr.error) continue;
+    const rawErr = sr.error;
+    const msg = typeof rawErr === 'string' && rawErr.length > 0
+      ? rawErr
+      : rawErr != null
+        ? String(rawErr)
+        : 'tool failed';
+    errors.push(msg);
+    toolFailures.push({ toolName: String(s?.toolName ?? 'unknown'), error: msg });
+  }
+
+  const incompleteSignals: string[] = [];
+  const lowered = responseResolved.toLowerCase();
+  const responseLen = responseResolved.length;
+  if (responseLen > 0) {
+    // announced-next-step — LLM explicitly said it will do something next.
+    const announcedNextStep = /\b(i'll now\b|\blet me\b|\bnext i('ll| will)\b|\bi will (start|begin|proceed|continue)\b|\bnow i('ll| will)\b)/;
+    if (responseLen < 500 && announcedNextStep.test(lowered)) {
+      incompleteSignals.push('announced-next-step');
+    }
+    // step-enumeration — "Step 1:", "First," on the LAST line.
+    const lastLine = responseResolved.split('\n').pop() || '';
+    if (
+      responseLen < 300 &&
+      lastLine.length > 0 &&
+      /\b(step \d[:\)]|first[,:]\s*$|second[,:]\s*$|^\s*\d+\.\s*$)/i.test(lastLine)
+    ) {
+      incompleteSignals.push('step-enumeration');
+    }
+    // planned-multi-step — response describes a plan without executing it.
+    const planWords = /\b(first|then|after that|finally|next)\b/g;
+    const planMatch = lowered.match(planWords);
+    const planWordCount = planMatch ? planMatch.length : 0;
+    if (planWordCount >= 2 && responseLen < 500) {
+      incompleteSignals.push('planned-multi-step');
+    }
+    // unclosed-code-block — odd number of ``` fences near the end.
+    const fenceOpen = (responseResolved.match(/```/g) || []).length;
+    if (fenceOpen % 2 !== 0 && responseLen > 20) {
+      const lastFenceIdx = responseResolved.lastIndexOf('```');
+      if (lastFenceIdx > responseLen - 200) {
+        incompleteSignals.push('unclosed-code-block');
+      }
+    }
+    // mid-sentence-cutoff — truncated without terminal punctuation.
+    const terminalPunct = /[.!?\"\'\)\u201d\u2019]\s*$/;
+    if (
+      !terminalPunct.test(responseResolved) &&
+      responseLen > 30 &&
+      responseLen < 1000 &&
+      !responseResolved.endsWith('```')
+    ) {
+      const lastLineTrim = (responseResolved.split('\n').pop() || '').trim();
+      const looksLikeCode = /^[\s{}\[\]();><=|&^%$#@!*,.\-\+\/\\]+$/.test(lastLineTrim);
+      if (!looksLikeCode) {
+        incompleteSignals.push('mid-sentence-cutoff');
+      }
+    }
+  }
+
+  return {
+    ...(result ?? {}),
+    success: result?.success ?? true,
+    // Belt-and-suspenders: `responseResolved` is already `responseText ?? result?.response ?? ''`
+    // but the explicit `?? ''` keeps the contract visible if upstream coalescing
+    // is ever refactored. DetectableResult.response is required (`string`),
+    // so an undefined would break the structural contract.
+    response: responseResolved ?? '',
+    steps: resolvedSteps as AutoContinueResultData['steps'],
+    // Pre-existing TS2552 followup: `result?.fileEdits` is `Array | undefined`
+    // when result is undefined; `DetectableResult.fileEdits` is optional
+    // (`Array | undefined`), so a bare passthrough compiles, but the runtime
+    // check inside `defaultFileEditDetector` is `Array.isArray(result.fileEdits)
+    // && result.fileEdits.length > 0` — already guarded at the read site.
+    // `?? []` here makes the enriched shape strictly-shape-complete (detectors
+    // can read `result.fileEdits.length` without `?.length`), and matches the
+    // Step 3 typing in `stateful-agent.ts:runSelfHealingPhase` which expects
+    // fileEdits to always be an array.
+    fileEdits: result?.fileEdits ?? [],
+    errors,
+    toolFailures,
+    incompleteSignals,
+  };
+}
 
 export function getContinuationCount(requestId: string): number {
   return _continuationCounters.get(requestId) ?? 0;
@@ -205,13 +492,21 @@ export interface AutoContinueInput {
 // brittle when package-sync forks resolve differently. `ContinueDecisionBase`
 // is the literal `interface` declaration in `./llm-continuation`, so
 // extending it directly pins to the canonical surface without alias hops.
-export interface AutoContinueDecision extends ContinueDecisionBase {
+/**
+ * Pre-existing TS2430 fix — drop `continuationsSoFar` and the
+ * `continuationPrompt?: string` (incompatible narrowing from parent's
+ * required `string` to optional `string | undefined`) declarations so the
+ * extension stays structurally compatible with `ContinueDecisionBase`.
+ * Both fields already live on the parent interface; redeclaring them here
+ * was triggering TS2430. The Omit extension widens `reason` from
+ * `ContinuationReason` to `AutoContinueReason` so detector bucket reasons
+ * can ride on the same field as LLM-routing reasons without type loss.
+ */
+export interface AutoContinueDecision extends Omit<ContinueDecisionBase, 'reason'> {
+  /** Combined reason — accepts both LLM routing reasons and detector bucket reasons. */
+  reason?: AutoContinueReason;
   /** True if the detector forced the continuation (vs the LLM decision). */
   forceSignal: boolean;
-  /** New counter value (post-increment if continue=true). */
-  continuationsSoFar: number;
-  /** The continuation prompt to feed into the next LLM call. */
-  continuationPrompt?: string;
   /** Which detector branch fired (when forceSignal=true). */
   forcedBy?: 'base' | 'advanced';
 }
@@ -267,7 +562,14 @@ export interface AutoContinueDecision extends ContinueDecisionBase {
  * pinned on each union variant.
  */
 interface BuildDecisionInputBase {
-  reason?: AutoContinueDecision['reason'];
+  /**
+   * Reason — accepts both LLM routing reasons and detector bucket reasons.
+   * Typed as `string | undefined` for caller-side ergonomics; the
+   * `buildDecision` factory narrows to `AutoContinueDecision['reason']`
+   * (AutoContinueReason | undefined) in its return so the typed contract
+   * is preserved end-to-end without forcing every call site to cast.
+   */
+  reason?: string | undefined;
   forceSignal: boolean;
   forcedBy?: AutoContinueDecision['forcedBy'];
   /** Single source of truth — clearedCount is derived from this in the output. */
@@ -298,7 +600,13 @@ export function buildDecision(
 ): AutoContinueDecision {
   return {
     continue: input.shouldContinue,
-    reason: input.reason,
+    // Pre-existing TS2322 fix — narrow `string | undefined` to
+    // AutoContinueDecision['reason'] (AutoContinueReason | undefined) on
+    // assignment. Safe at runtime because every emit site passes either a
+    // typed ContinuationReason literal or a known detector-bucket reason
+    // string; the Omit extension on AutoContinueDecision widened the parent
+    // type to accept both sets without loss of type safety.
+    reason: input.reason as AutoContinueDecision['reason'],
     forceSignal: input.forceSignal,
     forcedBy: input.forcedBy,
     continuationsSoFar: input.continuationsSoFar,
@@ -373,8 +681,18 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     maxContinuations: MAX_CONTINUATIONS,
   });
 
+  // Bug fix (Audit Item 2) — pre-compute the enriched result shape BEFORE
+  // invoking the detectors. The wrapper used to relay `result` verbatim
+  // to the detectors (only fileEdits/steps/stepCount/maxSteps/toolResults
+  // were derived upstream), so the detectors rarely tripped beyond
+  // Factor 1 (file-edit heuristic). The enrichment below populates
+  // `errors`, `toolFailures`, `incompleteSignals` so Factor 2 /
+  // Factor 4 signals pre-fire on real data without a full
+  // `detectNeedsMoreTurns` pass.
+  const enrichedResult = _enrichResultData(result, steps, responseText);
+
   // Primary detector override (file-edit detector by default)
-  const detectorOverride = detectorFn(result, continuationDecision);
+  const detectorOverride = detectorFn(enrichedResult, continuationDecision);
 
   // Advanced detector override (opt-in richer signal set). When provided,
   // BOTH detectors are evaluated; whichever returns `force: true` wins,
@@ -383,7 +701,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
   // (e.g. `read-then-stall`) than the basic fileEdits reason
   // (`file_edits_present`), giving operators sharper run.log signals.
   const advancedOverride = advancedDetectorFn
-    ? advancedDetectorFn(result, continuationDecision)
+    ? advancedDetectorFn(enrichedResult, continuationDecision)
     : null;
 
   const detectorFired = (detectorOverride?.force ?? false);

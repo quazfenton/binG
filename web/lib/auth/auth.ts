@@ -299,5 +299,21 @@ export class AuthManager {
   }
 }
 
-// Export singleton instance
-export const authManager = AuthManager.getInstance();
+// Lazy singleton — avoid eager initialization at module load time
+// which can fail during build when env vars aren't configured.
+let _authManager: AuthManager | undefined;
+export function getAuthManager(config?: AuthConfig): AuthManager {
+  if (!_authManager) {
+    _authManager = new AuthManager(config);
+  }
+  return _authManager;
+}
+// Backward-compat: existing imports of `authManager` resolve to a Proxy
+// that lazily delegates to the singleton on first property access.
+export const authManager: AuthManager = new Proxy({} as AuthManager, {
+  get(_, prop) {
+    const instance = getAuthManager();
+    const value = Reflect.get(instance, prop, instance);
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+});

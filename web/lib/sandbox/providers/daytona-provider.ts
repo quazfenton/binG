@@ -2,7 +2,8 @@ import { Daytona } from '@daytonaio/sdk'
 import { createLogger } from '@/lib/utils/logger';
 import { resolve, relative } from 'node:path'
 import type { ToolResult, PreviewInfo } from '../types'
-import { enable as enableDebug } from 'debug';
+import debugModule from 'debug';
+const enableDebug = debugModule.enable;
 
 // Suppress verbose HTTP request logging from axios/got/follow-redirects internals.
 // follow-redirects logs full request options (including auth headers) via debug("follow-redirects").

@@ -12,6 +12,8 @@ import { getRouterClient } from '@/lib/providers/9router/client'
 import type { OAuthProvider } from '@/lib/providers/9router/types'
 import { oauthService } from '@/lib/auth/oauth-service'
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
