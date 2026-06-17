@@ -536,6 +536,8 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
                 this.emit('job:stop-condition', job.jobId, job.stopCondition);
                 // P0-2 fix: Clean up dedupLookup when job naturally completes
                 this.cleanupDedupEntry(job);
+                // Remove completed job from the map to prevent unbounded growth.
+                this.jobs.delete(job.jobId);
                 break;
               }
             } catch (conditionError: any) {

@@ -30,8 +30,8 @@ import { tryRepairJson, extractFirstJsonObject } from './spec-parser-utils';
  * `browser` export condition to gate server-only loading).
  */
 export function resolveDefaultContinue(): boolean {
-  return typeof process !== 'undefined'
-    && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
+  if (typeof process === 'undefined' || !process.env) return true;
+  return process.env.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
 }
 
 
@@ -275,7 +275,7 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       // explicitly says continue: false (conflicting signal from the LLM).
       continue: Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2
         ? true
-        : (parsed.continue !== undefined ? parsed.continue : resolveDefaultContinue()),
+        : (parsed.continue !== undefined ? (normalizeBoolean(parsed.continue) ?? false) : resolveDefaultContinue()),
     };
 
     return {
@@ -399,7 +399,7 @@ function hasMultiplePlanSteps(routing: RoutingMetadata): boolean {
  *   - the plan has >= 2 steps (multi-step intent overrides a "false" explicit).
  */
 export function computeShouldContinue(routing: RoutingMetadata): boolean {
-  return routing.explicitContinue || hasMultiplePlanSteps(routing);
+  return routing.explicitContinue || hasMultiplePlanSteps(routing) || routing.continue === true;
 }
 
 /**

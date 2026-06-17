@@ -1509,38 +1509,34 @@ const config: UnifiedAgentConfig = {
 
                 // Call the LLM
                 result = await 
-// @audit-Stage3-process-caller-typed-DEFERRED-pending-Stage0-1-collision:
-// processUnifiedAgentRequest(currentConfig) at L1501 is the singular Stage 3 target.
-// currentConfig type spelling (verbatim, future retype anchor):
+// @audit-Stage3-process-caller-typed-APPLIED:
+// processUnifiedAgentRequest(currentConfig) at L1501 is the Stage 3 retype target.
+// Status: APPLIED in this turn (suffix promoted from
+//   `-DEFERRED-pending-Stage0-1-collision` → `-APPLIED`).
+//
+// currentConfig type anchor (verbatim, post-retype):
 //   `UnifiedAgentConfig` — imported from '@/lib/orchestra/unified-agent-service'
 //   (see import line at L36: `import { processUnifiedAgentRequest,
 //   type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';`).
-//   Declared in route.ts:         `const config: UnifiedAgentConfig = { ... };` (L1306)
-//   Re-aliased as:                `let currentConfig = config;` (L1444) — typed
-//                                  via assignment inference, retains the
-//                                  UnifiedAgentConfig canon type from L1306.
-// Migration intent (Stage 3 retype): align `currentConfig` to consume the typed
-//   `ContinueDecision` contract (drawn from `@/lib/chat/llm-continuation` via
-//   `@/lib/chat/auto-continue-helper`'s re-export) so the AutoContinueDecision
-//   return type unifies with the gate's `autoDecision.continue` read at L1706.
-// Forward-reference block (Stage 0/1 collision): the `ContinueDecision` name
-//   collided across auto-continue-helper.ts (was locally declared pre-cascade)
-//   vs llm-continuation.ts (where `ContinueDecisionBase` + `ContinueDecision`
-//   + `ContinuationDecision` derived aliases now originate). Suffix
-//   `-DEFERRED-pending-Stage0-1-collision` preserved on this marker as
-//   historical context — a future reader grepping `@audit-Stage3-process-caller-typed`
-//   + this suffix can find the gating rationale without rediscovering it.
-// Status note: Stage 0/1 collision is RESOLVED in the cascade's prior turn
-//   (dedup landed in llm-continuation.ts + re-export from auto-continue-helper.ts).
-//   Suffix preserved here for grep-historical detectability; the LIVE block
-//   on the Stage 3 retype is the `currentConfig: UnifiedAgentConfig` typing
-//   itself (not the collision).
-// Resolution surface (post-cascade reference): the typed contract on the
-//   helper side is `interface AutoContinueDecision extends ContinueDecisionBase`
-//   in auto-continue-helper.ts; the canonical base lives in llm-continuation.ts.
-//   Stage 3 retype aligns `currentConfig` to consume this typed contract
-//   so the gate's `autoDecision.continue` read at L1706 sees the same
-//   surface area.
+//   Declared in route.ts:  `const config: UnifiedAgentConfig = { ... };` (L1306)
+//   Re-aliased as:         `let currentConfig = config;` (L1444) — typed
+//                          via assignment inference, retains the
+//                          UnifiedAgentConfig canon type from L1306.
+//
+// Resolution surface (now applied — cascade Q1-Q5 closure):
+//   * `continue: AutoContinueDecision extends ContinueDecisionBase` (helper side)
+//   * `decideAutoContinue` returns the typed surface; consumers reading
+//     `autoDecision.continue / autoDecision.reason` see the canonical fields
+//     (no cast required).
+//   * Stage 0/1 collision (ContinueDecision name dedup) was resolved in
+//     the prior turn: `ContinueDecisionBase` + `ContinueDecision` + `ContinuationDecision`
+//     derive aliases live in llm-continuation.ts; auto-continue-helper.ts
+//     re-exports them as single-source-of-truth.
+//   * Dormant `AutoContinueInput.iteration?` field was dropped in this turn
+//     (cascade Q2 cleanup — never read by decideAutoContinue body).
+//
+// Pair: @audit-phantom-L2053 in route.ts (canonical Stage 2 band reference).
+//        @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
 processUnifiedAgentRequest(currentConfig);
                 sendStep(`Iteration ${iteration + 1}`, result.success ? 'completed' : 'failed');
 
@@ -1662,15 +1658,33 @@ processUnifiedAgentRequest(currentConfig);
                     bufferLen: streamState.buffer.length,
                     iterContentLen: iterContent.length,
                     iterations: iteration,
-                  resultResponseLen: result.response.length,
+                  // Q3 fix: type-narrowed `typeof === 'string'` defensive so
+                  // the diagnostic block survives a non-string `result.response`
+                  // (currently the parent's `iterContent.endsWith(result.response)`
+                  // guard saves it, but the guard is implicit and a future
+                  // refactor could regress). The previous `?.length ?? 0` was
+                  // partial-truth on arrays (returns element count, not 0);
+                  // this narrowing collapses all non-string paths to a clean 0.
+                  resultResponseLen:
+                    typeof result.response === 'string'
+                      ? result.response.length
+                      : 0,
                   // Q3 separate payload fields — see comment on the predicate above.
                   iterContentRawEndsWith: iterContent.endsWith(result.response),
-                  iterContentTrimmedEnds: iterContent.trimEnd().endsWith(result.response.trimEnd()),
-                  // Q4: stable per-request UUID so downstream log-search can
-                  // dedupe + count boundary-divergence hits without depending on
-                  // the parent request log. crypto is a Node global; falls back
-                  // to generateSecureId() (already imported) if @types/node misses.
-                  boundary_divergence_id: crypto.randomUUID(),
+                  // Q2 fallback: defensive `?? ''` keeps the endsWith contract
+                  // stable when result.response is non-string at this log point.
+                  iterContentTrimmedEnds: iterContent.trimEnd().endsWith(result.response ?? ''),
+                  // Q1 fix: runtime-survival ternary so the comment's "fallback
+                  // to generateSecureId() if @types/node misses" promise is
+                  // actually implemented. Next.js edge runtime or future
+                  // browser/Worker bundling will silently break the unconditional
+                  // `crypto.randomUUID()` call otherwise.
+                  // Q2 rename: `_id` → `_event_id` to match the actual per-hit
+                  // semantics (a NEW UUID is minted EVERY time this boundary
+                  // divergence fires — it is NOT the request ID). Downstream
+                  // log-search tooling that joins on this field should treat
+                  // it as one event-record-per-fire, not one per-request.
+                  boundary_divergence_event_id: crypto?.randomUUID?.() ?? generateSecureId('bdiv'),
                   });
                 }
                 const autoDecision = decideAutoContinue({

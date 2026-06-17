@@ -167,10 +167,16 @@ export function needsMoreTurnsDetector(
 
 export interface AutoContinueInput {
   requestId: string;
-  iteration?: number;
-  // Optional shape: the Stage 3 caller passes only `requestId + iteration`. Other
-  // fields remain available so the full decision logic keeps working when invoked
-  // from wider callers.
+  // Cascade Q2 cleanup: the `iteration?: number` field was previously declared
+  // as part of a Stage 3 retype plan, but `decideAutoContinue` never reads it.
+  // It was a dormant shape: callers passing it had no functional effect, and
+  // future readers might assume it gates the loop counter. Dropped here so the
+  // contract surface only includes fields actually consumed.
+  //
+  // Optional shape (now): the Stage 3 caller passes only `requestId` (the rest
+  // is supplied by route.ts via the typed `result` arg). Other fields remain
+  // optional so the full decision logic keeps working when invoked from wider
+  // callers.
   routing?: AutoContinueRouting;
   steps?: AutoContinueStep[];
   responseText?: string;
@@ -208,6 +214,61 @@ export interface AutoContinueDecision extends ContinueDecisionBase {
   continuationPrompt?: string;
   /** Which detector branch fired (when forceSignal=true). */
   forcedBy?: 'base' | 'advanced';
+}
+
+/**
+ * Cascade Q4 factory: `buildDecision` is a single typed-narrowed constructor
+ * for `AutoContinueDecision`. Keeps every return site in `decideAutoContinue`
+ * structurally pinned to the ContinueDecisionBase contract (clearedCount +
+ * finalIteration required) without hand-cloning them at three call sites.
+ *
+ * Why a factory rather than inline object literals?
+ *   * Compile-time exhaustiveness: every return shape passes through the same
+ *     type-narrowed constructor, so any drift in ContinueDecisionBase's field
+ *     requirements is one-place to fix.
+ *   * Telemetry parity: exactly the same telemetry fields are populated at
+ *     each site (counter snapshot, detector reason, advanced reason).
+ *   * Readability: callers read `buildDecision({ ... })` without memorizing
+ *     the 7-field literal shape.
+ *
+ * Reviewer-invariant protection (cascade Q4 polish): the prior draft typed
+ * `clearedCount` and `continuationsSoFar` as independently-required numbers,
+ * but the cascade's Q5 invariant in `llm-continuation.ts:257-309` actually
+ * pins them to ALWAYS be equal at the moment of decision (POST-increment on
+ * `continue=true`, PRE-snapshot on `continue=false`). Letting callers pass
+ * them independently would permit future external callers to violate the
+ * invariant by mistake. The factory collapses them: `continuationsSoFar` is
+ * the single source of truth, and `clearedCount` is DERIVED from it. The
+ * invariant is now type-enforced (assignment-impossible mismatch), not just
+ * convention.
+ */
+export interface BuildDecisionInput {
+  shouldContinue: boolean;
+  reason?: AutoContinueDecision['reason'];
+  forceSignal: boolean;
+  forcedBy?: AutoContinueDecision['forcedBy'];
+  /** Single source of truth — clearedCount is derived from this in the output. */
+  continuationsSoFar: number;
+  finalIteration: number;
+  continuationPrompt?: string;
+}
+
+export function buildDecision(
+  input: BuildDecisionInput,
+): AutoContinueDecision {
+  return {
+    continue: input.shouldContinue,
+    reason: input.reason,
+    forceSignal: input.forceSignal,
+    forcedBy: input.forcedBy,
+    continuationsSoFar: input.continuationsSoFar,
+    // Derived invariant: clearedCount ALWAYS equals continuationsSoFar at the
+    // moment of decision (POST-increment on continue=true, PRE-snapshot on
+    // continue=false). See cascade Q5 in llm-continuation.ts:257-309.
+    clearedCount: input.continuationsSoFar,
+    finalIteration: input.finalIteration,
+    continuationPrompt: input.continuationPrompt,
+  };
 }
 
 /**
@@ -250,14 +311,13 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
   // Hard limit check — mirrors route.ts:1641 `iteration < MAX_CONTINUATIONS - 1`
   if (continuationsSoFar >= MAX_CONTINUATIONS) {
     clearContinuationCount(requestId);
-    return {
-      continue: false,
+    return buildDecision({
+      shouldContinue: false,
       reason: 'max_continuations_reached',
       forceSignal: false,
       continuationsSoFar,
-      clearedCount: continuationsSoFar,
       finalIteration: MAX_CONTINUATIONS,
-    };
+    });
   }
 
   const continuationDecision = shouldAutoContinue({
@@ -304,29 +364,27 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       forceSignal: activeOverride !== null,
       continuationsSoFar: newCount,
     });
-    return {
-      continue: true,
+    return buildDecision({
+      shouldContinue: true,
       reason: continuationDecision.reason,
       forceSignal: activeOverride !== null,
       forcedBy: activeOverride !== null
         ? (advancedFired ? 'advanced' : 'base')
         : undefined,
       continuationsSoFar: newCount,
-      continuationPrompt: continuationDecision.continuationPrompt,
-      clearedCount: newCount,
       finalIteration: MAX_CONTINUATIONS,
-    };
+      continuationPrompt: continuationDecision.continuationPrompt,
+    });
   }
 
   // No continuation — clean up the counter (mirrors route.ts:1689)
   clearContinuationCount(requestId);
-  return {
-    continue: false,
+  return buildDecision({
+    shouldContinue: false,
     reason: continuationDecision.reason,
     forceSignal: false,
     forcedBy: undefined,
     continuationsSoFar,
-    clearedCount: continuationsSoFar,
     finalIteration: MAX_CONTINUATIONS,
-  };
+  });
 }

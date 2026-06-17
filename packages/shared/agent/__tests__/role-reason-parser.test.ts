@@ -194,8 +194,9 @@ describe('parseRoleReason', () => {
 
     it('does not match keyword inside a longer word', () => {
       // "signaler" should NOT be matched as the `signal` keyword.
+      // The left phrase stays intact; only `expected` is parsed.
       const r = parseRoleReason('signaler: foo; expected: bar');
-      expect(r.signal).toBe('foo');
+      expect(r.signal).toBe('signaler: foo');
       expect(r.expected).toBe('bar');
     });
   });

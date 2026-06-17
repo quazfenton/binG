@@ -3496,6 +3496,15 @@ export const AGENT_ROLE_CONFIGS: Record<AgentRole, Omit<AgentRoleConfig, 'id'>> 
     topP: 0.9,
     thinkingMode: 'high',
   },
+  orchestrator: {
+    name: 'Orchestrator',
+    description: 'Decomposes complex tasks, routes subtasks to specialists, sequences outputs',
+    systemPrompt: ORCHESTRATOR_PROMPT,
+    temperature: 0.2,
+    allowTools: true,
+    useHistory: true,
+    topP: 0.85,
+  },
 };
 
 /**

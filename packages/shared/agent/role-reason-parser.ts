@@ -137,12 +137,12 @@ const SIGNAL_PREFIX_RE = new RegExp(
  * so it can match against any phrase within a multi-phrase input.
  */
 const SIGNAL_LOOSE_RE = new RegExp(
-  KW_GROUP_S + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
+  String.raw`(?<![A-Za-z])` + KW_GROUP_S + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
   'iu',
 );
 
 const EXPECTED_LOOSE_RE = new RegExp(
-  KW_GROUP_E + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
+  String.raw`(?<![A-Za-z])` + KW_GROUP_E + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
   'iu',
 );
 

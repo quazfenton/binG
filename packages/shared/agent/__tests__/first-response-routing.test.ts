@@ -25,11 +25,22 @@
  *   /opt/bing/packages/shared/agent/__tests__/first-response-routing.test.ts.bak
  */
 
-import { describe, it, expect } from 'vitest';
-import {
-  DEFAULT_ROUTING,
-  resolveDefaultContinue,
-} from '../first-response-routing';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+
+beforeAll(() => {
+  delete process.env.LLM_AUTO_CONTINUE_DEFAULT;
+});
+
+let DEFAULT_ROUTING: typeof import('../first-response-routing').DEFAULT_ROUTING;
+let resolveDefaultContinue: typeof import('../first-response-routing').resolveDefaultContinue;
+
+beforeAll(async () => {
+  // Dynamic import within isolated env so module-level DEFAULT_ROUTING
+  // reflects the unset env state regardless of other tests' env mutations.
+  const mod = await import('../first-response-routing');
+  DEFAULT_ROUTING = mod.DEFAULT_ROUTING;
+  resolveDefaultContinue = mod.resolveDefaultContinue;
+});
 
 describe('module imports', () => {
   it('DEFAULT_ROUTING exports a RoutingMetadata object', () => {

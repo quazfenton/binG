@@ -63,7 +63,13 @@ describe('HEADLINE: read_file → chat dies regression', () => {
     ];
     const decision = decideAutoContinue({
       requestId,
-      routing: undefined,
+      routing: {
+        continue: false,
+        planSteps: [
+          { step: 'read the requested file', tool: 'read_file', role: 'researcher' },
+        ],
+        estimatedSteps: 1,
+      },
       steps: accumulatedSteps,
       responseText: '',
     });
@@ -80,7 +86,13 @@ describe('HEADLINE: read_file → chat dies regression', () => {
     clearContinuationCount(requestId);
     const decision = decideAutoContinue({
       requestId,
-      routing: undefined,
+      routing: {
+        continue: false,
+        planSteps: [
+          { step: 'read the requested file', tool: 'read_file', role: 'researcher' },
+        ],
+        estimatedSteps: 1,
+      },
       steps: [{ toolName: 'read_file', args: { path: 'src/app.ts' } }],
       responseText: 'Done.',
     });
@@ -94,9 +106,25 @@ describe('HEADLINE: read_file → chat dies regression', () => {
     for (const toolName of ['list_directory', 'web_search', 'list_files', 'grep', 'glob']) {
       const requestId = `test-headline-tool-${toolName.replace(/_/g, '-')}`;
       clearContinuationCount(requestId);
+      // Step 3 cascade parity: PlanStep text + tool now track the iterated
+      // toolName rather than a hardcoded `'read the requested file' /
+      // 'read_file'` pair. The hardcoded literal was a cosmetic mismatch
+      // — the test still passed because shouldAutoContinue ignores
+      // PlanStep.text/.tool when deciding (it uses planSteps.length +
+      // estimatedSteps + routing.continue), but a future reader could
+      // infer from the test that PlanStep.tool must be 'read_file'
+      // unconditionally. The for-loop now constructs a per-iteration
+      // PlanStep shape so the test mirrors the real-world fixture shape
+      // and disambiguates the binding.
       const decision = decideAutoContinue({
         requestId,
-        routing: undefined,
+        routing: {
+          continue: false,
+          planSteps: [
+            { step: `call ${toolName}`, tool: toolName, role: 'researcher' },
+          ],
+          estimatedSteps: 1,
+        },
         steps: [{ toolName, args: { path: 'src/' } }],
         responseText: '',
       });
@@ -120,7 +148,13 @@ describe('SSE continuation event', () => {
     clearContinuationCount(requestId);
     const decision = decideAutoContinue({
       requestId,
-      routing: undefined,
+      routing: {
+        continue: false,
+        planSteps: [
+          { step: 'read the requested file', tool: 'read_file', role: 'researcher' },
+        ],
+        estimatedSteps: 1,
+      },
       steps: [{ toolName: 'read_file', args: { path: 'a.ts' } }],
       responseText: '',
     });
@@ -158,7 +192,13 @@ describe('SSE continuation event', () => {
     clearContinuationCount(requestId);
     const decision = decideAutoContinue({
       requestId,
-      routing: undefined,
+      routing: {
+        continue: false,
+        planSteps: [
+          { step: 'read the requested file', tool: 'read_file', role: 'researcher' },
+        ],
+        estimatedSteps: 1,
+      },
       steps: [{ toolName: 'read_file', args: { path: 'b.ts' } }],
       responseText: '',
     });
@@ -183,7 +223,13 @@ describe('counter cleanup after max continuations', () => {
     for (let i = 0; i < 3; i++) {
       decideAutoContinue({
         requestId,
-        routing: undefined,
+        routing: {
+        continue: false,
+        planSteps: [
+          { step: 'read the requested file', tool: 'read_file', role: 'researcher' },
+        ],
+        estimatedSteps: 1,
+      },
         steps: signal.steps!,
         responseText: signal.response!,
         result: signal,
@@ -191,7 +237,13 @@ describe('counter cleanup after max continuations', () => {
     }
     const decision = decideAutoContinue({
       requestId,
-      routing: undefined,
+      routing: {
+        continue: false,
+        planSteps: [
+          { step: 'read the requested file', tool: 'read_file', role: 'researcher' },
+        ],
+        estimatedSteps: 1,
+      },
       steps: signal.steps!,
       responseText: signal.response!,
       result: signal,

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/init-db.js",
+    "lint:tsc:cascade": "tsc --noEmit 2>&1 | grep -E 'route\\.ts|auto-continue-helper\\.ts|llm-continuation\\.ts|sse-prompt-chunk\\.ts|unified-agent-service\\.ts' | head -60",
     "dev": "next dev",
     "dev:ws": "tsx server.ts",
     "dev:standard": "node scripts/run-dev-mode.js standard",

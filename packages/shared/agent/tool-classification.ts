@@ -107,6 +107,7 @@ export const WRITE_TOOL_NAMES: ReadonlySet<string> = new Set<string>([
   'file.write',
   'file.delete',
   'file.batch_write',
+  'file.append',
   'bash.execute',
 ]);
 
@@ -171,7 +172,8 @@ export function hasMutationSuffix(name: string): boolean {
     canonical.endsWith('.write') ||
     canonical.endsWith('.create') ||
     canonical.endsWith('.delete') ||
-    canonical.endsWith('.edit')
+    canonical.endsWith('.edit') ||
+    canonical.endsWith('.append')
   );
 }
 

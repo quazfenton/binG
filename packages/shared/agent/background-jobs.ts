@@ -343,9 +343,22 @@ export class BackgroundExecutor extends EventEmitter {
 
       const timer = setTimeout(() => {
         try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-        // Wait for the child to actually terminate before settling, otherwise
-        // the process remains as a zombie/orphan and the caller races ahead.
+        // Wait for the child to actually terminate before settling.
+        // If SIGTERM is ignored, escalate to SIGKILL after a grace period.
+        const sigkillTimer = setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch { /* may already be dead */ }
+          // Hard timeout: if even SIGKILL doesn't close the process, settle
+          // anyway to prevent the promise from hanging indefinitely.
+          const hardTimeout = setTimeout(() => {
+            settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (forced)`, exitCode: null });
+          }, 5000);
+          proc.on('close', () => {
+            clearTimeout(hardTimeout);
+            settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (escalated)`, exitCode: null });
+          });
+        }, 5000);
         proc.on('close', () => {
+          clearTimeout(sigkillTimer);
           settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
         });
       }, timeoutMs);

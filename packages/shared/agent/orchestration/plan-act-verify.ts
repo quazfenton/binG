@@ -607,10 +607,10 @@ export class PlanActVerifyOrchestrator {
           'coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier. ' +
           'Pair `reason` with one of the 3 lineage concepts: complexity, domain, or failure recovery.',
         ),
-        reason: z.string().describe('Reasoning for the role switch — must invoke one of the 3 lineage concepts: complexity (e.g. high-complexity refactor), domain (e.g. domain expertise shift to specialist), or failure recovery (e.g. debugging error loops, multi-step read-only stalls).'),
+        reason: z.string().optional().describe('Reasoning for the role switch — must invoke one of the 3 lineage concepts: complexity (e.g. high-complexity refactor), domain (e.g. domain expertise shift to specialist), or failure recovery (e.g. debugging error loops, multi-step read-only stalls).'),
         recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages — the failure-recovery lineage slice. Provide when reason invokes failure recovery.'),
       }),
-      execute: async ({ role, reason, recentFailures }: { role: string; reason: string; recentFailures?: string[] }) => {
+      execute: async ({ role, reason, recentFailures }: { role: string; reason?: string; recentFailures?: string[] }) => {
         const result = normalizeAndValidateRole(role, reason || '', { recentFailures });
         return {
           success: result.valid,
