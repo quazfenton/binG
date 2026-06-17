@@ -3576,6 +3576,7 @@ export function composePrompt(roles: AgentRole[], weights?: Record<AgentRole, nu
  * Get role compatibility matrix — which roles work well together in multi-agent workflows.
  */
 export const ROLE_COMPATIBILITY: Record<AgentRole, AgentRole[]> = {
+  orchestrator: ['planner', 'reviewer', 'architect', 'projectManager', 'coder'],
   coder: ['reviewer', 'tester', 'debugger', 'reverseEngineer'],
   reviewer: ['coder', 'securityAuditor', 'performanceEngineer', 'threatModeler'],
   researcher: ['planner', 'dataAnalyst', 'architect', 'knowledgeCurator'],

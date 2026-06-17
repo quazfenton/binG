@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { normalizeAndValidateRole } from '@bing/shared/agent';
+import { normalizeAndValidateRole, SYSTEM_PROMPTS } from '@bing/shared/agent';
 
 /**
  * choose_role Capability

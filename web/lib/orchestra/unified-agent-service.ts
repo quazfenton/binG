@@ -4624,7 +4624,17 @@ Based on what you have learned, continue working on the original task. Take the 
       while (autoContinueIteration < MAX_V1_CONTINUATIONS) {
         const autoDecision = decideAutoContinue({
           requestId,
-          routing: routingForClient ? {
+          // Bug #Q7 (audit): pass advancedDetectorFn to the v1-api-with-tools continuation
+              // loop so it gets the richer-signal coverage route.ts's
+              // maybeDetectorContinuation provides. The helper's default detector
+              // (defaultFileEditDetector) only watches file edits; needsMoreTurnsDetector
+              // also considers tool-failure patterns, accumulated tool-call counts, and
+              // the model-emitted next-action hint, so the v1 continuation loop stops
+              // asking prematurely on shallow runs and keeps going on substantive
+              // multi-step plans. Mirrors route.ts:1699 (the chat-SSE path) without
+              // touching route.ts.
+              advancedDetectorFn: needsMoreTurnsDetector,
+              routing: routingForClient ? {
             continue: routingForClient.continue,
             stepReprompt: routingForClient.stepReprompt,
             primaryRole: routingForClient.primaryRole,

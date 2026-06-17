@@ -2919,9 +2919,31 @@ const steps = await finalResult.steps;
         // the entire response in text-mode, taking 30-92s, and produces
         // duplicate writes). Only run Phase 2 when ALL tool calls failed
         // or no tool calls were made.
-        const anyToolCallSucceeded = allToolCalls.some((tc: any) =>
-          tc?.result && tc.result.success !== false && !tc.result.error
-        );
+        // Bug #7 fix (audit-C2): derive anyToolCallSucceeded from the Vercel AI
+        // SDK's canonical `step.toolResults` map, NOT from `tc.result`. The
+        // allToolCalls array at L2837–2860 is populated with {id, name, arguments}
+        // only — `tc?.result` is ALWAYS undefined, so the previous check silently
+        // evaluated to false, defeating the Phase 1 guard. Without this fix,
+        // Phase 2 text-mode fallback (30–92s re-stream, duplicate writes) ran
+        // even after a successful tool call.
+        //
+        // SDK contract: each `step` has both `step.toolCalls` (model requests)
+        // and `step.toolResults` (outcomes). We invert the lookup: build a
+        // toolCallId → result map from `steps`, then check each toolCall.
+        const toolResultByCallId: Record<string, any> = {};
+        for (const step of steps || []) {
+          for (const tr of (step as any)?.toolResults || []) {
+            if (tr?.toolCallId && ((tr as any).output !== undefined || (tr as any).result !== undefined)) {
+              toolResultByCallId[tr.toolCallId] = tr;
+            }
+          }
+        }
+        const anyToolCallSucceeded = allToolCalls.some((tc: any) => {
+          const tr = tc?.id ? toolResultByCallId[tc.id] : undefined;
+          if (!tr) return false;
+          const out = (tr as any).output ?? (tr as any).result ?? tr;
+          return out && (out as any).success !== false && !(out as any).error;
+        });
 
         if (supportsFC === undefined) {
           const allToolCallsFailed = allToolCalls.length > 0 && allToolCalls.every((tc: any) => {

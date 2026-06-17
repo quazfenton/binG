@@ -262,6 +262,22 @@ export interface ContinueDecisionBase {
   // ad-hoc decisions must supply both. shouldAutoContinue + decideAutoContinue
   // (in auto-continue-helper.ts) now populate them at every return site.
   //
+  // Q5-fields-audit (post-Bug #5): continuationPrompt + continuationsSoFar
+  // are populated at every return site in shouldAutoContinue and
+  // decideAutoContinue (see auto-continue-helper.ts), and consumers in
+  // unified-agent-service.ts (L4665, L4698, L4715) read both fields directly.
+  // Without them on the interface, the type contract is unsound and the
+  // downstream `?? defaults` are required. Add them as REQUIRED so that
+  // callers building ad-hoc decisions must supply them.
+  //
+  // SEMANTIC ANCHORS:
+  // - continuationPrompt: the optional prompt overlay that may be appended
+  //   to the next-iteration input. Empty string '' when no overlay applies.
+  // - continuationsSoFar: monotonically-increasing count of continuation
+  //   rounds dispatched by the gate so far (input counter, NOT inclusive of
+  //   this decision). Match the input shape of shouldAutoContinue so the
+  //   return value can be threaded straight back in next iteration.
+  //
   // SEMANTIC ANCHORS (Q5 strict — added after the reviewer's naming-clarity flag):
   // - clearedCount: per-return-path semantics:
   //     * `continue: false` paths (max_continuations_reached, no_continuation_needed,
@@ -289,6 +305,8 @@ export interface ContinueDecisionBase {
   //     for cascade-marker continuity; downstream readers should anchor on this
   //     JSDoc instead of treating "finalIteration" as the last 0-indexed
   //     iteration number.
+  continuationPrompt: string;
+  continuationsSoFar: number;
   clearedCount: number;
   finalIteration: number;
 }

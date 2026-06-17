@@ -601,7 +601,13 @@ export class PlanActVerifyOrchestrator {
     // history and consumed upstream by route.ts to force the selected role.
     this.sdkTools['choose_role'] = aiTool({
       description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
-      parameters: z.object({
+      // Bug #2 fix (audit-C2): AI SDK v6 requires `inputSchema` (not `parameters`).
+      // Other tools in this file (search, replace_in_file, file_read, etc.) route
+      // through `normalizeSchemaForAI(z.object(...))` for the same reason; choose_role
+      // was the lone holdout using `parameters:` directly. Without this, the SDK
+      // emits a schema-validation warning at register time and downstream type
+      // narrowing in execute() loses the inferred arg shape.
+      inputSchema: normalizeSchemaForAI(z.object({
         role: z.string().describe(
           'The target expert role to adopt — must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE in system-prompts-dynamic.ts: ' +
           'coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier. ' +
@@ -609,7 +615,7 @@ export class PlanActVerifyOrchestrator {
         ),
         reason: z.string().optional().describe('Reasoning for the role switch — must invoke one of the 3 lineage concepts: complexity (e.g. high-complexity refactor), domain (e.g. domain expertise shift to specialist), or failure recovery (e.g. debugging error loops, multi-step read-only stalls).'),
         recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages — the failure-recovery lineage slice. Provide when reason invokes failure recovery.'),
-      }),
+      })) as Record<string, unknown>,
       execute: async ({ role, reason, recentFailures }: { role: string; reason?: string; recentFailures?: string[] }) => {
         const result = normalizeAndValidateRole(role, reason || '', { recentFailures });
         return {

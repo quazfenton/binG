@@ -33,7 +33,7 @@
  *                                  Capture-the-best-of-route.ts.
  */
 
-import { shouldAutoContinue, type ContinuationDecision } from './llm-continuation';
+import { shouldAutoContinue, type ContinuationDecision, type ContinueDecisionBase } from './llm-continuation';
 import { detectNeedsMoreTurns, type DetectableResult } from './auto-continue-detector';
 import { createLogger } from '@/lib/utils/logger';
 // Re-export Single-Source-of-Truth: ContinueDecision originates in

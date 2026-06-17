@@ -135,13 +135,6 @@ async function transferAnonVFS(
       });
       return 0;
     }
-    // Bug #85 (Pass-6 audit) — defensive guard. The fix in findAnonOwnerIds
-    // already returns `[]` on DB error, but this `.filter(x => x != null)`
-    // normalises any unexpected null/undefined that might slip through (e.g.
-    // from a mock or future code path) into an empty array. Without this,
-    // the `.filter` below would throw "Cannot read properties of null".
-    recentAnonOwnerIds = recentAnonOwnerIds.filter((x): x is string => x != null);
-
   };
 
   // FAST PATH
@@ -220,6 +213,12 @@ async function tryDbFallback(params: {
     });
     return 0;
   }
+
+  // Bug #3 fix (Pass-6 audit): defensive guard MOVED here from tryTransfer where
+  // it was dead code (out of scope — recentAnonOwnerIds is only declared inside
+  // this tryDbFallback). Normalise any null/undefined entries from a mock or
+  // future code path into an empty array BEFORE the candidate filter below runs.
+  recentAnonOwnerIds = recentAnonOwnerIds.filter((x): x is string => x != null);
 
   // Scope to ownerIds whose session-id portion starts with the same
   // timestamp prefix as the cookie. ownerId format is "anon:<sessionId>"
