@@ -2732,13 +2732,6 @@ export function extractFencedDeleteBlocks(content: string): DeleteEdit[] {
  * 
  * EXPORTED for use in client-side validation (hooks/use-enhanced-chat.ts)
  */
-export function looksLikeProjectName(path: string): boolean {
-  if (!path || path.startsWith('/') || path.includes('/') || path.includes('\\')) return false;
-  if (/\.\w{1,4}$/.test(path)) return false;
-  if (path.length > 40) return false;
-  return /^[a-zA-Z0-9_-]+$/.test(path);
-}
-
 export function isValidExtractedPath(path: string): boolean {
   if (!path || path.length === 0 || path.length > 300) return false;
 

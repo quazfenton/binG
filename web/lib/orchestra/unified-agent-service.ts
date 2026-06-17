@@ -28,7 +28,7 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // chat/route.ts SSE streaming path. Closing the six gaps listed in the
 // audit (counter cleanup, requestId keying, hardcoded 3, helper.default,
 // SSE emission) in a single call site change.
-import { decideAutoContinue, defaultFileEditDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
+import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
@@ -4546,7 +4546,7 @@ Based on what you have learned, continue working on the original task. Take the 
         (!cleanedResponse || !cleanedResponse.trim()) &&
         (!response || !response.trim()) &&
         !!toolFailureMessage;
-      const finalResponse = cleanedResponse && cleanedResponse.trim()
+      let finalResponse = cleanedResponse && cleanedResponse.trim()
         ? cleanedResponse
         : (response && response.trim() ? response : (toolFailureMessage || ''));
 

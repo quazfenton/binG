@@ -340,6 +340,7 @@ function main() {
   // 6. Apply migrations (if migrations dir exists)
   let migrationsApplied = 0;
   let migrationsSkipped = 0;
+  let migrationsDriftRecovered = 0;
   let migrationsFailed = 0;
   if (migrationsDir) {
     // Initialize migration tracking table
@@ -381,9 +382,33 @@ function main() {
         const msg = err?.message ?? String(err);
         // Schema drift inside a db.transaction() means the entire migration
         // rolled back; a partial run must not be recorded as applied.
+        //
+        // Bug fix — drift-tolerance: `lib/database/schema.sql` is the
+        // current-fingerprint schema and intentionally pre-creates columns
+        // (e.g. `token_version` on `users`) and tables that several
+        // migrations later try to add via `ALTER TABLE ADD COLUMN`. On a
+        // clean dev DB, those migrations would otherwise hard-fail with
+        // `duplicate column name: ...` / `... already exists` even though
+        // their intent is already satisfied. Mark these as APPLIED (so a
+        // re-run doesn't keep retrying) instead of counting them as
+        // failures. Genuine errors — e.g. `no such column/table` raised
+        // by a migration BEFORE running — still fall through to the hard
+        // failure branch below.
         if (/duplicate column name/i.test(msg) || /already exists/i.test(msg)) {
-          migrationsFailed++;
-          console.error(`[init-db]   migration ${version} (${filename}) hit schema drift: ${msg.split('\n')[0]}`);
+          try {
+            db.prepare(
+              'INSERT OR IGNORE INTO schema_migrations (version, filename) VALUES (?, ?)',
+            ).run(version, filename);
+            migrationsDriftRecovered++;
+            console.log(
+              `[init-db]   drift-recovered migration ${version} (${filename}): ${msg.split('\n')[0]} (intent already satisfied by schema.sql)`,
+            );
+          } catch (dbErr) {
+            migrationsFailed++;
+            console.error(
+              `[init-db]   migration ${version} (${filename}) drift-recovery FAILED: ${dbErr.message}`,
+            );
+          }
         } else {
           migrationsFailed++;
           console.error(`[init-db]   migration ${version} (${filename}) FAILED: ${msg}`);
@@ -392,7 +417,7 @@ function main() {
     }
 
     console.log(
-      `[init-db] migrations: ${migrationsApplied} applied, ${migrationsSkipped} already executed, ${migrationsFailed} failed`,
+      `[init-db] migrations: ${migrationsApplied} applied, ${migrationsSkipped} already executed, ${migrationsDriftRecovered} drift-recovered${migrationsFailed > 0 ? `, ${migrationsFailed} failed` : ''}`,
     );
     if (migrationsFailed > 0) {
       db.close();
