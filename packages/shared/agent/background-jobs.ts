@@ -121,7 +121,7 @@ export class BackgroundExecutor extends EventEmitter {
           this.emit('error', { jobId, sandboxId, error });
           
           // Log error but continue the loop
-          log.error(`Background job ${jobId} error:`, error.message);
+          log.error(`Background job ${jobId} error:`, error);
         }
 
         // Wait for next interval

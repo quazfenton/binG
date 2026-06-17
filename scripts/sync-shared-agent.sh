@@ -45,6 +45,7 @@ GUARD_PKG_DIR="${PKG_DIR:-${BASH_SOURCE[0]%/*}/../packages/shared/agent}"
 GUARD_MIRROR_DIR="${MIRROR_DIR:-${BASH_SOURCE[0]%/*}/../web/.bing-shared/agent}"
 GUARD_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo /opt/bing)"
 
+GUARD_OFFENDING_FILES=""
 if [ -d "$GUARD_PKG_DIR" ] && [ -d "$GUARD_MIRROR_DIR" ] && [ -d "$GUARD_REPO_ROOT/.git" ]; then
   for _guard_pkg in "$GUARD_PKG_DIR"/*.ts; do
     [ -f "$_guard_pkg" ] || continue
@@ -58,11 +59,11 @@ if [ -d "$GUARD_PKG_DIR" ] && [ -d "$GUARD_MIRROR_DIR" ] && [ -d "$GUARD_REPO_RO
       _guard_web_sha=$(git -C "$GUARD_REPO_ROOT" show "$_guard_commit:$_guard_mirror" 2>/dev/null | sha256sum | awk '{print $1}')
       if [ "$_guard_web_sha" = "$_guard_pkg_sha" ]; then
         echo "[GUARD] REVERT-RISK: $_guard_bn pkg sha matches ancestor web commit $_guard_commit (web→pkg revert). Refusing sync." >&2
+        GUARD_OFFENDING_FILES="${GUARD_OFFENDING_FILES}${_guard_bn} (commit $_guard_commit)"$'\n'
         WEB_TO_PKG_GUARD_RC=1
         break
       fi
     done
-    [ "$WEB_TO_PKG_GUARD_RC" = "1" ] && break
   done
 fi
 
@@ -258,7 +259,11 @@ while IFS= read -r f; do
         rsync_args+=(--dry-run)
     fi
 
-    rsync_out="$(rsync "${rsync_args[@]}" "$pkg_f" "$web_f" 2>&1 || true)"
+    if ! rsync_out="$(rsync "${rsync_args[@]}" "$pkg_f" "$web_f" 2>&1)"; then
+        err "RSYNC FAILED $f --- $rsync_out"
+        sync_failed=1
+        continue
+    fi
     note "RSYNC    $f  --- $rsync_out"
 
     if [ "$DRY_RUN" = "1" ]; then

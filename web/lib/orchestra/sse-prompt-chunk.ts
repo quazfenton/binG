@@ -113,69 +113,138 @@ export interface SseErrorChunk {
 // @audit-SseChunkKind-extend-token-yield-pending anchor above.
 export type SseChunk = SsePromptChunk | SseContinuationChunk | SseErrorChunk;
 
-// === TypeScript-narrowed overloads for the unified makeSseChunk factory ===
-// Each overload maps a `kind` literal to its specific chunk shape; TS selects
-// the matching overload at the call site, narrowing return type accordingly.
-// Rule: when caller switches on `return.type`, the union narrows cleanly.
+// === Single-signature makeSseChunk (cascade Q-tightening) ===
 //
-// (b) The impl-signature uses `...args: never[]` (NOT `unknown[]`). The
-// `never[]` idiom declares the impl signature as unreachable-only: callers
-// cannot bypass the public overload chain with arbitrary positional args,
-// and runtime shape drift is caught at compile time by the `(f)`
-// exhaustiveness check below. The body uses `as [tupleType]` assertions to
-// destructure the args — these are necessary because `never[]` indexing
-// returns `never` (untyped).
+// The prior pattern was 3 typed overload declarations + 1 `never[]` impl
+// signature with `as [TupleType]` casts in each case body. This tightened
+// single-signature pattern replaces it:
+//
+//   * Single generic-K signature uses conditional types to resolve both
+//     the args tuple AND the return type per `kind`. No more overloads
+//     and no more wildcard impl — both were redundant since the impl
+//     was unreachable from outside the file (`never[]` idiom).
+//   * Case-body destructures no longer need `as [TupleType]` casts:
+//     `args` is already typed to its narrowed tuple via `_SseChunkArgs<K>`
+//     conditional narrowing inside each switch case.
+//   * Runtime shape guards (each `if (args.length !== N)`) are retained
+//     as defense-in-depth — if a future contributor adds a new arg
+//     without updating `_SseChunkArgs<K>`, the guard catches the drift
+//     before the destructure executes.
+//   * (f) Exhaustiveness check (`const _: never = kind;`) is retained;
+//     if any SseChunkKind variant is added without a corresponding case,
+//     TS surfaces a compile error AND the runtime throw fires.
+//
+// Per-kind arg tuples (single source of truth — now exported as the public
+// `SseChunkArgs` type alias for IDE hover-documentation + external consumer
+// reference; the declaration lives below the helper JSDoc):
+//   * 'prompt'         → readonly [PromptSource, string | null]
+//   * 'continuation'  → readonly [boolean, ContinuationReason | undefined, number]
+//   * 'error'         → readonly [string, boolean]
+//
+// Per-kind return type (via `_SseChunkReturn<K>`):
+//   * 'prompt'         → SsePromptChunk
+//   * 'continuation'  → SseContinuationChunk
+//   * 'error'         → SseErrorChunk
 
-export function makeSseChunk(
-  kind: 'prompt',
-  source: PromptSource,
-  content: string | null,
-): SsePromptChunk;
-export function makeSseChunk(
-  kind: 'continuation',
-  shouldContinue: boolean,
-  reason: ContinuationReason | undefined,
-  iteration: number,
-): SseContinuationChunk;
-export function makeSseChunk(
-  kind: 'error',
-  message: string,
-  recoverable: boolean,
-): SseErrorChunk;
-// (b) impl signature: never[] keeps the wildcard semantics while blocking
-// runtime bypass via direct positional args. (f) exhaustiveness check in the
-// default branch provides additional compile-time safety on the dispatch.
-export function makeSseChunk(kind: SseChunkKind, ...args: never[]): SseChunk {
+/**
+ * Conditional type: maps each `SseChunkKind` literal to its narrowed
+ * argument tuple. This is the single source of truth for the
+ * `makeSseChunk` per-kind args surface — case bodies consume `args`
+ * with this tuple type, eliminating the prior `as [TupleType]` casts.
+ *
+ * EXPORTED as the public `SseChunkArgs` type alias below so external
+ * consumers (and IDE hover-documentation tools) can reference the
+ * per-kind arg tuple contract by name. The internal `_SseChunkArgs`
+ * helper has been renamed to drop the `_`-prefix and is `export`ed.
+ * The shape is preserved verbatim.
+ */
+export type SseChunkArgs<K extends SseChunkKind> =
+  K extends 'prompt' ? readonly [PromptSource, string | null] :
+  K extends 'continuation' ? readonly [boolean, ContinuationReason | undefined, number] :
+  K extends 'error' ? readonly [string, boolean] :
+  readonly never[];
+
+/**
+ * Conditional type: maps each `SseChunkKind` literal to its specific
+ * return-shape union member. Callers that pin `_SseChunkReturn<'prompt'>`
+ * get `SsePromptChunk`, etc. — preserving the typed-discriminator contract
+ * at call sites (e.g. `const x: SsePromptChunk = makeSseChunk('prompt', ...)`).
+ */
+type _SseChunkReturn<K extends SseChunkKind> =
+  K extends 'prompt' ? SsePromptChunk :
+  K extends 'continuation' ? SseContinuationChunk :
+  K extends 'error' ? SseErrorChunk :
+  SseChunk;
+
+/**
+ * Build a typed SSE chunk. Returns the structurally-matched variant for
+ * the given `kind` discriminator.
+ *
+ * @example
+ * ```ts
+ * // 'prompt' kind — takes PromptSource + content
+ * const promptChunk: SsePromptChunk = makeSseChunk(
+ *   'prompt',
+ *   PROMPT_SOURCE.OVERRIDE,
+ *   'Hello, world!',
+ * );
+ *
+ * // 'continuation' kind — takes shouldContinue + reason + iteration
+ * const contChunk: SseContinuationChunk = makeSseChunk(
+ *   'continuation',
+ *   true,
+ *   'single_step_read_pattern',
+ *   1,
+ * );
+ *
+ * // 'error' kind — takes message + recoverable
+ * const errChunk: SseErrorChunk = makeSseChunk(
+ *   'error',
+ *   'Provider timeout',
+ *   false,
+ * );
+ * ```
+ *
+ * @param kind - the discriminator literal (`'prompt'` | `'continuation'` | `'error'`).
+ * @param args - the per-kind argument tuple. The shape is narrowed by TS
+ *               via the `kind` literal through the exported `SseChunkArgs<K>`
+ *               conditional type — no casts needed in the case bodies.
+ * @returns The structurally-matched SSE chunk variant
+ *          (`_SseChunkReturn<K>`): `SsePromptChunk` for `'prompt'`,
+ *          `SseContinuationChunk` for `'continuation'`,
+ *          `SseErrorChunk` for `'error'`.
+ */
+export function makeSseChunk<K extends SseChunkKind>(
+  kind: K,
+  ...args: SseChunkArgs<K>
+): _SseChunkReturn<K> {
   switch (kind) {
     case 'prompt': {
-      // (Q2 review-flag fix) runtime shape guard: 'prompt' overload expects
-      // exactly 2 args (source, content). The `never[]` impl signature
-      // enforces compile-time only; runtime validation catches cases where
-      // the overload gains a parameter without the case body updating.
+      // Runtime shape guard: 'prompt' kind expects exactly 2 args.
+      // Defense-in-depth against future drift if `_SseChunkArgs<'prompt'>`
+      // is widened without updating this case body's destructure.
       if (args.length !== 2) {
         throw new Error(
           `makeSseChunk('prompt'): expected 2 args, got ${args.length}`,
         );
       }
-      const [source, content] = args as [PromptSource, string | null];
+      // args is typed as `readonly [PromptSource, string | null]` by
+      // `SseChunkArgs<K>` conditional narrowing — no `as` cast.
+      const [source, content] = args;
       return { type: 'prompt', source, content };
     }
     case 'continuation': {
-      // (Q2 review-flag fix) runtime shape guard: 'continuation' overload
-      // expects exactly 3 args (shouldContinue, reason, iteration).
+      // Runtime shape guard: 'continuation' kind expects exactly 3 args.
       if (args.length !== 3) {
         throw new Error(
           `makeSseChunk('continuation'): expected 3 args, got ${args.length}`,
         );
       }
-      // (prior keyword-fix turn) renamed destructure too: `shouldContinue` matches the
-      // 'continuation' overload parameter name; field `continue` is OK on the
-      // returned object literal (object-property rule).
-      const [shouldContinue, reason, iteration] = args as [
-        boolean,
-        ContinuationReason | undefined,
-        number,
-      ];
+      // args is typed as `readonly [boolean, ContinuationReason | undefined, number]`.
+      // (cascade Q6) The local destructure binds `shouldContinue` (NOT
+      // `continue`) to avoid the reserved-keyword identifier rule; the
+      // returned object literal uses `continue` (object-property rule).
+      const [shouldContinue, reason, iteration] = args;
       return {
         type: 'continuation',
         continue: shouldContinue,
@@ -184,24 +253,22 @@ export function makeSseChunk(kind: SseChunkKind, ...args: never[]): SseChunk {
       };
     }
     case 'error': {
-      // (Q2 review-flag fix) runtime shape guard: 'error' overload expects
-      // exactly 2 args (message, recoverable).
+      // Runtime shape guard: 'error' kind expects exactly 2 args.
       if (args.length !== 2) {
         throw new Error(
           `makeSseChunk('error'): expected 2 args, got ${args.length}`,
         );
       }
-      const [message, recoverable] = args as [string, boolean];
+      // args is typed as `readonly [string, boolean]`.
+      const [message, recoverable] = args;
       return { type: 'error', message, recoverable };
     }
     default: {
-      // (f) exhaustiveness check: assigning `kind` to `never` after all listed
-      // cases handles the TS narrowing correctly; if any SseChunkKind variant
-      // is added without a corresponding case, TS surfaces a compile error.
-      // (Q5 review-flag fix) unused-var convention: `_` matches the user's
-      // literal spec for the exhaustiveness check; the runtime throw is a
-      // defense-in-depth fallback (the `never[]` impl signature keeps this
-      // branch unreachable from outside the file).
+      // (f) Exhaustiveness check: assigning `kind` to `never` after all
+      // listed cases handles TS narrowing correctly; if any SseChunkKind
+      // variant is added without a corresponding case, TS surfaces a
+      // compile error AND the runtime throw fires. `_` underscore
+      // convention matches the user's literal spec for the unused-var idiom.
       const _: never = kind;
       throw new Error(
         `makeSseChunk: unhandled SseChunkKind: ${String(_)}`,

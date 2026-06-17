@@ -102,8 +102,8 @@ if [ -n "$COMMON" ]; then
         else
             out_sync=$((out_sync + 1))
             sync_failed=1
-            sz_w=$(stat -c%s "$web_f")
-            sz_p=$(stat -c%s "$pkg_f")
+            sz_w=$(wc -c < "$web_f" | tr -d ' ')
+            sz_p=$(wc -c < "$pkg_f" | tr -d ' ')
             delta=$((sz_w - sz_p))
             patch="$DIFF_OUT_DIR/${f%.ts}.patch"
             diff -u "$pkg_f" "$web_f" > "$patch" || true
