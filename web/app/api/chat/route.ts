@@ -1959,4 +1959,4 @@ processUnifiedAgentRequest(currentConfig);
               // OUT-OF-BAND distinct from L2047 controller.enqueue safety-net:
               // this catch scopes tool-call FAILURE cleanup (fileEdits-apply errors).
               // Lock marker: do NOT migrate into runAutoContinueLoop \u2014 distinct semantic.
-                } catch (editErr: any) { /* Bug #86 sentinel: fileEdits-apply error recovery — empty body; @audit-A2-migration-ready */ } } } } } } }
+                } catch (editErr: any) { chatLogger.warn('fileEdits-apply failed', { requestId, error: editErr?.message }); /* Bug #86 sentinel: fileEdits-apply error recovery — empty body; @audit-A2-migration-ready */ } } } } }
