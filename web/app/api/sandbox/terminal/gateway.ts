@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { sandboxCreationRateLimiter } from '@/lib/utils/rate-limiter';
@@ -171,14 +170,9 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      // Gap-fix: resolve and thread the full ownerResolution so the
-      // bridge has the auth source / isAuthenticated / anonSessionId
-      // for source-aware sandboxing decisions.
-      const ownerResolution = await resolveFilesystemOwner(req);
       const session = await sandboxBridge.getOrCreateSession(
         authResult.userId,
         { language: 'typescript' },
-        ownerResolution,
       );
       // Success — clear any previous failure entry
       clearSandboxFailureEntry(authResult.userId);

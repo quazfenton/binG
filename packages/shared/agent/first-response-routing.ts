@@ -132,15 +132,23 @@ export function stripRoutingMarkers(responseText: string): string {
       // Remove trailing code fences if present
       afterJson = afterJson.replace(/^\s*```?\s*/, '');
 
-      cleaned = cleanedBefore + afterJson;
-    } else {
-      // JSON extraction failed — still strip the marker text so it doesn't leak to users
-      const beforeMarker = cleaned.slice(0, markerMatch.index);
-      const afterMarker = cleaned.slice(markerMatch.index + markerMatch[0].length);
-      const headerRegex = /###?\s*$/;
-      const cleanedBefore = beforeMarker.replace(headerRegex, '');
-      cleaned = cleanedBefore + afterMarker;
-    }
+      cleaned = cleanedBefore + afterJson;      } else {
+        // JSON extraction failed — strip the marker AND any leaked partial-JSON
+        // content following it. Truncate at the next plausible section break
+        // (next `###` header, code fence, or 2+ blank-line gap) so a malformed
+        // `[ROLE_SELECT] { broken-json` fragment doesn't leak to the user when
+        // the LLM emits `[ROLE_SELECT]` followed by broken/malformed braces.
+        const beforeMarker = cleaned.slice(0, markerMatch.index);
+        const afterMarker = cleaned.slice(markerMatch.index + markerMatch[0].length);
+        const headerRegex = /###?\s*$/;
+        const cleanedBefore = beforeMarker.replace(headerRegex, '');
+        const nextSectionBreak = afterMarker.match(/\n(?:\s*#{1,6}\s|\s*```|^\s*$)[\s\S]*?$/m);
+        const safeAfter =
+          nextSectionBreak && nextSectionBreak.index !== undefined
+            ? afterMarker.slice(0, nextSectionBreak.index).trimEnd()
+            : '';
+        cleaned = cleanedBefore + safeAfter;
+      }
   }
 
   // 3. Remove ### Initial Response section

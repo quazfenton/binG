@@ -136,7 +136,7 @@ export const CAPABILITY_PREFIX_TOOLS: ReadonlySet<string> = new Set<string>([  '
  * `.` is meaningful; only `-` is collapsed.
  */
 export function normalizeToolName(name: string): string {
-  return (name ?? '').toString().toLowerCase().replace(/-/g, '_');
+  return (name ?? '').toString().trim().toLowerCase().replace(/-/g, '_');
 }
 
 /**

@@ -341,9 +341,17 @@ export class BackgroundExecutor extends EventEmitter {
         resolve(value);
       };
 
+      // SIGTERM/SIGKILL graduated escalation — each kill-level attaches a
+      // scope-local close handler via `.once` (NOT `.on`) so the listener
+      // auto-removes after firing. This closes the leak window the prior
+      // codereview flagged: many short-lived processes accumulating stale
+      // `.on` listeners on the EventEmitter. The main `proc.on('close')`
+      // below (the source-of-truth handler) still settles the promise; the
+      // graduated handlers here only clear inner escalation timers and emit
+      // a more descriptive stderr when SIGTERM is ignored. The `resolved`
+      // flag in `settle` makes any duplicate settle call a no-op.
       const timer = setTimeout(() => {
         try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-        // Wait for the child to actually terminate before settling.
         // If SIGTERM is ignored, escalate to SIGKILL after a grace period.
         const sigkillTimer = setTimeout(() => {
           try { proc.kill('SIGKILL'); } catch { /* may already be dead */ }
@@ -352,12 +360,12 @@ export class BackgroundExecutor extends EventEmitter {
           const hardTimeout = setTimeout(() => {
             settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (forced)`, exitCode: null });
           }, 5000);
-          proc.on('close', () => {
+          proc.once('close', () => {
             clearTimeout(hardTimeout);
             settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (escalated)`, exitCode: null });
           });
         }, 5000);
-        proc.on('close', () => {
+        proc.once('close', () => {
           clearTimeout(sigkillTimer);
           settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
         });

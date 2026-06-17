@@ -348,7 +348,7 @@ You have the ability to switch your expert role to better suit the task.
 2. **SELECT**: If a different role is the better fit, call choose_role with role set to one of these 9 IDs (coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier). The 7 worked examples below cover the most common cases; coder and simplifier (the 2 unillustrated roles) use the same shape.
 3. **WAIT**: The system injects the new persona at the start of your next turn.
 
-Worked examples (the nudge the prior prompt was missing — choose_role is a tool that already exists):
+Worked examples (choose_role is a tool that already exists):
 - "Need a multi-step plan spanning UI + API + tests before any code is written" -> choose_role(role='planner')
 - "Last turn failed with a stack trace or assertion; need root-cause not another guess" -> choose_role(role='debugger')
 - "Cross-cutting architectural decision affecting multiple subsystems, requires trade-off analysis" -> choose_role(role='architect')

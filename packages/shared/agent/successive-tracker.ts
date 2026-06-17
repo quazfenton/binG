@@ -80,6 +80,7 @@ const DEFAULT_RESPONSE_THRESHOLD = 5;
 // no STEER message. 50 covers a reasonable task envelope while still
 // catching runaway loops.
 const DEFAULT_TOOL_CALL_THRESHOLD = 50;
+const ROTATION_TOOL_CALL_THRESHOLD = 15;
 const DEFAULT_CONSECUTIVE_TOOL_THRESHOLD = 7;
 const RE_EVAL_WINDOW_MS = 60 * 1000; // 1 minute
 /**
@@ -534,7 +535,7 @@ export function getRotationRecommendation(sessionId: string): RotationRecommenda
   let reasoning = 'Default routing based on session state';
   
   // High tool call count suggests need for planning
-  if (tracker.toolCallCount > 15) {
+  if (tracker.toolCallCount > ROTATION_TOOL_CALL_THRESHOLD) {
     primaryRole = 'planner';
     alternativeRole = 'architect';
     confidence = 0.8;

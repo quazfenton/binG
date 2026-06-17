@@ -719,7 +719,7 @@ export class PlanActVerifyOrchestrator {
               const structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
               yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
               // Record the error result so the model can see what went wrong
-              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: { success: false, error: error.message } });
+              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: structuredResult }); // Bug #6 fix: route error through buildToolResult for consistent ToolResult shape
               // Bug #14: When a search tool fails, inject a skip-search directive
               // so the LLM doesn't retry the same broken tool in subsequent steps.
               const isSearchTool = call.name === 'web_search' || call.name === 'web.search' || call.name === 'nullclaw:search';
@@ -887,7 +887,35 @@ If a search step fails during execution, skip it and proceed with file operation
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
     const response = await this.callLLM(planPrompt, history || []);
     try {
-      const parsed = JSON.parse(response.text.match(/\[[\s\S]*\]/)?.[0] || '[]');
+      // Bug #7 fix: walk the string to find the FIRST balanced `[...]` array
+      // before parsing. The previous greedy regex `[\s\S]*` matched up to the
+      // LAST closing bracket in the response — so a JSON-then-prose response
+      // like `[{"action":"a"}]\n\nSome explanation text` parses the explanation
+      // prose too, throwing on the JSON guard. Bracket-walk gives a robust
+      // first-matched-array extraction; we keep a bounded lazy regex as a
+      // fallback for text-mode LLMs that emit only the bare array.
+      const text = response.text;
+      let parsed = [];
+      let depth = 0;
+      let start = -1;
+      let matchedBalanced = false;
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '[') { if (depth === 0) start = i; depth++; }
+        else if (ch === ']') {
+          depth--;
+          if (depth === 0 && start !== -1) {
+            const candidate = text.slice(start, i + 1);
+            try { const decoded = JSON.parse(candidate); if (Array.isArray(decoded)) { parsed = decoded; matchedBalanced = true; } break; }
+            catch { start = -1; }
+          }
+        }
+      }
+      if (!matchedBalanced) {
+        const fallbackCandidate = text.match(/\[[\s\S]*?\]/)?.[0] || '[]';
+        try { const decoded = JSON.parse(fallbackCandidate); if (Array.isArray(decoded)) parsed = decoded; }
+        catch { /* last-resort empty fallback handled below */ }
+      }
       return parsed.length ? parsed : [{ action: task }];
     } catch {
       return [{ action: task }];

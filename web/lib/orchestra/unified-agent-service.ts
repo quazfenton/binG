@@ -1676,18 +1676,10 @@ export async function processUnifiedAgentRequest(
     const isAutoMode = !config.mode || config.mode === 'auto';
     const roleSelection = result.metadata?.roleSelection;
 
-  // Log auto-continue trigger (route through shouldAutoContinue() so the
-  // env-default-on canonical lives in lib/chat/llm-continuation, mirroring
-  // first-response-routing.ts's `?? DEFAULT_ROUTING.continue` policy).
-  // Migrate direct shouldAutoContinue() -> decideAutoContinue() at L1645 (post-PHASE-1
-  // transition) so the roleSelection-driven continuation flows through the same helper as
-  // the canonical L4579 site. Values sourced from `result` (the PHASE 1 tool-execution output
-  // that lives in scope at this transition site) so the fileEdits + base detectors can fire
-  // rather than silently being suppressed. requestId uses a graceful empty-string fallback since
-  // it is not in scope at this transition site today; forceSignal / forcedBy overrides now
-  // flow uniformly across both call sites.
-  const roleAutoDecision = decideAutoContinue({
-    requestId: requestId ?? '',
+  const phaseTransitionRequestId =
+    config.conversationId || config.sessionId || `unified-phase1-${Date.now()}`;
+  const autoDecision = decideAutoContinue({
+    requestId: phaseTransitionRequestId,
     routing: roleSelection
       ? { continue: roleSelection.continue,
           primaryRole: roleSelection.suggestedRole }
@@ -1697,15 +1689,15 @@ export async function processUnifiedAgentRequest(
       args: s.args,
     })),
     responseText: result.response ?? '',
-    continuationsSoFar: typeof continuationCount === 'number' ? continuationCount : 0,
-    result: { ...result, fileEdits: (result.fileEdits ?? []).filter((fe) => fe && WRITE_TOOL_NAMES.some((n) => fe.toolName === n)) },
+    result,
   });
-  if (roleAutoDecision.continue) {
+  clearContinuationCount(phaseTransitionRequestId);
+  if (autoDecision.continue) {
     log.info('\x1b[33m[Auto-Continue]\x1b[0m 🔄 triggered by model', {
       reason: roleSelection?.classification || 'multi-step plan detected',
       suggestedRole: roleSelection?.suggestedRole,
       nextAction: roleSelection?.specializationRoute,
-      reasonCode: roleAutoDecision.reason,
+      reasonCode: autoDecision.reason,
     });
   }
 
@@ -4630,7 +4622,7 @@ Based on what you have learned, continue working on the original task. Take the 
       let accumulatedToolInvocations = [...toolInvocations];
 
       while (autoContinueIteration < MAX_V1_CONTINUATIONS) {
-        const contDecision = decideAutoContinue({
+        const autoDecision = decideAutoContinue({
           requestId,
           routing: routingForClient ? {
             continue: routingForClient.continue,
@@ -4662,7 +4654,7 @@ Based on what you have learned, continue working on the original task. Take the 
           },
         });
 
-        if (!contDecision.continue || !contDecision.continuationPrompt) {
+        if (!autoDecision.continue || !autoDecision.continuationPrompt) {
           break;
         }
 
@@ -4693,9 +4685,9 @@ Based on what you have learned, continue working on the original task. Take the 
             type: 'continuation',
             requestId,
             iteration: autoContinueIteration,
-            reason: contDecision.reason,
-            forceSignal: contDecision.forceSignal,
-            continuationsSoFar: contDecision.continuationsSoFar,
+            reason: autoDecision.reason,
+            forceSignal: autoDecision.forceSignal,
+            continuationsSoFar: autoDecision.continuationsSoFar,
           });
           try {
             config.onStreamChunk(ssePayload);
@@ -4711,16 +4703,16 @@ Based on what you have learned, continue working on the original task. Take the 
 
         log.info('[V1-API-WITH-TOOLS] Auto-continuation loop iteration', {
           iteration: autoContinueIteration,
-          reason: contDecision.reason,
-          continuationsSoFar: contDecision.continuationsSoFar,
-          forceSignal: contDecision.forceSignal,
+          reason: autoDecision.reason,
+          continuationsSoFar: autoDecision.continuationsSoFar,
+          forceSignal: autoDecision.forceSignal,
           sseDelivered,
         });
 
         const contMessages = [
           ...llmMessages,
           { role: 'assistant', content: accumulatedResponse },
-          { role: 'user', content: contDecision.continuationPrompt },
+          { role: 'user', content: autoDecision.continuationPrompt },
         ];
 
         try {
@@ -5236,13 +5228,13 @@ async function runV1Orchestrated(
       // `decideAutoContinue(...)` (lib/chat/auto-continue-helper — canonical wrapper
       // that internally delegates to `shouldAutoContinue` from lib/chat/llm-continuation).
       // Treats undefined as continue=true so env-default-on canonical lives in one place.
-      const firstResponseAutoDecision = decideAutoContinue({
+      const autoDecision = decideAutoContinue({
         requestId: '',
         routing: parsedRouting.routing,
         steps: [],
         responseText: firstResponseContent || content || '',
       });
-      if (firstResponseAutoDecision.continue && parsedRouting.routing.planSteps.length > 0) {
+      if (autoDecision.continue && parsedRouting.routing.planSteps.length > 0) {
         (config as any)._stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
       }
       

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { verifyAuth } from '@/lib/auth/jwt';
-import { resolveFilesystemOwner } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 
 export const maxDuration = 120;
@@ -28,14 +27,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Get or create sandbox session for the authenticated user
-    // Gap-fix: resolve and thread the full ownerResolution so the
-    // bridge has the auth source / isAuthenticated / anonSessionId
-    // for source-aware sandboxing decisions.
-    const ownerResolution = await resolveFilesystemOwner(req);
     const session = await sandboxBridge.getOrCreateSession(
       authenticatedUserId,
-      undefined,
-      ownerResolution,
     );
 
     // Dynamic import to avoid build errors when sandbox module not available

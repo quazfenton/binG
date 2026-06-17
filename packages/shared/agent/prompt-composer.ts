@@ -410,6 +410,21 @@ export function generateDynamicToolBlock(
     // Q3: see DEFAULT_DYNAMIC_HEADER above — single source so renames are safe.
     header = DEFAULT_DYNAMIC_HEADER,
   } = options;
+  // Bug #8 fix: detect allowedTools ∩ excludedTools overlap and warn (or throw in dev).
+  // Without this guard, a tool listed in BOTH arrays is silently dropped because
+  // the filter order runs `allowedTools` first then `excludedTools` excludes it again.
+  // This ambiguity is easy to miss at call sites — fail loudly in dev, warn once in prod.
+  if (allowedTools && excludedTools && allowedTools.length > 0 && excludedTools.length > 0) {
+    const overlap = allowedTools.filter((id) => excludedTools.includes(id));
+    if (overlap.length > 0) {
+      const msg = `[prompt-composer] allowedTools and excludedTools overlap on ${overlap.length} id(s): ${overlap.join(', ')}. These are treated as excluded (filter order: allowed → excluded). Pass them in only ONE list to avoid silent filtering.`;
+      if (process.env.NODE_ENV === 'production') {
+        console.warn(msg);
+      } else {
+        throw new Error(msg);
+      }
+    }
+  }
   let caps = ALL_CAPABILITIES;
   if (allowedTools) caps = caps.filter((c) => allowedTools.includes(c.id));
   if (excludedTools) caps = caps.filter((c) => !excludedTools.includes(c.id));

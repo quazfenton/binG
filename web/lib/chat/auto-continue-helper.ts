@@ -222,6 +222,35 @@ export interface AutoContinueDecision extends ContinueDecisionBase {
  * structurally pinned to the ContinueDecisionBase contract (clearedCount +
  * finalIteration required) without hand-cloning them at three call sites.
  *
+ * Step C discriminator (cascade Q5 polish): `BuildDecisionInput` is a
+ * DISCRIMINATED UNION keyed on `shouldContinue` with a required
+ * `clearedSnapshotKind: 'pre' | 'post'` literal that pins the counter
+ * snapshot semantic at compile time:
+ *
+ *   - `shouldContinue: true`  branch REQUIRES `clearedSnapshotKind: 'post'`.
+ *     POST-increment: `clearedCount = continuationsSoFar + 1` (this decision
+ *     IS the Nth continuation being dispatched). The factory collapses this
+ *     to `clearedCount = continuationsSoFar` (POST-snapshot via the helper's
+ *     `incrementContinuationCount(requestId)` which mutates-and-returns).
+ *
+ *   - `shouldContinue: false` branch REQUIRES `clearedSnapshotKind: 'pre'`.
+ *     PRE-snapshot at the moment of decision: `clearedCount = continuationsSoFar`
+ *     (the counter at the moment the decision fired; `this many were in-flight`).
+ *
+ * The discriminator prevents future external callers from accidentally
+ * inverting the PRE-vs-POST semantic. Without it, a caller could pass
+ * `shouldContinue: true` plus a `continuationsSoFar` value that's PRE-snapshot
+ * (off-by-one drift on `clearedCount`); the discriminator enforces a
+ * type-safe pairing.
+ *
+ * Reviewer-invariant protection (cascade Q4 polish): the prior draft typed
+ * `clearedCount` and `continuationsSoFar` as independently-required numbers,
+ * but the cascade's Q5 invariant in `llm-continuation.ts:257-309` actually
+ * pins them to ALWAYS be equal at the moment of decision. The factory
+ * collapses them: `continuationsSoFar` is the single source of truth, and
+ * `clearedCount` is DERIVED from it. The invariant is now type-enforced
+ * (assignment-impossible mismatch), not just convention.
+ *
  * Why a factory rather than inline object literals?
  *   * Compile-time exhaustiveness: every return shape passes through the same
  *     type-narrowed constructor, so any drift in ContinueDecisionBase's field
@@ -230,20 +259,14 @@ export interface AutoContinueDecision extends ContinueDecisionBase {
  *     each site (counter snapshot, detector reason, advanced reason).
  *   * Readability: callers read `buildDecision({ ... })` without memorizing
  *     the 7-field literal shape.
- *
- * Reviewer-invariant protection (cascade Q4 polish): the prior draft typed
- * `clearedCount` and `continuationsSoFar` as independently-required numbers,
- * but the cascade's Q5 invariant in `llm-continuation.ts:257-309` actually
- * pins them to ALWAYS be equal at the moment of decision (POST-increment on
- * `continue=true`, PRE-snapshot on `continue=false`). Letting callers pass
- * them independently would permit future external callers to violate the
- * invariant by mistake. The factory collapses them: `continuationsSoFar` is
- * the single source of truth, and `clearedCount` is DERIVED from it. The
- * invariant is now type-enforced (assignment-impossible mismatch), not just
- * convention.
  */
-export interface BuildDecisionInput {
-  shouldContinue: boolean;
+
+/**
+ * Shared fields for BuildDecisionInput variants. The `shouldContinue` and
+ * `clearedSnapshotKind` discriminators are NOT in this base — they're
+ * pinned on each union variant.
+ */
+interface BuildDecisionInputBase {
   reason?: AutoContinueDecision['reason'];
   forceSignal: boolean;
   forcedBy?: AutoContinueDecision['forcedBy'];
@@ -252,6 +275,23 @@ export interface BuildDecisionInput {
   finalIteration: number;
   continuationPrompt?: string;
 }
+
+/**
+ * Discriminated union for buildDecision input. The `shouldContinue` literal
+ * and the matching `clearedSnapshotKind` literal are pinned per branch so
+ * external callers can't accidentally invert PRE vs POST semantic.
+ */
+export type BuildDecisionInput =
+  | (BuildDecisionInputBase & {
+      shouldContinue: true;
+      /** POST-increment: clearedCount = continuationsSoFar (post-snapshot). */
+      clearedSnapshotKind: 'post';
+    })
+  | (BuildDecisionInputBase & {
+      shouldContinue: false;
+      /** PRE-snapshot: clearedCount = continuationsSoFar (the in-flight count). */
+      clearedSnapshotKind: 'pre';
+    });
 
 export function buildDecision(
   input: BuildDecisionInput,
@@ -317,6 +357,11 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       forceSignal: false,
       continuationsSoFar,
       finalIteration: MAX_CONTINUATIONS,
+      // PRE-snapshot: clearedCount = continuationsSoFar at the moment of
+      // decision (the cap-hit path reads the in-flight counter before the
+      // cleanup). The discriminator union (Step C polish) catches any
+      // inversion attempt at compile time.
+      clearedSnapshotKind: 'pre',
     });
   }
 
@@ -374,6 +419,10 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       continuationsSoFar: newCount,
       finalIteration: MAX_CONTINUATIONS,
       continuationPrompt: continuationDecision.continuationPrompt,
+      // POST-increment: clearedCount = continuationsSoFar (= newCount) AFTER
+      // incrementContinuationCount returns. The discriminator union (Step C)
+      // catches any PRE-on-continue-true inversion attempt at compile time.
+      clearedSnapshotKind: 'post',
     });
   }
 
@@ -386,5 +435,10 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     forcedBy: undefined,
     continuationsSoFar,
     finalIteration: MAX_CONTINUATIONS,
+    // PRE-snapshot: clearedCount = continuationsSoFar at the moment of
+    // decision (no-continue branch keeps the in-flight counter as-is).
+    // The discriminator union (Step C) catches any POST-on-continue-false
+    // inversion attempt at compile time.
+    clearedSnapshotKind: 'pre',
   });
 }

@@ -518,8 +518,9 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
             this.emit('job:max-executions', job.jobId);
             // P0-2 fix: Clean up dedupLookup when job naturally completes
             this.cleanupDedupEntry(job);
-            // Remove completed job from the map to prevent unbounded growth.
-            this.jobs.delete(job.jobId);
+            // Bug #2 fix: route the jobs-map removal through safeDeleteJob()
+            // (single source of truth for the status-transition+delete pair).
+            this.safeDeleteJob(job.jobId, 'completed');
             break;
           }
 
@@ -536,8 +537,9 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
                 this.emit('job:stop-condition', job.jobId, job.stopCondition);
                 // P0-2 fix: Clean up dedupLookup when job naturally completes
                 this.cleanupDedupEntry(job);
-                // Remove completed job from the map to prevent unbounded growth.
-                this.jobs.delete(job.jobId);
+                // Bug #2 fix: centralize deletion via safeDeleteJob() —
+                // status flip + map removal in a single synchronous block.
+                this.safeDeleteJob(job.jobId, 'completed');
                 break;
               }
             } catch (conditionError: any) {
@@ -814,7 +816,12 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     // P0-2 fix: Clean up dedup lookup entry
     this.cleanupDedupEntry(job);
 
-    this.jobs.delete(jobId);
+    // Bug #2 fix: route the jobs-map removal through safeDeleteJob() so the
+    // status='stopped' transition + map deletion happen in a single
+    // synchronous block. Closes the TOCTOU window that the codereview
+    // flagged (race between this deletion and concurrent stopJob/pauseJob
+    // queries reading the map at the same microtask tick).
+    this.safeDeleteJob(jobId, 'stopped');
     this.emit('job:stopped', jobId, reason);
 
     logger.info('Background job stopped locally', {
@@ -968,6 +975,28 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     this.emit('shutdown');
 
     logger.info('Background Jobs Manager shut down complete');
+  }
+
+  /**
+   * P2: Atomic job cleanup (Bug #2 fix). Centralizes the
+   * `this.jobs.delete(jobId)` call sites so the status flip + map removal
+   * happen in a single synchronous block. Single source of truth for all
+   * jobs.delete paths (executeJobLoop's max-executions branch, its
+   * stop-condition branch, and stopJob). Concurrent readers (stopJob /
+   * pauseJob / listJobs / getJob) now see a consistent state transition:
+   * the job is briefly present with status='completed'/'stopped' before
+   * the map entry disappears, eliminating the prior TOCTOU window where
+   * a reader could call `getJob(jobId)` then lose the reference mid-read.
+   *
+   * Note: Single-threaded JS doesn't allow true atomic mutations across
+   * microtask boundaries. This helper minimizes the window — concurrent
+   * reads through `Array.from(this.jobs.values())` snapshots at any tick.
+   */
+  private safeDeleteJob(jobId: string, finalStatus: 'completed' | 'stopped' | 'failed'): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    job.status = finalStatus;
+    this.jobs.delete(jobId);
   }
 
   /**

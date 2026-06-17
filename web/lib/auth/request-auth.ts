@@ -133,8 +133,7 @@ export async function resolveRequestAuth(
     // after login. Without this, the cached anonymous result persists and
     // the ownerId stays `anon:TIMESTAMP` even after successful authentication.
     if (anonId) {
-      const anonCacheKey = `auth:::${anonId}:`;
-      authCache.delete(anonCacheKey);
+      authCache.invalidateAnonymous(anonId);
     }
     // SECURITY: Don't cache JWT success - always re-verify to check blacklist
     // authCache.set(cacheKey, result); // REMOVED for security
@@ -152,8 +151,7 @@ export async function resolveRequestAuth(
       };
       // Bug #4 fix: Invalidate the anonymous cache entry on session auth too.
       if (anonId) {
-        const anonCacheKey = `auth:::${anonId}:`;
-        authCache.delete(anonCacheKey);
+        authCache.invalidateAnonymous(anonId);
       }
       // Get session expiration for cache re-validation
       const session = (sessionAuth as any).session;

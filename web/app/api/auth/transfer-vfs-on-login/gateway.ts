@@ -68,8 +68,6 @@ export async function POST(request: NextRequest) {
     // this explicit override over the cookie, so we pass it through the
     // options parameter instead of cloning the request to inject a fake
     // cookie header.
-    // `.json()` throws on non-JSON or empty bodies; the `.catch` collapses
-    // the throw path to "no body" so the cookie-only fallback applies. The
     let bodyAnonymousSessionId: string | undefined;
     let body: any;
     try {

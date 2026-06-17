@@ -46,8 +46,8 @@ fi
 say "$(bold '== detect-drift ==')  web=$WEB_MIRROR  pkg=$PKG_MIRROR"
 
 # Build sorted basenames for each side; intersect to find common.
-WEB_FILES=$(mktemp)
-PKG_FILES=$(mktemp)
+WEB_FILES=$(mktemp) || { echo 'Failed to create temp file' >&2; exit 3; }
+PKG_FILES=$(mktemp) || { echo 'Failed to create temp file' >&2; exit 3; }
 trap 'rm -f "$WEB_FILES" "$PKG_FILES"' EXIT
 
 find "$WEB_MIRROR" -maxdepth 1 -type f -name '*.ts' -printf '%f\n' \
