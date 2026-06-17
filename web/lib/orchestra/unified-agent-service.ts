@@ -5234,10 +5234,43 @@ async function runV1Orchestrated(
         continue: parsedRouting.routing.continue,
       });
 
-      // Loose-truthy `routing.continue` was retired: route the gating decision through
-      // `decideAutoContinue(...)` (lib/chat/auto-continue-helper — canonical wrapper
-      // that internally delegates to `shouldAutoContinue` from lib/chat/llm-continuation).
-      // Treats undefined as continue=true so env-default-on canonical lives in one place.
+      // Audit-Q7 option-(c) carve-out: Sites 3+4 (canonical-first-response
+      // routing) deliberately DO NOT pass `advancedDetectorFn` here.
+      //
+      // (b) Inverse-case contract: BOTH `defaultFileEditDetector` (the helper's
+      // default `detectorFn`) and `needsMoreTurnsDetector` (advanced optional)
+      // return `null` (NOT `{force:false}` — there is no `force:false` path on
+      // either function; the override type is `{ force: true, reason: string }
+      // | null`) when their input signals are missing. Both read
+      // `result.fileEdits` to compute their override — at Sites 3+4 no
+      // `result` argument is passed in, so both gracefully fall through,
+      // returning `null`. The LLM-emitted `parsedRouting.routing.continue`
+      // boolean therefore remains the canonical continuation signal at this
+      // decision point.
+      //
+      // (c) 'lose' reframed: this is not the detector losing on undefined —
+      // it's gracefully falling through. The helper's cascade resolves to
+      // `decideAutoContinue` -> `shouldAutoContinue` -> routing-derived
+      // reason (one of: 'role_selection_continue_true',
+      // 'plan_steps_remaining', 'single_step_read_pattern',
+      // 'empty_tool_args_detected', 'single_write_then_stop',
+      // 'no_continuation_needed', 'max_continuations_reached'). None of
+      // these are detector-derived buckets.
+      //
+      // (d) Decision.reason guard: tests assert that
+      // `decision.reason` is NOT in the detector-bucket allowlist
+      // ['file_edits_present', 'needs_more_turns', 'read-then-stall',
+      // 'deep-research-loop', 'failure-cascade', 'write-verify-loop',
+      // 'announced-next-step', 'incomplete-thought', 'step-enumeration',
+      // 'planned-multi-step', 'read-many-write-none', 'single-write-silent',
+      // 'diff-no-explanation', 'edits-mismatch', 'empty-after-tools',
+      // 'unclosed-code-block', 'mid-sentence-cutoff'], to catch regressions
+      // where a future refactor wires a detector into this slot.
+      //
+      // Precedence contract: when both detectors return non-null overrides,
+      // `advancedDetectorFn` wins over `detectorFn`. Tested explicitly in
+      // __tests__/chat/auto-continue-helper.test.ts in the 'advancedDetectorFn
+      // reason wins when both detectors fire' describe block.
       const autoDecision = decideAutoContinue({
         requestId: '',
         routing: parsedRouting.routing,

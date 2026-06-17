@@ -997,6 +997,16 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     if (!job) return;
     job.status = finalStatus;
     this.jobs.delete(jobId);
+    // Single-source-of-truth: also drop the dedupLookup entry so callers don't
+    // have to remember to call cleanupDedupEntry manually. Removal paths that
+    // use only safeDeleteJob will no longer leak dedupLookup entries.
+    try {
+      this.cleanupDedupEntry(jobId);
+    } catch (err) {
+      // Surface real errors instead of swallowing — caller should be able to
+      // observe dedup-cleanup failures even though job-deletion succeeded.
+      console.warn('[enhanced-background-jobs] cleanupDedupEntry failed inside safeDeleteJob', { jobId, error: String(err) });
+    }
   }
 
   /**

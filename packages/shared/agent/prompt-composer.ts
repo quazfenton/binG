@@ -400,6 +400,10 @@ export interface DynamicToolBlockOptions {
  * Generate a categorized markdown tool block with optional filtering.
  * Empty string on zero matches (per test conventions).
  */
+// Bug #8 dedup state: warn only once per unique overlap key in prod (persists
+// across calls so we don't spam logs when the same overlap recurs). Keyed by
+// sorted overlap id list to be order-insensitive.
+const warnedOverlaps = new Set<string>();
 export function generateDynamicToolBlock(
   options: DynamicToolBlockOptions = {},
 ): string {
@@ -413,13 +417,19 @@ export function generateDynamicToolBlock(
   // Bug #8 fix: detect allowedTools ∩ excludedTools overlap and warn (or throw in dev).
   // Without this guard, a tool listed in BOTH arrays is silently dropped because
   // the filter order runs `allowedTools` first then `excludedTools` excludes it again.
-  // This ambiguity is easy to miss at call sites — fail loudly in dev, warn once in prod.
+  // This ambiguity is easy to miss at call sites — fail loudly in dev, warn once per
+  // unique overlap pattern in prod (keyed by sorted overlap ids) to avoid log spam
+  // when the same overlap is detected across many calls.
   if (allowedTools && excludedTools && allowedTools.length > 0 && excludedTools.length > 0) {
     const overlap = allowedTools.filter((id) => excludedTools.includes(id));
     if (overlap.length > 0) {
       const msg = `[prompt-composer] allowedTools and excludedTools overlap on ${overlap.length} id(s): ${overlap.join(', ')}. These are treated as excluded (filter order: allowed → excluded). Pass them in only ONE list to avoid silent filtering.`;
       if (process.env.NODE_ENV === 'production') {
-        console.warn(msg);
+        const overlapKey = [...overlap].sort().join('|');
+        if (!warnedOverlaps.has(overlapKey)) {
+          warnedOverlaps.add(overlapKey);
+          console.warn(msg);
+        }
       } else {
         throw new Error(msg);
       }

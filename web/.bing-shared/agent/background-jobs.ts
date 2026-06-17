@@ -90,6 +90,7 @@ export class BackgroundExecutor extends EventEmitter {
 
     // Create execution loop
     const executeLoop = async () => {
+      let consecutiveFailures = 0;
       while (job.status === 'running') {
         try {
           const startTime = Date.now();
@@ -116,17 +117,25 @@ export class BackgroundExecutor extends EventEmitter {
             exitCode: result.exitCode,
           } as JobExecutionResult);
 
+          consecutiveFailures = 0;
+
         } catch (error: any) {
           job.lastError = error;
           this.emit('error', { jobId, sandboxId, error });
           
           // Log error but continue the loop
           log.error(`Background job ${jobId} error:`, error.message);
+          consecutiveFailures++;
         }
 
-        // Wait for next interval
+        // Wait for next interval with exponential backoff on failure
         if (job.status === 'running') {
-          await this.sleep(job.interval);
+          let waitMs = job.interval;
+          if (consecutiveFailures > 0) {
+            const backoff = Math.min(5000 * Math.pow(2, consecutiveFailures - 1), 300000);
+            waitMs = Math.max(waitMs, backoff);
+          }
+          await this.sleep(waitMs);
         }
       }
     };
@@ -209,6 +218,7 @@ export class BackgroundExecutor extends EventEmitter {
 
     // Restart the execution loop
     const executeLoop = async () => {
+      let consecutiveFailures = 0;
       while (job.status === 'running') {
         try {
           let result: { stdout: string; stderr: string; exitCode: number | null };
@@ -235,13 +245,21 @@ export class BackgroundExecutor extends EventEmitter {
             exitCode: result.exitCode,
           });
 
+          consecutiveFailures = 0;
+
         } catch (error: any) {
           job.lastError = error;
           this.emit('error', { jobId, sandboxId: job.sandboxId, error });
+          consecutiveFailures++;
         }
 
         if (job.status === 'running') {
-          await this.sleep(job.interval);
+          let waitMs = job.interval;
+          if (consecutiveFailures > 0) {
+            const backoff = Math.min(5000 * Math.pow(2, consecutiveFailures - 1), 300000);
+            waitMs = Math.max(waitMs, backoff);
+          }
+          await this.sleep(waitMs);
         }
       }
     };

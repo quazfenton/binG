@@ -364,4 +364,77 @@ describe('decideAutoContinue', () => {
   });
 });
 
+// Audit-Q7 (Sites 3+4 carve-out): canonical-first-response routing call shape is
+// `{ requestId, routing, steps: [], responseText }` — NO `result` argument. Both
+// `defaultFileEditDetector` (the helper's default `detectorFn`) and any
+// `advancedDetectorFn` gracefully fall through (return `null`, NOT `{force:false}` —
+// there is no `force:false` path on either detector; the override type is
+// `{ force: true, reason: string } | null`). The helper therefore resolves to
+// the LLM `parsedRouting.routing.continue` boolean via `shouldAutoContinue`.
+// This test locks the no-result fallback so future refactors don't accidentally
+// break the carve-out shape used at `unified-agent-service.ts` Sites 3+4.
+describe('Audit-Q7: Sites 3+4 carve-out — no `result` arg falls through to routing.continue', () => {
+  // Detector-bucket denylist: any reason string a detector might emit. Locked
+  // from grep of `defaultFileEditDetector` + `needsMoreTurnsDetector` + the
+  // 15 signal names emitted by `detectNeedsMoreTurns` in `auto-continue-detector.ts`.
+  // If a new signal is added there, this list needs to grow accordingly.
+  const DETECTOR_BUCKET_REASONS = [
+    'file_edits_present',            // defaultFileEditDetector
+    'needs_more_turns',              // needsMoreTurnsDetector fallback
+    'read-then-stall',
+    'deep-research-loop',
+    'failure-cascade',
+    'write-verify-loop',
+    'announced-next-step',
+    'incomplete-thought',
+    'step-enumeration',
+    'planned-multi-step',
+    'read-many-write-none',
+    'single-write-silent',
+    'diff-no-explanation',
+    'edits-mismatch',
+    'empty-after-tools',
+    'unclosed-code-block',
+    'mid-sentence-cutoff',
+  ];
+
+  function assertNotDetectorReason(reason: string | undefined) {
+    expect(reason).toBeDefined();
+    if (DETECTOR_BUCKET_REASONS.includes(String(reason))) {
+      throw new Error(
+        "decision.reason '" + reason + "' is a detector-derived bucket; the LLM routing " +
+        "signal should drive Sites 3+4's decision (no result arg passes through " +
+        "to detectors, both return null, so reason MUST come from " +
+        "shouldAutoContinue / parsedRouting.routing.continue passthrough). " +
+        "See DETECTOR_BUCKET_REASONS constant above for the canonical list.",
+      );
+    }
+  }
+
+  it('routing.continue=true with no result arg → decision.continue === true AND reason is routing-derived (NOT a detector bucket)', () => {
+    const decision = decideAutoContinue({
+      requestId: '',
+      routing: { continue: true, primaryRole: 'coder', planSteps: [{ action: 'do-thing' }] },
+      steps: [],
+      responseText: 'hello world',
+    });
+    expect(decision.continue).toBe(true);
+    assertNotDetectorReason(decision.reason);
+  });
+
+  it('routing.continue=false with no result arg → decision.continue === false (no detector fires, LLM signal wins)', () => {
+    const decision = decideAutoContinue({
+      requestId: '',
+      routing: { continue: false, primaryRole: 'coder' },
+      steps: [],
+      responseText: 'explicit stop',
+    });
+    expect(decision.continue).toBe(false);
+  });
+
+  // Precedence contract: see the 'advancedDetectorFn reason wins when both
+  // detectors fire' describe block above for the helper-internal precedence rule.
+  // Sites 3+4 only needs the passthrough assertions above; a co-fire no-op
+  // test would be redundant with that lock.
+});
 
