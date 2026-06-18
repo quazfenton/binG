@@ -1,6 +1,29 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { normalizeAndValidateRole, SYSTEM_PROMPTS } from '@bing/shared/agent';
+import {
+  normalizeAndValidateRole,
+  getAvailableChooseRoles,
+} from '@bing/shared/agent';
+
+// SEV-12 polish (2026-06-18 followup): the canonical 9-ID choose-role menu
+// and the drift-safe intersection-with-SYSTEM_PROMPTS helper both live in
+// `packages/shared/agent/unified-role-selector.ts` (CHOOSE_ROLE_MENU +
+// getAvailableChooseRoles). We import from there rather than maintain a
+// duplicate copy here, so:
+//   - the LLM-facing Zod describe() advertises the SAME set the runtime
+//     validator consults (no drift between what we tell the LLM is
+//     acceptable and what we actually validate against),
+//   - adding a new role to CHOOSE_ROLE_MENU upstream automatically
+//     propagates here without a separate edit,
+//   - the SEV-12 production-throw / dev-warn invariant is enforced from a
+//     single place inside @bing/shared/agent (so test suites that import
+//     the shared helpers directly also catch drift).
+//
+// Note: we call getAvailableChooseRoles() ONCE at module load and sink the
+// result into the `_AVAILABLE_CHOOSE_ROLES` const referenced by both the
+// Zod describe() and any downstream consumers. The same string is what
+// normalizeAndValidateRole computes internally on each call.
+const _AVAILABLE_CHOOSE_ROLES: readonly string[] = getAvailableChooseRoles();
 
 /**
  * choose_role Capability
@@ -22,12 +45,12 @@ export const chooseRoleCapability = tool({
     'or when you hit repeated tool failures (call choose_role role="debugger" to investigate — failure-recovery lineage) ' +
     'or when the user asks for research (call choose_role role="researcher" — domain lineage) ' +
     'or when you outlined a multi-role coordination problem (call choose_role role="orchestrator" — complexity lineage). ' +
-    'Available roles (must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE): coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier.',
+    `Available roles (intersected with canonical SYSTEM_PROMPTS keys, ${_AVAILABLE_CHOOSE_ROLES.length} IDs at load time): ${_AVAILABLE_CHOOSE_ROLES.join(', ')}.`,
   inputSchema: z.object({
     role: z.string().describe(
-      'The target expert role to adopt — must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE in packages/shared/agent/system-prompts-dynamic.ts: ' +
-      'coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier. ' +
-      'Pair `reason` with one of the 3 lineage concepts: complexity, domain, or failure recovery.',
+      `The target expert role to adopt — must be one of the live canonical IDs from CHOOSE_ROLE_MENU: ` +
+      `${_AVAILABLE_CHOOSE_ROLES.join(', ')}. ` +
+      `Pair \`reason\` with one of the 3 lineage concepts: complexity, domain, or failure recovery.`,
     ),
     reason: z.string().optional().describe(
       'Reasoning for the role switch — frame it using one of the 3 lineage concepts: task complexity (multi-phase or architectural decisions), ' +
@@ -63,33 +86,8 @@ export const chooseRoleCapability = tool({
   },
 });
 
-// ─── Module-load drift-check ───────────────────────────────────────────────
-// Ensure the 9 role IDs documented in the Zod schema.describe()s above stay
-// in lock-step with the canonical SYSTEM_PROMPTS Record from
-// @bing/shared/agent/system-prompts.ts. If a role is renamed/removed upstream,
-// fail-fast here rather than silently splitting the choose-role menu in front of
-// LLMs (which the prior tests already flagged as a regression risk).
-const _DOCUMENTED_CHOOSE_ROLES = [
-  'coder',
-  'reviewer',
-  'planner',
-  'architect',
-  'researcher',
-  'debugger',
-  'specialist',
-  'orchestrator',
-  'simplifier',
-] as const;
-const _CANONICAL_KEYS = Object.keys(SYSTEM_PROMPTS as unknown as Record<string, unknown>);
-const _MISSING_ROLE = (_DOCUMENTED_CHOOSE_ROLES as readonly string[])
-  .find(r => !(_CANONICAL_KEYS as string[]).includes(r));
-if (_MISSING_ROLE) {
-  throw new Error(
-    `[choose-role-tool] drift-check failed: documented role "${_MISSING_ROLE}" is missing from ` +
-    `canonical SYSTEM_PROMPTS (${_CANONICAL_KEYS.length} canonical keys, ` +
-    `${_DOCUMENTED_CHOOSE_ROLES.length} documented choose-roles). ` +
-    `Either rename the role upstream in packages/shared/agent/system-prompts.ts, ` +
-    `or update the 9 IDs documented in the Zod schema.describe()s above.`
-  );
-}
+// Re-export for downstream consumers (tests, prompt-composer). The value
+// here is a snapshot at module-load — normalizeAndValidateRole computes a
+// fresh check at runtime so drift introduced by HMR still surfaces there.
+export { _AVAILABLE_CHOOSE_ROLES };
 

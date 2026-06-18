@@ -159,14 +159,34 @@ export async function GET(request: NextRequest) {
 // POST handler - add custom RSS feed
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    
+    // SEV-4 (audit-sweep) — Hoisted null-body guard mirroring validate.ts.
+    // `req.json()` returns null when:
+    //   - the body is the JSON literal `null`
+    //   - the body is missing (no Content-Type or empty body)
+    //   - req.json() throws on malformed JSON and the catch returns null
+    // Without this guard, `schema.parse(null)` throws ZodError that escapes
+    // to the outer catch as a generic 500. This site was the rss/news
+    // counterpart of the top-panel sweep.
+    // TODO(SEV-4-followup): unify error-response discriminator across news/rss,
+    // top-panel, and lib/middleware/validate.ts. Current shapes diverge:
+    //   - top-panel / validate.ts: { error, details: [{field, message, code}] }
+    //   - news/rss: { success: false, error }
+    // DRY by promoting `code` to a top-level { error, code, details } shape.
+    // This is a contract change — pin a release note.
+    const body = await request.json().catch(() => null);
+    if (body === null) {
+      return NextResponse.json(
+        { success: false, error: 'Request body is null, missing, or invalid JSON' },
+        { status: 400 }
+      );
+    }
+
     const schema = z.object({
       name: z.string().min(1).max(50),
       url: z.string().url(),
       category: z.string().optional(),
     });
-    
+
     const { name, url, category } = schema.parse(body);
     
     // Validate RSS feed is accessible

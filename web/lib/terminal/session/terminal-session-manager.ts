@@ -29,12 +29,14 @@ import { quotaManager } from '../../management/quota-manager'
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider'
 import { secureRandomId } from '@/lib/utils/crypto-random'
 import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph'
-// Reuse the SQLite failure taxonomy + the 3-shape unwrap helper from
-// session-store.ts so this file classifies arch-mismatch / libc-missing /
-// abi-mismatch / cjs-of-esm / interop-mismatch instead of swallowing every
-// failure under one message, AND uses the SAME unwrap ladder as
-// session-store (single source of truth across files).
-import { classifySqliteFailure, unwrapDefaultExport } from '@/lib/storage/session-store'
+// Reuse the SQLite failure taxonomy from session-store.ts (classifySqliteFailure)
+// and the 3-shape unwrap helper from the LEAF module lib/database/unwrap-default-export.
+// The two were previously co-imported from session-store, but the import there
+// created a circular dep that crashed `pnpm run dev` (see 2026-06-18 run.log —
+// `ReferenceError: Cannot access 'getDatabase' before initialization`). The leaf
+// module breaks the cycle AND is TDZ-defensive on shape-C property access.
+import { classifySqliteFailure } from '@/lib/storage/session-store'
+import { unwrapDefaultExport } from '../../database/unwrap-default-export'
 
 const logger = createLogger('Terminal:SessionManager')
 
@@ -145,6 +147,8 @@ const MAX_SESSIONS_PER_USER = parseInt(process.env.MAX_TERMINAL_SESSIONS_PER_USE
 // Delegate to the shared 3-shape helper unwrapDefaultExport(...)
 // (single source of truth across session-store, terminal-session-manager,
 // and jwt × 3 sites) rather than re-implementing the ladder inline.
+// The helper is now in a leaf module so that this initialization cannot
+// re-import session-store and create a module-resolution cycle.
 try {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const dbModule: any = require('../../database/connection-shim');

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 

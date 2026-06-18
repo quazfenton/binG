@@ -105,7 +105,7 @@ export class OAuthService {
 
   constructor() {
     // Lazily init db to avoid pulling connection.ts into client bundles
-    import('../database/connection-shim).then(mod => {
+    import('../database/connection-shim').then(mod => {
       this.db = mod.getDatabase();
       if (this.db) {
         this.ensureSchema();

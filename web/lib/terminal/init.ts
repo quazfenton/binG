@@ -21,7 +21,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { execSchemaFile } from '@/lib/database/schema';
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 
 const logger = createLogger('WorkspaceRuntimeInit');
 

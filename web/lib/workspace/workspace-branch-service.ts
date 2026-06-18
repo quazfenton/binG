@@ -18,7 +18,7 @@
  * @module workspace/workspace-branch-service
  */
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 

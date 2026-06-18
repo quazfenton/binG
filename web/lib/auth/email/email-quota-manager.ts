@@ -11,7 +11,7 @@
 // Server-only module - do not import directly in Client Components
 export const runtime = 'nodejs';
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 

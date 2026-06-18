@@ -7,13 +7,28 @@ import { createLogger } from '@/lib/utils/logger';
 // has drifted past the schema.sql in code (the underlying cause) which
 // is the same family of detection as SKILL.md mtime drift.
 import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
+// SEV-11 (2026-06-18 fix): import classifySqliteFailure to give the
+// typeof-require guards in getDatabaseConstructor() / isDatabaseAvailable()
+// typed warn output instead of a plain ReferenceError. session-store.ts
+// only imports the leaf unwrap-default-export.ts (no static coupling back
+// to connection.ts or connection-shim.ts), so this import does NOT close a
+// cycle in the TS dep graph. The runtime unwrap chain (connection-shim -> connection)
+// remains cycle-free because session-store.ts does its require() at
+// `tryRequireDatabaseConnection` call time inside a function body, not at
+// module load.
+import { classifySqliteFailure } from '@/lib/storage/session-store';
 
 const logger = createLogger('Database:Connection');
 
-// Top-level await with string concatenation prevents Turbopack from statically
-// tracing `node:module` into client bundles. At runtime in Node.js ESM the
-// dynamic import resolves to the real built-in module.
-const { createRequire } = await import('node' + ':module');
+// SEV-8 (2026-06-18 fix): synchronous `import` replaces the prior TLA pattern
+// `await import('node' + ':module')`. The TLA made connection.ts mid-evaluation
+// when CJS `require('./connection')` was called by connection-shim, causing
+// the unwrap helper to TDZ-throw against the TLA-pending namespace and
+// crashing the dev server with `kind: 'interop-mismatch', reason:
+// "Cannot access 'getDatabase' before initialization"`. The file is
+// server-only (top-of-file comment: "do not import in Client Components")
+// so `node:module` (a Node built-in) is safe to statically import.
+import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 export const runtime = 'nodejs';
 
@@ -799,14 +814,55 @@ let dbInitLock: boolean = false;
 type Database = any;
 let DatabaseConstructor: any = null;
 
+/**
+ * SEV-11 (2026-06-18 fix): The literal `require('better-sqlite3')` here
+ * looks like a bare require to grep — but `require` in this file is
+ * the createRequire-derived function declared at line 22
+ * (`const require = createRequire(import.meta.url)`), NOT a global. That
+ * means this site is ESM-safe in Node 22, Node 24, and Turbopack-evaluated
+ * contexts (createRequire returns a CJS-style loader that works under any
+ * ESM parent).
+ *
+ * Hardened below: explicit `typeof require === 'function'` guard so any
+ * future regression where the createRequire line is removed surfaces a
+ * sharp `unknown` classification with an accurate hint (the ESM-require-undefined
+ * kind), instead of bubbling a raw `ReferenceError: require is not defined`
+ * up through `useSqlite=false` and crashing callers like
+ * `assertSessionStorePersisted()` in lib/storage/session-store.ts with a
+ * misleading \"SQLite unavailable\" message.
+ *
+ * Better-sqlite3 is INHERENTLY SYNCHRONOUS — converting this to
+ * `await import()` would cascade the entire `getDatabase()` →
+ * `initializeDatabaseSync()` → `DatabaseOperations.constructor` graph
+ * into async. Keeping the sync path here is correct; the SEV-11 hardening
+ * is the right trade-off.
+ */
 function getDatabaseConstructor(): any {
-  if (!DatabaseConstructor) {
-    // Dynamic import to avoid bundling native module in client/Edge
+  if (DatabaseConstructor) return DatabaseConstructor;
+  try {
+    if (typeof require !== 'function') {
+      // Reachable only if SEV-11's createRequire line at module top is
+      // accidentally removed. Surface a typed diagnostic so the operator
+      // sees an actionable hint instead of a vanilla ReferenceError.
+      logger.warn(
+        '[DB] better-sqlite3 require() unavailable — `require` is not a function in this scope. ' +
+        'Ensure `import { createRequire } from "node:module"; const require = createRequire(import.meta.url);` ' +
+        'is present at the top of this file.',
+        classifySqliteFailure(new ReferenceError('require is not defined (createRequire line missing?)')),
+      );
+      return null;
+    }
     const betterSqlite3 = require('better-sqlite3');
     // Handle both ESM default export and CommonJS module
     DatabaseConstructor = betterSqlite3.default || betterSqlite3;
+    return DatabaseConstructor;
+  } catch (err) {
+    logger.warn(
+      '[DB] better-sqlite3 require() failed – falling back to mock path',
+      classifySqliteFailure(err),
+    );
+    return null;
   }
-  return DatabaseConstructor;
 }
 
 /**
@@ -1638,16 +1694,41 @@ export default getDatabase;
  * require can succeed even when the native binding is broken (the .node file
  * is present in node_modules but cannot be loaded by Node.js). We must
  * actually instantiate the database to catch native binding failures.
+ *
+ * SEV-11 (2026-06-18 fix): Same hardening as `getDatabaseConstructor()` —
+ * the `require` is createRequire-derived (line 22) so this site is ALREADY
+ * ESM-safe; the explicit `typeof require === 'function'` guard below is a
+ * regression trap that surfaces a typed diagnostic if the createRequire
+ * line is ever accidentally removed. The existing try/catch keeps the
+ * boolean contract intact (returns false on any failure).
  */
 export function isDatabaseAvailable(): boolean {
   if (_dbAvailable !== null) return _dbAvailable;
   try {
+    if (typeof require !== 'function') {
+      // Mirror SEV-11 trap from getDatabaseConstructor() — naive
+      // ReferenceError would be a useless `kind: 'unknown'` unless we
+      // explicitly classify. Log once via classifySqliteFailure so an
+      // operator sees an actionable hint if they grep for the warning.
+      logger.warn(
+        '[DB] isDatabaseAvailable: `require` is not a function in this scope. ' +
+        'Ensure `import { createRequire } from "node:module"; const require = createRequire(import.meta.url);` ' +
+        'is present at the top of this file.',
+        classifySqliteFailure(new ReferenceError('require is not defined (createRequire line missing?)')),
+      );
+      _dbAvailable = false;
+      return false;
+    }
     const Database = require('better-sqlite3');
     const testDb = new Database(':memory:');
     testDb.close();
     _dbAvailable = true;
     return true;
-  } catch {
+  } catch (err) {
+    logger.warn(
+      '[DB] better-sqlite3 availability probe failed',
+      classifySqliteFailure(err),
+    );
     _dbAvailable = false;
     return false;
   }

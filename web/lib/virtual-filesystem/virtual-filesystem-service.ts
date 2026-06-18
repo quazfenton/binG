@@ -16,14 +16,14 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
-import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';;;
+import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';
 import { reconcileScopePathWithSessionId, DETECTION_TERMS, withDetectionTerms } from './session-path-guard';
 // Bug #72 review fix: removed dead assertScopePathMatchesSessionId import
 // (both call sites in this file now use the recovery variant).
 import { getSnapshotBroadcaster } from './snapshot-broadcaster';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
 // Bug #10/#25: import the shared error classes directly. Previously these
@@ -2098,6 +2098,13 @@ class GitBackedVFSProxy {
     // time-based semantic (we don't want to block legitimate sequential
     // edits where the file already exists).
     const gitVFS = this.vfs.getGitBackedVFS(ownerId, sessionId ? { sessionId } : undefined);
+    if (typeof gitVFS?.writeFile !== 'function') {
+      // SEV-7 — fall through to base VFS writeFile when gitVFS is unhealthy.
+      // The file is still persisted to SQLite (base VFS); we lose git commit
+      // tracking but the user's write succeeds.
+      this.noteProxyGuardFired('writeFile');
+      return this.vfs.writeFile(ownerId, filePath, content, language, options, sessionId);
+    }
     return gitVFS.writeFile(ownerId, filePath, content, language, options);
   }
 
@@ -2122,12 +2129,14 @@ class GitBackedVFSProxy {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
     const listing = await this.vfs.listDirectory(ownerId, targetPath);
     
-    // Record deletions
+    // Record deletions (best-effort; tracked via single canTrackTransaction hoist — SEV-7)
+    const canTrackTransaction = typeof gitVFS?.trackTransaction === 'function';
+    if (!canTrackTransaction) this.noteProxyGuardFired('deletePath:trackTransaction');
     for (const node of listing.nodes) {
       if (node.type === 'file') {
         try {
           const file = await this.vfs.readFile(ownerId, node.path);
-          gitVFS.trackTransaction(ownerId, {
+          if (canTrackTransaction) gitVFS.trackTransaction(ownerId, {
             path: node.path,
             type: 'DELETE',
             timestamp: Date.now(),
@@ -2142,9 +2151,13 @@ class GitBackedVFSProxy {
     
     const result = await this.vfs.deletePath(ownerId, targetPath);
 
-    // Commit the deletion
+    // Commit the deletion (guarded — SEV-7).
     if (result !== null && result !== undefined && typeof result === 'object' && result.deletedCount > 0) {
-      await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`);
+      if (typeof gitVFS?.commitChanges === 'function') {
+        try { await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`); } catch { /* heal-on-miss noise */ }
+      } else {
+        this.noteProxyGuardFired('deletePath:commitChanges');
+      }
     }
 
     const deletedCount = result === null || result === undefined
@@ -2201,15 +2214,19 @@ class GitBackedVFSProxy {
   ): Promise<{ path: string; createdAt: string }> {
     const result = await this.vfs.createDirectory(ownerId, dirPath);
 
-    // Track directory creation in git
+    // Track directory creation in git — best-effort (SEV-7).
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
-    gitVFS.trackTransaction(ownerId, {
-      path: dirPath,
-      type: 'CREATE',
-      timestamp: Date.now(),
-      newContent: '',
-    });
-    await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`);
+    if (typeof gitVFS?.trackTransaction === 'function' && typeof gitVFS?.commitChanges === 'function') {
+      gitVFS.trackTransaction(ownerId, {
+        path: dirPath,
+        type: 'CREATE',
+        timestamp: Date.now(),
+        newContent: '',
+      });
+      try { await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`); } catch { /* heal-on-miss noise */ }
+    } else {
+      this.noteProxyGuardFired('createDirectory');
+    }
 
     return result;
   }
@@ -2218,25 +2235,80 @@ class GitBackedVFSProxy {
 
   /**
    * Enable batch mode - disables auto-commit until flushBatchMode is called
+   *
+   * SEV-7 (audit) — defensive guard. `getGitBackedVFS` returns the cached
+   * GitBackedVFS instance, which under Next.js HMR / module-resolution races
+   * can transiently resolve to `undefined` or an instance whose prototype
+   * chain was severed (the `isHealthyGitVFS` check in
+   * `getGitBackedVFSForOwner` heals on miss but the heal is process-local,
+   * so during a hot-reload window the returned value can still be invalid).
+   * Without this guard the call throws
+   * `Cannot read properties of undefined (reading 'enableBatchMode')` —
+   * the exact phrase in the 8 occurrence Chat:Logger warn entries.
+   * Pattern mirrors the guard in lib/vfs/transactional-vfs.ts.
    */
+  /**
+   * SEV-7 (audit) — one-time HMR correlation warn. Persisted on globalThis
+   * so the message fires at most ONCE per process. The tripped-methods Set
+   * tallies every distinct proxy method that hit this guard during the
+   * current process so the first warn line carries the full affected
+   * surface, not just the method that happened to fire first. Subsequent
+   * calls within the same process are silent (dedup).
+   */
+  private noteProxyGuardFired(methodName: string): void {
+    const tallyState = globalThis as unknown as {
+      __vfsProxyGuardFiredMethods__?: Set<string>;
+      __vfsProxyGuardFiredWarned__?: boolean;
+    };
+    if (!tallyState.__vfsProxyGuardFiredMethods__) {
+      tallyState.__vfsProxyGuardFiredMethods__ = new Set<string>();
+    }
+    tallyState.__vfsProxyGuardFiredMethods__.add(methodName);
+    if (tallyState.__vfsProxyGuardFiredWarned__ === true) return;
+    tallyState.__vfsProxyGuardFiredWarned__ = true;
+    const distinct = (tallyState.__vfsProxyGuardFiredMethods__).size;
+    const list = Array.from(tallyState.__vfsProxyGuardFiredMethods__).sort().join(', ');
+    logger.warn(
+      `[VFS Proxy] ${methodName} guard fired — gitVFS unavailable (HMR re-init in flight). Distinct methods tripped in this process: ${list} (${distinct} total). Subsequent calls will silently no-op until next module reload.`,
+    );
+  }
+
   enableBatchMode(ownerId: string): void {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    if (typeof gitVFS?.enableBatchMode !== 'function') {
+      this.noteProxyGuardFired('enableBatchMode');
+      return;
+    }
     gitVFS.enableBatchMode(ownerId);
   }
 
   /**
    * Flush batch mode - commit all pending changes and re-enable auto-commit
+   *
+   * SEV-7 — same defensive guard as enableBatchMode. Returns a defensive
+   * failure-shape when the inner gitVFS is unhealthy so callers can react
+   * without throwing out of an async context.
    */
-  async flushBatchMode(ownerId: string): Promise<{ success: boolean; committedFiles: number }> {
+  async flushBatchMode(ownerId: string): Promise<{ success: boolean; committedFiles: number; error?: string }> {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    if (typeof gitVFS?.flushBatch !== 'function') {
+      this.noteProxyGuardFired('flushBatchMode');
+      return { success: false, committedFiles: 0, error: 'gitVFS unavailable (HMR re-init in flight)' };
+    }
     return await gitVFS.flushBatch();
   }
 
   /**
    * Disable batch mode without committing (for error recovery)
+   *
+   * SEV-7 — same defensive guard.
    */
   disableBatchMode(ownerId: string): void {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    if (typeof gitVFS?.disableBatchMode !== 'function') {
+      this.noteProxyGuardFired('disableBatchMode');
+      return;
+    }
     gitVFS.disableBatchMode();
   }
 

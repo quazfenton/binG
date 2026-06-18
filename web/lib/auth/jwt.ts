@@ -5,10 +5,14 @@ import { createLogger } from '../utils/logger';
 // token. The DB's token_version has drifted past the JWT's encoded
 // version (typically a password change or admin revocation).
 import { DETECTION_TERMS, withDetectionTerms } from '../virtual-filesystem/session-path-guard';
-// Reuse the 3-shape unwrap helper from session-store.ts so this file
-// matches the same connection.ts module-shape ladder as session-store
-// and terminal-session-manager — single source of truth.
-import { unwrapDefaultExport } from '@/lib/storage/session-store';
+// Reuse the 3-shape unwrap helper from the LEAF module
+// `lib/database/unwrap-default-exptort.ts`. Previously imported from
+// session-store.ts, but the import there created a circular dep that
+// crashed `pnpm run dev` (see 2026-06-18 run.log — `ReferenceError:
+// Cannot access 'getDatabase' before initialization`). The leaf module
+// breaks the cycle AND is TDZ-defensive on shape-C property access, so
+// jwt.ts benefits from both fixes without changing call sites.
+import { unwrapDefaultExport } from '@/lib/database/unwrap-default-export';
 
 const logger = createLogger('Auth:JWT');
 
@@ -266,8 +270,9 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
 function getUserTokenVersion(userId: string): number | null {
   try {
     // Lazy load to avoid circular deps at module level.
-    // Defensive unwrap is delegated to unwrapDefaultExport (single source
-    // of truth across session-store, terminal-session-manager, and this
+    // Defensive unwrap is delegated to the leaf-module unwrapDefaultExport
+    // (single source of truth across session-store, terminal-session-manager,
+    // and this
     // file). Named-only flatten (Shape C: { getDatabase: fn, default: undefined })
     // is the case the dev-server log actually showed on Next.js / turbopack
     // output of connection.ts which exports BOTH `export function getDatabase`

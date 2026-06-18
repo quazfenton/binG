@@ -2714,7 +2714,7 @@ class LLMService {
     requestId?: string,
     apiKeyOverride?: string
   ): Promise<LLMResponse> {
-    const apiKey = this.getApiKey('pollinations', apiKeyOverride) ;;
+    const apiKey = this.getApiKey('pollinations', apiKeyOverride);
     if (!apiKey) {
       throw new Error('Pollinations API key not configured. Please set POLLINATIONS_API_KEY in your environment variables.');
     }

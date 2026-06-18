@@ -336,7 +336,7 @@ function parseLLMResponse(content: string): {
  * Apply fix to event payload
  */
 export async function applyFix(event: EventRecord, fix: string): Promise<void> {
-  const { getDatabase } = await import('@/lib/database/connection-shim);
+  const { getDatabase } = await import('@/lib/database/connection-shim');
   const db = getDatabase();
 
   if (!db) {
@@ -377,7 +377,7 @@ export async function applyFix(event: EventRecord, fix: string): Promise<void> {
  * Get healing history for an event
  */
 export async function getHealingHistory(eventId: string): Promise<any[]> {
-  const { getDatabase } = await import('@/lib/database/connection-shim);
+  const { getDatabase } = await import('@/lib/database/connection-shim');
   const db = getDatabase();
 
   if (!db) {
@@ -403,7 +403,7 @@ export async function logHealingAttempt(
   success: boolean,
   explanation?: string
 ): Promise<void> {
-  const { getDatabase } = await import('@/lib/database/connection-shim);
+  const { getDatabase } = await import('@/lib/database/connection-shim');
   const db = getDatabase();
 
   if (!db) {
@@ -424,7 +424,7 @@ export async function logHealingAttempt(
  * Initialize healing log table
  */
 export async function initializeHealingLog(): Promise<void> {
-  const { getDatabase } = await import('@/lib/database/connection-shim);
+  const { getDatabase } = await import('@/lib/database/connection-shim');
   const { execSchemaFile } = await import('@/lib/database/schema');
   const db = getDatabase();
 

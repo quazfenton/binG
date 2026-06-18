@@ -13,6 +13,52 @@ import { createLogger } from "@/lib/utils/logger";
 
 const logger = createLogger("API:TopPanel");
 
+// SEV-4 (audit-sweep) — The POST handler has 12 `schema.parse(body)` sites
+// inside a `switch(section)`-style dispatch, and the outer try/catch returns
+// generic 500 on ANY thrown error. The `validateRequest(...)` wrapper is
+// infeasible here because the schema varies per `section` case (a single
+// schema applied to the whole handler would either over-constrain or require
+// a discriminated-union rewrite of the file). This helper converts each
+// parse failure into a typed 400 returned alongside the parsed data; callers
+// narrow with `instanceof NextResponse`. The `instanceof` shape (rather than
+// a tagged-union `{ ok, data | response }`) is used because TypeScript's
+// boolean-literal narrowing on a generic-function return with `z.infer<T>`
+// is unreliable — `instanceof` narrowing compiles cleanly under all generics.
+// Response shape mirrors the canonical contract in `lib/middleware/validate.ts`.
+// TODO(SEV-4-followup): unify error-response discriminator across top-panel,
+// news/rss, and lib/middleware/validate.ts. Current shapes diverge:
+//   - top-panel / validate.ts: { error, details: [{field, message, code}] }
+//   - news/rss: { success: false, error }
+// DRY by promoting `code` to a top-level { error, code, details } shape.
+// This is a contract change — pin a release note.
+function parseOrRespond<T extends z.ZodTypeAny>(
+  schema: T,
+  body: unknown
+): NextResponse | z.infer<T> {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    logger.warn("Top-panel POST validation failed", {
+      errors: result.error.errors.map(e => ({
+        field: e.path.join(".") || "root",
+        message: e.message,
+        code: e.code,
+      })),
+    });
+    return NextResponse.json(
+      {
+        error: "Validation failed",
+        details: result.error.errors.map(e => ({
+          field: e.path.join(".") || "root",
+          message: e.message,
+          code: e.code,
+        })),
+      },
+      { status: 400 }
+    );
+  }
+  return result.data;
+}
+
 // ============================================================================
 // Art Gallery Routes
 // ============================================================================
@@ -178,7 +224,24 @@ export async function POST(request: NextRequest) {
   const section = searchParams.get("section");
 
   try {
-    const body = await request.json();
+    // SEV-4 (audit-sweep) — Hoisted null-body guard mirroring validate.ts.
+    // `req.json()` returns null when:
+    //   - the body is the JSON literal `null`
+    //   - the body is missing (no Content-Type or empty body)
+    //   - req.json() throws on malformed JSON and the catch returns null
+    // Without this guard, `schema.parse(null)` throws ZodError that escapes
+    // to the outer catch and returns a generic 500.
+        const body = await request.json().catch(() => null);
+    if (body === null) {
+      logger.warn("Top-panel POST null body");
+      return NextResponse.json(
+        {
+          error: "invalid_body",
+          details: [{ field: "root", message: "Request body is null, missing, or invalid JSON", code: "invalid_body_null" }],
+        },
+        { status: 400 }
+      );
+    }
 
     switch (section) {
        // Broadway Deal Hunter
@@ -201,7 +264,8 @@ export async function POST(request: NextRequest) {
           height: z.number().optional().default(1024),
         });
 
-        const parsed = schema.parse(body);
+        const parsed = parseOrRespond(schema, body);
+        if (parsed instanceof NextResponse) return parsed;
 
         // TODO: Call image generation API (Replicate, Mistral FLUX, etc.)
         // For now, return mock response
@@ -222,14 +286,16 @@ export async function POST(request: NextRequest) {
 
       case "art/like": {
         const schema = z.object({ imageId: z.string() });
-        schema.parse(body);
+        const parseResult = parseOrRespond(schema, body);
+        if (parseResult instanceof NextResponse) return parseResult;
         // TODO: Update database
         return NextResponse.json({ success: true });
       }
 
       case "art/delete": {
         const schema = z.object({ imageId: z.string() });
-        schema.parse(body);
+        const parseResult = parseOrRespond(schema, body);
+        if (parseResult instanceof NextResponse) return parseResult;
         // TODO: Delete from database
         return NextResponse.json({ success: true });
       }
@@ -243,7 +309,8 @@ export async function POST(request: NextRequest) {
           timeout: z.number().optional().default(5000),
         });
 
-        const parsed = schema.parse(body);
+        const parsed = parseOrRespond(schema, body);
+        if (parsed instanceof NextResponse) return parsed;
 
         // TODO: Execute code in sandbox (Daytona, E2B, etc.)
         // For now, return mock response for JavaScript
@@ -304,7 +371,8 @@ export async function POST(request: NextRequest) {
           isPublic: z.boolean().optional().default(false),
         });
 
-        const parsed = schema.parse(body);
+        const parsed = parseOrRespond(schema, body);
+        if (parsed instanceof NextResponse) return parsed;
 
         // TODO: Save to database
         return NextResponse.json({
@@ -327,7 +395,8 @@ export async function POST(request: NextRequest) {
           isPublic: z.boolean().optional().default(false),
         });
 
-        const parsed = schema.parse(body);
+        const parsed = parseOrRespond(schema, body);
+        if (parsed instanceof NextResponse) return parsed;
 
         // TODO: Save to database
         return NextResponse.json({
@@ -347,7 +416,8 @@ export async function POST(request: NextRequest) {
           model: z.string().optional(),
         });
 
-        const parsed = schema.parse(body);
+        const parsed = parseOrRespond(schema, body);
+        if (parsed instanceof NextResponse) return parsed;
 
         // TODO: Call LLM API with template
         return NextResponse.json({
@@ -365,14 +435,16 @@ export async function POST(request: NextRequest) {
       // Orchestration
       case "orchestration/agents/toggle": {
         const schema = z.object({ agentId: z.string() });
-        schema.parse(body);
+        const parseResult = parseOrRespond(schema, body);
+        if (parseResult instanceof NextResponse) return parseResult;
         // TODO: Update agent status
         return NextResponse.json({ success: true });
       }
 
       case "orchestration/modes/activate": {
         const schema = z.object({ modeId: z.string() });
-        schema.parse(body);
+        const parseResult = parseOrRespond(schema, body);
+        if (parseResult instanceof NextResponse) return parseResult;
         // TODO: Activate mode
         return NextResponse.json({ success: true });
       }
@@ -380,14 +452,16 @@ export async function POST(request: NextRequest) {
       // Workflows
       case "workflows/toggle": {
         const schema = z.object({ workflowId: z.string() });
-        schema.parse(body);
+        const parseResult = parseOrRespond(schema, body);
+        if (parseResult instanceof NextResponse) return parseResult;
         // TODO: Call n8n API
         return NextResponse.json({ success: true });
       }
 
       case "workflows/run": {
         const schema = z.object({ workflowId: z.string() });
-        schema.parse(body);
+        const parseResult = parseOrRespond(schema, body);
+        if (parseResult instanceof NextResponse) return parseResult;
         // TODO: Call n8n API to run workflow
         return NextResponse.json({ success: true });
       }
@@ -400,7 +474,8 @@ export async function POST(request: NextRequest) {
           refreshInterval: z.number(),
         });
 
-        const parsed = schema.parse(body);
+        const parsed = parseOrRespond(schema, body);
+        if (parsed instanceof NextResponse) return parsed;
         // TODO: Save to database
         return NextResponse.json({ success: true });
       }

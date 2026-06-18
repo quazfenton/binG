@@ -156,6 +156,55 @@ class ToolCallTracker {
           logger.warn('Failed to create tool_call_payloads table', e);
         }
 
+        // SEV-9 (2026-06-18 fix): Defensive CREATE TABLE IF NOT EXISTS for
+        // `tool_calls` mirroring the canonical definition in
+        // lib/database/schema/logging-schema.sql. The execSchemaFile call above
+        // SHOULD apply that schema, but in some runtime paths — e.g. when
+        // TOOL_CALL_DB_PATH points to a fresh `.data/tool-calls.db` outside
+        // the bundled cwd resolution root, when schema-version drift causes
+        // execSchemaFile to skip stale markers, or when the file lookup path
+        // is misaligned in dev — the `tool_calls` table is observably absent
+        // at query time, surfacing as
+        //   SqliteError: no such table: tool_calls
+        // and silently demoting telemetry to in-memory storage via the
+        // `SQLite query failed, using memory fallback` warn at line ~314.
+        // Mirror the exact pattern already used for `tool_call_payloads`
+        // (defensive CREATE alongside execSchemaFile) so this tracker
+        // guarantees tool_calls exists on its own when execSchemaFile's run
+        // is a no-op. Columns AND indexes are reproduced verbatim from
+        // logging-schema.sql so the existing SELECT/INSERT/DELETE statements
+        // in this file continue to match.
+        try {
+          this.db.prepare(`
+            CREATE TABLE IF NOT EXISTS tool_calls (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              model TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              tool_name TEXT NOT NULL,
+              success INTEGER NOT NULL,
+              error TEXT,
+              timestamp INTEGER NOT NULL,
+              conversation_id TEXT,
+              tool_call_id TEXT
+            )
+          `).run();
+
+          this.db.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_model
+              ON tool_calls(provider, model, timestamp)
+          `).run();
+          this.db.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_timestamp
+              ON tool_calls(timestamp)
+          `).run();
+          this.db.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_dedup
+              ON tool_calls(tool_call_id) WHERE tool_call_id IS NOT NULL
+          `).run();
+        } catch (e) {
+          logger.warn('Failed to create tool_calls defensive schema', e);
+        }
+
         this.initialized = true;
         logger.info('Tool call tracker initialized (SQLite)');
       } catch (error) {

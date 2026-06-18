@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { z } from 'zod';
 import { hashValue } from '@/lib/utils/crypto';
 import { createLogger } from '@/lib/utils/logger';

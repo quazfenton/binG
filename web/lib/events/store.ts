@@ -10,7 +10,7 @@
  * @module events/store
  */
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { execSchemaFile } from '@/lib/database/schema';
 import { AnyEvent, EventType } from './schema';
 import { createLogger } from '@/lib/utils/logger';

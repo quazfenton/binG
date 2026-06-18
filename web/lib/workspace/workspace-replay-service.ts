@@ -15,7 +15,7 @@
  * @module workspace/workspace-replay-service
  */
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 import { createHash } from 'crypto';

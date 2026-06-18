@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { hashValue } from '@/lib/utils/crypto';
 

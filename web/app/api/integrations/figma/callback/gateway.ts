@@ -13,7 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth/auth0';
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/integrations/figma/oauth';
 import { getFigmaRedirectUri } from '@/lib/integrations/figma/config';
 import { oauthStateStore } from '../oauth-state-store';
@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-      const { encryptApiKey } = await import('@/lib/database/connection-shim);
+      const { encryptApiKey } = await import('@/lib/database/connection-shim');
 
       const stmt = db.prepare(`
         INSERT OR REPLACE INTO external_connections (

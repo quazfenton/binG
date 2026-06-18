@@ -7,7 +7,7 @@
  * @module services/skill-store
  */
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Services:SkillStore');

@@ -18,7 +18,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import { createLogger } from '@/lib/utils/logger';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 

@@ -69,6 +69,7 @@ type SqliteFailureKind =
   | 'cjs-of-esm'
   | 'sqlite-runtime-error'
   | 'interop-mismatch'
+  | 'esm-tla-pending'
   | 'unknown'
 
 export interface SqliteFailure {
@@ -185,6 +186,30 @@ export function classifySqliteFailure(err: unknown): SqliteFailure {
         'database/connection-shim module loaded but its default export was not callable through this require() site — CJS/ESM interop hoisted the default to module.exports. Use `conn.default ?? conn` (defensive unwrap) instead of destructuring `const { default } = conn`.',
     }
   }
+  // SEV-8 (2026-06-18 audit chain) — ESM TLA-pending case. Node.js throws `ReferenceError: Cannot access
+  // '<name>' before initialization` when a CJS `require()` reads named exports
+  // from a synthetic namespace whose owning module is mid-evaluation (top-level
+  // await not yet resolved). Observed verbatim in run.log on 2026-06-18 against
+  // connection-shim's `require('./connection')` where connection.ts has
+  // `const { createRequire } = await import('node' + ':module')`. Classify as
+  // its own kind so operators see accurate remediation instead of the vague
+  // `unknown`-hint "rebuild better-sqlite3". SEV-2 hard-fail policy applies —
+  // see decideOnSqliteLoadFailure.
+  if (
+    /cannot access .* before initialization/i.test(haystack) &&
+    /getDatabase|default/i.test(haystack)
+  ) {
+    return {
+      kind: 'esm-tla-pending',
+      reason: e?.message ?? haystack,
+      // NOTE: double-quote outer string so the inner `await import('node:module')`
+      // substring does not break the literal. Single-quoted outer (matching the
+      // other hints above) would close prematurely on the `'` inside `import('..')`
+      // and trip the parser with `Expected , or } but found Identifier`.
+      hint:
+        'an ESM dependency (connection.ts) is mid-evaluation due to a top-level await; `require()` returned a TLA-pending namespace whose named export read threw a TDZ ReferenceError. This is a module-graph / Next.js / Turbopack interaction with the `await import(\"node:module\")` pattern in connection.ts, NOT a better-sqlite3 binding issue. Fix the import cycle or move the `await` inside a function body.',
+    }
+  }
   return {
     kind: 'unknown',
     reason: e?.message ?? String(err),
@@ -245,40 +270,85 @@ function tryRequireDatabaseConnection():
     }
     return { getDatabase }
   } catch (requireErr) {
+    const decision = decideOnSqliteLoadFailure(requireErr)
+    if (decision.kind === 'throw') {
+      log.error(
+        '[session-store] CRITICAL: CJS/ESM interop-mismatch — refusing silent fallback. ' +
+          'Restarting the server would lose all chat sessions, OAuth refresh tokens, ' +
+          'and VFS session metadata. Fix the build/bundler configuration before retrying.',
+        decision.reason,
+      )
+      throw decision.err
+    }
     useSqlite = false
     log.warn(
       '[session-store] better-sqlite3 binding failed to load – falling back to in-memory store',
-      classifySqliteFailure(requireErr),
+      decision.reason,
     )
     return null
   }
 }
 
 /**
- * Pure unwrap helper — exported ONLY for direct unit testing of the 3-shape
- * ladder. Production code goes through `tryRequireDatabaseConnection()`
- * which combines this unwrap with the bind-warn + classify pipeline.
+ * SEV-2 policy helper — pure function that decides what to do when
+ * `better-sqlite3` fails to load. Extracted from tryRequireDatabaseConnection
+ * so the hard-fail vs graceful-fallback policy is lock-down unit-testable
+ * (without spinning up the full session-store module or trying to mock the
+ * CJS `require()` call, which vi.doMock / vi.mock have spotty coverage for).
  *
- * Shapes handled:
- *   A: any-function        → the fn itself
- *   B: { default: fn }     → conn.default
- *   C: { getDatabase: fn } → conn.getDatabase  (named-only flatten case)
+ * Discrimination rule:
+ *   - 'interop-mismatch' → throw (SEV-2 hard policy — never silent-fall-back)
+ *   - all other kinds     → warn-and-fall-back (graceful degradation OK)
  *
- * Returns undefined when no shape matches (e.g. null/undefined/empty
- * object), so callers can decide whether to throw or fail-open.
+ * Pure function: takes an unknown error, returns a tagged-union decision.
+ * No side effects, no logging (the caller logs based on the decision).
  *
- * `export` is necessary so the vitest file can lock down Shape A/B/C
- * regressions without spinning up the full session-store module (which
- * has init side effects like setInterval).
+ * Exported for unit testing in `__tests__/session-store-probe.test.ts`.
  */
-export function unwrapDefaultExport<T = (...args: any[]) => any>(
-  mod: unknown,
-): T | undefined {
-  if (typeof mod === 'function') return mod as T
-  if (mod && typeof (mod as any).default === 'function') return (mod as any).default as T
-  if (mod && typeof (mod as any).getDatabase === 'function') return (mod as any).getDatabase as T
-  return undefined
+export type SessionStoreLoadDecision =
+  | { kind: 'fallback'; reason: SqliteFailure }
+  | { kind: 'throw'; err: unknown; reason: SqliteFailure }
+
+export function decideOnSqliteLoadFailure(requireErr: unknown): SessionStoreLoadDecision {
+  const diagnostic = classifySqliteFailure(requireErr)
+  // SEV-2 hard-fail policy — never silently fall back to in-memory store on
+  // module-resolution timing errors. Both kinds propagate up to instrumentation
+  // / server-init which throws and exits the process non-zero.
+  if (diagnostic.kind === 'interop-mismatch' || diagnostic.kind === 'esm-tla-pending') {
+    return { kind: 'throw', err: requireErr, reason: diagnostic }
+  }
+  return { kind: 'fallback', reason: diagnostic }
 }
+
+/**
+ * Pure unwrap helper — imported from leaf module `@/lib/database/unwrap-default-export`.
+ *
+ * SEV-8 (2026-06-18 audit chain). Moved out of session-store.ts into a true
+ * leaf module to break the import cycle that crashed `pnpm run dev`:
+ *
+ *   instrumentation.ts → server-init.ts → connection-shim.ts ← unwrapDefaultExport
+ *                                                       ↑
+ *   session-store.ts ─────────────────────────────────┘ (circular TS import)
+ *                                                       │
+ *   tryRequireDatabaseConnection() require(./connection-shim) ───────┘
+ *
+ * The cycle point was `import { unwrapDefaultExport } from '@/lib/storage/session-store'`
+ * sitting at the top of connection-shim.ts. When session-store’s top-level body
+ * hit `tryRequireDatabaseConnection()` → `require('../database/connection-shim')`,
+ * the cycle re-entered and connected to connection.ts (which has TLA
+ * `await import('node' + ':module')`). unwrapDefaultExport’s shape-C
+ * `mod.getDatabase` access TDZ-threw on the TLA-pending synthetic namespace.
+ *
+ * This line is an IMPORT (not a re-export) so that the local symbol is in
+ * scope and callable from `tryRequireDatabaseConnection()` below. Earlier
+ * variants used `export { unwrapDefaultExport } from '...'` which is a
+ * re-export — that puts the name in the module’s export object but NOT in
+ * local scope, breaking the call below with `error TS2304: Cannot find name
+ * 'unwrapDefaultExport'`. All 5 external consumers (connection-shim,
+ * terminal-session-manager, jwt × 3 sites, sqlite-diagnostics.test) already
+ * import directly from the leaf, so no backwards-compat shim is needed.
+ */
+import { unwrapDefaultExport } from '@/lib/database/unwrap-default-export'
 
 const connection = tryRequireDatabaseConnection()
 if (connection) {
@@ -832,4 +902,73 @@ function enforceMemoryCheckpointLimits(): void {
 export function getLatestCheckpoint(sessionId: string): SessionCheckpoint | undefined {
   const checkpoints = getCheckpointsBySession(sessionId, 1)
   return checkpoints[0]
+}
+
+// ============================================================================
+// SEV-2 Persistence Probe
+// ============================================================================
+
+/**
+ * SEV-2 startup probe — guarantees that the SessionStore is backed by real
+ * persisted SQLite at the moment `assertSessionStorePersisted()` returns,
+ * not by the silent in-memory fallback.
+ *
+ * Call from `instrumentation.ts` / `server-init.ts` immediately after the
+ * database is initialized. Throws if either condition holds:
+ *   - `useSqlite === false` — the module-load init never bound a callable
+ *     `getDatabase` (native binding missing, broken build, etc.) AND
+ *     that fail was not a hard-fatal `interop-mismatch` (in which case
+ *     `tryRequireDatabaseConnection` already threw at module-load time, so
+ *     we never reached this probe).
+ *   - `db === null` — the SQLite handle never opened even though the
+ *     require succeeded (likely a runtime init failure during schema exec).
+ *
+ * On throw, the process should exit non-zero so a misconfigured deployment
+ * is loudly rejected by whatever orchestration is launching it
+ * (systemd/pm2/Docker/Kubernetes all surface non-zero exit codes).
+ */
+export function assertSessionStorePersisted(): void {
+  if (!useSqlite || !db) {
+    const reason = !useSqlite
+      ? 'useSqlite=false (better-sqlite3 binding load failed at module-load)'
+      : 'null db handle (init succeeded but getDatabase() returned null)'
+
+    // SEV-12 (2026-06-18 fix): SEV-2 hard-fail policy applies in PRODUCTION
+    // only — in non-production environments, we surface a loud WARN and
+    // continue with in-memory state so dev boot isn't completely blocked when
+    // the binding can't load (the most common cause is a Node-ABI mismatch
+    // during local development against a freshly-installed Node version).
+    //
+    // Rationale: the user-reported crash chain in their dev log shows the
+    // server reaches `Ready in 554ms` but then `instrumentation.ts` →
+    // server-init → assertSessionStorePersisted throws a FATAL, which
+    // Next.js prints as ELIFECYCLE Command failed with exit code 1. That's
+    // correct production behavior — but in NODE_ENV=development, the same
+    // throw bricks the entire dev surface (no chat history, but readable
+    // pages) for a problem that has nothing to do with the user's code.
+    //
+    // NOTE: any operator/dev who sees the WArn and wants strict SEV-2
+    // enforcement can set `SESSION_STORE_REQUIRE_SQLITE=1` in non-prod.
+    const requireSqliteEnv = process.env.SESSION_STORE_REQUIRE_SQLITE
+    const shouldHardFail =
+      process.env.NODE_ENV === 'production' ||
+      (requireSqliteEnv != null && requireSqliteEnv !== '0' && requireSqliteEnv !== 'false')
+
+    if (shouldHardFail) {
+      throw new Error(
+        '[session-store] FATAL: SessionStore is NOT persisted — ' + reason + '. ' +
+          'Refusing to start: this would silently lose all chat sessions, OAuth refresh ' +
+          'tokens, and VFS session metadata on the next restart.',
+      )
+    }
+    // Non-production (default): loud WARN + continue with in-memory store.
+    // The session/chat surface remains functional in dev; data won't survive
+    // a restart, which is the same behaviour as before SEV-2 and acceptable
+    // for day-to-day dev work.
+    log.warn(
+      '[session-store] ⚠️  NOT persisted (in-memory fallback active) — ' + reason + '. ' +
+        'This is acceptable in non-production environments. Set ' +
+        'SESSION_STORE_REQUIRE_SQLITE=1 or NODE_ENV=production to enforce SEV-2 strict mode.',
+    )
+  }
 }

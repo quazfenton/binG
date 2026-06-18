@@ -1601,7 +1601,7 @@ export async function processUnifiedAgentRequest(
           const orchMessages = [
             ...orchNonSystem,
             { role: 'user', content: config.userMessage },
-          ];;
+          ];
           return await runV1Orchestrated(config, orchMessages, startTime);
         }
 
@@ -4893,7 +4893,7 @@ async function runV1ApiWithTools(
           if (isExplicitClientAbort) {
             // Set global flag: no subsequent provider attempts (or agent loop iterations)
             // should try any more providers — the response stream is gone.
-                        markClientDisconnected(error?.message || errorMessage);;
+                        markClientDisconnected(error?.message || errorMessage);
           }
 
           if (isExplicitClientAbort) {

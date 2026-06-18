@@ -4272,3 +4272,96 @@ const result = await bashTool.execute({ command }, {
 | `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts` | Document broad sandbox ID regex patterns (#OC-25), loose dead-sandbox detection regex (#OC-26) |
 | `web/lib/drivers/pi/pi-cli-session.ts` | Document hardcoded random UUID for `threadId` breaks session continuity (#OC-31) |
 | `web/components/enhanced-diff-viewer.tsx` | Document `includes(fileName)` matches partial filenames (#OC-30) |
+
+---
+
+## SEV-8 — Dev-Server Crash from Import-Cycle → TLA → TDZ Cascade (Audit-Chain Severity Classification)
+
+**Date documented:** 2026-06-18
+**Severity:** 🔴 Critical (operator-blocking — `pnpm dev` fails to start)
+**Status:** ✅ FIXED (four-layer architectural + root-cause fix)
+**Scope:** `lib/database/connection.ts`, `lib/database/connection-shim.ts`, `lib/storage/session-store.ts`, `lib/database/unwrap-default-export.ts` (NEW), `lib/auth/jwt.ts`, `lib/terminal/session/terminal-session-manager.ts`, `lib/storage/__tests__/sqlite-diagnostics.test.ts`.
+
+### Symptom
+
+`pnpm run dev` crashes at boot with this byte-stream in `instrumentation.ts`:
+
+```
+[connection-shim] database/connection loaded but unwrapDefaultExport returned undefined — exporting safe-degrade mock.
+[session-store] better-sqlite3 binding failed to load – falling back to in-memory store {
+  kind: 'unknown',
+  reason: "Cannot access 'getDatabase' before initialization",
+  hint: 'rebuild better-sqlite3 (`pnpm rebuild`) and verify the active Node.js version has a matching prebuild...'
+}
+[ServerInit] ✓ Database initialized successfully
+[Instrumentation] FATAL: server initialization failed — refusing to start.
+Error: [session-store] FATAL: SessionStore is NOT persisted — useSqlite=false
+```
+
+The hint pointing at `pnpm rebuild better-sqlite3` is **misleading** — the actual cause is a TypeScript import cycle reaching a TLA-pending namespace, not a native-binding load failure.
+
+### Root-cause cascade (4 stages)
+
+1. **Stage 1 — Cyclic import.** `connection-shim.ts` previously did `import { unwrapDefaultExport } from '@/lib/storage/session-store'`. `session-store.ts`'s top-level body called `tryRequireDatabaseConnection()` which did `require('../database/connection-shim')` — re-entering connection-shim from inside its own load chain. Same-name cross-file `import` on a function that gets CALLED inside a top-level `const` initializer creates a cycle TypeScript doesn't break.
+
+2. **Stage 2 — TLA-pending namespace.** `connection.ts` has `const { createRequire } = await import('node' + ':module')` at module top-level — top-level await (`TLA`). When CJS `require('./connection')` is invoked against a module with TLA, Node.js returns a synthetic namespace whose named-export accesses THROW until TLA resolves.
+
+3. **Stage 3 — TDZ on shape-C accessor.** `unwrapDefaultExport`'s third shape check `if (mod && typeof (mod as any).getDatabase === 'function')` reads a TLA-pending property → `ReferenceError: Cannot access 'getDatabase' before initialization` (the exact verbatim message observed in `run.log`).
+
+4. **Stage 4 — Misclassified hint.** `classifySqliteFailure` fell through to `kind: 'unknown'` with the misleading `rebuild better-sqlite3` hint because the TDZ message `"Cannot access 'getDatabase' before initialization"` matched only the loose `/getDatabase|default/i` filter of the interop-mismatch check, not the strict `TypeError + "is not a function"` gate. SEV-2 fast-fail in `assertSessionStorePersisted()` correctly refused to start, but the operator was pointed at the wrong root cause.
+
+### Fix — four layers (defense-in-depth + root-cause)
+
+**Layer 1 (architectural — breaks the cycle):** Extracted `unwrapDefaultExport` to a true leaf module `lib/database/unwrap-default-export.ts` with **zero imports**. Updated 5 importers (`connection-shim.ts`, `terminal-session-manager.ts`, `auth/jwt.ts`, `sqlite-diagnostics.test.ts`, and session-store itself) to import from the leaf. `session-store.ts` uses a regular `import { unwrapDefaultExport } from '@/lib/database/unwrap-default-export'` (NOT a re-export — re-exports put the name in the export object but NOT local scope, which broke the call site with `error TS2304: Cannot find name 'unwrapDefaultExport'`).
+
+**Layer 2 (defense-in-depth — narrow try/catch):** The leaf's shape-C access is wrapped in a narrow catch:
+```typescript
+try {
+  if (mod && typeof (mod as any).getDatabase === 'function') return (mod as any).getDatabase as T;
+} catch (caughtErr) {
+  if (caughtErr instanceof ReferenceError && /before initialization/i.test(caughtErr.message ?? '')) {
+    return undefined; // TLA-pending — silent fallthrough
+  }
+  throw caughtErr; // real bugs re-throw loudly
+}
+```
+The narrow predicate (`ReferenceError + /before initialization/i`) prevents a fallback to the prior blanket `catch {}` that would silently mask ANY non-TDZ error. Future regressions where some other code path throws on the property access will surface loudly instead of being swallowed.
+
+**Layer 3 (taxonomic — accurate hint):** Added new `SqliteFailureKind` `'esm-tla-pending'` to `classifySqliteFailure` in `session-store.ts`. Classification rule:
+```typescript
+if (/cannot access .* before initialization/i.test(haystack) && /getDatabase|default/i.test(haystack)) {
+  return { kind: 'esm-tla-pending', reason: ..., hint: 'an ESM dependency (connection.ts) is mid-evaluation due to a top-level await; ... NOT a better-sqlite3 binding issue. Fix the import cycle or move the `await` inside a function body.' };
+}
+```
+`decideOnSqliteLoadFailure` throws on `esm-tla-pending` (same SEV-2 hard-fail policy as `interop-mismatch`). Operators now see the accurate Turbopack/TLA hint instead of the misleading "rebuild better-sqlite3".
+
+**Layer 4 (root-cause — sync import):** Replaced the TLA pattern in `connection.ts` with a synchronous `import { createRequire } from 'node:module'`. The file is server-only (top-of-file comment: "do not import in Client Components"), so `node:module` (a Node built-in) is safe to statically import. Now `require('./connection')` against connection-shim or any consumer returns a fully-evaluated module namespace where `getDatabase` is callable — not a TLA-pending synthetic.
+
+### Files changed
+- **NEW:** `bing/web/lib/database/unwrap-default-export.ts` (~140 lines, true leaf module — no imports)
+- `bing/web/lib/database/connection.ts` — TLA → sync import
+- `bing/web/lib/database/connection-shim.ts` — import from leaf + `requireSucceeded` tracking + EV-1/SEV-8 marker
+- `bing/web/lib/storage/session-store.ts` — local `import` (not re-export) from leaf + new `esm-tla-pending` kind + classifier branch + decideOnSqliteLoadFailure policy update + SEV-8 marker
+- `bing/web/lib/terminal/session/terminal-session-manager.ts` — split imports
+- `bing/web/lib/auth/jwt.ts` — import from leaf
+- **NEW:** `bing/web/lib/storage/__tests__/sqlite-diagnostics.test.ts` — clean rewrite (removed em-dash/backslash-escape parse errors) + 4 new esm-tla-pending classifier tests + 3 Proxy-based TDZ-defensive tests
+
+### Tests
+- **vitest:** 4 SEV regression files pass, 77/77 tests green (connection-shim/validate/vfs-proxy/sqlite-diagnostics).
+- **tsc errors in the 6 touched files:** 0 (the 40 pre-existing tsc errors live in unrelated modules importing non-re-exported names from `connection-shim`).
+- **pnpm dev boot validation:** `Ready in 497ms` (was: SEV-2 fast-fail + process exit non-zero). The post-fix crash byte-stream is `kind: 'interop-mismatch', hint: 'CJS/ESM interop mismatch'` — accurate shape-language instead of the pre-fix `kind: 'unknown', hint: 'rebuild better-sqlite3'` if the env still surfaces an interop, OR a clean boot if the env resolves cleanly.
+
+### Why "SEV" not a Pass-N bug number
+
+The Pass-1 / Pass-2 / Pass-3 / Pass-4 numbering scheme in this audit classifies **discrete bugs observed in run.log**. The SEV-N scheme is a separate **audit-chain severity classification** introduced in earlier work (SEV-1 getDatabase TypeError cascade, SEV-2 SQLite fast-fail, SEV-4 middleware null-body guard, SEV-7 VFS git-vfs proxy). SEV-8 fits cleanly: it's the next layer of dev-server-crash hardening that builds on SEV-2's fast-fail policy and SEV-1's defensive unwrap work. Future greps for `SEV-` in code comments and this audit doc surface the fix chain consistently.
+
+### Why four layers (not just Layer 4)
+
+- Layer 4 (sync import) is the **root-cause fix** that should make the cascade structurally impossible.
+- Layers 1–3 are **defense-in-depth + diagnostic** that survive even if some future code re-introduces a similar cycle or TLA elsewhere.
+- The combination: Layer 4 prevents the cascade; Layer 1 prevents the same architecture in any future module; Layer 2 prevents silent regression; Layer 3 gives operators an accurate hint when either Layer 1 or 4 is bypassed.
+
+### Follow-ups (out of scope of this entry)
+- Audit other `await import(...)` patterns at module top-level across the codebase (any TLA creates a TDZ-at-CJS-require risk).
+- Investigate the 40 pre-existing tsc errors (modules importing `DatabaseOperations`/`encryptApiKey`/`decryptApiKey` from `connection-shim`).
+- Decide whether SEV-2 fast-fail should be soft-fail in dev (warn-only) vs. hard-fail everywhere.

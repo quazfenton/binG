@@ -20,7 +20,7 @@
 import { createLogger } from '../utils/logger';
 import { sandboxBridge } from './sandbox-service-bridge';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 import type { SandboxProviderType } from './providers';
 import type { SandboxHandle } from './providers/sandbox-provider';
 

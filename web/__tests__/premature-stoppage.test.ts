@@ -171,6 +171,67 @@ function simulateAutoContinueDetection(
     };
   }
 
+  // ─── Gap #13: failure_plan_loop circuit-breaker (chat-loop preemption) ─────
+  // Production rule: `lib/chat/llm-continuation.ts:_detectFailurePlanLoop`.
+  // Operates on the SAME plan-language regex as production
+  // (`/\b(I'll now|first|then I will|finally|let me)\b/i`) so the
+  // simulator and production diverge ZERO on detection. The simulator's
+  // placement differs intentionally from production: production fires
+  // this rule INSIDE the plan_steps_remaining branch (after the heuristic
+  // cascade), while the simulator exposes it as a free-standing cascade
+  // arm because the simulator's `allToolCalls` shape doesn't model
+  // `planStepsCount` (it only carries `continuationCount`). This is a
+  // deliberate, documented simplification — the simulator's goal is to
+  // lock down SERIALIZATION of the `failure_plan_loop` reason into the
+  // SSE chunk, NOT cascade-ordering semantics.
+  //
+  // KNOWN DIVERGENCE from production (acceptable for this regression-test
+  // scope): production's `_detectFailurePlanLoop` wrapper ALSO has a
+  // `if (!hasFailure || hasSuccess) return false` gate — meaning the
+  // breaker is bypassed if NO tool failed OR if there's mixed success/
+  // failure (forward progress). The simulator does not model this gate
+  // because its `allToolCalls` shape doesn't carry `result.success`.
+  // Consequence: the simulator may over-trigger when a SUCCESSFUL
+  // non-info-gathering tool is followed by plan-language text. This is
+  // acceptable here because the regression-test goal is wire-format
+  // preservation (i.e. doesn't break the reason-string assertion); a
+  // future change to the simulator's `simulateServerRePrompt` or a
+  // thread of `collectedToolResults` into `simulateAutoContinueDetection`
+  // could close the gap.
+  //
+  // Preconditions (continue-friendly lastToolCall is already declared
+  // above in the info-gathering block):
+  //   1. continuationCount >= 1 (PRE-snapshot, model has already had a retry)
+  //   2. allToolCalls.length >= 1 (last tool was attempted)
+  //   3. lastToolCall is NON-info-gathering (write_file / execute_shell —
+  //      simulator's failure proxy; allToolCalls doesn't carry
+  //      result.success so the tool-choice is the closest signal)
+  //   4. responseText has plan-language words in the 30-1000 char range
+  //      (shorter = too ambiguous, longer = real content not pure plan)
+  const responseLen = fullResponse.length;
+  const responseHasPlanLanguage =
+    responseLen >= 30 &&
+    responseLen <= 1000 &&
+    /\b(I'll now|first|then I will|finally|let me)\b/i.test(fullResponse);
+  const lastToolIsNonInfoGathering =
+    lastToolCall && !isInfoGatheringTool(lastToolCall.name);
+  if (
+    continuationCount >= 1 &&
+    allToolCalls.length >= 1 &&
+    lastToolIsNonInfoGathering &&
+    responseHasPlanLanguage
+  ) {
+    // Stop signal: no yieldedContent / yieldedType. The route.ts SSE
+    // emitter downstream reads `autoDecision.reason` verbatim into the
+    // `continuation` chunk's `reason` field, where operators
+    // `grep '"reason":"failure_plan_loop"'` to detect upstream-tool-
+    // failure chat loops.
+    return {
+      triggered: false,
+      reason: 'failure_plan_loop',
+    };
+  }
+
   // Check incomplete response detection (step 7)
   // Simulates detectIncompleteResponse by checking for common truncation patterns
   const simulateIncompleteCheck = simulateDetectIncompleteResponse(fullResponse);
@@ -2351,6 +2412,61 @@ describe('Premature Stoppage After Info-Gathering Tools', () => {
       // Server re-prompt blocked by maxRePrompts
       expect(result.serverRePrompted).toBe(false);
       expect(result.rePromptCount).toBe(3); // unchanged
+    });
+
+    // ─── Gap #13: failure_plan_loop circuit-breaker (operator-grep layer) ───
+    // Production rule: lib/chat/llm-continuation.ts:_detectFailurePlanLoop.
+    // The route.ts SSE emitter propagates autoDecision.reason verbatim into
+    // the `continuation` chunk's `reason` field via
+    //   makeSseChunk('continuation', autoDecision.continue, autoDecision.reason, ...)
+    // so operators `grep '"reason":"failure_plan_loop"'` against the live SSE
+    // stream to detect upstream-tool-failure-induced chat loops.
+    //
+    // This test asserts the chain-integration layer's autoContinueReason
+    // preserves `'failure_plan_loop'` verbatim so any future reason-field
+    // serialization regression (rename, drop, type widening to `string`)
+    // is caught at CI rather than at the operator-grep stage.
+    //
+    // Preconditions for failure_plan_loop (mirroring production):
+    //   - routing.continue === false (so the heuristic cascade can fire)
+    //   - planStepsCount >= 2 (entry guard) + steps.length < planStepsCount (exit guard)
+    //   - continuationsSoFar === 1 (PRE-snapshot, the breaker won't fire at 0)
+    //   - last tool is non-info-gathering (write_file / execute_shell — the
+    //     simulator uses tool-name as the failure proxy)
+    //   - responseText has plan-language words in the 30-1000 char range
+    it('should emit failure_plan_loop reason in chain integration when chat-loop circuit-breaker fires', () => {
+      const planLanguageResponse =
+        "Step 1 failed. I'll now try a different approach. First I'll read the existing file, then I will write the correct version, and finally I'll verify the result.";
+      const result = simulateChainIntegration(
+        [{ name: 'write_file', arguments: { path: 'src/a.ts', content: '/* A */' } }],
+        planLanguageResponse,
+        [], // collectedToolResults empty — server re-prompt is independent
+        {
+          maxContinuations: 3,
+          continuationCount: 1, // >= 1 required for breaker entry
+          enableAutoContinue: true,
+          maxRePrompts: 3,
+          rePromptCount: 0,
+        }
+      );
+      // PRIMARY assertions — the operator-grep layer.
+      expect(result.autoContinued).toBe(false); // breaker preempts the continue
+      expect(result.autoContinueReason).toBe('failure_plan_loop');
+      // SCOPED events assertion: NO continue-type events in the payload.
+      // This pins the breaker contract (a STOP signal owes no continue
+      // event) without coupling to `simulateServerRePrompt`'s future
+      // behavior — e.g., if a simulator change extends server re-prompt
+      // to fire for non-info-gathering-tool failures, a `server-re-prompt`
+      // event in the payload won't break this assertion.
+      expect(
+        result.events.filter(
+          (e) => e.type === 'auto-continue' || e.type === 'next' || e.type === 'continue',
+        ),
+      ).toEqual([]);
+      // Independent sanity: finalContent is the raw plan-language response
+      // (NOT a [AUTO-CONTINUE] nudge), so a future flip to triggered=true
+      // would surface as a CI failure on this assertion.
+      expect(result.finalContent).not.toContain('[AUTO-CONTINUE]');
     });
   });
 

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { oauthService } from '@/lib/auth/oauth-service';
-import { getDatabase } from '@/lib/database/connection-shim;
+import { getDatabase } from '@/lib/database/connection-shim';
 
 function verifyWebhookSignature(body: string, signature: string | null, secret: string | undefined): boolean {
   if (!secret || !signature) return false;

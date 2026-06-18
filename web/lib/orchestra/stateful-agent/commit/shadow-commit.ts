@@ -2,10 +2,10 @@ import { tool } from 'ai';
 import { z } from 'zod';
 
 // Lazy import to avoid pulling Node.js-only modules (fs, better-sqlite3) into client bundle
-let _getDb: typeof import('@/lib/database/connection-shim).getDatabase | null = null;
+let _getDb: typeof import('@/lib/database/connection-shim').getDatabase | null = null;
 async function getDb() {
   if (!_getDb) {
-    const { getDatabase } = await import('@/lib/database/connection-shim);
+    const { getDatabase } = await import('@/lib/database/connection-shim');
     _getDb = getDatabase;
   }
   return _getDb();

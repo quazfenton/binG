@@ -28,7 +28,7 @@
  * `/called a file/i` regex pinned to literal wording).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { shouldAutoContinue, humanizeToolName, type ContinuationDecision } from '../llm-continuation';
 
 describe('shouldAutoContinue', () => {
@@ -315,21 +315,161 @@ describe('shouldAutoContinue', () => {
   });
 
   // ─── TRIGGER 4: plan steps remaining ───────────────────────────────
-  // Cross-file coverage lives in
+  // Branch-level unit coverage. The end-to-end fixture coverage that
+  // exercises plan_steps_remaining through decideAutoContinue lives in
   //   bing/web/__tests__/orchestra/unified-agent-service.test.ts
-  // (the plan_steps_remaining detector is exercised end-to-end through the
-  // orchestrator + first-response routes; unit coverage in this file would
-  // be redundant with the fixture-level coverage). The placeholder below
-  // keeps trigger numbers in this file sequential so the doc-comment
-  // header (CONTINUATION TRIGGERS 1-5) maps cleanly to describe blocks.
-  describe('trigger 4: plan steps remaining (cross-file coverage)', () => {
-    // Intentionally skipped pending cross-file coverage pointer
-    // (see module-level comment above). The describe block stays as a
-    // structural landmark so trigger numbers map cleanly to describe blocks.
-    it.skip('placeholder — real coverage in bing/web/__tests__/orchestra/unified-agent-service.test.ts', () => {
-      // No assertion body: `it.skip` is the codebase convention for
-      // “intentionally uncovered” and shows a SKIP marker in test output
-      // (replaces the prior `expect(true).toBe(true)` tautology).
+  // so this block locks down the four SHAPE branches the rule pivots on:
+  //   1. routing == null catch-all → env-default-on/off split
+  //   2. planStepsCount >= 2 entry guard
+  //   3. steps.length < planStepsCount exit guard
+  //   4. failure_plan_loop circuit-breaker integration
+  // The broader regression coverage of the circuit-breaker rule itself
+  // (length floors, success/failure mix, no-failure case, etc.) lives in
+  // the bottom `circuit-breaker: failure + plan-only response` describe
+  // block of this file — this block pins the BRANCH SHAPE, that block
+  // pins the REGEX / DETECTOR behavior.
+  describe('trigger 4: plan steps remaining (branch unit coverage)', () => {
+    // Catch-all when the caller omits routing entirely.
+    // resolveDefaultContinue() reads process.env.LLM_AUTO_CONTINUE_DEFAULT
+    // at call time (not at module load), so vi.stubEnv flips the branch
+    // deterministically and vi.unstubAllEnvs restores per-test isolation.
+    describe('routing == null catch-all (env-default split)', () => {
+      afterEach(() => {
+        vi.unstubAllEnvs();
+      });
+
+      it('returns plan_steps_remaining when routing is undefined and env default is not "false"', () => {
+        // Default env (unset OR 'true' OR any non-'false' value) →
+        // resolveDefaultContinue() returns true → catch-all emits
+        // plan_steps_remaining.
+        //
+        // Note: steps: [] is critical — a single read step would trigger
+        // trigger 3 (single_step_read_pattern) BEFORE the catch-all (the
+        // catch-all is last-resort per the producer-order fix). With empty
+        // steps, every heuristic trigger falls through and only the
+        // catch-all can emit.
+        vi.stubEnv('LLM_AUTO_CONTINUE_DEFAULT', 'true');
+        const decision = shouldAutoContinue({
+          routing: undefined,
+          steps: [],
+          continuationsSoFar: 0,
+        });
+        expect(decision.continue).toBe(true);
+        expect(decision.reason).toBe('plan_steps_remaining');
+        expect(decision.continuationPrompt).toBeTruthy();
+      });
+
+      it('returns no_continuation_needed when routing is undefined and env default is "false"', () => {
+        // Env explicitly 'false' → resolveDefaultContinue() returns false
+        // → catch-all flips to no_continuation_needed (clean close without
+        // routing metadata).
+        //
+        // Same caveat as the truthy-sibling test: steps: [] is required so
+        // no heuristic trigger (1/2/3/4/5) fires before the catch-all.
+        vi.stubEnv('LLM_AUTO_CONTINUE_DEFAULT', 'false');
+        const decision = shouldAutoContinue({
+          routing: undefined,
+          steps: [],
+          continuationsSoFar: 0,
+        });
+        expect(decision.continue).toBe(false);
+        expect(decision.reason).toBe('no_continuation_needed');
+      });
+    });
+
+    // Guards around the
+    //   (planStepsCount >= 2 && steps.length >= 1 && steps.length < planStepsCount)
+    // core expression. Both tests verify that violating the guard cleanly
+    // falls through to the no-continuation bottom rule rather than
+    // mis-firing on a partial plan or a fully-complete plan.
+    describe('entry + exit guards', () => {
+      it('does NOT fire when planStepsCount is below 2 (entry guard)', () => {
+        // estimatedSteps: 1 → planStepsCount = 1 < 2 → entry guard fails.
+        // The non-read / non-write toolName prevents triggers 3 + 5 from
+        // intercepting, so the fall-through lands on no_continuation_needed.
+        const decision = shouldAutoContinue({
+          routing: { continue: false, estimatedSteps: 1 },
+          steps: [{ toolName: 'some_generic_tool', args: { value: 'x' } }],
+          continuationsSoFar: 0,
+        });
+        expect(decision.continue).toBe(false);
+        expect(decision.reason).toBe('no_continuation_needed');
+      });
+
+      it('does NOT fire when steps.length >= planStepsCount (exit guard)', () => {
+        // planSteps=[a,b] (length 2) + steps=[s1,s2] (length 2)
+        // → steps.length < planStepsCount is FALSE → exit guard fails.
+        const decision = shouldAutoContinue({
+          routing: {
+            continue: false,
+            planSteps: [{ action: 'a' }, { action: 'b' }],
+          },
+          steps: [
+            { toolName: 'some_tool_one', args: { value: 'x' } },
+            { toolName: 'some_tool_two', args: { value: 'y' } },
+          ],
+          continuationsSoFar: 0,
+        });
+        expect(decision.continue).toBe(false);
+        expect(decision.reason).toBe('no_continuation_needed');
+      });
+    });
+
+    // Circuit-breaker integration: the plan_steps_remaining entry guard
+    // passes but the failure-plan-loop check
+    // (continuationsSoFar >= 1 + failed last tool + plan-language response
+    // between 30-1000 chars) preempts the legitimate plan_steps_remaining
+    // emit and returns failure_plan_loop instead. The broader regression
+    // coverage of the detector's quirks lives in the bottom
+    // `circuit-breaker: failure + plan-only response` describe block;
+    // this test is the trigger-4 BRANCH-SHAPE pin (entry-guard passes +
+    // breaker flips the reason).
+    it('returns failure_plan_loop when plan_steps_remaining entry passes and breaker preempts', () => {
+      // Precondition trace:
+      //   planStepsCount = 3 (via planSteps.length=3)
+      //   steps.length    = 1
+      //   triggers 1/2/3 — skip (routing.continue=false, args non-empty, tool=write_file not in READ_ONLY_TOOL_NAMES)
+      //   planStepsCount >= 2 ✓ AND 1 >= 1 ✓ AND 1 < 3 ✓ → entry guard passes
+      //   Note: with planStepsCount = 3 > 1, trigger 5's planStepsCount<=1 guard
+      //   rejects, so single_write_then_stop never fires regardless of cascade order.
+      //   (Pinned by an explicit defensive assertion below.)
+      //   Then inside the plan_steps_remaining branch:
+      //     continuationsSoFar = 1 ✓
+      //     steps[0].result.success = false ✓
+      //     responseText contains "I'll now" + "First I'll" + "then I will" + "I'll verify" ✓ (length well within 30-1000 floor/ceiling)
+      //     → _detectFailurePlanLoop fires → reason flips to failure_plan_loop,
+      //     continuationPrompt empty.
+      const decision = shouldAutoContinue({
+        routing: {
+          continue: false,
+          planSteps: [
+            { action: 'a' },
+            { action: 'b' },
+            { action: 'c' },
+          ],
+        },
+        steps: [
+          {
+            toolName: 'write_file',
+            args: { path: 'src/a.ts', content: '/* A */' },
+            result: { success: false, error: 'permission denied' },
+          },
+        ],
+        responseText:
+          "Step 1 failed. I'll now try a different approach. First I'll read the existing file, then I will write the correct version, and finally I'll verify.",
+        continuationsSoFar: 1,
+      });
+      expect(decision.continue).toBe(false);
+      // Defensive: lock down the cascade-order assumption so a future
+      // source reorder surfaces a regression failure rather than a quiet
+      // semantic shift. planStepsCount=3 > 1 → trigger 5's guard rejected.
+      expect(decision.reason).not.toBe('single_write_then_stop');
+      expect(decision.reason).toBe('failure_plan_loop');
+      expect(decision.continuationPrompt).toBe('');
+      // Counter is a PRE-snapshot value (continuationsSoFar is captured
+      // before the increment), so the count after a continue=false decision
+      // is unchanged.
+      expect(decision.continuationsSoFar).toBe(1);
     });
   });
 
