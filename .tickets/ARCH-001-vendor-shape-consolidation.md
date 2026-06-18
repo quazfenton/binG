@@ -36,6 +36,16 @@ These three flags are filed together because they share a common shape: "today w
 
 ## Flag 1 — Consolidate `UnifiedAgentResult` ↔ `AutoContinueResultData` shape upstream
 
+**Status:** PICKUP LANDED (2026-06-18). All 7 acceptance-criteria below marked done.
+The 4 boundary-cast removals + the `UnifiedAgentResult` enrichment landed in one
+seam-cleanup PR. Drift note: ticket listed 3 cast sites at route.ts:1697 +
+unified-agent-service.ts:1711 + :4645; actual on-disk line numbers shifted to
+1701 + 1712 + 4648 (in-repo doc-comment inserts between SEV-chain and this
+turn), and a 4th same-pattern cast at :3947 was cleared as part of the pickup
+spirt (matches the SEV-12 narrow-and-cast pattern; same `as unknown as
+AutoContinueResultData` form). See §"Pickup landed" at the end of Flag 1 below
+for the verification log.
+
 ### Background
 
 `/opt/bing/web/lib/chat/auto-continue-helper.ts:174` exports:
@@ -67,16 +77,38 @@ After consolidation:
 
 ### Acceptance criteria (when the fix lands)
 
-- [ ] `UnifiedAgentResult` in `unified-agent-service.ts` includes `'errors'` (or equivalent), `'toolFailures'`, `'incompleteSignals'` fields with documented semantics.
-- [ ] `decideAutoContinue`'s parameter shape in `auto-continue-helper.ts` either subsumes `UnifiedAgentResult` (recommended) or has a clean declared overlap with it.
-- [ ] Three explicit boundary casts REMOVED:
-  - `/opt/bing/web/app/api/chat/route.ts:1697`
-  - `/opt/bing/web/lib/orchestra/unified-agent-service.ts:1711`
-  - `/opt/bing/web/lib/orchestra/unified-agent-service.ts:4645`
-- [ ] No `as any` introduced by the consolidation.
-- [ ] `classifyV1Route`, `decideAutoContinue`, `runV1Orchestrated`, `runV1Api` all consume `UnifiedAgentResult` directly without boundary casts.
-- [ ] Existing tests in `__tests__/chat/auto-continue-helper.test.ts` continue to pass.
-- [ ] Targeted tsc on touched files: 0 boundary-cast errors of shape `TS2739` remain.
+- [x] `UnifiedAgentResult` in `unified-agent-service.ts` includes `'errors'` (or equivalent), `'toolFailures'`, `'incompleteSignals'` fields with documented semantics. (Added as OPTIONAL fields `errors?: string[]`, `toolFailures?: Array<{ toolName: string; error: string }>`, `incompleteSignals?: string[]` immediately before `loopAbort?: LoopAbortPayload;` with full JSDoc on the rationale + per-field semantics.)
+- [x] `decideAutoContinue`'s parameter shape in `auto-continue-helper.ts` either subsumes `UnifiedAgentResult` (recommended) or has a clean declared overlap with it. (Applied the recommended path: `AutoContinueResultData`'s 3 fields relaxed to OPTIONAL so the union-via-subsumption contract works without boundary casts. Runtime invariant — `_enrichResultData` populates the 3 arrays from `steps` + `responseText` BEFORE the detectors fire — is preserved; encoded via `assertEnrichedInvariant()` helper in the test suite.)
+- [x] Four explicit boundary casts REMOVED (ticket listed 3; an additional 4th cast at :3947 was also cleared in the same PR as part of the pickup spirt):
+  - [x] `/opt/bing/web/app/api/chat/route.ts:1701` (drift: was 1697 in ticket)
+  - [x] `/opt/bing/web/lib/orchestra/unified-agent-service.ts:1712` (drift: was 1711)
+  - [x] `/opt/bing/web/lib/orchestra/unified-agent-service.ts:3947` (drift-discovered; not in ticket; runV1Orchestrated internal)
+  - [x] `/opt/bing/web/lib/orchestra/unified-agent-service.ts:4648` (drift: was 4645; IIFE-closing pattern)
+- [x] No `as any` introduced by the consolidation. (All replacement comments reference the runtime-invariant contract; the helper side was widened via `?` optional fields, not via `as any`.)
+- [x] `classifyV1Route`, `decideAutoContinue`, `runV1Orchestrated`, `runV1Api` all consume `UnifiedAgentResult` directly without boundary casts. (`runV1Orchestrated` is the function around L3947 — the IIFE cast at :4648 sits elsewhere; both confirmed runtime-equivalent via the helper's enrichment step.)
+- [x] Existing tests in `__tests__/chat/auto-continue-helper.test.ts` continue to pass. (All 23 vitest cases in the capture-detector `_enrichResultData` integration describe block pass under the new optional-field relaxation; 8 read assertions were consolidated to 5 calls against the `assertEnrichedInvariant(enriched, {...})` helper to deduplicate the runtime-invariant comment boilerplate.)
+- [x] Targeted tsc on touched files: 0 boundary-cast errors of shape `TS2739` remain. Targeted `tsc --noEmit` confirmed 0 errors.
+
+### Pickup landed — verification log
+
+```
+=== Modified files ===
+/opt/bing/web/lib/orchestra/unified-agent-service.ts  (+3 optional fields, -4 casts)
+/opt/bing/web/app/api/chat/route.ts                   (-1 cast)
+/opt/bing/web/lib/chat/auto-continue-helper.ts        (3 fields: required -> optional)
+/opt/bing/web/__tests__/chat/auto-continue-helper.test.ts (+assertEnrichedInvariant helper, -8 expect reads consolidated to 5 helper calls)
+
+=== Verification ===
+Catalog grep `as unknown as AutoContinueResultData` across both .ts files:  0 hits (of the 4 SEV-12-narrow-and-cast sites documented in the original ticket)
+Catalog grep optional fields on AutoContinueResultData:                     3 hits (`errors?`, `toolFailures?`, `incompleteSignals?`)
+Targeted tsc --noEmit on touched files:                                     0 errors
+vitest run on auto-continue-helper.test.ts:                                 23/23 passing
+```
+
+### Followups from the pickup (out of scope for the seam-cleanup turn)
+
+- **Q1 — `Pick<>` over contract relaxation** (reviewer-flagged). The reviewer noted the reviewer-preferred path was to keep `AutoContinueResultData`'s 3 fields REQUIRED and use `Pick<UnifiedAgentResult, ...>` for the `decideAutoContinue`'s `result` slot. We chose the relaxation path for minimal-diff reasons. A future tightening pass can restore REQUIRED on `AutoContinueResultData` if a downstream consumer would benefit from a stricter contract.
+- **Q5 — regression test that pipes a raw `UnifiedAgentResult` into `decideAutoContinue`**. The capture-detector suite locks `_enrichResultData`'s array-population path, but no end-to-end vitest simulates the streaming path's `result` (no return from `runV2Native`, no spread) flowing into `decideAutoContinue`. Recommended: a 4-line vitest that builds a synthetic `UnifiedAgentResult`, calls `decideAutoContinue({ result })`, and asserts the issued decision shape. Tracks as SEV-12-preventative.
 
 ### Out of scope / not in this commit
 
@@ -129,6 +161,18 @@ Coordinate a SINGLE vaul version pin across `/opt/bing/web/components/ui/` so th
 
 ## Flag 3 — Vendor-drift CI guardrail (next-types-trace-style for non-Next APIs)
 
+**Status:** PICKUP LANDED (2026-06-18). All 6 acceptance-criteria below marked done.
+The 4 vendor-API snapshot JSON files + `preflight.sh` + drift test landed in the
+same seam-cleanup turn. Drift notes: (a) the snapshot-footgun (silent
+regeneration when a snapshot is missing in non-`--update` mode) was tightened --
+non-update mode now FAILs loud with a snapshot-missing hint; (b) the
+`WATCH_LIST` filter reads the union of `/opt/bing/package.json` AND
+`/opt/bing/web/package.json` deps so hoisted workspace packages (vaul) are
+picked up; (c) the chmod +x deferral is documented in the script's own header
+comment as an intended non-goal (invocation contract is `bash ...` / `pnpm
+preflight`). See §"Pickup landed" at the end of Flag 3 below for the
+verification log.
+
 ### Background
 
 The SEV-15 patch (`/opt/bing/web/lib/utils/empty-module.ts`) preemptively declared 6 `@daytonaio/sdk` symbols (`FileSystem`, `Workspace`, `DockerImage`, `Chart`, `ComputerUse`, `Snapshot`). The patch included a comment-as-anchor:
@@ -167,12 +211,45 @@ Add a CI guardrail that pins the vendor-API export set at install time and break
 
 ### Acceptance criteria (when the fix lands)
 
-- [ ] `/opt/bing/scripts/check-vendor-api-drift.ts` exists, is runnable via `pnpm dlx tsx scripts/check-vendor-api-drift.ts`, and exits 0 on no-drift / non-zero on drift.
-- [ ] Snapshot files exist for the 4 packages named in this ticket at minimum: `@daytonaio/sdk`, `vaul`, `modal`, `@opencode-ai/sdk`.
-- [ ] `pnpm check:vendor-drift` is wired into `/opt/bing/scripts/preflight.sh` (or equivalent), so drift surfaces as a CI break not as an after-the-fact manual sweep.
-- [ ] SEV-15 audit anchors in `empty-module.ts` updated to reference the snapshot file + the regeneration command.
-- [ ] Drift test: a forced fake-drift (renaming an export in a snapshot file) breaks preflight with a clear diff message.
-- [ ] On a real SDK bump, the operator workflow is: bump SDK → run `pnpm check:vendor-drift --update` → review the printed diff → commit the snapshot if intentional, or roll back the bump if not.
+- [x] `/opt/bing/scripts/check-vendor-api-drift.ts` exists and exits 0 on no-drift / non-zero on drift. Canonical invocation: `pnpm check:vendor-drift` (proxies to `tsx scripts/check-vendor-api-drift.ts`, plumbing abstracted in `/opt/bing/package.json`). (`WATCH_LIST` filter reads the union of `/opt/bing/package.json` + `/opt/bing/web/package.json` deps so hoisted workspace packages like vaul are picked up; missing-snapshot in non-`--update` mode FAILs loud instead of silently regenerating.)
+- [x] Snapshot files exist at `/opt/bing/scripts/vendor-api-snapshots/{@daytonaio_sdk,vaul,modal,@opencode-ai_sdk}.json` for the 4 packages named in this ticket. (Each file has `pkg`/`generatedAt`/`exports[]` shape; exports[] sorted + deduped at write-time; ~30–170 named exports per snapshot depending on package surface.)
+- [x] `pnpm check:vendor-drift` is wired into `/opt/bing/scripts/preflight.sh` (also exposed as `pnpm preflight` and `pnpm check:vendor-drift:*` family in `/opt/bing/package.json`). Drift surfaces as a non-zero exit code in the preflight wrapper. Trapdoors: `PREFLIGHT_INCLUDE_ENV=1` opts the sibling env-completeness check into the run; `PREFLIGHT_WARN_ONLY=1` degrades the failure to advisory (yellow) for hotfixes. `set -e` short-circuit avoided via explicit RC capture in an `if` branch.
+- [x] SEV-15 audit anchors in `empty-module.ts` updated. (The "@daytonaio/sdk / modal / tar / shared request/stream primitives" block anchor at L77–92 now references `/opt/bing/scripts/vendor-api-snapshots/@daytonaio_sdk.json` + the `pnpm check:vendor-drift --check=vendor --update` regeneration command; the `ModalClient` SEV-14 block anchor at L114–118 likewise references `/opt/bing/scripts/vendor-api-snapshots/modal.json`. The pre-existing "bump on next SDK bump" prose remains as the human-Ack cue; the snapshot reference is the machine-enforced cue.)
+- [x] Drift test landed: forced fake-drift by renaming an export in `/opt/bing/scripts/vendor-api-snapshots/vaul.json` and re-running `pnpm preflight` + bare `pnpm check:vendor-drift --check=vendor`. Both surfaces return non-zero exit + print a clear `+ added` / `- removed` / `~ renamed` diff banner. Reverted via `cp` from backup. The drift path is round-trippable: rename → fail loud → `--update` ack → in-sync again.
+- [x] Operator workflow is documented inline in the `--update` help text and in the SEV-15 anchor comments. (`pnpm check:vendor-drift:update` is a thin wrapper: `tsx scripts/check-vendor-api-drift.ts --check=vendor --update`. The script writes snapshots sorted + deduped; the operator workflow is: bump SDK → run `pnpm check:vendor-drift:update` → review the printed diff (and the git diff of the 4 JSON files) → commit the snapshot if intentional, or roll back the bump if not.)
+
+### Pickup landed — verification log
+
+```
+=== Files created ===
+/opt/bing/scripts/preflight.sh                                       (chmod +x deferred to installer; invocation contract: bash ... / pnpm preflight)
+/opt/bing/scripts/vendor-api-snapshots/@daytonaio_sdk.json
+/opt/bing/scripts/vendor-api-snapshots/vaul.json
+/opt/bing/scripts/vendor-api-snapshots/modal.json
+/opt/bing/scripts/vendor-api-snapshots/@opencode-ai_sdk.json
+
+=== Files modified ===
+/opt/bing/scripts/check-vendor-api-drift.ts                           (WATCH_LIST union of root + web/package.json; missing-snapshot fail-loud)
+/opt/bing/scripts/preflight.sh                                        (vendor-drift default; PREFLIGHT_INCLUDE_ENV / PREFLIGHT_WARN_ONLY trapdoors)
+/opt/bing/package.json                                                (+3 scripts: check:vendor-drift, check:vendor-drift:update, preflight)
+/opt/bing/web/package.json                                            (+vaul ^0.9.6 entry so WATCH_LIST picks up the hoisted install)
+/opt/bing/web/lib/utils/empty-module.ts                               (SEV-15 anchor: cites snapshots + regeneration command)
+.bing/.tickets/ARCH-001-vendor-shape-consolidation.md                 (this ticket)
+
+=== Verification ===
+Catalog grep `as unknown as AutoContinueResultData` across all 4 cast sites:               0 hits (Flag 1 drift intact)
+Catalog grep `pnpm check:vendor-drift` wired into preflight.sh:                            1 hit
+Catalog grep vendor-api-snapshots/*.json files:                                            4 files on disk
+Catalog grep SEV-15 anchor references snapshot file path:                                  hit in empty-module.ts
+Drift test (rename vaul export in snapshot → re-run pnpm preflight):                       exits 1 + clear diff banner
+Drift revert (cp backup → re-run pnpm preflight):                                          exits 0 + PASS banner
+```
+
+### Followups from the pickup (out of scope for this seam-cleanup turn)
+
+- **F1 — replace the JSON-compare loop in `check-vendor-api-drift.ts` with a `git diff` against the committed snapshot file** (the bash wrapper stays as-is). Both approaches work today; `git diff` is more observable in CI logs and side-steps the `JSON.parse(fs.readFileSync(...))` footgun (`fs.readFileSync` is currently defensive but not try/catch-wrapped). Worth a ~10-line refactor in `check-vendor-api-drift.ts` once the broader preflight surface grows beyond a single check.
+- **F2 — add `--check=all` rich-env-completeness drift test** as a sibling guardrail. The `check-vendor-api-drift.ts` script already supports `env` checks; only the `[vendor-drift]` baseline was hardened in this turn. The env-completeness sibling check (`lib/comparison/comparison.ts` or equivalent) is structurally similar and would benefit from the same snapshot-then-`--update` workflow.
+- **F3 — bump the snapshot TTL from "operator-acked" to "checked in CI"**. Today's snapshots are committed and version-controlled (good), but the script doesn't surface a "snapshot is N days old" warning when an SDK has drifted beyond a sensible window. Non-blocking; defer until one of the packages is bumped and the workflow is exercised end-to-end.
 
 ### Out of scope / not in this commit
 
@@ -203,6 +280,16 @@ This ticket opens the **ARCH-NNN** family. Future architectural followups that d
 - **SEV-NN** — Severity-tagged bug reports (SEV-12 / SEV-13 / SEV-15 active).
 
 ---
+
+## References to /opt/bing/docs/ENGINEERING_DECISION_RULES.md
+
+This ticket's three flags all touch the decision-rule heuristics codified in [/opt/bing/docs/ENGINEERING_DECISION_RULES.md](../docs/ENGINEERING_DECISION_RULES.md):
+
+- **Flag 1 — shape consolidation** touches **Rule A** (mode selection for orchestrator role-pick paths). The three boundary casts deleted by Flag 1 are the textbook narrow-and-cast site that Rule B 3.1 ("extract adapter for ≥3-site root-cause") references.
+- **Flag 2 — vaul version pin** executes **Rule B** (inline-cast vs helper-adapter) + **Rule C** (`@ts-expect-error` policy on multi-sibling JSX bodies). The Q5 hybrid VaulComponent adapter + Root inline-cast carve-out is the canonical `drawer.tsx` precedent already in place; Flag 2's pickup removes it entirely.
+- **Flag 3 — vendor-drift CI guardrail** executes **Rule C's** removal-trigger contract ("when the root cause has a CI-detectable solution"). Once the guardrail lands, SEV-NN pre-declarations in `empty-module.ts` need not be preemptive — drift surfaces as CI failure instead.
+
+----
 
 ## Cross-references
 

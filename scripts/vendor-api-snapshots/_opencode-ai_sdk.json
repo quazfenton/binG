@@ -1,0 +1,7 @@
+{
+  "pkg": "@opencode-ai/sdk",
+  "generatedAt": "2026-06-18T20:40:48.146Z",
+  "exports": [
+    "createOpencode"
+  ]
+}

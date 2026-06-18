@@ -1694,11 +1694,16 @@ const config: UnifiedAgentConfig = {
                     args: normalizeStepArgs(s.args),
                   })),
                   responseText: iterContent,
-                  // SEV-12 pre-existing tsc TS2352 (UnifiedAgentResult/AutoContinueResultData overlap) fix:
-                  // TS requires an `unknown`-cast hop when source/target types don't sufficiently overlap.
-                  // narrow-and-cast at the boundary using the helper's exported AutoContinueResultData type.
-                  // No `as any`; runtime behavior identical.
-                  result: result as unknown as AutoContinueResultData,
+                  // ARCH-001 Flag 1 (Pickup): `UnifiedAgentResult` now subsumes
+                  // `AutoContinueResultData` — the 3 helper-derived fields
+                  // (`errors`/`toolFailures`/`incompleteSignals`) are optional
+                  // on both, so the upstream cast hop is no longer required.
+                  // Runtime identical: `decideAutoContinue`'s `_enrichResultData`
+                  // populates the 3 arrays from `steps` + `responseText` BEFORE
+                  // the detectors run, so detectors see a fully-shaped
+                  // `AutoContinueResultData` regardless of the caller's
+                  // pre-population status. Mirror site: unified-agent-service.ts:1712.
+                  result,
                   advancedDetectorFn: needsMoreTurnsDetector,
                 });
 

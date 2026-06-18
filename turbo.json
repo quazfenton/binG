@@ -4,13 +4,12 @@
     "dev": {
       "cache": false,
       "persistent": true,
-      "_comment_passThroughEnv": "SEV-12 dev-server fix: turbo 2.x defaults passThroughEnv=[] which strips all custom env vars (NODE_ENV, E2B_API_KEY, JWT_SECRET, REDIS_URL, etc.) before backend/web workers spawn — manifests as nodeEnv:'undefined' in VFS Startup Fingerprint and 'E2B_API_KEY not set' warnings even when keys are configured. Adding '*' forwards the orchestrator's env (populated by scripts/dev-runner.js from /opt/bing/.env) to all child processes so next dev + tsx-backed backend can read the keys.",
       "passThroughEnv": ["*"]
     },
     "build": {
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"],
-      "dependsOn": ["^build"],      "_comment_build_passThroughEnv": "Builds use explicit allowlist (NOT '*') so production builds still gate on env presence — '*' is dev-only. Forwarded server secrets (DATABASE_URL / JWT_SECRET / ENCRYPTION_KEY / REDIS_URL) are needed because Next.js statically analyses process.env.* during `next build` and fails on missing-static-env even when the code path is server-only at runtime. Next.js's webpack DefinePlugin scopes inlining strictly to NEXT_PUBLIC_* so non-NEXT_PUBLIC vars are NOT baked into client bundles — passing them here only satisfies the build-time env presence check.",
-      "passThroughEnv": ["NODE_ENV", "CI", "NEXT_PUBLIC_*", "DATABASE_URL", "JWT_SECRET", "ENCRYPTION_KEY", "REDIS_URL"]  
+      "dependsOn": ["^build"],
+      "passThroughEnv": ["NODE_ENV", "CI", "NEXT_PUBLIC_*", "DATABASE_URL", "JWT_SECRET", "ENCRYPTION_KEY", "REDIS_URL"]
     }
   }
 }

@@ -7,16 +7,22 @@ import { createLogger } from '@/lib/utils/logger';
 // has drifted past the schema.sql in code (the underlying cause) which
 // is the same family of detection as SKILL.md mtime drift.
 import { DETECTION_TERMS, withDetectionTerms } from '@/lib/virtual-filesystem/session-path-guard';
-// SEV-11 (2026-06-18 fix): import classifySqliteFailure to give the
+// SEV-11 follow-up (2026-06-18 fix): import classifySqliteFailure to give the
 // typeof-require guards in getDatabaseConstructor() / isDatabaseAvailable()
-// typed warn output instead of a plain ReferenceError. session-store.ts
-// only imports the leaf unwrap-default-export.ts (no static coupling back
-// to connection.ts or connection-shim.ts), so this import does NOT close a
-// cycle in the TS dep graph. The runtime unwrap chain (connection-shim -> connection)
-// remains cycle-free because session-store.ts does its require() at
-// `tryRequireDatabaseConnection` call time inside a function body, not at
-// module load.
-import { classifySqliteFailure } from '@/lib/storage/session-store';
+// typed warn output instead of a plain ReferenceError.
+//
+// CRITICAL: import from the dependency-free LEAF module
+// `@/lib/database/sqlite-failure`, NOT from `@/lib/storage/session-store`.
+// session-store.ts runs DB init at module-load (`const connection =
+// tryRequireDatabaseConnection()` → `require('../database/connection-shim')`
+// → `require('./connection')`). Importing the classifier from session-store
+// therefore closed a cycle: connection.ts → session-store.ts → connection-shim
+// → connection.ts. While connection.ts was still mid-evaluation (stopped at
+// this import line), the re-entrant require read `conn.getDatabase` from the
+// partially-evaluated namespace and threw
+//   "ReferenceError: Cannot access 'getDatabase' before initialization".
+// The leaf module is pure (no imports) so this edge no longer creates a cycle.
+import { classifySqliteFailure } from '@/lib/database/sqlite-failure';
 
 const logger = createLogger('Database:Connection');
 

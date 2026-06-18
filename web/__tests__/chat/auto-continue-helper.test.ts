@@ -454,6 +454,36 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
     };
   }
 
+  // ARCH-001 Flag 1 (Pickup) — single-source-of-truth assertion for the
+  // `_enrichResultData` runtime invariant: every value reaching the detectors
+  // has `errors`/`toolFailures`/`incompleteSignals` arrays populated by the
+  // helper regardless of caller pre-population status. Partial-expectations
+  // are supported (test cases assert on whichever subset is meaningful for
+  // their scenario). The `!` non-null assertions encode the runtime
+  // invariant — if a future refactor drops `_enrichResultData`'s population
+  // step, these would surface TS errors at the assertion site.
+  function assertEnrichedInvariant(
+    enriched: AutoContinueResultData | undefined,
+    expected: {
+      errors?: string[];
+      toolFailures?: Array<{ toolName: string; error: string }>;
+      incompleteSignals?: string[];
+    },
+  ) {
+    expect(enriched).toBeDefined();
+    if (expected.errors !== undefined) {
+      expect(enriched!.errors!).toEqual(expected.errors);
+    }
+    if (expected.toolFailures !== undefined) {
+      expect(enriched!.toolFailures!).toEqual(expected.toolFailures);
+    }
+    if (expected.incompleteSignals !== undefined) {
+      for (const s of expected.incompleteSignals) {
+        expect(enriched!.incompleteSignals!).toContain(s);
+      }
+    }
+  }
+
   it('populates errors[0] === String(err) and toolFailures[0].toolName when a step has result.error', () => {
     const requestId = 'test-enrich-errors';
     clearContinuationCount(requestId);
@@ -480,11 +510,10 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
       detectorFn: det.fn,
     });
     const enriched = det.captured();
-    expect(enriched).toBeDefined();
-    expect(enriched!.errors).toEqual(['permission denied']);
-    expect(enriched!.toolFailures).toEqual([
-      { toolName: 'bash_shell', error: 'permission denied' },
-    ]);
+    assertEnrichedInvariant(enriched, {
+      errors: ['permission denied'],
+      toolFailures: [{ toolName: 'bash_shell', error: 'permission denied' }],
+    });
     clearContinuationCount(requestId);
   });
 
@@ -512,8 +541,9 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
       detectorFn: det.fn,
     });
     const enriched = det.captured();
-    expect(enriched).toBeDefined();
-    expect(enriched!.incompleteSignals).toContain('announced-next-step');
+    assertEnrichedInvariant(enriched, {
+      incompleteSignals: ['announced-next-step'],
+    });
     clearContinuationCount(requestId);
   });
 
@@ -543,12 +573,11 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
         detectorFn: det.fn,
       });
       const enriched = det.captured();
-      expect(enriched).toBeDefined();
-      expect(enriched!.errors).toEqual(['file locked']);
-    expect(enriched!.toolFailures).toEqual([
-      { toolName: 'edit_file', error: 'file locked' },
-    ]);
-    expect(enriched!.incompleteSignals).toContain('announced-next-step');
+      assertEnrichedInvariant(enriched, {
+        errors: ['file locked'],
+        toolFailures: [{ toolName: 'edit_file', error: 'file locked' }],
+        incompleteSignals: ['announced-next-step'],
+      });
     clearContinuationCount(requestId);
   });
 
@@ -584,11 +613,10 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
       detectorFn: det.fn,
     });
     const enriched = det.captured();
-    expect(enriched).toBeDefined();
-    expect(enriched!.errors).toEqual([String(errInstance)]);
-    expect(enriched!.toolFailures).toEqual([
-      { toolName: 'bash_shell', error: String(errInstance) },
-    ]);
+    assertEnrichedInvariant(enriched, {
+      errors: [String(errInstance)],
+      toolFailures: [{ toolName: 'bash_shell', error: String(errInstance) }],
+    });
     clearContinuationCount(requestId);
   });
 
@@ -617,8 +645,9 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
       detectorFn: det.fn,
     });
     const enriched = det.captured();
-    expect(enriched).toBeDefined();
-    expect(enriched!.errors).toEqual([String(numericErr)]);
+    assertEnrichedInvariant(enriched, {
+      errors: [String(numericErr)],
+    });
     clearContinuationCount(requestId);
   });
 });

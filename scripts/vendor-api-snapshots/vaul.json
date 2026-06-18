@@ -1,0 +1,13 @@
+{
+  "pkg": "vaul",
+  "generatedAt": "2026-06-18T20:40:48.142Z",
+  "exports": [
+    "Content",
+    "Drawer",
+    "Handle",
+    "NestedRoot",
+    "Overlay",
+    "Portal",
+    "Root"
+  ]
+}

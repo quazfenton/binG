@@ -172,9 +172,27 @@ export const MAX_CONTINUATIONS = parseInt(
  *     additional candidates.
  */
 export interface AutoContinueResultData extends DetectableResult {
-  errors: string[];
-  toolFailures: Array<{ toolName: string; error: string }>;
-  incompleteSignals: string[];
+  // ARCH-001 Flag 1 (Pickup): the 3 helper-derived enrichment fields are
+  // OPTIONAL on `AutoContinueResultData`. They are pre-computed by
+  // `_enrichResultData` from `result.steps` + `responseText` BEFORE detectors
+  // run (steps[].result.error → errors/toolFailures; responseText regex
+  // detector → incompleteSignals). Callers do not have to populate them; the
+  // helper guarantees populated arrays at the detector call site.
+  //
+  // Making them optional structurally unblocks passing `UnifiedAgentResult`
+  // (which now also carries these as optional) into `decideAutoContinue({ result })`
+  // without `as unknown as AutoContinueResultData`. The 4 boundary casts at
+  // route.ts:1701 + unified-agent-service.ts:1712/3947/4648 are dropped.
+  //
+  // Runtime invariant (NOT a type-system one): every value reaching the
+  // detectors has all 3 arrays populated by `_enrichResultData`. The
+  // `?`-declaration is purely a compile-time concession to upstream callers
+  // like `UnifiedAgentResult`, which builds its result shape long before
+  // `_enrichResultData` runs. The `__tests__/chat/auto-continue-helper.test.ts`
+  // capture-detector suite encodes this invariant via `enriched!.errors!`.
+  errors?: string[];
+  toolFailures?: Array<{ toolName: string; error: string }>;
+  incompleteSignals?: string[];
 }
 
 /**

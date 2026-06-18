@@ -29,6 +29,7 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // audit (counter cleanup, requestId keying, hardcoded 3, helper.default,
 // SSE emission) in a single call site change.
 import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
+import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
 import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
@@ -784,6 +785,28 @@ export interface UnifiedAgentResult {
   // this to emit a final `loop_abort` SSE event for the UI banner. Plain
   // `error` field still carries the abort message for backward compat.
   loopAbort?: LoopAbortPayload;
+  // ARCH-001 Flag 1 (Pickup): the 3 detector-helper enrichment fields from
+  // `AutoContinueResultData` now live on `UnifiedAgentResult` as OPTIONAL
+  // arrays. They are marked `?` because most call sites (mode-handler return
+  // paths in runV2Native, runOpencodeSDKMode, etc.) do not pre-compute these;
+  // `_enrichResultData` in `auto-continue-helper.ts` populates them from
+  // `steps` + `responseText` at the `decideAutoContinue` boundary BEFORE the
+  // detectors run. Type is NOT marked `readonly` — the spread-based refresh
+  // semantic in `processUnifiedAgentRequest` (e.g. `{ ...fallbackResult }`)
+  // simply re-reads whatever the source held, and the helper's wider repo
+  // already pattern-matches spread semantics everywhere else.
+  //
+  // - `errors`:               stringified tool-failure messages distilled from
+  //                            `steps[].result.error` and `steps[].result.success === false`.
+  // - `toolFailures`:         paired `{ toolName, error }` records for the
+  //                            same step set; drives the `failure-cascade` detector signal.
+  // - `incompleteSignals`:    responseText-derived heuristic signal names
+  //                            (`announced-next-step`, `step-enumeration`,
+  //                            `planned-multi-step`, `unclosed-code-block`,
+  //                            `mid-sentence-cutoff`) for the soft-gate detectors.
+  errors?: string[];
+  toolFailures?: Array<{ toolName: string; error: string }>;
+  incompleteSignals?: string[];
 }
 
 // Note: StartupCapabilities is imported from ./startup-capabilities
@@ -1703,12 +1726,14 @@ export async function processUnifiedAgentRequest(
       args: s.args,
     })),
     responseText: result.response ?? '',
-    // SEV-12 pre-existing tsc TS2739 (`UnifiedAgentResult` missing `errors`/`toolFailures`/`incompleteSignals` from `AutoContinueResultData`) fix:
-    // narrow-and-cast at the boundary using the helper's exported type. Mirror of the
-    // route.ts:1697 round-7 (c) fix — same pattern, same explicit-named-type preference
-    // over indexed-ResType so type changes ripple to both call sites simultaneously.
-    // No `as any`; runtime behavior identical (`decideAutoContinue` enriches internally).
-    result: result as unknown as AutoContinueResultData,
+    // ARCH-001 Flag 1 (Pickup): `UnifiedAgentResult` now subsumes
+    // `AutoContinueResultData` — the 3 helper-derived fields
+    // (`errors`/`toolFailures`/`incompleteSignals`) are optional on both
+    // shapes. The boundary cast is gone; `decideAutoContinue` calls
+    // `_enrichResultData(result, steps, responseText)` BEFORE invoking the
+    // detectors, which guarantees the fields are populated at the call site
+    // even when the caller left them undefined. Mirror of route.ts:1701.
+    result,
   });
   clearContinuationCount(phaseTransitionRequestId);
   if (autoDecision.continue) {
@@ -3943,7 +3968,7 @@ async function runV1ApiWithTools(
                   toolName: t.toolName,
                 }))
                 .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
-            },
+            }
           });
           if (!autoDecision.continue) {
             log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
@@ -4621,7 +4646,7 @@ async function runV1ApiWithTools(
             primaryRole: routingForClient.primaryRole,
             estimatedSteps: routingForClient.estimatedSteps,
             planSteps: routingForClient.planSteps,
-          } : undefined,
+          } as unknown as AutoContinueRouting : undefined,
           steps: accumulatedSteps.map(s => ({ toolName: s.toolName, args: s.args })),
           responseText: accumulatedResponse,
           // Bug-#1 follow-up: pass REAL accumulated file edits so the
@@ -4635,7 +4660,7 @@ async function runV1ApiWithTools(
           // detector sees a consistent view.
           // SEV-12 (TS2739 sweep #2): cast at the second decideAutoContinue call boundary.
           // Mirror of the L1706 cast pattern: narrow-and-cast the result shape to the helper param type.
-          result: ((): { fileEdits: Array<{ path: string; action: 'write'; toolName: string }> } => ({
+          result: ((): AutoContinueResultData => ({
             fileEdits: accumulatedSteps
               .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName))
               .map((s: any) => ({
@@ -4644,7 +4669,7 @@ async function runV1ApiWithTools(
                 toolName: s.toolName,
               }))
               .filter((e: any) => typeof e.path === 'string' && e.path.length > 0),
-          },
+          }))()),
         });
 
         if (!autoDecision.continue || !autoDecision.continuationPrompt) {
@@ -5256,7 +5281,7 @@ async function runV1Orchestrated(
       // reason wins when both detectors fire' describe block.
       const autoDecision = decideAutoContinue({
         requestId: '',
-        routing: parsedRouting.routing,
+        routing: parsedRouting.routing as unknown as AutoContinueRouting,
         steps: [],
         responseText: firstResponseContent || content || '',
       });

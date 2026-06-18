@@ -46,9 +46,25 @@ const stub = new Proxy(function () { return stub; } as any, {
 //      which transitively leaks into webdav → cloud-storage → instrumentation.ts).
 //      Without these Turbopack errors with 'The export Headers was not found...'
 //      and the dev log repeats the same message for Request, Response, fetch.
+/**
+ * @rationale `= stub` Proxy (Rule B proposed-it-inline-at-imp-boundary): Turbopack static-rejects `import { Headers / Request / Response / fetch }` from `node-fetch` because the static-resolved named-export list is empty; the Proxy preserves callable+construct shape across `Headers.constructor(...)` / `fetch(url)` / `Request(input)` so every CJS-importer collapse-via-stub. Remove when `node-fetch` is removed from the transitive CJS chain.
+ * Ticket: SEV-10.
+ */
 export const Headers = stub;
+/**
+ * @rationale `= stub` Proxy: same Turbopack static-reject as Headers above; Proxy preserves `new Request(input)` constructor invocation through the construct trap.
+ * Ticket: SEV-10.
+ */
 export const Request = stub;
+/**
+ * @rationale `= stub` Proxy: same Turbopack static-reject; Proxy preserves `new Response(body)` + `response.headers.get(...)` chains via get/apply traps returning `stub`.
+ * Ticket: SEV-10.
+ */
 export const Response = stub;
+/**
+ * @rationale arrow returning stub: the Web-Fetch API needs a callable shape; Proxy's `apply` trap handles `fetch(url)` directly, but a typed arrow `(args) => unknown => stub` keeps the export shape distinct from the Proxy-shaped cousins, signaling "this name MAY be called with args and is intentionally permissive" to readers.
+ * Ticket: SEV-10.
+ */
 export const fetch = (..._args: unknown[]): unknown => stub;
 
 // ---- mcporter named exports (consumed by lib/mcp/mcporter-integration.ts:
@@ -97,6 +113,9 @@ export const createRuntime = (..._args: unknown[]): unknown => stub;
 // `include` (they live under `docs/`), so only the production-code
 // symbols in modal-com-provider.ts trigger the rejection — adding only
 // these 6 covers the actual reach without bloating the stub.
+/**
+ * @rationale `= stub` Proxy: Turbopack static-rejects `import { X } from 'modal'` without these declarations; shared names cover both `@daytonaio/sdk` and `modal` because Proxy is shape-agnostic. Caveat per Rule C: collapses `import type` fidelity (any-return). Drift anchor (ARCH-001 Flag 3): see /opt/bing/scripts/vendor-api-snapshots/modal.json. Ticket: SEV-14.
+ */
 export const ModalClient = stub;
 export const Sandbox = stub;
 export const Image = stub;
@@ -118,6 +137,10 @@ export const Volume = stub;
 // both `Daytona({...})` factory call and `new Daytona({...})` constructor
 // invocation through the Proxy's `apply` / `construct` traps, matching the
 // Headers/Request/Response precedent.
+/**
+ * @rationale `= stub` Proxy (Rule B 9-site import-level adapter): Turbopack's `turbopack.resolveAlias` for `@daytonaio/sdk` static-rejects `import { Daytona } from '@daytonaio/sdk'` at compile-time without this declaration; Proxy preserves factory-call `Daytona({...})` AND constructor-call `new Daytona({...})` through apply+construct traps, matching the Headers/Request/Response precedent (Rule A zero-state — no replacement at the call boundary needed because the Proxy exports already handle the runtime shape). Each downstream export (Blob/File/FormData/URL/URLSearchParams/ReadableStream/Buffer/process) serves the same defensive role; the lib-side surface area is pre-declared so the next SDK-area consumer's static-reject is short-circuited without a new fix ticket.
+ * Ticket: SEV-13. Removal trigger: re-shim per-package if `import type { ... }` fidelity is required.
+ */
 export const Daytona = stub;
 export const Blob = stub;
 export const File = stub;
@@ -129,9 +152,12 @@ export const Buffer = stub;
 export const process = stub;
 
 // SEV-15 (2026-06-18 proactive @daytonaio/sdk coverage expansion):
-// last-verified-against: @daytonaio/sdk@0.175.0 (npx ls @daytonaio/sdk@0.175.0
-// shows Sandbox/Image/FileSystem/Workspace/DockerImage/Chart/ComputerUse/
-// Snapshot as top-level named exports; bump this anchor on next SDK bump).
+// last-verified-against: @daytonaio/sdk@0.175.0. ARCH-001 Flag 3 drift anchor:
+// see /opt/bing/scripts/vendor-api-snapshots/@daytonaio_sdk.json for the pinned
+// named-export set. On the next SDK bump: run
+//   pnpm check:vendor-drift --check=vendor --update
+//   (or: bash /opt/bing/scripts/preflight.sh)
+// to refresh the snapshot; detected drift surfaces as a preflight FAIL.
 // Pre-declares the next tier of commonly-used @daytonaio/sdk surface area
 // via the same `stub` Proxy. None of these are statically referenced yet in
 // any source file, but they short-circuit the next consumer's static-reject
@@ -165,6 +191,9 @@ export const process = stub;
 // Both bundlers resolve through this stub via the NormalModuleReplacementPlugin
 // in next.config.mjs, so the named-export list MUST stay in sync to avoid
 // Turbopack's build-time error AND Webpack's narrow-runtime TypeError.
+/**
+ * @rationale `= stub` Proxy (preemptive SDK coverage): no current static consumer references these symbols, but the SDK's documented surface lists them; pre-declaring short-circuits future static-reject without a new SEV ticket. Pair with ARCH-001 Flag 3 vendor-drift guardrail. Drift anchor: `node_modules/@daytonaio/sdk@0.175.0`. Ticket: SEV-15.
+ */
 export const FileSystem = stub;
 export const Workspace = stub;
 export const DockerImage = stub;

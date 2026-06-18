@@ -26,7 +26,11 @@
     "env:check": "node scripts/compare-env.mjs web/.env web/.env.example",
     "logs": "node tail-logs.js",
 
-    "sqlite:rebuild": "pnpm rebuild better-sqlite3"
+    "sqlite:rebuild": "pnpm rebuild better-sqlite3",
+
+    "check:vendor-drift": "tsx scripts/check-vendor-api-drift.ts",
+    "check:vendor-drift:update": "tsx scripts/check-vendor-api-drift.ts --check=vendor --update",
+    "preflight": "bash scripts/preflight.sh"
   },
   "devDependencies": {
     "@octokit/rest": "^22.0.1",
@@ -46,7 +50,6 @@
     "unified": "^11.0.5",
     "vitest": "^4.0.18"
   },
-  "pnpm": {},
   "resolutions": {
     "fast-xml-parser": ">=5.3.6",
     "next": ">=15.5.10"
