@@ -23,7 +23,7 @@
  * passthrough behavior without dotenv loading, use `pnpm dev:raw`.
  */
 import { config } from 'dotenv';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -45,13 +45,24 @@ if (existsSync(envFile)) {
   console.warn(`[dev-runner] no ${envFile} found — spawning turbo without .env preload`);
 }
 
-// Spawn turbo with the augmented env. stdio:'inherit' preserves stdout/stderr
-// so the user's terminal shows the same logs as before. env is omitted so
-// turbo inherits this Node process's process.env (with the dotenv additions).
-const result = spawnSync('turbo', ['dev'], {
+// Spawn turbo as the group leader so Ctrl+C/SIGINT propagates to all
+// child workers (next dev, tsx backend, etc.). spawn() is non-blocking —
+// we use process.signal handlers below to forward signals into the turbo
+// process group.
+const turbo = spawn('turbo', ['dev'], {
   stdio: 'inherit',
-  // Default behavior: child inherits parent env. Explicit for clarity.
   env: process.env,
+  // Detach from this process's group so signals reach turbo's children
+  detached: false,
 });
 
-process.exit(result.status ?? 1);
+// Forward SIGINT/SIGTERM into the turbo process so `pnpm dev` (or the
+// terminal) cleanly shuts down next + backend tsx when you press Ctrl+C.
+function forward(sig) {
+  turbo.kill(sig);
+}
+
+process.on('SIGINT', () => forward('SIGINT'));
+process.on('SIGTERM', () => forward('SIGTERM'));
+
+turbo.on('exit', (code) => process.exit(code ?? 1));

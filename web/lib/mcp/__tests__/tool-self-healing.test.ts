@@ -77,17 +77,17 @@ describe('validateToolArgs', () => {
   it('returns INVALID_ARGS when fields are missing', () => {
     const err = validateToolArgs('write_file', { path: 'a.ts' }, ['path', 'content']);
     expect(err).not.toBeNull();
-    expect(err!.code).toBe('INVALID_ARGS');
-    expect(err!.retryable).toBe(true);
-    expect(err!.expectedFields).toContain('path');
-    expect(err!.expectedFields).toContain('content');
-    expect(err!.suggestedNextAction).toContain('content');
+    expect(err!.error.code).toBe('INVALID_ARGS');
+    expect(err!.error.retryable).toBe(true);
+    expect(err!.error.expectedFields).toContain('path');
+    expect(err!.error.expectedFields).toContain('content');
+    expect(err!.error.suggestedNextAction).toContain('content');
   });
 
   it('treats empty string as missing', () => {
     const err = validateToolArgs('write_file', { path: '', content: 'x' }, ['path', 'content']);
     expect(err).not.toBeNull();
-    expect(err!.code).toBe('INVALID_ARGS');
+    expect(err!.error.code).toBe('INVALID_ARGS');
   });
 
   it('treats null as missing', () => {

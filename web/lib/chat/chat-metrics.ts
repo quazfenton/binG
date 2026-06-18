@@ -45,6 +45,17 @@ interface ChatMetricsState {
       at: number;
     }>;
   };
+  // Bug #119 (Pass-8 audit) — JSON.parse fallback counter. Tracks
+  // cases where an LLM- or AI-SDK-emitted JSON string failed to parse
+  // and the code path fell through to a default (e.g. `{}` for args).
+  // Operators can `grep -c '\\[INVALID-JSON-FALLBACK\\]'` in run.log
+  // and cross-reference with this counter; mismatched sources point
+  // at hidden io/codepaths that aren't surfacing the warn.
+  invalidJsonFallbacks: {
+    count: number;
+    bySource: Record<string, number>;
+    lastAt: number | null;
+  };
 }
 
 declare global {
@@ -68,6 +79,12 @@ function getState(): ChatMetricsState {
         lastReason: null,
         lastExhaustedAt: null,
         recentAttempts: [],
+      },
+      // Bug #119 — see ChatMetricsState.invalidJsonFallbacks above.
+      invalidJsonFallbacks: {
+        count: 0,
+        bySource: {},
+        lastAt: null,
       },
     };
   }
@@ -262,5 +279,34 @@ export function _resetChatMetricsForTests(): void {
       lastExhaustedAt: null,
       recentAttempts: [],
     };
+  }
+}
+
+
+/**
+ * Bug #119 (Pass-8 audit) — record that a JSON.parse call has fallen
+ * back to a default value because the input was malformed. Permanently
+ * tied to `chatMetrics.invalidJsonFallbacks` so that `recordInvalidJsonFallback`
+ * callers in `bing/web/lib/chat/vercel-ai-streaming.ts` (tool-args parser)
+ * and any future caller stay in lockstep. Note: this counter is web-only.
+ * The shared-package companion (e.g. `bing/packages/shared/agent/orchestration/
+ * plan-act-verify.ts`) uses `logger.warn('[INVALID-JSON-FALLBACK]')` directly
+ * because the cross-package boundary (shared → web) is forbidden.
+ *
+ * @param source — short identifier for the callsite emitting the fallback
+ *   (e.g. `'vercel-ai-streaming.tool-call-args-cache'`). Becomes a key
+ *   in `bySource` so /api/health?detailed can surface per-source counts.
+ */
+export function recordInvalidJsonFallback(source: string): void {
+  try {
+    const state = getState();
+    state.invalidJsonFallbacks.count += 1;
+    state.invalidJsonFallbacks.bySource[source] =
+      (state.invalidJsonFallbacks.bySource[source] ?? 0) + 1;
+    state.invalidJsonFallbacks.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordInvalidJsonFallback] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }

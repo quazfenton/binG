@@ -34,6 +34,19 @@ import { recordCall } from './llm-provider-health';
 // the user reprompting. sessionId is best-effort — not always available
 // inside the streaming generator.
 import { recordDegradation } from '@/lib/observability/degradation-tracker';
+// Pass-8 [FC-GATE seam-cleanup] followup (b) extended: adopt the unified
+// FC-GATE-0-calls detector at the Vercel-AI finish site (non-CLI path)
+// so the [FC-GATE-ZERO-CALLS] run.log marker fires from BOTH the CLI-binary
+// path (enhanced-llm-service.ts streamWithCLIBinary) AND the Vercel-AI SDK
+// path. Single source of truth for marker + field naming.
+import {
+  wireFCGateZeroCallsSteer,
+  emitFCGateZeroCallsLog,
+  // Bug #113 (Pass-8) deferred end-to-end adoption: wire
+  // wireMissingRequiredArgsSteer at the _recoveryHint injection
+  // site so missing-required-field steers fire in production.
+  wireMissingRequiredArgsSteer,
+} from '../orchestra/steer-service';
 
 import { getProviderForModel } from './openai-compat-wrapper';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
@@ -44,7 +57,12 @@ import { recordToolCall, shouldForceTextMode } from '../tools/tool-call-telemetr
 // surfaces how often the LLM silently dropped all tools. recordSteerInjected
 // is best-effort — if chat-metrics is unavailable (e.g. in a unit test that
 // doesn't import it), the optional-chained call is a no-op.
-import { recordSteerInjected } from './chat-metrics';
+import {
+  recordSteerInjected,
+  // Bug #119 (Pass-8 audit) — defensive JSON.parse metric recorder,
+  // called from `tryParseToolArgs` below at every `JSON.parse(raw)` site.
+  recordInvalidJsonFallback,
+} from './chat-metrics';
 import { getModelsForPurpose } from './model-capability-registry';
 import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm-compat';
 
@@ -53,6 +71,44 @@ import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm
 // cache entry, we skip the expensive two-phase strategy and go directly to
 // tool-calling mode. Cache is cleared on 429/rate-limit errors since provider
 // rotation may change FC support. Persisted on globalThis for hot-reload survival.
+/**
+ * Bug #119 (Pass-8 audit) — defensive tool-args JSON.parse wrapper.
+ *
+ * Why a wrapper (vs inline `try { return JSON.parse(raw); } catch { return {}; }`):
+ *   - The 4 inline sites did NOT log invalid-JSON events. Bad inputs were
+     silently coerced to `{}`, so /api/health surfaced no signal and run.log
+     grep returned 0 — meaning operators couldn't tell when an upstream
+     provider degraded to malformed JSON.
+   - Consumer contract is preserved: still returns `{}` on failure so the
+     downstream tool-args dispatcher keeps working with sensible defaults.
+   - Bumps `chatMetrics.invalidJsonFallbacks` keyed by source so /api/health
+     can surface per-callsite counts.
+ *
+ * @param raw — the suspected JSON string (typically from a tool-args
+   cache or chunk.input).
+ * @param source — short caller identifier for per-source metric bucketing.
+ * @returns parsed Record on success, or `{}` on parse failure (matches
+   previous behavior, just now instrumented).
+ */
+export function tryParseToolArgs(
+  raw: string,
+  source: string,
+): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    // JSON parsed but is e.g. an array, null, or primitive — treat as
+    // unusable for tool-args. Still bump the metric so the operator sees it.
+    recordInvalidJsonFallback(source + '.non-object');
+    return {};
+  } catch (err) {
+    recordInvalidJsonFallback(source);
+    return {};
+  }
+}
+
 const _fcGatePositiveCache = new Map<string, { confirmedAt: number; provider: string }>();
 declare global { var __fcGatePositiveCache__: Map<string, { confirmedAt: number; provider: string }> | undefined; }
 const fcGatePositiveCache = globalThis.__fcGatePositiveCache__ ?? (globalThis.__fcGatePositiveCache__ = _fcGatePositiveCache);
@@ -1311,6 +1367,15 @@ export async function* streamWithVercelAI(
 
   // Cache for tool call arguments - scoped to this stream invocation to prevent cross-request leaks
   const toolCallArgsCache = new Map<string, any>();
+  // Bug #113 (Pass-8) deferred end-to-end adoption: parallel cache for
+  // the StructuredToolError produced by validateToolArgs during the
+  // tool-call chunk phase, consumed by the tool-result chunk phase to
+  // feed the precise wireMissingRequiredArgsSteer(_recoveryHint). Keyed
+  // by toolCallId so multiple in-flight tool calls don't cross-contaminate.
+  const toolCallValidationCache = new Map<
+  string,
+  import('../orchestra/shared-agent-context').StructuredToolError & { missing: readonly string[] }
+>();
   let useCompatibilityFallback = false;
 
   // Time-to-first-token timeout: only cancels if NO content arrives within timeoutMs
@@ -1334,6 +1399,11 @@ export async function* streamWithVercelAI(
   let lastActivityType: 'ttft-waiting' | 'text' | 'tool-call' | 'tool-result' | 'reasoning' | 'step' = 'ttft-waiting';
   let lastActivityDetail: string = '';  // e.g. tool name, token preview
   let toolCallCount = 0;                // total tool calls made
+  // Pass-8 [FC-GATE seam-cleanup] followup (b) extended: accumulator for
+  // the full streamed response text so the Vercel-AI finish handler can
+  // run the FC-GATE-0-calls detector independently of streamWithCLIBinary.
+  // Empty string is the reset value; chunks append via text-delta handler.
+  let fullResponseText = '';
   let toolResultSuccessCount = 0;       // successful tool results
   let toolResultFailCount = 0;          // failed tool results
   let totalTokensReceived = 0;          // total text tokens received
@@ -1782,6 +1852,9 @@ export async function* streamWithVercelAI(
             onFirstToken();
             // Reset rolling idle timeout - activity detected
             resetIdleTimeout();
+            // Pass-8 [FC-GATE seam-cleanup]: accumulate for finish-time
+            // FC-GATE-0-calls detection. Cheap (single string concat per chunk).
+            fullResponseText += chunk.textDelta;
             
             yield {
               content: chunk.textDelta,
@@ -1789,6 +1862,46 @@ export async function* streamWithVercelAI(
               timestamp: new Date(),
             };
           } else if (chunk.type === 'finish') {
+            // Pass-8 [FC-GATE seam-cleanup] followup (b) extended: detect
+            // FC-GATE-0-calls at finish time for the Vercel-AI SDK path
+            // (non-CLI streaming). Mirrors the block in enhanced-llm-service.ts
+            // streamWithCLIBinary so the [FC-GATE-ZERO-CALLS] log marker
+            // surfaces for ANY model whose stream ends with 0 tool calls
+            // despite tools being available.
+            //
+            // PARITY WITH CLI-BINARY PATH (code-reviewer polish round):
+            // wireFCGateZeroCallsSteer internally gates on
+            // `finishReason === 'stop' || undefined` (its L895-915 logic), so
+            // passing `chunk.finishReason` verbatim produces IDENTICAL behavior
+            // to the CLI-binary call site (which also passes its finishReason
+            // verbatim — CLI-binary currently passes the literal string
+            // 'stop', which clears the inner gate). Both paths are equally
+            // strict; NO caller-side pre-gate is needed. Do NOT add one here
+            // without also adding it to the CLI-binary site, or asymmetric
+            // detection will result.
+            const availableTools = tools ? Object.keys(tools).length : 0;
+            let fcGateSteer: string | null = null;
+            try {
+              const detection = wireFCGateZeroCallsSteer({
+                toolCallsDone: toolCallCount,
+                availableTools,
+                responseText: fullResponseText,
+                finishReason: chunk.finishReason,
+                provider,
+                model: modelName,
+              });
+              if (detection.detected) {
+                emitFCGateZeroCallsLog({
+                  provider,
+                  model: modelName,
+                  availableTools,
+                  toolCallsDone: toolCallCount,
+                  responseLength: fullResponseText.length,
+                  steerLength: detection.steer?.length || 0,
+                });
+                fcGateSteer = detection.steer;
+              }
+            } catch { /* best-effort, non-fatal */ }
             yield {
               content: '',
               isComplete: true,
@@ -1805,6 +1918,12 @@ export async function* streamWithVercelAI(
                 provider,
                 model: modelName,
                 latencyMs: Date.now() - startTime,
+                // Surface the FC-GATE steer prompt via metadata so
+                // downstream orchestrators (streamWithServerAutoRePrompt,
+                // UnifiedAgentService) can inject it into the NEXT turn
+                // rather than dumping it on the user's UI. Undefined when
+                // no FC-GATE condition matched.
+                ...(fcGateSteer ? { fcGateSteer } : {}),
               },
             };
           } else if (chunk.type === 'error') {
@@ -2464,7 +2583,7 @@ while (thinkPingQueue.length > 0) {
             let callArgs = (() => {
               const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
               if (typeof raw === 'string') {
-                try { return JSON.parse(raw); } catch { return {}; }
+                return tryParseToolArgs(raw, 'vercel-ai-streaming.tool-call-input');
               }
               return raw || {};
             })();
@@ -2503,6 +2622,34 @@ while (thinkPingQueue.length > 0) {
               const required = requiredFields[toolName];
               if (required) {
                 validationError = validateToolArgs(toolName, callArgs, required);
+                // Bug #113 (Pass-8): stash the validationError so
+                // the tool-result handler can feed its missing-fields
+                // list into wireMissingRequiredArgsSteer. Cleared
+                // alongside toolCallArgsCache at the end of the
+                // tool-result case.
+                if (validationError) {
+
+                  // Bug #113 (Pass-8) polish-round: stash both the
+
+                  // StructuredToolError AND the precomputed missing-
+
+                  // fields list so the tool-result handler can read
+
+                  // `missing` directly without re-parsing the error
+
+                  // message (regex-fragility deferred risk). Cleared
+
+                  // alongside toolCallArgsCache at the end of the
+
+                  // tool-result case.
+
+                  // Bug #113 (Pass-8) polish: missing-required-args predicate
+                  // lives in validateToolArgs (orchestra/shared-agent-context).
+                  // The cache stores the helper's co-return shape directly so
+                  // downstream readers see `cachedValidation.error.*` and
+                  // `cachedValidation.missing` from exactly one source of truth.
+                  toolCallValidationCache.set(toolCallId, validationError);
+                }
               }
             } catch {
               // Validation is best-effort
@@ -2631,7 +2778,9 @@ while (thinkPingQueue.length > 0) {
           const finalArgs = (() => {
             const raw = cachedArgs ?? (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
             if (typeof raw === 'string') {
-              try { return JSON.parse(raw); } catch { return {}; }
+              // Bug #119 (Pass-8 audit) — defensive JSON.parse via
+              // the helper that bumps chatMetrics.invalidJsonFallbacks.
+              return tryParseToolArgs(raw, 'vercel-ai-streaming.tool-result-input');
             }
             return raw || {};
           })();
@@ -2644,9 +2793,36 @@ while (thinkPingQueue.length > 0) {
             const errObj = toolResult.error;
             const errMsg = typeof errObj === 'string' ? errObj : errObj?.message || '';
             if (!toolResult._recoveryHint) {
+              // Bug #113 (Pass-8) deferred end-to-end adoption: prefer
+              // the precise wireMissingRequiredArgsSteer over the generic
+              // 'Re-read the tool description' line so the LLM sees the
+              // EXACT missing required fields. Falls back to the generic
+              // hint if no validationError was cached for this toolCallId
+              // (e.g. INVALID_ARGS fires for a tool not in the static
+              // requiredFields table at L2549-2558), if the helper
+              // short-circuits to '' (missingFields empty), or if we
+              // can't derive the missing list from the error message.
+              const cachedValidation = toolCallValidationCache.get(resultToolCallId);
+              const invalidArgsHint: string | undefined =
+                errObj?.code === 'INVALID_ARGS' && toolName && cachedValidation
+                  ? (() => {
+                      // Bug #113 (Pass-8) polish-round: read the precomputed
+                      // `missing` list directly from the cache (captured at
+                      // tool-call time, pre-arg-normalization). Eliminates
+                      // the regex parse-back-from-message that the original
+                      // wiring used — the cached shape is owned and stable.
+                      const helperPrompt = wireMissingRequiredArgsSteer({
+                        toolName,
+                        missingFields: cachedValidation.missing,
+                        availableFields: cachedValidation.expectedFields,
+                        schemaHint: `Required schema: ${cachedValidation.expectedSchema}`,
+                      });
+                      return helperPrompt || `Re-read the tool description and provide all required fields.`;
+                    })()
+                  : (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined);
               toolResult._recoveryHint = errObj?.suggestedNextAction
                 || (errObj?.code === 'PATH_NOT_FOUND' ? `Check the path and call list_files on the parent directory.` : undefined)
-                || (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined)
+                || invalidArgsHint
                 || `Read the error carefully. Do NOT retry the exact same call — try a different approach.`;
             }
             // Wrap plain-string errors into structured format for consistency
@@ -2766,6 +2942,10 @@ while (thinkPingQueue.length > 0) {
             timestamp: new Date(),
           };
           if (cachedArgs) toolCallArgsCache.delete(resultToolCallId);
+          // Bug #113 (Pass-8): also evict from the validation cache
+          // so the parallel map doesn't grow unbounded across long
+          // streaming responses.
+          toolCallValidationCache.delete(resultToolCallId);
           break;
         }
 
@@ -3398,7 +3578,7 @@ ${healingInstructions}` : healingInstructions)
             let fbCallArgs = (() => {
               const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
               if (typeof raw === 'string') {
-                try { return JSON.parse(raw); } catch { return {}; }
+                return tryParseToolArgs(raw, 'vercel-ai-streaming.fallback-chain-args');
               }
               return raw || {};
             })();
@@ -3437,7 +3617,7 @@ ${healingInstructions}` : healingInstructions)
                 state: 'result' as const,
                 args: (() => {
                   const r = (chunk as any).input ?? (chunk as any).args;
-                  if (typeof r === 'string') { try { return JSON.parse(r); } catch { return {}; } }
+                  if (typeof r === 'string') { return tryParseToolArgs(r, 'vercel-ai-streaming.fallback-chain-result'); }
                   return r || {};
                 })(),
                 result: fbToolResult,

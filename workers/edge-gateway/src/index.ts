@@ -780,7 +780,9 @@ export default {
       // Non-streaming requests (static assets, API calls) don't need one
       // since they complete in well under 30s.
       const isStreamingPath = url.pathname.startsWith('/v1/');
-      const fetchSignal = isStreamingPath ? AbortSignal.timeout(300_000) : undefined;
+      const abortSignals: AbortSignal[] = [request.signal];
+      if (isStreamingPath) abortSignals.push(AbortSignal.timeout(300_000));
+      const fetchSignal = AbortSignal.any(abortSignals);
 
       const proxyResponse = await fetch(target.url, {
         method: request.method,
@@ -853,6 +855,11 @@ export default {
       }
       return await buildProxyResponse();
     } catch (error) {
+      // Client disconnected — no CPU wasted building a response for nobody
+      if (request.signal.aborted) {
+        return new Response(null, { status: 499 });
+      }
+
       const message = error instanceof Error ? error.message : 'Unknown error';
 
       // Always trace proxy errors (502) — they represent real failures and
@@ -895,9 +902,9 @@ function createKeepAliveStream(
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       try {
-        controller.enqueue(encoder.encode(':\n\n'));
+        controller.enqueue(encoder.encode(':\n'));
+        resetTimer(controller);
       } catch { /* stream closed, ignore */ }
-      resetTimer(controller);
     }, idleTimeoutMs);
   }
 

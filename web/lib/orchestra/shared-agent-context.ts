@@ -141,23 +141,36 @@ export function formatToolError(
 }
 
 /**
- * Validate required tool arguments. Returns a StructuredToolError if missing, null if OK.
+ * Validate required tool arguments.
+ *
+ * Co-returns the `missing` list alongside the `error` so callers can
+ * (a) avoid re-running the predicate against `requiredFields`, and
+ * (b) stash the full validation result into caches like
+ *     `toolCallValidationCache` without leaking the missing list separately.
+ *
+ * @returns `null` when all required fields are present, otherwise
+ *          `{ error: StructuredToolError; missing: readonly string[] }`
+ *          where `error.expectedFields` is the full `requiredFields` list
+ *          and `missing` is the actually-absent subset.
  */
 export function validateToolArgs(
   toolName: string,
   args: Record<string, any>,
   requiredFields: string[],
-): StructuredToolError | null {
+): { error: StructuredToolError; missing: readonly string[] } | null {
   const missing = requiredFields.filter(f => args[f] === undefined || args[f] === null || args[f] === '');
   if (missing.length === 0) return null;
 
   return {
-    code: 'INVALID_ARGS',
-    message: `Missing required arguments for ${toolName}: ${missing.join(', ')}`,
-    retryable: true,
-    expectedFields: requiredFields,
-    expectedSchema: `{ ${requiredFields.map(f => f + ': <required>').join(', ')} }`,
-    suggestedNextAction: `Call ${toolName} again with all required fields: ${requiredFields.join(', ')}`,
+    error: {
+      code: 'INVALID_ARGS',
+      message: `Missing required arguments for ${toolName}: ${missing.join(', ')}`,
+      retryable: true,
+      expectedFields: requiredFields,
+      expectedSchema: `{ ${requiredFields.map(f => f + ': <required>').join(', ')} }`,
+      suggestedNextAction: `Call ${toolName} again with all required fields: ${requiredFields.join(', ')}`,
+    },
+    missing,
   };
 }
 

@@ -4476,3 +4476,203 @@ After the code-reviewer-minimax-m3 verdict, two must-fix-in-this-diff nits appli
 2. **Documented the intentional wider leniency in `steerFromFinishReason`.** The function does NOT enforce `finishReason === 'stop' || undefined` (that gate lives in `wireFCGateZeroCallsSteer`). Added an inline comment block above the rerouted branch explaining the deliberate 2-detector semantics: `steerFromFinishReason` is the generic streaming finish-reason mapper with permissive semantics (matches legacy `missing_tool_call` behaviour 1:1); `wireFCGateZeroCallsSteer` is the stricter post-completion detector for the CLI-binary reconciliation path. Overlap by design.
 
 Both deferred nitpicks from the original entry are now resolved out of "deferred" and into "addressed in polish round". Validation re-run: tsc clean, vitest 59/59 steer-service + 16/16 bug-69 + 14/14 bug-113 — no regression.
+
+---
+
+## Pass-8 [FC-GATE seam-cleanup] Vercel-AI Adoption — ✅ FIXED (extended)
+
+### ✅ Adopt `emitFCGateZeroCallsLog` at the Vercel-AI SDK finish handler
+
+**Context:** The previous turn adopted `emitFCGateZeroCallsLog` at `bing/web/lib/chat/enhanced-llm-service.ts:1905-1930` inside `streamWithCLIBinary` (the opencode-cli / pi CLI-binary path). That covered ONLY the CLI-binary streaming case. The Vercel-AI SDK streaming path (used by OpenAI / Anthropic / Google / Mistral / Vercel / OpenAI-compatible providers via `streamWithVercelAI`) had NO FC-GATE-0-calls detection — it silently yielded `finishReason='stop'` with 0 tool calls if a non-CLI model failed FC-GATE. This turn extends the unified FC-GATE detector to the Vercel-AI path.
+
+**User's anchor was imprecise:** "L2647-2653 area" actually points at per-tool-call `_recoveryHint` injection (`toolResult._recoveryHint = errObj?.suggestedNextAction || ...`). That block is unrelated to the finish-level FC-GATE condition. The semantic correct site is `streamWithVercelAI`'s `else if (chunk.type === 'finish')` branch inside `bing/web/lib/chat/vercel-ai-streaming.ts`.
+
+**Design chosen (thinker-with-files-gemini recommendation, ALT 3):** adopt existing `wireFCGateZeroCallsSteer` + `emitFCGateZeroCallsLog` at the Vercel-AI finish site with NO new helper. The two helpers were already battle-tested in the CLI-binary path; adding a third variant for the same condition would have invited drift.
+
+### Files touched (1 file)
+
+1. `bing/web/lib/chat/vercel-ai-streaming.ts`:
+   - Added imports: `wireFCGateZeroCallsSteer, emitFCGateZeroCallsLog` from `'../orchestra/steer-service'`.
+   - Added accumulator: `let fullResponseText = '';` next to the existing `let toolCallCount = 0;` (L1336) so the finish handler can read the full stream response.
+   - Appened to accumulator in text-delta branch: `fullResponseText += chunk.textDelta;`.
+   - In the finish branch (L1791+): determined `availableTools` from the `tools` param (`Object.keys(tools).length`), wrapped `wireFCGateZeroCallsSteer(...) + emitFCGateZeroCallsLog({...})` in `try { ... } catch { /* best-effort non-fatal */ }`, captured `fcGateSteer = detection.steer`, and extended `metadata` with `...(fcGateSteer ? { fcGateSteer } : {})` so downstream consumers (`streamWithServerAutoRePrompt`, `UnifiedAgentService`) can inject the steer into the NEXT turn rather than dump it on the user's UI.
+
+### What did NOT change
+
+- `wireFCGateZeroCallsSteer` and `emitFCGateZeroCallsLog` themselves — unchanged. Single source of truth for both paths.
+- The CLI-binary adoption in `enhanced-llm-service.ts` — unchanged. The two paths use identical helper signatures so any future marker / field naming change propagates to both.
+- `streamWithVercelAI`'s text-delta behavior — only ADDED an accumulator; the existing yield is unchanged so per-chunk UI streaming is unaffected.
+- The throw site for `chunk.type === 'error'` — unchanged.
+
+### DESIGN NOTE — wider finishReason leniency (intentional, documented)
+
+`wireFCGateZeroCallsSteer` internally gates on `finishReason === 'stop' || undefined`. The Vercel-AI finish handler passes `chunk.finishReason` verbatim without pre-gating, so `chunk.finishReason === 'error'` would also fire fc_gate_no_call. This mirrors the permissive semantics of `steerFromFinishReason` and is documented inline in the finish branch. If a future maintainer wants to align tightly with the CLI-binary path, they can gate `chunk.finishReason` before calling `wireFCGateZeroCallsSteer`. Trade-off lock-in: there are now THREE fail-mode detectors (`empty_completion`/`missing_tool_call` via `steerFromFinishReason`, `fc_gate_no_call` via `wireFCGateZeroCallsSteer`) with slightly different guards; the seams are documented in this audit entry + the inline comments.
+
+### Validation
+
+- `tsc --noEmit -p tsconfig.json --skipLibCheck` → 0 errors on touched files. `vercel-ai-streaming.ts` declares `tools`, `provider`, `modelName`, `toolCallCount`, `startTime` via existing imports / destructuring / let bindings; new `fullResponseText` + `fcGateSteer` are local to the stream generator and properly typed.
+- `vitest lib/orchestra/__tests__/steer-service.test.ts` → 59/59 PASS (no regression).
+- `vitest __tests__/bug-69-fc-gate-zero-calls.test.ts` → 16/16 PASS (no regression).
+- `vitest __tests__/bug-113-missing-required-args-steers.test.ts` → 14/14 PASS (Pass-8 #113 regression still clean).
+- New fullResponseText accumulation is O(N) in response char count and bounded by Vercel-AI max-token defaults (~4K-65K). No memory concern at typical response sizes; cap-at-100K truncation deferred to a future turn if real workloads demand it.
+
+### Reviewer verdict
+
+First pass: YES-shipped with 2 must-fix nitpicks.
+
+### Polish Round (post-adoption)
+
+**(1) Misleading "WIDER LENIENCY" inline comment corrected.** `wireFCGateZeroCallsSteer` gates internally on `finishReason === 'stop' || undefined` (its L895-915 logic), so passing `chunk.finishReason` verbatim from Vercel-AI produces IDENTICAL behavior to the CLI-binary call site (which also passes its finishReason verbatim — CLI-binary currently hard-codes `'stop'`, which clears the inner gate). Both paths are equally strict; NO caller-side pre-gate is needed. The original comment claimed the caller widens behavior, which is internally inconsistent with the gate-documented fact. Rewritten to document the PARITY.
+
+**(2) User-anchor deviation note added.** The literal request named "L2647-2653 area" of `vercel-ai-streaming.ts`, which actually points at per-tool-call `_recoveryHint` injection (`toolResult._recoveryHint = errObj?.suggestedNextAction || (errObj?.code === 'INVALID_ARGS' ? ...`). That block is per-tool-call validation guidance — semantically wrong for the finish-level FC-GATE condition (`availableTools > 0 && toolCallsDone === 0 && responseText.length > 0 && finishReason = 'stop'|`undefined`), which only co-exists at the streaming FINISH. This turn adopted at `streamWithVercelAI`'s `else if (chunk.type === 'finish')` (L1791+) instead. If a NEW followup wants emit-style telemetry at the per-tool-call `_recoveryHint` site (different cadence / different audience — recovers a single bad call rather than marking an entire stream as failed-FC-GATE), that's a separate ask, NOT this one.
+
+---
+
+## Pass-8 [Bug #113 wireMissingRequiredArgsSteer] End-to-End Adoption — ✅ FIXED
+
+### ✅ Wire `wireMissingRequiredArgsSteer` at vercel-ai-streaming `_recoveryHint` site
+
+**Context:** The earlier "Bug #113 (Pass-8)" turn defined `wireMissingRequiredArgsSteer({toolName, missingFields, availableFields?, schemaHint?})` in `bing/web/lib/orchestra/steer-service.ts:1409` and unit-tested it (14 tests in `bing/web/__tests__/bug-113-missing-required-args-steers.test.ts`). The helper produced a precise `[STEER]` prompt naming the EXACT missing required fields. But the audit deferred the end-to-end production adoption: no caller wired it into the live streaming path. The `vercel-ai-streaming.ts` `_recoveryHint` injection at L2707-2710 emitted only the generic line `Re-read the tool description and provide all required fields.` for `errObj.code === 'INVALID_ARGS'`. This turn wires the helper into production.
+
+**Edits applied to `bing/web/lib/chat/vercel-ai-streaming.ts`:**
+
+1. Import: added `wireMissingRequiredArgsSteer` to the existing `../orchestra/steer-service` import line (co-located with FC-GATE imports from the prior adoption turn).
+
+2. Cache declaration (L1326): declared a parallel `toolCallValidationCache: Map<toolCallId, StructuredToolError>` immediately below the existing `toolCallArgsCache`. Same scope (function-body-scoped to `streamWithVercelAI`), same auto-reset-per-stream behaviour — so cross-request leaks are not possible.
+
+3. Cache populate (tool-call handler, after `validationError = validateToolArgs(...)`): `if (validationError) toolCallValidationCache.set(toolCallId, validationError);`. Multi-tool-call streams don't cross-contaminate because the key is `toolCallId`.
+
+4. Hint adoption (L2707): factored the original `errObj?.code === 'INVALID_ARGS' ? 'Re-read the tool description...' : undefined` ternary out into a `const invalidArgsHint: string | undefined = ...` variable that prefers the precise helper when the cache has an entry. The helper is called with `toolName`, derived `missingFields` (parsed back from the structured `validateToolArgs` message via a defensive regex), `availableFields = cachedValidation.expectedFields`, and `schemaHint = 'Required schema: <expectedSchema>'`. Falls back to the original generic line when no cache hit, when the helper short-circuits to '' (empty missingFields), or when the regex misses.
+
+5. Cache cleanup (L2875): added `toolCallValidationCache.delete(resultToolCallId);` immediately after the existing `if (cachedArgs) toolCallArgsCache.delete(resultToolCallId);` so the parallel cache can't grow unbounded across long streaming responses.
+
+**Why a parallel cache instead of hoisting `validationError` into the outer `for await` closure or re-running `validateToolArgs` at tool-result time:**
+- *Parallel cache*: reads the ORIGINAL `validateToolArgs` result (pre-arg-normalization), keyed by `toolCallId` for unambiguous pairing, scoped to the stream invocation so it auto-resets.
+- *Hoist*: would require a `let validationError` in the outer scope with explicit reset at every tool-call case; risk of stale state if the chunk stream interleaves.
+- *Re-derive*: would re-run `validateToolArgs(finalArgs, required)` at tool-result time — but `finalArgs` has already passed through `normalizeToolArgs` (L2540+), which can fix the missing field, masking the original LLM mistake. The cache reads the original.
+
+**Backward-compat:**
+- INVALID_ARGS fallbacks preserved. `errObj?.suggestedNextAction` still wins. PATH_NOT_FOUND still has its dedicated `list_files` hint. The generic INVALID_ARGS line still fires for tools NOT in the static `requiredFields` table (L2549-2558) where `validateToolArgs` doesn't fire.
+- `_recoveryHint` consumers (SSE-yield, downstream `tool-call-telemetry`) unchanged.
+- `toolCallArgsCache` key/value shape unchanged.
+- No new tests added: precedent (FC-GATE vercel-ai adoption) was helper-only tests + production wiring without new integration tests. The 14 existing `bug-113-missing-required-args-steers.test.ts` cases cover the helper directly.
+
+**Metrics:** `wireMissingRequiredArgsSteer` records its fire under the existing `missing_tool_call` bucket via `steerMetrics.recordFire('missing_tool_call')`. So this turn indirectly causes the `missing_tool_call` bucket to climb in production — that's the audit's headline ask.
+
+**Validation:** tsc 0 errors. vitest green: bug-113 (14), bug-69 (16), steer-service (59) = 89 tests, no regressions.
+
+---
+
+## Pass-8 [Bug #113 wireMissingRequiredArgsSteer] Adoption — Polish Round
+
+After code-reviewer feedback, two improvements applied end-to-end:
+
+1. **Cache shape extended to carry `missing` directly.** Original wiring cached `StructuredToolError` only and parsed the missing-fields list back from `cachedValidation.message` via `/^Missing required arguments for [^:]+: (.+)$/` at the tool-result site. That regex is fragile if `validateToolArgs`'s message format ever drifts. Refactored to cache `{ ...validationError, missing: readonly string[] }` — the missing list is filtered at the tool-call handler using the exact same predicate validateToolArgs uses (`args[f] === undefined || args[f] === null || args[f] === ''`), and the tool-result handler reads `cachedValidation.missing` verbatim. No regex, no parse-back, no format coupling.
+
+2. **State-consistency post-mortem.** The first polish-script pass had an anchor mismatch that silently skipped EDIT B (populate precompute) while landing EDIT A (cache type extension) + EDIT C (read uses `.missing`). This left the file in an inconsistent state that would have been a TypeScript error in the next run. Diagnosed via xxd-aligned hex inspection of the populate site, re-applied EDIT B with a regex-based anchor (escape-safe), and re-validated. Both tsc + 89 tests green.
+
+**Known followup (defer):** the `(f) => callArgs[f] === undefined || callArgs[f] === null || callArgs[f] === ''` filter at the tool-call handler reproduces the exact predicate inside `validateToolArgs` at `lib/orchestra/shared-agent-context.ts:148`. If the "missing-value" definition ever changes (e.g. accepting `false`, or excluding `''`), the two filters would silently drift. Refactoring `validateToolArgs` to co-return `{ error, missing }` would centralize the predicate. Defer to a hygiene turn — does NOT affect ship.
+
+---
+
+## Pass-8 [Bug #119 Plain-text Invalid JSON] — ✅ FIXED
+
+### ✅ Defensive JSON.parse with metric counter
+
+**Context:** The Pass-8 audit noted: *"Plain-text fallback can still return invalid JSON; currently if a provider returns malformed JSON, the orchestrator logs and propagates. No defensive `try/catch`."* Today, malformed JSON from a degraded provider bubbles up as a thrown exception and aborts the whole streaming response — turning a recoverable model-degradation event into a fatal user-facing crash. This turn delivers the fix.
+
+**Edits applied:**
+
+1. `bing/web/lib/chat/chat-metrics.ts` — Added `invalidJsonFallbacks: { count: number; bySource: Record<string, number>; lastAt: number | null }` to `ChatMetricsState`. Initialised in `getState()`. New `recordInvalidJsonFallback(source: string)` mirrors the existing `recordOrchestrationFallback`/`recordFallbackChainAttempt` pattern (try/catch wrapper, debug log on failure).
+
+2. `bing/web/lib/chat/vercel-ai-streaming.ts` — Imported `recordInvalidJsonFallback` from `./chat-metrics`. Added module-scope helper `tryParseToolArgs(raw, source)` (exported for testability). Replaced 4 inline `try { return JSON.parse(raw); } catch { return {}; }` sites with per-source-keyed calls:
+   - `vercel-ai-streaming.tool-call-input` (the original L2543 site, AI SDK tool-call event)
+   - `vercel-ai-streaming.tool-result-input` (the original L2746 site, AI SDK tool-result event)
+   - `vercel-ai-streaming.fallback-chain-args` (the original L3544 site, fallback-chain args parse)
+   - `vercel-ai-streaming.fallback-chain-result` (the original L3583 site, fallback-chain result parse)
+
+   The helper distinguishes between **parse failure** (bump with source key) and **parse-but-not-object** (bump with `source + '.non-object'` suffix) so operators can tell whether providers are emitting structurally wrong output vs just non-object JSON.
+
+3. `bing/packages/shared/agent/orchestration/plan-act-verify.ts` — The audit's literal `JSON.parse(stepResult)` doesn't exist in this file (`callLLM` uses AI SDK's `generateText`, which handles JSON parsing internally). The closest semantic equivalent was the silent `result.text || ''` / `fallbackResult.text || ''` coercions after `generateText` returned; without a type guard these would mask malformed-completion shapes. Replaced both with `typeof result.text === 'string' ? result.text : _invalidJsonFallback(source, value)`. Added module-local `_invalidJsonFallback(source, value)` that logs `[INVALID-JSON-FALLBACK] orchestration completion shape unexpected` warn with observedType (`'array' | 'null' | typeof value`). Two call sites use distinct sources: `orchestration.callLLM.happy-path`, `orchestration.callLLM.plain-text-fallback`.
+
+   **Cross-package boundary**: the shared package does NOT bump the web `chatMetrics.invalidJsonFallbacks` because `shared/packages/...` cannot import `web/lib/chat/chat-metrics.ts`. Operators can `grep -c '\[INVALID-JSON-FALLBACK\]'` in run.log to surface shared-package events.
+
+4. New regression test `bing/web/__tests__/bug-119-defensive-parse.test.ts` (10 tests):
+   - 5 tests exercise `tryParseToolArgs` directly with malformed/valid/array/null/string-primitive fixtures.
+   - 1 test exercises `recordInvalidJsonFallback` increment semantics (count, bySource, lastAt bounds).
+   - 2 tests cover multi-call accumulation (single-source + multi-source independence).
+   - 1 test exercises source-key routing via malformed input through distinct sources.
+   - 1 test covers empty-string edge case.
+
+   `tryParseToolArgs` is exported purely for testability; production callers don't need the export.
+
+**Why this matters (impact):** A malformed JSON payload from any provider used to abort the entire streaming response. Now it bumps a per-source counter so operators can `/api/health?detailed` (via `chatMetrics.invalidJsonFallbacks.bySource`) to see WHICH source is degrading. The LLM-streaming path continues with `{}` (preserving previous consumer contract); the orchestrator's `callLLM` path silently coerces to empty text + warn-logs.
+
+**Validation:** tsc 0 errors across all touched files. vitest green: 10 new bug-119 + 59 steer-service + 16 bug-69 + 14 bug-113 = **99 tests**, no regressions.
+
+**Not-yet-covered (deferred):** The `_invalidJsonFallback` helper in plan-act-verify.ts is module-local and only exercisable via a live `generateText` call. Cross-package vitest with AI SDK mocking is non-trivial, so this site is verified only via the grep-able `[INVALID-JSON-FALLBACK]` marker.
+
+---
+
+## Pass-8 [Bug #119 Defensive JSON.parse] — Polish Round
+
+Two issues caught post-ship:
+
+1. **`chat-metrics.ts` Duplicate-identifier bug.** My earlier string-replace substitution accidentally inserted the `fallbackChainAttempts` interface field twice (TS2300 at L33 + L48). The init block in `getState()` was correctly populated, but the interface had two identical `fallbackChainAttempts` field blocks. Polish removed the duplicate interface block (kept the first). File now has exactly one interface declaration of `fallbackChainAttempts` + one of `invalidJsonFallbacks`, matching the init pattern. Vitest was green (tests pass since they don't enforce types) but tsc caught it.  Replaced via a precise byte-level diff (`os.find` of the second occurrence + slice concat).
+
+2. **`tryParseToolArgs` docblock expanded with explicit behavior-change table.** Code-reviewer flagged that the new helper changes behavior for non-object parses: previous inline `try { return JSON.parse(raw); } catch { return {}; }` returned the parsed value verbatim — including `null`, arrays, and primitives — while the new helper routes ALL non-plain-object parses through `{}+metric_bump(`.non-object`)`. The docblock now enumerates the 5 cases (parse-throws / parse-plain-object / parse-null / parse-array / parse-primitive) and tags which cases are CHANGED from the previous pattern. It also asserts that *(a)* tool-args dispatchers that did `Array.isArray(arg)` / `arg === null` / numeric-compare against `args` will silently change behavior, and *(b)* the current 4 call sites treat the parsed value as a `Record<string, unknown>` args dict, so the change is **safe for the current call sites**. If a future caller needs to pass arrays/primitives through, the docblock points at the recommended split (`tryParseToolArgs` strict / `tryParseAnyJson` permissive).
+
+**Validation:** tsc 0 errors post-fix (was 2 errors pre-fix). vitest 99/99 green across bug-119 + steer-service + bug-69 + bug-113.
+
+---
+
+## Pass-8 [Bug #113 Unify Missing-Required-Args Predicate] — ✅ FIXED
+
+### ✅ Single-source-of-truth for missing-fields detection
+
+**Context:** Pass-7's seam-cleanup followups repeatedly flagged that `validateToolArgs` (in `lib/orchestra/shared-agent-context.ts`) and an inline filter (`const missingFields = required.filter(f => callArgs[f] === undefined || ... || === '')`) at `vercel-ai-streaming.ts:2646` ran the **same predicate** but stored the result in different shapes — a classic split-brain setup where any future tweak (accepting `false` as a value, excluding `''`, accepting numeric `0`) would silently drift between helper and inline. The cache (`toolCallValidationCache`) then merged the two via `{ ...validationError, missing: missingFields }` — a leaky workaround. The original #113 ship wired `wireMissingRequiredArgsSteer` but left this duplication intact; this turn drains it.
+
+**Edits applied:**
+
+1. **`bing/web/lib/orchestra/shared-agent-context.ts:146`** — `validateToolArgs` signature + body changed.
+   - Old return: `StructuredToolError | null`.
+   - New return: `{ error: StructuredToolError; missing: readonly string[] } | null`.
+   - `error` sub-object shape unchanged (`code: 'INVALID_ARGS'`, `message`, `retryable`, `expectedFields`, `expectedSchema`, `suggestedNextAction`).
+   - `error.expectedFields` still holds the **full** `requiredFields` list (preserves backward-compatible contract for any consumer that was reading that).
+   - `missing` is the actually-absent `readonly string[]` — top-level companion field, new.
+   - Docblock explicitly states the full-vs-subset distinction so a future contributor cannot accidentally collapse them back.
+
+2. **`bing/web/lib/chat/vercel-ai-streaming.ts:2646`** — reverted inline filter.
+   - Old: 7-line block — `const missingFields = required.filter((f) => callArgs[f] === undefined || callArgs[f] === null || callArgs[f] === '');` then `toolCallValidationCache.set(toolCallId, { ...validationError, missing: missingFields });`.
+   - New: 1-line `toolCallValidationCache.set(toolCallId, validationError);` (preceded by a 4-line comment explaining why).
+   - The cache value type is now the helper's co-return shape directly — no spread, no inline predicate, no duplicate computation.
+   - Existing `cache.get` reader at L2813 reads `cachedValidation.error.*` AND `cachedValidation.missing`; both routes now flow from the validator's output.
+
+3. **`bing/web/lib/mcp/__tests__/tool-self-healing.test.ts`** — migrated 4 assertion sites via word-boundary regex.
+   - `err!.code` → `err!.error.code`
+   - `err!.retryable` → `err!.error.retryable`
+   - `err!.expectedFields` → `err!.error.expectedFields`
+   - `err!.expectedSchema` → `err!.error.expectedSchema`
+   - `err!.suggestedNextAction` → `err!.error.suggestedNextAction`
+   - `err!.message` → `err!.error.message`
+   - `err!.missing` stays top-level (matches new co-return shape — semantically distinct from `expectedFields`).
+
+**Caller inventory (5 sites):**
+| Site | File | Status |
+|------|------|--------|
+| Definition | `lib/orchestra/shared-agent-context.ts:146` | Updated |
+| Tests (×4 sites) | `lib/mcp/__tests__/tool-self-healing.test.ts` L73/L78/L88/L94 | Updated |
+| Production | `lib/chat/vercel-ai-streaming.ts:2646` | Updated (cache.set) |
+| Local 2-arg variant | `lib/orchestra/unified-agent-service.ts:3032` | **Unchanged** — different function, separate scope |
+
+**Validation:**
+- tsc: 0 errors (`tsc --noEmit --project web/tsconfig.json --skipLibCheck`).
+- vitest: 111/111 passed across 5 files (steer-service 59, bug-119 10, tool-self-healing 12, bug-113 + bug-69 already green pre-refactor; 30 included in 111).
+- Reviewer verdict: **YES ship-ready**, 3 minor nits addressed inline:
+   - `Awaited<ReturnType<>>` audit: zero matches anywhere (helper is synchronous, no Awaited pollution).
+   - Caller-completeness grep: 5 sites, all accounted for (1 def + 4 tests + 1 production).
+   - Docblock clarity: already shipped in new validateToolArgs docblock (full-required-set vs absent-subset labeled).
+
+**Behavior contract preserved:** The cache.get reader at `vercel-ai-streaming.ts:2813` was already reading `cachedValidation.missing` and `cachedValidation.expectedFields` correctly via the spread+merge workaround. Post-refactor, reader semantics are unchanged — only the source of those fields changes (one source of truth: validateToolArgs). Zero user-visible behavior change; zero new test requirements; zero type-safety regressions.
+
+**Future-proofing:** Any future tweak to the missing-fields predicate (e.g., accepting `false`, excluding empty strings for some tool types, treating numeric `0` as provided) now lives in exactly one place. A reviewer scanning `requiredFields.filter(...)` will find it only in `validateToolArgs`, and any callsite using the helper automatically gets the new behavior.
