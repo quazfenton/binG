@@ -51,13 +51,50 @@ export { type ContinueDecision, type ContinuationDecision, type ContinuationReas
  * (Audit-Q7 Sites 3+4 carve-out: `decideAutoContinue({ routing, steps: [],
  * responseText })` with no `result`) still satisfy the type.
  */
+/**
+ * Plan-step variants for `AutoContinueRouting.planSteps`.
+ *
+ * Each variant carries an `action` discriminator that TS narrows on. There is
+ * intentionally NO `[key: string]: unknown` index signature: members here are
+ * statically-typed per variant so the `attempt`, `maxAttempts`, `toolCount`,
+ * `errorsCount` fields are checked at compile time. Adding a new planStep
+ * shape means defining a new variant here AND at every callsite that produces
+ * it — fail-fast on planStep schema drift instead of silently widening
+ * `unknown`.
+ */
+export type RecoverPlanStep = {
+  action: 'recover';
+  attempt: number;
+  maxAttempts: number;
+  errorsCount?: number;
+};
+
+export type HasToolCallsPlanStep = {
+  action: 'has-tool-calls';
+  toolCount: number;
+};
+
+export type PlanStep = RecoverPlanStep | HasToolCallsPlanStep;
+
 export type AutoContinueRouting = {
   continue?: boolean;
   stepReprompt?: string;
   primaryRole?: string;
   estimatedSteps?: number;
-  /** Plan steps array — each step has at minimum an `action` discriminator. */
-  planSteps?: Array<{ action?: string }>;
+  /**
+   * Optional explicit-flag override — when `true`, the orchestrator continues
+   * even if the heuristic-decay signal would otherwise route a stop.
+   * Allowed so downstream agents (e.g. self-healer, stateful-agent) can pin
+   * a continue decision to a single boolean instead of recomputing routing.
+   */
+  explicitContinue?: boolean;
+  /**
+   * Plan steps array — each element is a discriminated union variant.
+   * Currently: `RecoverPlanStep` (self-healer trace) and `HasToolCallsPlanStep`
+   * (stateful-agent progress). Empty array `[]` is naturally assignable to
+   * `PlanStep[]` — no separate `EmptyPlanStep` variant needed.
+   */
+  planSteps?: PlanStep[];
 };
 
 export type AutoContinueStep = {

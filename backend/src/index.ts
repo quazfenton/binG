@@ -6,6 +6,7 @@ import path from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { mountNextApiRoutes } from "./lib/next-route-loader";
+import { acquireSingletonLock, releaseSingletonLock } from "./lib/singleton-lock";
 
 // Prevent unhandled rejections from crashing the process
 // (mountNextApiRoutes may encounter async rejections from
@@ -119,6 +120,12 @@ async function findAvailablePort(start: number): Promise<number> {
 }
 
 const desiredPort = Number(process.env.PORT) || 3000;
+
+const locked = await acquireSingletonLock();
+if (!locked) {
+  console.error("[backend] another instance is already running — exiting");
+  process.exit(1);
+}
 
 // Retry loop: bind the real server directly, catching EADDRINUSE.
 // This eliminates the TOCTOU window between probe and bind.

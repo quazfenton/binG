@@ -158,6 +158,14 @@ export class CircuitBreaker extends EventEmitter {
   }
 
   /**
+   * Record a failure manually (used by provider init when the standard
+   * `execute()` path can't be used). Opens the circuit if threshold is met.
+   */
+  recordFailure(error: Error): void {
+    this.onFailure(error);
+  }
+
+  /**
    * Reset circuit breaker to initial state
    */
   reset(): void {

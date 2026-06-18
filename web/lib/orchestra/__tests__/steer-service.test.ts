@@ -130,6 +130,17 @@ describe('buildSteerPrompt — every trigger kind produces a [STEER] prompt', ()
           suggestion: 'The previous turn ran in degraded text-mode. Do not retry complex multi-step plans.',
         },
       },
+      // Bug #69 sample — FC-GATE-0-calls failure mode (distinct from missing_tool_call).
+      fc_gate_no_call: {
+        kind: 'fc_gate_no_call',
+        detail: {
+          availableTools: 19,
+          provider: 'mistral',
+          model: 'mistral-small-latest',
+          finishReason: 'stop',
+          responseLength: 142,
+        },
+      },
     };
 
     const prompt = buildSteerPrompt(samples[kind]);
@@ -161,7 +172,7 @@ describe('steerFromFinishReason — turns streaming signals into triggers', () =
     expect(t?.kind).toBe('empty_completion');
   });
 
-  it('returns missing_tool_call when tools are available but none called', () => {
+  it('returns fc_gate_no_call when tools are available but none called (Pass-8 seam-cleanup (a))', () => {
     const t = steerFromFinishReason({
       responseText: 'I think we should...',
       availableTools: 19,
@@ -170,10 +181,13 @@ describe('steerFromFinishReason — turns streaming signals into triggers', () =
       finishReason: 'stop',
       toolCallsDone: 0,
     });
-    expect(t?.kind).toBe('missing_tool_call');
-    if (t?.kind === 'missing_tool_call') {
+    expect(t?.kind).toBe('fc_gate_no_call');
+    if (t?.kind === 'fc_gate_no_call') {
       expect(t.detail.availableTools).toBe(19);
       expect(t.detail.finishReason).toBe('stop');
+      // fc_gate_no_call detail shape requires responseLength (vs the legacy
+      // missing_tool_call which omitted it). Verify the new field is populated.
+      expect(t.detail.responseLength).toBe('I think we should...'.length);
     }
   });
 
@@ -475,14 +489,22 @@ describe('wireFinishReasonSteer + wireToolResultFalseSteer + wireBashErrorSteer'
     expect(prompt).toMatch(/^\[STEER\].*was empty/);
   });
 
-  it('wireFinishReasonSteer returns a [STEER] prompt for missing_tool_call', () => {
+  it('wireFinishReasonSteer returns a [STEER] prompt for fc_gate_no_call (Pass-8 seam-cleanup (a))', () => {
+    // Pass-8 seam-cleanup (a): steerFromFinishReason now routes the
+    // available-tools-but-no-calls branch to fc_gate_no_call (was
+    // missing_tool_call). The prompt body is now the FC-GATE-specific text
+    // from renderBody's fc_gate_no_call case — assertions updated below.
     const prompt = wireFinishReasonSteer({
       responseText: 'I think we should...',
       availableTools: 19,
       finishReason: 'stop',
       toolCallsDone: 0,
     });
-    expect(prompt).toMatch(/^\[STEER\].*did not call any of the 19 available tools/);
+    expect(prompt).toContain('[STEER]');
+    expect(prompt).toContain('FC-GATE Phase 1 passed');
+    expect(prompt).toContain('Phase 2 text-mode');
+    // Spot-check that the available-tools count still surfaces in the body.
+    expect(prompt).toContain('19');
   });
 
   it('wireToolResultFalseSteer always returns a [STEER] prompt', () => {

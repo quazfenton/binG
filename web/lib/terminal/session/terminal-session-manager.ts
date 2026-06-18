@@ -23,6 +23,15 @@
  */
 
 import type BetterSqlite3 from 'better-sqlite3'
+// SEV-12 (2026-06-18 fix): bare global `require` is NOT defined in pure ESM
+// (package.json `"type": "module"`). The module-load
+// `require('../../database/connection-shim')` below therefore threw
+// `ReferenceError: require is not defined`, classified as `unknown` and
+// silently degrading terminal-session persistence to the in-memory store.
+// Mirror the createRequire pattern already used in connection.ts (line 22)
+// and connection-shim.ts so the require() resolves under strict ESM.
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
 import { createLogger } from '../../utils/logger'
 import { getSandboxProvider, type SandboxProviderType } from '../../sandbox/providers'
 import { quotaManager } from '../../management/quota-manager'
@@ -35,7 +44,7 @@ import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph'
 // created a circular dep that crashed `pnpm run dev` (see 2026-06-18 run.log —
 // `ReferenceError: Cannot access 'getDatabase' before initialization`). The leaf
 // module breaks the cycle AND is TDZ-defensive on shape-C property access.
-import { classifySqliteFailure } from '@/lib/storage/session-store'
+import { classifySqliteFailure } from '@/lib/database/sqlite-failure'
 import { unwrapDefaultExport } from '../../database/unwrap-default-export'
 
 const logger = createLogger('Terminal:SessionManager')

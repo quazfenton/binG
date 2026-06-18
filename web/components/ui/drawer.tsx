@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils/utils'
 // from round-7's per-site reversion. The adapter re-types each vaul vX
 // forwardRef component as React.ForwardRefExoticComponent<any, any>, so
 // downstream ComponentPropsWithoutRef spreads type cleanly WITHOUT per-site
-// @ts-expect-error directives. The multi-sibling JSX body in DrawerContent
+// ts-expect-error directives. The multi-sibling JSX body in DrawerContent
 // (Portal → Overlay + Content siblings) is the canonical regression site
 // for per-site patterns — TS@5 next-line semantics don't propagate through
 // the multi-sibling tree, so TS2322 surfaces on the <DrawerPrimitive.Content>
@@ -21,7 +21,7 @@ import { cn } from '@/lib/utils/utils'
  * @rationale `as VaulForwardRefComponent|VaulRegularComponent` import-level typed-passthrough adapter (Rule B ≥3-site root-cause consolidation). Selected over per-site `@ts-expect-error` because rounds 1-5 of this file regressed TS2322 on `<DrawerPrimitive.Content>`'s multi-sibling body (Rule C blocked condition). Selected over `as unknown as X` because the surface here is 4 distinct vaul accessors composing a single typed envelope, not a single site; the adapter also handles the `ElementRef<typeof VaulComponent.X>` ref-typing hookup downstream. Removal trigger (ARCH-001 Flag 2): pin `vaul` to a specific version whose surface matches upstream typedefs.
  * Ticket: ARCH-001 Flag 2.
  */
-type VaulForwardRefComponent = React.ForwardRefExoticComponent<any, any>;
+type VaulForwardRefComponent = React.ForwardRefExoticComponent<any>;
 type VaulRegularComponent = React.ComponentType<any>;
 const VaulComponent = {
   Root: DrawerPrimitive.Root as VaulRegularComponent,

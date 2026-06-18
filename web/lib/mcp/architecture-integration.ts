@@ -1271,7 +1271,7 @@ export async function callMCPToolFromAI_SDK(
   userId: string,  // Required for Arcade tools
   scopePath?: string,  // VFS scope path for session-scoped file operations
   recentFailures?: string[],  // Recent tool execution errors (≥2 biases toward debugger in role_selection)
-): Promise<{ success: boolean; output: string; error?: string }> {
+): Promise<{ success: boolean; output: string; error?: string; __aiSdkOnly?: boolean }> {
   try {
     // Bug #37 (regression): canonicalize LLM-invented tool names (e.g.
     // 'list_directory' → 'list_files') BEFORE any registry/cache lookup.

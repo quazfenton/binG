@@ -525,7 +525,51 @@ export async function GET(req: NextRequest) {
           // 30s but keeps hitting the cooldown gate.
           const initDoneKey = `__vfsInitDone__:${owner.ownerId}`;
           if ((globalThis as any)[initDoneKey]) {
-            log(`[${requestId}] Workspace already initialized for anonymous owner — skipping WORKSPACE_NOT_READY check`);
+            // Bug #7 follow-up FIX: this branch used to only log and then
+            // fall through to the `return WORKSPACE_NOT_READY` at the bottom
+            // of the anonymous block — directly contradicting its own
+            // comment ("skip the WORKSPACE_NOT_READY path entirely"). The
+            // result: the FIRST anonymous read eager-inits and returns
+            // success, but EVERY subsequent read of the (still-empty)
+            // workspace re-entered here, logged "skipping", then 202'd with
+            // WORKSPACE_NOT_READY forever. The client surfaced that as
+            // `[useVFS ERROR] request: failed - Workspace not yet
+            // initialized` on app open. The workspace genuinely exists and
+            // is simply empty, so return a SUCCESS response with the
+            // already-computed (empty) file list instead of falling through.
+            log(`[${requestId}] Workspace already initialized for anonymous owner — returning empty snapshot (success) instead of WORKSPACE_NOT_READY`);
+            const readyEtag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+            snapshotCache.set(cacheKey, {
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              timestamp: now,
+              etag: readyEtag,
+              version: snapshot.version,
+            });
+            vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+            const readyResponse = NextResponse.json({
+              success: true,
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              cached: false,
+            }, {
+              headers: {
+                'cache-control': 'private, no-store',
+                'vary': 'Authorization, Cookie',
+                etag: readyEtag,
+              },
+            });
+            return withAnonSessionCookie(readyResponse, owner);
           } else {
           // 5s in-memory cooldown to prevent hammering the DB when the
           // snapshot is polled faster than the init can complete. After

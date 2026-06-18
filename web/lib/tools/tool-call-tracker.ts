@@ -20,7 +20,7 @@ import { createLogger } from '@/lib/utils/logger';
 // Tag better-sqlite3 binding-load failures with the same diagnostic taxonomy
 // used by storage/session-store.ts so the in-memory fallback log line states
 // WHY the binding failed, not just THAT it failed.
-import { classifySqliteFailure } from '@/lib/storage/session-store';
+import { classifySqliteFailure } from '@/lib/database/sqlite-failure';
 
 const logger = createLogger('ToolCallTracker');
 

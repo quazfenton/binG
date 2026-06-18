@@ -436,9 +436,9 @@ export function shouldAutoContinue(input: {
     stepReprompt?: string;
     primaryRole?: string;
     estimatedSteps?: number;
-    planSteps?: PlanStep[];
+    planSteps?: Array<{ action?: string }>;
   };
-  steps?: ReadonlyArray<{ toolName?: string; args?: Record<string, unknown> }>;
+  steps?: ReadonlyArray<{ toolName?: string; args?: Record<string, unknown>; result?: { success?: boolean; error?: unknown } }>;
   responseText?: string;
   continuationsSoFar: number;
   maxContinuations?: number;

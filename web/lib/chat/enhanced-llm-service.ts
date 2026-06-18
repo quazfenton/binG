@@ -12,7 +12,7 @@
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
-import { wireFinishReasonSteer, incompleteConfidenceThreshold } from '../orchestra/steer-service';
+import { wireFinishReasonSteer, wireFCGateZeroCallsSteer, emitFCGateZeroCallsLog, incompleteConfidenceThreshold } from '../orchestra/steer-service';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
 import { PROVIDER_FALLBACK_CHAINS, getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { coordinateConcurrentFallback } from './llm-fallback-coordinator';
@@ -1619,6 +1619,16 @@ export class EnhancedLLMService {
 
     try {
       let result: any;
+      // Bug #69 helper-input scoping: `tools` is block-scoped inside the
+      // opencode-cli branch below (it's `let tools: LLMToolDefinition[] = []`
+      // inside the `if (provider === 'opencode-cli')` block). The FC-GATE-0-calls
+      // detector runs AFTER this if/elseif/else chain. Hoist the tool count to
+      // outer scope so the detector can read it without triggering a TDZ /
+      // ReferenceError on the block-scoped variable. The pi branch doesn't
+      // build tools (its native binary-spawn path), so it leaves toolsCount==0
+      // and the FC-GATE detector short-circuits — acceptable since pi has its
+      // own observable failure modes.
+      let toolsCount = 0;
 
       if (provider === 'opencode-cli') {
         // Check if opencode binary is available
@@ -1711,6 +1721,10 @@ export class EnhancedLLMService {
                requestId,
                toolCount: tools.length,
              });
+             // Bug #69: hoist the tool count to outer scope (see declaration
+             // before the if/elseif/else chain) so the FC-GATE-0-calls detector
+             // — which lives after the chain ends — can read it.
+             toolsCount = tools.length;
            } catch (toolErr: any) {
               chatLogger.warn('[CLI-PROVIDER] Failed to build tools for opencode-cli', {
                 requestId,
@@ -1869,26 +1883,52 @@ export class EnhancedLLMService {
         steps: result.steps?.length || 0,
       });
 
-      // Bug A/B: if finishReason:'stop' with 0 tool calls and the model is
-      // known to misbehave (mistral-large-latest, qwen3.5-122b-a10b), inject
-      // a steer hint via wireFinishReasonSteer so the model self-corrects on
-      // retry. Best-effort — a steer failure must never break the stream.
+      // Bug #69 (Pass-5 #69 regression cycle fix): the prior detector at this
+      // site called wireFinishReasonSteer with availableTools hardcoded to 0,
+      // which short-circuited the inner guard (`availableTools > 0`) and
+      // produced NO steer prompt — the FC-GATE-0-calls failure mode went
+      // unflagged and unsteered in the run.log audit. The replacement uses
+      // wireFCGateZeroCallsSteer (which CAN detect the FC-GATE condition
+      // with availableTools > 0) and emits the [FC-GATE-ZERO-CALLS] structured
+      // marker distinct from the legacy [STEER] finishReason stop line —
+      // run.log greppers can now spot the FC-GATE failure mode specifically.
+      // Detection is no longer scoped to mistral-large/qwen3.5 — ANY model can
+      // hit this when FC-GATE passes Phase 1 but the model emits text instead
+      // of tool calls. The steer path short-circuits the fallback chain: the
+      // steer prompt goes into the NEXT turn rather than triggering a
+      // provider retry (which would burn credits on a model that already
+      // demonstrated FC-GATE capability).
       const toolCallsDone = (result.steps || []).reduce(
         (n, s) => n + ((s as any).toolCalls || []).length, 0
       );
-      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5'))) {
-        try {
-          const hint = wireFinishReasonSteer({
-            finishReason: 'stop',
-            availableTools: 0,
+      // Bug #69 outer-scope read: previously referenced `Array.isArray(tools)`
+      // here, but `tools` is block-scoped to the `if (provider === 'opencode-cli')`
+      // branch above. Read from the hoisted `toolsCount` instead.
+      const availableTools = toolsCount;
+      try {
+        const detection = wireFCGateZeroCallsSteer({
+          toolCallsDone,
+          availableTools,
+          responseText: result.response || '',
+          finishReason: 'stop',
+          provider,
+          model,
+        });
+        if (detection.detected) {
+          // Pass-8 seam-cleanup followup (b): delegate the structured warn
+          // to the single-sourced helper exported from steer-service.ts.
+          // The marker string + field naming is owned by steer-service so
+          // the bug-69 test exercises the same code path as production.
+          emitFCGateZeroCallsLog({
             provider,
             model,
-            responseText: result.response || '',
+            availableTools,
             toolCallsDone,
+            responseLength: (result.response || '').length,
+            steerLength: detection.steer?.length || 0,
           });
-          if (hint) chatLogger.warn('[STEER] finishReason stop with 0 tool calls', { hint, model, provider });
-        } catch { /* steer helper failure is non-fatal */ }
-      }
+        }
+      } catch { /* steer helper failure is non-fatal */ }
 
       yield {
         content: result.response || '',

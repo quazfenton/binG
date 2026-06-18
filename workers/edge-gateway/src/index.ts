@@ -19,9 +19,9 @@
  *   POST /admin/backend-url-fallback
  *     R2-only fallback when KV put quota is exceeded
  */
-import { authenticateRequest, signJwt } from './auth';
+import { authenticateRequest, signJwt, type AuthResult } from './auth';
 import { checkIpRateLimit, checkRateLimit } from './rate-limiter';
-import { routeRequest } from './router';
+import { routeRequest, type RouteTarget } from './router';
 import { getBackendUrl, setBackendUrl } from './url-store';
 import { handleFileRequest } from './r2-storage';
 import { TraceLog } from './trace-log';
@@ -716,11 +716,18 @@ export default {
       });
     }
 
-    // ─── Authentication ──────────────────────────────────────────────
+    // ─── Authentication + Route Resolution (parallel) ──────────────
+    // These are independent — auth reads the JWT header and verifies with
+    // crypto.subtle (~0.5ms), route resolves the backend URL from KV or
+    // env (~5-15ms KV read). Run them concurrently instead of serial.
     // Skipped for /v1/* — the 9router validates its own Bearer API key.
-    const auth = skipRateLimitAndAuth
-      ? { authenticated: false, userId: null }
-      : await authenticateRequest(request, env.JWT_SECRET);
+    const [auth, target]: [AuthResult, RouteTarget | null] = skipRateLimitAndAuth
+      ? [{ authenticated: false, userId: null }, await routeRequest(request, env)]
+      : await Promise.all([
+          authenticateRequest(request, env.JWT_SECRET),
+          routeRequest(request, env),
+        ]);
+
     // Pass auth info to backend via headers (even if unauthenticated)
     const proxiedRequest = addAuthHeaders(request, auth);
 
@@ -729,8 +736,6 @@ export default {
       return await handleFileRequest(request, env, url.pathname, auth.userId);
     }
 
-    // ─── Route Request ───────────────────────────────────────────────
-    const target = await routeRequest(request, env);
     if (!target) {
       return new Response(JSON.stringify({
         error: 'No route configured',

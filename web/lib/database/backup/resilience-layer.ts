@@ -26,7 +26,7 @@
 
 import { DatabaseBackupService } from './backup-service';
 import fs from 'fs';
-import { classifySqliteFailure } from '@/lib/storage/session-store';
+import { classifySqliteFailure } from '@/lib/database/sqlite-failure';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Database:ResilienceLayer');

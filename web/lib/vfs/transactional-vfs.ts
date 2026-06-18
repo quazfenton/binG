@@ -489,7 +489,7 @@ export class Transaction {
           failed: failed + 1,
           results: [
             ...results,
-            { path: '<flush>', success: false, error: flushResult.error ?? 'flush failed' },
+            { path: '<flush>', success: false, error: ('error' in flushResult ? flushResult.error : undefined) ?? 'flush failed' },
           ],
           duration: Date.now() - startTime,
         };

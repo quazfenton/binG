@@ -2,7 +2,7 @@ import { getVercelModel } from '../../../chat/vercel-ai-streaming';
 import { streamText, generateText, stepCountIs, type Tool as CoreTool, Output } from 'ai';
 // Audit-Q7: per-step early-exit soft gate via decideAutoContinue (above the
 // stepCountIs hard cap) — see stopWhen wrapper at L~1570 for the wiring.
-import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
+import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/context/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
@@ -850,7 +850,7 @@ Respond with valid JSON matching this schema:
         status: 'pending' as const,
       };
 
-      log.info('[StatefulAgent] Task decomposition complete:', this.taskGraph.tasks.length, 'tasks');
+      log.info(`[StatefulAgent] Task decomposition complete: ${this.taskGraph.tasks.length} tasks`);
     } catch (error: any) {
       log.warn('[StatefulAgent] Task decomposition failed, using simple plan:', error.message);
       // Fallback to single task
@@ -1159,13 +1159,13 @@ Use 'createFile' for new files.`;
         continue: this.retryCount < this.maxSelfHealAttempts,
         primaryRole: 'self-healer',
         explicitContinue: this.retryCount < this.maxSelfHealAttempts,
-        planSteps: errors.length > 0
-          ? [{ action: 'recover', errorsCount: errors.length, attempt: this.retryCount, maxAttempts: this.maxSelfHealAttempts }]
-          : [{ action: 'recover', attempt: this.retryCount, maxAttempts: this.maxSelfHealAttempts }],
+        planSteps: (errors.length > 0
+          ? [{ action: 'recover' as const, errorsCount: errors.length, attempt: this.retryCount, maxAttempts: this.maxSelfHealAttempts }]
+          : [{ action: 'recover' as const, attempt: this.retryCount, maxAttempts: this.maxSelfHealAttempts }]),
       },
       steps: [],
       responseText: '',
-      result: { errors, retryCount: this.retryCount, maxAttempts: this.maxSelfHealAttempts, phase: 'self-heal' },
+      result: { errors: errors as AutoContinueResultData['errors'] } as AutoContinueResultData,
     });
     // Phase-end cleanup: releases per-requestId continuation-pressure counter
     // by removing the keyed entry from `_continuationCounters` so it cannot
@@ -1180,7 +1180,7 @@ Use 'createFile' for new files.`;
     }
     if (!autoDecision.continue) {
       log.info('[StatefulAgent] Self-heal soft-gate tripped; aborting self-heal cycle', {
-        reason: autoDecision.reason, requestId: autoDecision.requestId,
+        reason: autoDecision.reason, requestId: this.sessionId,
       });
       return this.getState();
     }
@@ -1644,9 +1644,9 @@ export async function* runStatefulAgentStreaming(
               continue: true,                 // explicit let-it-continue UNLESS detector overrides
               primaryRole: 'stateful-agent',
               explicitContinue: true,
-              planSteps: latestToolCalls.length > 0
-                ? [{ action: 'has-tool-calls', toolCount: latestToolCalls.length }]
-                : [],
+              planSteps: (latestToolCalls.length > 0
+                ? [{ action: 'has-tool-calls' as const, toolCount: latestToolCalls.length }]
+                : []),
             },
             steps: latestToolCalls.map((tc: any) => ({
               toolName: tc?.toolName || tc?.function?.name || 'unknown',
@@ -1654,11 +1654,13 @@ export async function* runStatefulAgentStreaming(
             })),
             responseText: latestText,
             result: {
+              response: latestText,
+              success: true,
               steps,
               stepCount: steps.length,
               maxSteps,
               toolResults: latestToolResults,
-            },
+            } as unknown as AutoContinueResultData,
           });
           if (!autoDecision.continue) {
             // Soft gate hit: abort. Clear the per-requestId counter so the next

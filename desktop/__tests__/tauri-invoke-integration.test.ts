@@ -239,7 +239,7 @@ describe('File Operations Integration Tests', () => {
       const filePath = path.join(workspaceRoot, 'image.png');
       await fs.writeFile(filePath, binaryData);
 
-      const result = await fs.readFile(filePath);
+      const result = await fs.readFile(filePath) as Buffer;
       expect(result.equals(binaryData)).toBe(true);
     });
 

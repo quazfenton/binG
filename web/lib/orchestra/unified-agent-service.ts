@@ -3958,6 +3958,7 @@ async function runV1ApiWithTools(
               success: toolInvocations.every(t => t.result?.success !== false),
               steps: toolInvocations.map(t => ({
                 toolName: t.toolName,
+                args: t.args,
                 result: t.result,
               })),
               fileEdits: toolInvocations
@@ -4660,7 +4661,9 @@ async function runV1ApiWithTools(
           // detector sees a consistent view.
           // SEV-12 (TS2739 sweep #2): cast at the second decideAutoContinue call boundary.
           // Mirror of the L1706 cast pattern: narrow-and-cast the result shape to the helper param type.
-          result: ((): AutoContinueResultData => ({
+          result: {
+            response: accumulatedResponse,
+            success: accumulatedSteps.every((s: any) => s.result?.success !== false),
             fileEdits: accumulatedSteps
               .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName))
               .map((s: any) => ({
@@ -4669,7 +4672,7 @@ async function runV1ApiWithTools(
                 toolName: s.toolName,
               }))
               .filter((e: any) => typeof e.path === 'string' && e.path.length > 0),
-          }))()),
+          },
         });
 
         if (!autoDecision.continue || !autoDecision.continuationPrompt) {

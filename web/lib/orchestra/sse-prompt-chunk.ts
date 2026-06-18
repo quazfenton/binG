@@ -231,7 +231,7 @@ export function makeSseChunk<K extends SseChunkKind>(
       // args is typed as `readonly [PromptSource, string | null]` by
       // `SseChunkArgs<K>` conditional narrowing — no `as` cast.
       const [source, content] = args;
-      return { type: 'prompt', source, content };
+      return { type: 'prompt', source, content } as unknown as _SseChunkReturn<K>;
     }
     case 'continuation': {
       // Runtime shape guard: 'continuation' kind expects exactly 3 args.
@@ -250,7 +250,7 @@ export function makeSseChunk<K extends SseChunkKind>(
         continue: shouldContinue,
         reason,
         iteration,
-      };
+      } as unknown as _SseChunkReturn<K>;
     }
     case 'error': {
       // Runtime shape guard: 'error' kind expects exactly 2 args.
@@ -261,7 +261,7 @@ export function makeSseChunk<K extends SseChunkKind>(
       }
       // args is typed as `readonly [string, boolean]`.
       const [message, recoverable] = args;
-      return { type: 'error', message, recoverable };
+      return { type: 'error', message, recoverable } as unknown as _SseChunkReturn<K>;
     }
     default: {
       // (f) Exhaustiveness check: assigning `kind` to `never` after all
