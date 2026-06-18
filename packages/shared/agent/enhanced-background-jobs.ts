@@ -1000,8 +1000,11 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     // Single-source-of-truth: also drop the dedupLookup entry so callers don't
     // have to remember to call cleanupDedupEntry manually. Removal paths that
     // use only safeDeleteJob will no longer leak dedupLookup entries.
+    //
+    // SEV-12 pre-existing tsc TS2345 (`Argument of type 'string' is not assignable to parameter of type 'EnhancedJob'`) fix:
+    // pass the cached job reference (still has .dedupId) instead of jobId.
     try {
-      this.cleanupDedupEntry(jobId);
+      this.cleanupDedupEntry(job);
     } catch (err) {
       // Surface real errors instead of swallowing — caller should be able to
       // observe dedup-cleanup failures even though job-deletion succeeded.
@@ -1031,9 +1034,17 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    * P0-2 fix: Prevents memory leak from stale dedupLookup entries accumulating
    * in long-running processes.
    */
-  private cleanupDedupEntry(job: EnhancedJob): void {
-    if (job.dedupId) {
-      this.dedupLookup.delete(job.dedupId);
+  private cleanupDedupEntry(jobOrDedupId: EnhancedJob | string): void {
+    // SEV-12 widen: callers may now pass either an EnhancedJob reference OR
+    // a raw dedupId string. The typeof discriminant below unifies both paths
+    // while preserving the original "delete only if dedupId is set" semantics.
+    // runtime: typeof check is cheap; the string fallback covers future
+    // boxed-String-from-app generic APIs.
+    const dedupId = typeof jobOrDedupId === 'string'
+      ? jobOrDedupId
+      : jobOrDedupId.dedupId;
+    if (dedupId) {
+      this.dedupLookup.delete(dedupId);
     }
   }
 

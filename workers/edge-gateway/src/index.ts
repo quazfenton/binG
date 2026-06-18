@@ -311,7 +311,8 @@ function shouldTrace(pathname: string, isHealth: boolean): boolean {
 
 /**
  * Lightweight structured trace for observed requests.
- * Only fires for high-value paths (see TRACED_PATTERNS above).
+ * Only fires for high-value paths (see TRACED_PATTERNS above) or for error
+ * responses (4xx/5xx — see alwaysTraceError below).
  *
  * Dual-write strategy:
  *   1. console.log() — feeds Cloudflare tail / Logpush (primary observability)
@@ -319,7 +320,12 @@ function shouldTrace(pathname: string, isHealth: boolean): boolean {
  *
  * R2 failure is non-fatal — TraceLog buffers entries and retries on next write.
  */
-function traceRequest(method: string, pathname: string, extra?: Record<string, unknown>): void {
+function traceRequest(
+  method: string,
+  pathname: string,
+  extra?: Record<string, unknown>,
+  ctx?: ExecutionContext,
+): void {
   const entry: Record<string, unknown> = {
     ts: new Date().toISOString(),
     method: method.toUpperCase(),
@@ -327,7 +333,7 @@ function traceRequest(method: string, pathname: string, extra?: Record<string, u
     ...extra,
   };
   // writeTraceLog handles console.log + R2 dual-write
-  writeTraceLog(entry as any);
+  writeTraceLog(entry as any, ctx);
 }
 
 // TraceLog instance — initialized lazily so we don't require TRACE_R2 to exist
@@ -338,14 +344,17 @@ function getTraceLog(env: Env): TraceLog {
   }
   return _traceLog;
 }
-function writeTraceLog(entry: {
-  ts: string;
-  method: string;
-  path: string;
-  [key: string]: unknown;
-}): void {
+function writeTraceLog(
+  entry: {
+    ts: string;
+    method: string;
+    path: string;
+    [key: string]: unknown;
+  },
+  ctx?: ExecutionContext,
+): void {
   if (!_traceLog) return;
-  _traceLog.write(entry as any);
+  _traceLog.write(entry as any, ctx);
 }
 
 // CORS headers applied to all responses
@@ -559,7 +568,7 @@ export default {
       traceRequest(request.method, url.pathname, {
         cfCountry: request.headers.get('cf-ipcountry') ?? '??',
         userAgent: request.headers.get('user-agent') ?? '',
-      });
+      }, ctx);
     }
 
     // ─── Health Check (Cache API, 5s TTL) ──────────────────────────
@@ -622,9 +631,75 @@ export default {
       return await handleAdminBackendUrl(request, env);
     }
 
-    // ─── Rate Limiting (by IP) ────────────────────────────────────────
-    const rateLimit = await checkIpRateLimit(env.BING_KV, request);
+    let skipRateLimitAndAuth = false;
+
+    // ─── /v1/* proxy (BEFORE rate limiting + auth) ────────────────────
+    // Proxy directly — no edge rate limit or JWT auth. The 9router backend
+    // validates the Bearer API key (sk-...) and enforces its own per-key
+    // rate limits. Applying the generic per-IP limiter here would let UI
+    // polling exhaust the budget and silently block chat requests.
+    if (url.pathname.startsWith('/v1/')) {
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: CORS_HEADERS });
+      }
+      skipRateLimitAndAuth = true;
+    }
+
+    // ─── /api/chat Redirect (BEFORE rate limiting) ─────────────────────
+    // Same rationale: app-level JWT auth + backend per-user rate limits.
+    // The generic per-IP limiter should not gate chat.
+    if (url.pathname.startsWith('/api/chat')) {
+      // (1) CORS preflight
+      if (request.method === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: CORS_HEADERS });
+      }
+      // (2) Auth check (JWT — app-level, not 9router)
+      const chatAuth = await authenticateRequest(request, env.JWT_SECRET);
+      if (!chatAuth.authenticated) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+      // (3) Resolve backend URL
+      const chatBackendUrl = (env.BACKEND_URL && env.BACKEND_URL.length > 0)
+        ? env.BACKEND_URL
+        : (await getBackendUrl(env));
+      if (!chatBackendUrl) {
+        return new Response(JSON.stringify({ error: 'Backend URL not configured' }), {
+          status: 503,
+          headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        });
+      }
+      // (4) Sign a 5-minute JWT for the redirect
+      const workerJwtSecret = env.WORKER_JWT_SECRET || 'fallback-dev-secret-change-me';
+      const chatToken = await signJwtCached(
+        { sub: chatAuth.userId || 'anonymous', exp: Math.floor(Date.now() / 1000) + 5 * 60, scope: 'chat:stream' },
+        workerJwtSecret,
+      );
+      // (5) Return 302 redirect with token
+      const chatQs = url.search ? url.search + '&' : '?';
+      const chatLocation = `${chatBackendUrl}${url.pathname}${chatQs}token=${encodeURIComponent(chatToken)}`;
+      return new Response(null, {
+        status: 302,
+        headers: {
+          ...CORS_HEADERS,
+          Location: chatLocation,
+          'Cache-Control': 'private, max-age=4',
+        },
+      });
+    }
+
+    // ─── Rate Limiting (by IP) — only applies to proxied requests ─────
+    // Skipped for /v1/* — the 9router backend enforces its own per-key limits.
+    const rateLimit = skipRateLimitAndAuth
+      ? { allowed: true, remaining: Infinity, retryAfter: 0 }
+      : await checkIpRateLimit(env.BING_KV, request);
     if (!rateLimit.allowed) {
+      traceRequest(request.method, url.pathname, {
+        error: 'rate_limited',
+        retryAfter: rateLimit.retryAfter,
+      }, ctx);
       return new Response(JSON.stringify({
         error: 'Too many requests',
         retryAfter: rateLimit.retryAfter,
@@ -642,7 +717,10 @@ export default {
     }
 
     // ─── Authentication ──────────────────────────────────────────────
-    const auth = await authenticateRequest(request, env.JWT_SECRET);
+    // Skipped for /v1/* — the 9router validates its own Bearer API key.
+    const auth = skipRateLimitAndAuth
+      ? { authenticated: false, userId: null }
+      : await authenticateRequest(request, env.JWT_SECRET);
     // Pass auth info to backend via headers (even if unauthenticated)
     const proxiedRequest = addAuthHeaders(request, auth);
 
@@ -680,102 +758,6 @@ export default {
       proxyHeaders.set('X-Forwarded-Proto', url.protocol.replace(':', ''));
       proxyHeaders.set('X-Forwarded-Host', url.hostname);
 
-      // NOTE: no AbortSignal.timeout here on purpose.
-      // The previous 25 s cap cut off long agent SSE streams. Cloudflare
-      // Workers do NOT charge CPU time for time spent waiting on the
-      // upstream `fetch` body, so streaming responses can run for the
-      // full request lifetime (up to CF's hard 30 min cap on enterprise,
-      // ~10 min on paid, ~5 min on free — all far beyond what we need).
-      // ── 302 redirect for streaming chat endpoints ──────────────────────
-      // Bypasses the Worker wall-clock cap (30s on Free plan) by handing
-      // the streaming connection off to the backend. Worker still does
-      // auth, rate limiting, and KV URL resolution. The client then
-      // streams directly from the backend with a short-lived signed JWT.
-      //
-      // /v1/chat/completions is INTENTIONALLY excluded. That path is the
-      // 9router (ninerouter) OpenAI-compatible endpoint, which authenticates
-      // clients with its own Bearer API-key format (e.g. `sk-…`), NOT with
-      // a JWT. Forcing a 302 redirect would:
-      //   1. Reject valid 9router Bearer tokens at the edge auth check
-      //      (the verifyJwt path expects 3-part JWT, 9router keys aren't).
-      //   2. Append `?token=<jwt>` to the redirect, which the 9router
-      //      endpoint doesn't understand.
-      // The /v1/* path therefore falls through to the normal proxy flow
-      // below, which forwards the original Authorization header to the
-      // OCI backend (see router.ts) and lets ninerouter validate it.
-      const isChatStreamPath = url.pathname.startsWith('/api/chat');
-      if (isChatStreamPath) {
-        // (1) CORS preflight
-        if (request.method === 'OPTIONS') {
-          return new Response(null, { status: 204, headers: CORS_HEADERS });
-        }
-        // (2) Auth check
-        const auth = await authenticateRequest(request, env.JWT_SECRET);
-        if (!auth.authenticated) {
-          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-            status: 401,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          });
-        }
-        // (3) Rate limit
-        const ipLimit = await checkIpRateLimit(env.BING_KV, request);
-        if (!ipLimit.allowed) {
-          return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), {
-            status: 429,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          });
-        }
-        // (4) Resolve backend URL (env wins, KV is fallback for tunnel URL updates)
-        const backendUrl = (env.BACKEND_URL && env.BACKEND_URL.length > 0)
-          ? env.BACKEND_URL
-          : (await getBackendUrl(env));
-        if (!backendUrl) {
-          return new Response(JSON.stringify({ error: 'Backend URL not configured' }), {
-            status: 503,
-            headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
-          });
-        }
-        // (5) Sign a 5-minute JWT for the redirect.
-        // The `exp` claim MUST be Unix seconds (not milliseconds) per RFC 7519.
-        // Setting it in ms produces a value ~1.7e12 that the backend's verifyJwt
-        // (and any standard JWT consumer) would interpret as a date in the year 58494.
-        // Use WORKER_JWT_SECRET, not the internal JWT_SECRET (which signs app/route
-        // session tokens) — distinct secrets for defense-in-depth isolation.
-        // A leak of either system does not compromise the other.
-        // Use the cached signJwtCached instead of signJwt to amortize the
-        // ~0.5ms crypto.subtle.importKey cost across requests in this isolate.
-        const workerJwtSecret = env.WORKER_JWT_SECRET || 'fallback-dev-secret-change-me';
-        const token = await signJwtCached(
-          {
-            sub: auth.userId || 'anonymous',
-            exp: Math.floor(Date.now() / 1000) + 5 * 60,
-            scope: 'chat:stream',
-          },
-          workerJwtSecret,
-        );
-        // (6) Return 302 redirect.
-        // Cache-Control: private (only the client may cache, not shared proxies)
-        // + max-age=4 (4-second freshness window).
-        //
-        // Cache-key analysis: HTTP cache key is method + request URL + Vary
-        // headers. The token is in the RESPONSE (Location header), NOT the
-        // request — so the cache key for the 302 is just the request URL +
-        // Authorization header. Repeated requests within 4s serve the same
-        // cached 302 with the same (still-valid, 5-min-lifetime) token.
-        // Safe because the token is short-lived and `private` prevents any
-        // intermediary from caching the redirect target.
-        const qs = url.search ? url.search + '&' : '?';
-        const location = `${backendUrl}${url.pathname}${qs}token=${encodeURIComponent(token)}`;
-        return new Response(null, {
-          status: 302,
-          headers: {
-            ...CORS_HEADERS,
-            Location: location,
-            'Cache-Control': 'private, max-age=4',
-          },
-        });
-      }
-
       // ── Cache API wrap for VFS GET + sandbox GET (per-user, short TTL) ──
       // VFS polling spam and sandbox status checks are the two biggest
       // sources of repeated Worker invocations on the free tier. Caching
@@ -783,15 +765,24 @@ export default {
       // rapid-fire polling without serving stale data long enough to matter.
       //
       // The buildProxyResponse closure captures all the variables in scope
-      // (request, env, proxiedRequest, target, url, rateLimit, doTrace,
+      // (request, env, proxiedRequest, target, url, rateLimit, doTrace, ctx,
       // proxyHeaders, traceRequest, writeTraceLog, getCorsHeaders) and runs
       // the existing fetch + response build logic on cache miss.
       const buildProxyResponse = async () => {
+      // For long-running streaming paths (/v1/* chat completions) add a
+      // generous abort signal so a hung backend produces a clean error
+      // instead of hanging until Cloudflare's edge idle timeout.
+      // Non-streaming requests (static assets, API calls) don't need one
+      // since they complete in well under 30s.
+      const isStreamingPath = url.pathname.startsWith('/v1/');
+      const fetchSignal = isStreamingPath ? AbortSignal.timeout(300_000) : undefined;
+
       const proxyResponse = await fetch(target.url, {
         method: request.method,
         headers: proxyHeaders,
         body: request.method !== 'GET' && request.method !== 'HEAD' ? proxiedRequest.body : undefined,
         redirect: 'follow',
+        signal: fetchSignal,
       });
 
       // ─── Build Response ────────────────────────────────────────────
@@ -812,14 +803,32 @@ export default {
         responseHeaders.set('Cache-Control', `public, max-age=${target.ttl}, s-maxage=${target.ttl}`);
       }
 
-      const responseBody = proxyResponse.body;
+      let responseBody = proxyResponse.body;
 
-      if (doTrace) {
+      // ─── SSE Keep-Alive (for streaming LLM responses) ──────────────
+      // Cloudflare's edge drops idle TCP connections after ~15-30s of
+      // silence. When the 9router stalls mid-stream (fallback chains,
+      // slow reasoning steps), wrap the body in a TransformStream that
+      // injects SSE heartbeat comments every 10s so the connection stays
+      // alive until the next real chunk.
+      if (isStreamingPath && responseBody) {
+        const ct = proxyResponse.headers.get('content-type') ?? '';
+        if (ct.includes('text/event-stream') || ct.includes('application/x-ndjson')) {
+          responseBody = createKeepAliveStream(responseBody, 10_000);
+        }
+      }
+
+      // ─── Observability: trace response status ──────────────────
+      // Always trace error responses (4xx/5xx) regardless of doTrace so
+      // upstream failures never silently disappear from logs. Non-error
+      // paths only trace when doTrace is set (high-value API paths).
+      const isErrorResponse = proxyResponse.status >= 400;
+      if (doTrace || isErrorResponse) {
         traceRequest(request.method, url.pathname, {
           upstreamStatus: proxyResponse.status,
           upstreamStatusText: proxyResponse.statusText,
           contentType: proxyResponse.headers.get('content-type') ?? '',
-        });
+        }, ctx);
       }
 
       return new Response(responseBody, {
@@ -841,9 +850,9 @@ export default {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
 
-      if (doTrace) {
-        traceRequest(request.method, url.pathname, { error: message });
-      }
+      // Always trace proxy errors (502) — they represent real failures and
+      // should never be silent regardless of the TRACED_PATTERNS filter.
+      traceRequest(request.method, url.pathname, { error: message }, ctx);
 
       return new Response(JSON.stringify({
         error: 'Backend unavailable',
@@ -860,6 +869,64 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Creates a TransformStream that forwards data chunks and injects SSE
+ * heartbeat comments (":\n\n") during idle gaps longer than `idleTimeoutMs`.
+ *
+ * This keeps Cloudflare's edge idle timeout (~15-30s) from killing the
+ * connection when the upstream LLM provider stalls mid-stream (e.g.,
+ * during fallback chain evaluation or slow reasoning steps).
+ */
+function createKeepAliveStream(
+  inner: ReadableStream,
+  idleTimeoutMs = 10_000,
+): ReadableStream {
+  const encoder = new TextEncoder();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let reader: ReadableStreamDefaultReader<Uint8Array>;
+
+  function resetTimer(controller: ReadableStreamDefaultController): void {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      try {
+        controller.enqueue(encoder.encode(':\n\n'));
+      } catch { /* stream closed, ignore */ }
+      resetTimer(controller);
+    }, idleTimeoutMs);
+  }
+
+  return new ReadableStream({
+    start(controller) {
+      reader = inner.getReader();
+      resetTimer(controller);
+
+      function pump(): void {
+        reader.read().then(({ done, value }) => {
+          if (done) {
+            if (timer) clearTimeout(timer);
+            controller.close();
+            return;
+          }
+          // Data arrived — reset the idle timer
+          if (timer) clearTimeout(timer);
+          controller.enqueue(value);
+          resetTimer(controller);
+          pump();
+        }).catch(err => {
+          if (timer) clearTimeout(timer);
+          controller.error(err);
+        });
+      }
+
+      pump();
+    },
+    cancel() {
+      if (timer) clearTimeout(timer);
+      reader?.cancel();
+    },
+  });
+}
 
 /**
  * Constant-time string comparison to prevent timing attacks on secrets.

@@ -223,6 +223,20 @@ export {
   generateDynamicInjection,
 } from './system-prompts-dynamic';
 
+// SEV-12 polish (2026-06-18): canonical 9-ID choose-role menu + drift-safe
+// available-set helper. Re-exported here so consumers (bing/web/lib/chat/tools/
+// choose-role-tool.ts and any future LLM-facing menu callers) read from the
+// same source as normalizeAndValidateRole in unified-role-selector.ts.
+// Before this export, the list lived in two places (choose-role-tool.ts AND
+// inline in normalizeAndValidateRole's getAllRoleIds() check) and drifted
+// apart when a new role was added to the advertisement without a matching
+// SYSTEM_PROMPTS entry — the LLM would emit the missing ID and the runtime
+// validator would reject it.
+export {
+  CHOOSE_ROLE_MENU,
+  getAvailableChooseRoles,
+} from './unified-role-selector';
+
 // Prompt Composer — Structured, dynamic prompt composition with tool injection
 export {
   // Composition API

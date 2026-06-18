@@ -7,7 +7,8 @@
   "packageManager": "pnpm@9.15.4",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "node scripts/dev-runner.js",
+    "dev:raw": "turbo dev",
     "dev:backend": "pnpm --filter backend dev",
     "dev:web": "pnpm --filter web dev",
     "dev:desktop": "pnpm --filter desktop tauri dev",
@@ -23,7 +24,9 @@
     "test:unit": "vitest run",
 
     "env:check": "node scripts/compare-env.mjs web/.env web/.env.example",
-    "logs": "node tail-logs.js"
+    "logs": "node tail-logs.js",
+
+    "sqlite:rebuild": "pnpm rebuild better-sqlite3"
   },
   "devDependencies": {
     "@octokit/rest": "^22.0.1",

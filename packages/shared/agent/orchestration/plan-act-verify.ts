@@ -132,11 +132,17 @@ function buildToolResult(
   toolName: string,
   args: Record<string, any>,
   rawResult: any,
-  error?: Error
+  error?: Error | ToolError
 ): ToolResult {
   if (error) {
-    const errMsg = error.message || 'Unknown error';
-    const structuredError: ToolError = classifyToolError(toolName, errMsg, rawResult);
+    // SEV-12 pre-existing tsc TS2345 (`Argument of type 'ToolError' is not assignable to parameter of type 'Error'`) fix:
+    // callers (e.g. validateAndNormalizeArgs in this file at the tool-validation error path) now hand us a structured ToolError;
+    // preserve it directly via discriminant (`.type` is a string field on ToolError) instead of re-classifying.
+    // Runtime behavior unchanged for callers passing a raw Error — classifyToolError still derives from .message.
+    const structuredError: ToolError =
+      typeof (error as ToolError).type === 'string'
+        ? (error as ToolError)
+        : classifyToolError(toolName, (error as Error).message || 'Unknown error', rawResult);
     return {
       success: false,
       toolName,

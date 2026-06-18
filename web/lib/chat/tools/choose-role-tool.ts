@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   normalizeAndValidateRole,
   getAvailableChooseRoles,
+  CHOOSE_ROLE_MENU,
 } from '@bing/shared/agent';
 
 // SEV-12 polish (2026-06-18 followup): the canonical 9-ID choose-role menu
@@ -20,10 +21,47 @@ import {
 //     the shared helpers directly also catch drift).
 //
 // Note: we call getAvailableChooseRoles() ONCE at module load and sink the
-// result into the `_AVAILABLE_CHOOSE_ROLES` const referenced by both the
-// Zod describe() and any downstream consumers. The same string is what
-// normalizeAndValidateRole computes internally on each call.
+// result into the module-local `_AVAILABLE_CHOOSE_ROLES` const referenced
+// by the tool description and Zod describe(). Zod schemas need a string
+// at registration time, NOT a function — so we keep the local snapshot
+// for that one purpose. normalizeAndValidateRole computes a fresh check
+// at runtime so drift introduced by HMR still surfaces there.
+//
+// SEV-13 (reviewer critique #2): re-export the FUNCTION rather than the
+// local snapshot. Downstream consumers (tests, prompt-composer) reading
+// a frozen snapshot under HMR or vitest's isolate-modules would observe
+// stale drift-checked values after re-load. Re-exporting the function
+// lets each consumer pull a fresh value on demand.
 const _AVAILABLE_CHOOSE_ROLES: readonly string[] = getAvailableChooseRoles();
+
+/**
+ * SEV-13 (reviewer critique #3): defense-in-depth production guard extracted
+ * to a module-level helper so `chooseRoleCapability.execute()` reads as a
+ * single line. The runtime drift-check lives in `getAvailableChooseRoles()`
+ * (throws in production on missing-from-canonical IDs). Mirror that guard
+ * here so a future refactor that accidentally bypasses the source-package
+ * throw path still fails loudly at the LLM-facing entrypoint. Outside
+ * production we rely on `getAvailableChooseRoles()`' `console.warn` to keep
+ * dev boot unblocked.
+ *
+ * Operator-friendly error: names the drifted IDs rather than only counting,
+ * so on-call grep-sees-the-actual-missing-role rather than hunting for the
+ * discrepancy between `live.length` and `CHOOSE_ROLE_MENU.length`.
+ */
+function assertNoChooseRoleMenuDrift(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  const live = getAvailableChooseRoles();
+  const choices = CHOOSE_ROLE_MENU as readonly string[];
+  if (live.length === choices.length) return;
+  const missingFromLive = choices.filter((id) => !live.includes(id));
+  const extraInLive = live.filter((id) => !choices.includes(id));
+  throw new Error(
+    `[choose-role] drift: ` +
+    `${missingFromLive.length} canonical id(s) missing from live SYSTEM_PROMPTS keys — [${missingFromLive.join(', ') || '\u2205'}]. ` +
+    `${extraInLive.length} extra live key(s) not in CHOOSE_ROLE_MENU — [${extraInLive.join(', ') || '\u2205'}]. ` +
+    `Fix: rename in packages/shared/agent/system-prompts.ts, or update the ids in CHOOSE_ROLE_MENU.`,
+  );
+}
 
 /**
  * choose_role Capability
@@ -62,6 +100,11 @@ export const chooseRoleCapability = tool({
     ),
   }),
   execute: ({ role, reason, recentFailures }) => {
+    // SEV-13 (reviewer critique #3): defense-in-depth production guard —
+    // single-line call. See assertNoChooseRoleMenuDrift() for the full
+    // rationale + operator-friendly ID-naming error message.
+    assertNoChooseRoleMenuDrift();
+
     const result = normalizeAndValidateRole(role, reason || '', {
       recentFailures,
     });
@@ -86,8 +129,10 @@ export const chooseRoleCapability = tool({
   },
 });
 
-// Re-export for downstream consumers (tests, prompt-composer). The value
-// here is a snapshot at module-load — normalizeAndValidateRole computes a
-// fresh check at runtime so drift introduced by HMR still surfaces there.
-export { _AVAILABLE_CHOOSE_ROLES };
+// SEV-13 (reviewer critique #2): re-export the FUNCTION, not the local
+// snapshot. Downstream consumers (tests, prompt-composer) should call
+// `getAvailableChooseRoles()` freshly on each use so HMR / isolate-modules
+// re-load produces the current drift-checked list, not a stale snapshot
+// captured at this module's first load.
+export { getAvailableChooseRoles };
 

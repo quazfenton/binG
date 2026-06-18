@@ -1703,7 +1703,12 @@ export async function processUnifiedAgentRequest(
       args: s.args,
     })),
     responseText: result.response ?? '',
-    result,
+    // SEV-12 pre-existing tsc TS2739 (`UnifiedAgentResult` missing `errors`/`toolFailures`/`incompleteSignals` from `AutoContinueResultData`) fix:
+    // narrow-and-cast at the boundary using the helper's exported type. Mirror of the
+    // route.ts:1697 round-7 (c) fix — same pattern, same explicit-named-type preference
+    // over indexed-ResType so type changes ripple to both call sites simultaneously.
+    // No `as any`; runtime behavior identical (`decideAutoContinue` enriches internally).
+    result: result as unknown as AutoContinueResultData,
   });
   clearContinuationCount(phaseTransitionRequestId);
   if (autoDecision.continue) {
@@ -4628,7 +4633,9 @@ async function runV1ApiWithTools(
           // response format right. WRITE_TOOL_NAMES is the same set used
           // elsewhere in runV1ApiWithTools for tool classification so the
           // detector sees a consistent view.
-          result: {
+          // SEV-12 (TS2739 sweep #2): cast at the second decideAutoContinue call boundary.
+          // Mirror of the L1706 cast pattern: narrow-and-cast the result shape to the helper param type.
+          result: ((): { fileEdits: Array<{ path: string; action: 'write'; toolName: string }> } => ({
             fileEdits: accumulatedSteps
               .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName))
               .map((s: any) => ({

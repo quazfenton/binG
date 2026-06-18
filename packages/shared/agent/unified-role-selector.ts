@@ -1021,7 +1021,8 @@ export function normalizeAndValidateRole(
           `(total ${broadRoles.length} IDs across core, supplementary, and general* prompt sets).`,
       };
     }
-    // mode='all' accepted — fall through to composition.    } else {
+    // mode='all' accepted — fall through to composition.
+  } else {
       // Tier-1 (choose-menu, default): LLM-facing choose_role tool sees only
       // IDs that are both in the 9-ID menu AND in canonical SYSTEM_PROMPTS —
       // so we cannot route to a `SYSTEM_PROMPTS[missing]` undefined access.

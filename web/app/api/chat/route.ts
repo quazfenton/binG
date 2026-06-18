@@ -53,7 +53,7 @@ import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
-import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
+import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, type AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
 // Bug #86 (Pass-6 audit): wire detectNeedsMoreTurns() from the
 // auto-continue-detector module. The detector is the single source of truth
 // for "did the LLM stop too early?" — it inspects 17+ named signals
@@ -1694,7 +1694,11 @@ const config: UnifiedAgentConfig = {
                     args: normalizeStepArgs(s.args),
                   })),
                   responseText: iterContent,
-                  result,
+                  // SEV-12 pre-existing tsc TS2352 (UnifiedAgentResult/AutoContinueResultData overlap) fix:
+                  // TS requires an `unknown`-cast hop when source/target types don't sufficiently overlap.
+                  // narrow-and-cast at the boundary using the helper's exported AutoContinueResultData type.
+                  // No `as any`; runtime behavior identical.
+                  result: result as unknown as AutoContinueResultData,
                   advancedDetectorFn: needsMoreTurnsDetector,
                 });
 
