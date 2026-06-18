@@ -10,9 +10,9 @@
     "dev:trigger": "trigger dev"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.2",
-    "@ai-sdk/openai": "^1.0.6",
-    "@ai-sdk/xai": "^1.0.4",
+    "@ai-sdk/anthropic": "^3.0.85",
+    "@ai-sdk/openai": "^3.0.73",
+    "@ai-sdk/xai": "^3.0.96",
     "@prisma/client": "^6.0.1",
     "@radix-ui/react-label": "^2.1.0",
     "@radix-ui/react-radio-group": "^1.2.1",
