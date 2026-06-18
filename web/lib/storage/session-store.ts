@@ -54,7 +54,7 @@ let stmtCleanup: BetterSqlite3.Statement | null = null
 // ---------------------------------------------------------------------------
 // Native-binding diagnostics
 // ---------------------------------------------------------------------------
-// `require('../database/connection')` can throw for several distinct reasons.
+// `require('../database/connection-shim')` can throw for several distinct reasons.
 // The bare warn line used to swallow every possibility under the same
 // `[session-store] better-sqlite3 unavailable` text, leaving operators no way
 // to tell apart a CPU-arch mismatch from a missing libc++ from an ESM/CJS
@@ -68,6 +68,7 @@ type SqliteFailureKind =
   | 'module-not-installed'
   | 'cjs-of-esm'
   | 'sqlite-runtime-error'
+  | 'interop-mismatch'
   | 'unknown'
 
 export interface SqliteFailure {
@@ -165,6 +166,25 @@ export function classifySqliteFailure(err: unknown): SqliteFailure {
         'a CJS require() tried to import an ESM module; replace the require() with a dynamic import() or upgrade better-sqlite3 to a CJS-compatible prebuild',
     }
   }
+  // CJS/ESM default-export hoisting mismatch: `module.exports = fn` (default
+  // hoisted to module.exports), so `require(...).default` is undefined but
+  // `require(...)` IS the callable. Distinguish from generic TypeErrors by
+  // requiring TypeError AND a function-callability signal. Match EITHER the
+  // runtime message ("is not a function") OR our wrapper's own throw message
+  // ("did not export a callable default") — both signal the same CJS/ESM
+  // interop issue and should yield the same hint.
+  if (
+    err instanceof TypeError &&
+    (/is not a function/.test(haystack) || /did not export a callable default/.test(haystack)) &&
+    /getDatabase|default/i.test(haystack)
+  ) {
+    return {
+      kind: 'interop-mismatch',
+      reason: e?.message ?? haystack,
+      hint:
+        'database/connection-shim module loaded but its default export was not callable through this require() site — CJS/ESM interop hoisted the default to module.exports. Use `conn.default ?? conn` (defensive unwrap) instead of destructuring `const { default } = conn`.',
+    }
+  }
   return {
     kind: 'unknown',
     reason: e?.message ?? String(err),
@@ -174,19 +194,56 @@ export function classifySqliteFailure(err: unknown): SqliteFailure {
 }
 
 /**
- * Wrap the `require('../database/connection')` call — the line that historically
+ * Wrap the `require('../database/connection-shim')` call — the line that historically
  * swallowed every failure under a single vague warn message. If the require
  * itself throws (CJS/ESM mismatch, missing module, native binding failure
  * surfacing from connection.ts), classify and warn with structured fields
  * before returning null so the caller can fall back to the in-memory store.
  *
  * Pure Node ESM-safe: uses the same `require(...)` pattern connection.ts uses.
+ *
+ * BUG FIX (3-shape ladder, hardened against the actual dev-server symptom):
+ *   The first version unwrapped `const { default } = conn` — broken on
+ *   CJS-hoisted output. The second version unwrapped
+ *   `typeof conn === 'function' ? conn : (conn && conn.default)` — broken on
+ *   the namespace-flattened output where named exports are preserved but
+ *   `default` is dropped. The third shape, seen in production:
+ *     typeof conn=object, conn.default=undefined, conn.getDatabase=fn
+ *   is the result of Next.js/turbopack flattening `export default getDatabase`
+ *   + `export function getDatabase` into just `{ getDatabase: fn, ... }`.
+ *
+ * Fix: try `typeof conn === 'function'` first (CJS-hoisted), then
+ * `conn.default` (ESM-wrapped namespace), then `conn.getDatabase` (named-only
+ * flattened). Only throw TypeError when NONE of the three resolve to a callable.
+ * Each throw includes "is not a function" + "did not export a callable default"
+ * + the literal substring `getDatabase` so classifySqliteFailure's
+ * interop-mismatch branch reliably fires.
  */
 function tryRequireDatabaseConnection():
-  | { default: () => BetterSqlite3.Database }
+  | { getDatabase: () => BetterSqlite3.Database }
   | null {
   try {
-    return require('../database/connection') as { default: () => BetterSqlite3.Database }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conn: any = require('../database/connection-shim')
+    // 3-shape unwrap delegated to the exported pure helper — single source
+    // of truth across session-store, terminal-session-manager, and jwt (×3).
+    // The helper returns `undefined` when none of Shape A/B/C matches, so
+    // the throw below fires only on genuine interop-mismatch (no callable).
+    const getDatabase = unwrapDefaultExport<() => BetterSqlite3.Database>(conn)
+    if (typeof getDatabase !== 'function') {
+      throw new TypeError(
+        // Include both "is not a function" (JavaScript runtime TypeError format)
+        // AND "did not export a callable default" (our wrapper vocabulary) so
+        // classifySqliteFailure's interop-mismatch branch reliably fires for
+        // either phrasing. Without these two substrings, the error falls through
+        // unknown and the operator gets the misleading "rebuild better-sqlite3"
+        // hint — the very bug this whole patch is fixing.
+        `getDatabase is not a function: database/connection-shim did not export a callable default ` +
+        `(typeof conn=${typeof conn}, conn.default=${typeof conn?.default}, conn.getDatabase=${typeof conn?.getDatabase}). ` +
+        `This is a CJS/ESM interop mismatch, not a better-sqlite3 binding issue.`,
+      )
+    }
+    return { getDatabase }
   } catch (requireErr) {
     useSqlite = false
     log.warn(
@@ -197,10 +254,36 @@ function tryRequireDatabaseConnection():
   }
 }
 
+/**
+ * Pure unwrap helper — exported ONLY for direct unit testing of the 3-shape
+ * ladder. Production code goes through `tryRequireDatabaseConnection()`
+ * which combines this unwrap with the bind-warn + classify pipeline.
+ *
+ * Shapes handled:
+ *   A: any-function        → the fn itself
+ *   B: { default: fn }     → conn.default
+ *   C: { getDatabase: fn } → conn.getDatabase  (named-only flatten case)
+ *
+ * Returns undefined when no shape matches (e.g. null/undefined/empty
+ * object), so callers can decide whether to throw or fail-open.
+ *
+ * `export` is necessary so the vitest file can lock down Shape A/B/C
+ * regressions without spinning up the full session-store module (which
+ * has init side effects like setInterval).
+ */
+export function unwrapDefaultExport<T = (...args: any[]) => any>(
+  mod: unknown,
+): T | undefined {
+  if (typeof mod === 'function') return mod as T
+  if (mod && typeof (mod as any).default === 'function') return (mod as any).default as T
+  if (mod && typeof (mod as any).getDatabase === 'function') return (mod as any).getDatabase as T
+  return undefined
+}
+
 const connection = tryRequireDatabaseConnection()
 if (connection) {
   try {
-    const { default: getDatabase } = connection
+    const { getDatabase } = connection
     db = getDatabase()
 
     db.exec(`

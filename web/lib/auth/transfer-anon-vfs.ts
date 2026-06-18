@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 
 import { createLogger } from '@/lib/utils/logger';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { isDatabaseAvailable } from '@/lib/database/connection';
+import { isDatabaseAvailable } from '@/lib/database/connection-shim;
 
 const logger = createLogger('Auth:TransferAnonVFS');
 

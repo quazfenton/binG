@@ -49,7 +49,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, renameSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { execSchemaFile } from '@/lib/database/schema';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { createLogger } from '@/lib/utils/logger';

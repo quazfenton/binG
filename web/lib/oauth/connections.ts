@@ -13,7 +13,7 @@
 
 import { AUTH0_CONNECTIONS } from '@/lib/auth/auth0';
 import { oauthService } from '../auth/oauth-service';
-import { getDatabase, encryptApiKey, decryptApiKey } from '../database/connection';
+import { getDatabase, encryptApiKey, decryptApiKey } from '../database/connection-shim;
 
 // Lazy-loaded functions to avoid circular dependency
 async function getAccessTokenForConnection(connection: string, userId?: string) {

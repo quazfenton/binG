@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
     if (!localUserId) {
       // Try to find existing local user by email and create mapping
       try {
-        const { getDatabase } = await import('@/lib/database/connection');
+        const { getDatabase } = await import('@/lib/database/connection-shim);
         const db = getDatabase();
 
         if (db) {

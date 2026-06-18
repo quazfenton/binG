@@ -721,14 +721,42 @@ export function getGitBackedVFSForOwner(
       ? `${ownerId}$${sessionId}`  // Needs scoping
       : ownerId;  // No sessionId provided - use ownerId as sessionId
 
-  if (!gitVFSInstances.has(compositeKey)) {
-    // Pass the composite sessionId AND ownerId so ShadowCommit uses correct format
-    // and handleFileChange only processes events for this owner
-    gitVFSInstances.set(compositeKey, createGitBackedVFS(vfs, {
-      ...options,
-      // Always use compositeKey as sessionId to ensure consistent ShadowCommit queries
-      sessionId: compositeKey,
-    }, ownerId));
+    // Chat-loop bug (Pass-X): heal-on-miss-poisoned-cache. Under Next.js HMR
+    // (Turbopack) the circular import between this module and
+    // virtual-filesystem-service.ts can transiently resolve
+    // `createGitBackedVFS` to undefined during a hot-reload cycle, causing
+    // `gitVFSInstances.set(compositeKey, undefined)` to silently poison the
+    // Map. Without this heal, the previous `!` non-null assertion raised
+    // `TypeError: Cannot read properties of undefined (reading 'enableBatchMode')`
+    // once per chat request and triggered 'plan-loop' warnings. We re-create
+    // the instance whenever the cached value is missing OR doesn't expose a
+    // class-immutable method (the latter catches detached instances whose
+    // prototype chain was severed by HMR).
+    const cached = gitVFSInstances.get(compositeKey);
+    if (!isHealthyGitVFS(cached)) {
+      const fresh = createGitBackedVFS(vfs, {
+        ...options,
+        // Pass the composite sessionId AND ownerId so ShadowCommit uses correct
+        // format and handleFileChange only processes events for this owner.
+        sessionId: compositeKey,
+      }, ownerId);
+      gitVFSInstances.set(compositeKey, fresh);
+      return fresh;
+    }
+    return cached;
   }
-  return gitVFSInstances.get(compositeKey)!;
-}
+
+  /**
+   * Returns true iff `cached` is a fully-constructed GitBackedVFS instance.
+   * The `enableBatchMode` method check filters out missing entries (Map.get
+   * returning undefined) AND instances whose prototype chain was severed
+   * by HMR. Belt-and-braces: the prototype-chain lookup normally still
+   * resolves old methods on old instances, but Turbopack edge cases have
+   * been observed producing detached instances that no longer expose
+   * class-immutable methods.
+   */
+  function isHealthyGitVFS(cached: GitBackedVFS | undefined): cached is GitBackedVFS {
+    if (!cached) return false;
+    if (typeof (cached as { enableBatchMode?: unknown }).enableBatchMode !== 'function') return false;
+    return true;
+  }

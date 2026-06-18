@@ -21,7 +21,7 @@ export async function initializeServer(): Promise<void> {
   const logger = createLogger('ServerInit');
 
   const getDbMod = async () => {
-    const mod = await import('@/lib/database/connection');
+    const mod = await import('@/lib/database/connection-shim);
     return mod.getDatabase();
   };
 

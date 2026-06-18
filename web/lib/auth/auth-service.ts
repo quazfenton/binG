@@ -3,8 +3,8 @@ export const runtime = 'nodejs';
 
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '@/lib/database/connection';
-import { DatabaseOperations } from '../database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
+import { DatabaseOperations } from '../database/connection-shim;
 import { generateToken, blacklistToken, isTokenExpiringSoon } from './jwt';
 import { authCache } from './auth-cache';
 import { createLogger } from '../utils/logger';

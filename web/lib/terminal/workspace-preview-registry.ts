@@ -487,7 +487,7 @@ export class WorkspacePreviewRegistry extends EventEmitter {
    */
   rehydrate(workspaceId: string): void {
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return;
 

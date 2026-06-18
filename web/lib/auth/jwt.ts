@@ -5,6 +5,10 @@ import { createLogger } from '../utils/logger';
 // token. The DB's token_version has drifted past the JWT's encoded
 // version (typically a password change or admin revocation).
 import { DETECTION_TERMS, withDetectionTerms } from '../virtual-filesystem/session-path-guard';
+// Reuse the 3-shape unwrap helper from session-store.ts so this file
+// matches the same connection.ts module-shape ladder as session-store
+// and terminal-session-manager — single source of truth.
+import { unwrapDefaultExport } from '@/lib/storage/session-store';
 
 const logger = createLogger('Auth:JWT');
 
@@ -261,8 +265,17 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
  */
 function getUserTokenVersion(userId: string): number | null {
   try {
-    // Lazy load to avoid circular deps at module level
-    const { getDatabase } = require('../database/connection');
+    // Lazy load to avoid circular deps at module level.
+    // Defensive unwrap is delegated to unwrapDefaultExport (single source
+    // of truth across session-store, terminal-session-manager, and this
+    // file). Named-only flatten (Shape C: { getDatabase: fn, default: undefined })
+    // is the case the dev-server log actually showed on Next.js / turbopack
+    // output of connection.ts which exports BOTH `export function getDatabase`
+    // AND `export default getDatabase`.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conn: any = require('../database/connection-shim');
+    const getDatabase = unwrapDefaultExport<() => any>(conn);
+    if (typeof getDatabase !== 'function') return null;
     const db = getDatabase();
     if (!db) return null;
     const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(userId) as any;
@@ -278,7 +291,17 @@ function getUserTokenVersion(userId: string): number | null {
  */
 export function incrementUserTokenVersion(userId: string): number {
   try {
-    const { getDatabase } = require('../database/connection');
+    // Password-revocation write path: fail OPEN with audit log so a broken
+    // DB does not silently leave tokens valid FOREVER — returns -1 (rather
+    // than throwing) so verifyAuth() can still accept the token, but
+    // operators see the error log + can investigate.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conn: any = require('../database/connection-shim');
+    const getDatabase = unwrapDefaultExport<() => any>(conn);
+    if (typeof getDatabase !== 'function') {
+      logger.error('Cannot increment token version — database/connection-shim did not export a callable default or named getDatabase export', { userId });
+      return -1;
+    }
     const db = getDatabase();
     if (!db) {
       logger.error('Cannot increment token version — DB not available', { userId });
@@ -403,7 +426,13 @@ export function verifyMfaToken(mfaToken: string): { userId: string; jti: string 
  */
 export function getUserEmail(userId: string): string | null {
   try {
-    const { getDatabase } = require('../database/connection');
+    // Read path: fail open silently — return null if DB unwrap fails, so
+    // verifyAuth (which calls this lazily) does not crash auth on a broken
+    // connection module.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conn: any = require('../database/connection-shim');
+    const getDatabase = unwrapDefaultExport<() => any>(conn);
+    if (typeof getDatabase !== 'function') return null;
     const db = getDatabase();
     if (!db) return null;
     const row = db.prepare('SELECT email FROM users WHERE id = ?').get(userId) as any;

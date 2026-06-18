@@ -205,7 +205,7 @@ export async function retryEvent(eventId: string): Promise<void> {
     throw new Error(`Event is not failed: ${event.status}`);
   }
 
-  const db = require('@/lib/database/connection').getDatabase();
+  const db = require('@/lib/database/connection-shim').getDatabase();
   db.prepare(`
     UPDATE events
     SET status = 'pending', error = NULL, updated_at = CURRENT_TIMESTAMP

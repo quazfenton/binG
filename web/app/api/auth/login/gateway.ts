@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     let mfaEnabled = false;
     if (result.user?.id) {
       try {
-        const { getDatabase } = require('@/lib/database/connection');
+        const { getDatabase } = require('@/lib/database/connection-shim');
         const db = getDatabase();
         if (db) {
           const mfaRecord = db.prepare(

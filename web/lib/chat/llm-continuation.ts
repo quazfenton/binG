@@ -170,14 +170,31 @@ function isReadOnlyStep(step: { toolName?: string }): boolean {
  * in the map falls back to the canonicalized form. Why a map rather
  * than blanket text? The LLM-side prompt quality is better with named
  * categories ("a web search" reads as English; "a web_search" does not).
+ *
+ * Style split in CATEGORY_MAP (do NOT harmonize without re-reading this):
+ *   - READ family: gerund-style ("a file read", "a web URL read") so the
+ *     prompt template "You called X in the previous turn…" reads as
+ *     "[you] performed a file read" (action), not as "[you] called THE
+ *     file" (object). The bare-object form caused ambiguity in prompts.
+ *   - OTHER families: noun-phrase ("a directory listing", "a web search",
+ *     "a code search") — already reads as English in the prompt template
+ *     without needing the gerund pivot.
+ *
+ * Exported as `humanizeToolName` (was `_humanizeToolName`) and tagged
+ * SEMI-PUBLIC so tests can assert on the producer contract directly
+ * instead of pinning the continuation-prompt regex to brittle literal
+ * wording. Do NOT treat this as the module's stable consumer API — if
+ * internal callers need to humanize a tool name outside of test
+ * contexts, the export may be re-privatized behind a thin wrapper.
  */
-function _humanizeToolName(raw: string): string {
+export function humanizeToolName(raw: string): string {
   const canonical = _canonicalToolName(raw);
   if (!canonical) return 'an info-gathering tool';
   const CATEGORY_MAP: Record<string, string> = {
-    // filesystem reads
-    read_file: 'a file',
-    read_url: 'a web URL',
+    // READ family — gerund-style (see JSDoc for the rationale)
+    read_file: 'a file read',
+    read_url: 'a web URL read',
+    // filesystem listings
     list_files: 'a directory listing',
     list_directory: 'a directory listing',
     list_dir: 'a directory listing',
@@ -193,7 +210,7 @@ function _humanizeToolName(raw: string): string {
     web_search: 'a web search',
     web_fetch: 'a web fetch',
     // capability-style
-    'file.read': 'a file',
+    'file.read': 'a file read',
     'file.list': 'a directory listing',
     'file.search': 'a file search',
     'repo.search': 'a repository search',
@@ -205,6 +222,93 @@ function _humanizeToolName(raw: string): string {
 
 function isSingleReadOnlyStep(steps: ReadonlyArray<{ toolName?: string }>): boolean {
   return steps.length === 1 && isReadOnlyStep(steps[0]);
+}
+
+/**
+ * Circuit-breaker detector for the chat-loop bug.
+ *
+ * Pattern (visible in dev-server log when a tool error propagates into the
+ * next continuation, e.g. a VFS `enableBatchMode` TypeError):
+ *   1. Tool call fails internally (result.success === false || result.error set)
+ *   2. LLM receives the failure in tool-result context
+ *   3. LLM's next text response is just plan-language ("I'll now ...", "first ..."
+ *      "then ...", "let me ...") instead of concrete next-action tool calls
+ *   4. AutoContinue.plan_steps_remaining re-fires because
+ *      steps.length < planStepsCount is still satisfied
+ *   5. The cycle repeats until MAX_CONTINUATIONS (default 3) silently caps it
+ *   6. User sees duplicated message bubbles and 60s+ POST /api/chat waits
+ *
+ * Refuse to re-invoke when ALL three conditions match so the LLM is forced
+ * to either (a) actually execute a tool successfully or (b) surface the
+ * failure to the user instead of looping on a fresh `I'll now` prompt.
+ *
+ * Guards prevent false positives:
+ *   - `hasFailure && !hasSuccess` — any positive tool result alongside the
+ *     failure means the LLM is making progress (e.g. one read worked, one
+ *     write failed). Don't fight genuine forward motion.
+ *   - responseText length 30..1000 — too short = no plan words yet (every
+ *     legitimate continuation prompt is longer); too long = real content
+ *     (not a plan-only response).
+ *   - Plan-pattern regex tuned to match the LLM vocabulary in the bug log
+ *     (Phase 6 telemetry tagging): "I'll now", "let me", "next I'll", "first,"
+ *     "then I", "after that", "finally".
+ */
+  // Failure detection (defending future refactors):
+  //   - r.success === true                        → success (ignores any
+  //     `error` field that may carry incidental metadata on a successful
+  //     run, e.g. partial warnings that don't represent failure)
+  //   - r.success === false                       → definitive failure
+  //   - r.success === undefined + meaningful error → failure (treat the
+  //     error field as the failure marker when the success flag wasn't set)
+  //   - r.success === undefined + null/empty error → no signal. Critically:
+  //   express-style `{ success: undefined, error: null }` and
+  //   `{ success: undefined, error: '' }` do NOT trip the breaker.
+  // Do NOT switch to `r.error !== undefined` or `!!r.error` — the previous
+  // implementation's `!== undefined` check mis-classified `error: null`
+  // and `error: ''` as failures. The check below is intentionally
+  // conservative against false positives so express-style success markers
+  // remain compatible with the circuit-breaker semantics.
+  function _detectFailurePlanLoop(
+  steps: ReadonlyArray<{ result?: { success?: boolean; error?: unknown } }> | undefined,
+  responseText: string | undefined,
+): boolean {
+  if (!steps || steps.length === 0) return false;
+  let hasFailure = false;
+  let hasSuccess = false;
+  for (const s of steps) {
+    const r = s?.result;
+    if (!r) continue;
+    if (r.success === true) {
+      hasSuccess = true;
+      continue;
+    }
+    if (r.success === false) {
+      hasFailure = true;
+      continue;
+    }
+    // success === undefined: fall back to the error field, ignoring
+    // express-style null/empty-string sentinel values.
+    const err = r.error;
+    const errorIsMeaningful =
+      err !== undefined && err !== null && err !== '';
+    if (errorIsMeaningful) {
+      hasFailure = true;
+    }
+  }
+  if (!hasFailure || hasSuccess) return false;
+  if (!responseText) return false;
+  const len = responseText.length;
+  if (len < 30 || len > 1000) return false;
+  // Plan-language regex matched against the Phase 6 telemetry fingerprint
+  // of the chat-loop bug (see top-of-file comment for the full bug
+  // pattern). Keep this list narrow: the helper fires by intent on
+  // *planning-shape* responses, not on every conversational sentence
+  // containing a modal verb. Adding broad variants like `\bi should\b`
+  // would make legitimate follow-ups (e.g. "I should also note this API
+  // is deprecated") trigger the breaker and reject valid continuations.
+  return /\b(i'll now\b|\blet me\b|\bnext i('ll| will)\b|\bi will (start|begin|proceed|continue)\b|\bnow i('ll| will)\b|\bthen i\b|\bfirst,?\s+(let me|i('ll| will)|we|next)\b|\bafter that\b|\bfinally\b)/i.test(
+    responseText,
+  );
 }
 
 /**
@@ -246,6 +350,15 @@ export type ContinuationReason =
   | 'single_step_read_pattern'
   | 'plan_steps_remaining'
   | 'single_write_then_stop'
+  // 'failure_plan_loop' is a dedicated reason emitted by the chat-loop
+  // circuit-breaker (see _detectFailurePlanLoop below). Distinct from
+  // 'no_continuation_needed' so SSE/log lines expose which branch closed
+  // the loop — operators grep on this token to detect a chat stuck in
+  // tool-failure → plan-only-text → re-invoke cycles (the VFS
+  // enableBatchMode TypeError was the originating bug). Strictly additive:
+  // existing switch statements with `default` cases are unaffected;
+  // exhaustive switch statements without default need a new arm.
+  | 'failure_plan_loop'
   | 'no_continuation_needed'
   | 'max_continuations_reached'
   | 'max_iterations'
@@ -349,23 +462,15 @@ export function shouldAutoContinue(input: {
   const routing = input.routing;
   const planStepsCount = routing?.planSteps?.length ?? routing?.estimatedSteps ?? 0;
 
-  // Env-default-on guard: when no routing metadata is provided, defer to
-  // resolveDefaultContinue (env-default-aware). Makes the env-default-on
-  // contract load-bearing instead of heuristic-only via the trigger chain.
-  // RT-001 sibling: see also first-response-routing.ts:255 producer
-  // ternary and :373 consumer gate.
-  if (routing == null) {
-    const shouldContinue = resolveDefaultContinue();
-    return {
-      continue: shouldContinue,
-      reason: shouldContinue ? 'plan_steps_remaining' : 'no_continuation_needed',
-      continuationPrompt: shouldContinue ? 'Continue with the plan.' : '',
-      continuationsSoFar,
-      clearedCount: continuationsSoFar,
-      finalIteration: maxContinuations,
-    };
-  }
-
+  // Order matters: heuristic triggers that work off `steps` ONLY (Triggers 2
+  // and 3) must fire BEFORE the routing==null catch-all. Previously this
+  // catch-all ran first and shadowed them — any test (or real call) without
+  // a `routing` object would short-circuit to `resolveDefaultContinue()` and
+  // emit `plan_steps_remaining` instead of the more targeted
+  // `empty_tool_args_detected` / `single_step_read_pattern` reason.
+  // The catch-all is now a last-resort fallback positioned after Triggers 1-3
+  // and before the routing-aware plan_steps_remaining + single_write rules.
+  //
   // 1. roleSelection.continue === true → continue with the plan's next step
   if (routing?.continue === true) {
     const basePrompt = routing.stepReprompt
@@ -406,8 +511,9 @@ export function shouldAutoContinue(input: {
     // Sanitize the raw provider name so camelCase / dotted variants
     // (`listFiles`, `file.read`) don't leak into the model's context.
     // Use a small category map for the most common shapes and fall back
-    // to the lowercased snake_case form.
-    const toolName = _humanizeToolName(rawToolName);
+    // to the lowercased snake_case form. `humanizeToolName` is the
+    // producer (see its doc for the gerund-style rationale).
+    const toolName = humanizeToolName(rawToolName);
     return {
       continue: true,
       reason: 'single_step_read_pattern',
@@ -421,10 +527,57 @@ export function shouldAutoContinue(input: {
     };
   }
 
+  // Env-default-on catch-all: when no routing metadata is provided AND none
+  // of the steps-only heuristic triggers fired, defer to resolveDefaultContinue
+  // (env-aware). This is now the LAST gate, not the first — Triggers 2 and 3
+  // have priority because their steers are more specific than a generic
+  // "Continue with the plan." RT-001 sibling: see first-response-routing.ts.
+  if (routing == null) {
+    const shouldContinue = resolveDefaultContinue();
+    return {
+      continue: shouldContinue,
+      reason: shouldContinue ? 'plan_steps_remaining' : 'no_continuation_needed',
+      continuationPrompt: shouldContinue ? 'Continue with the plan.' : '',
+      continuationsSoFar,
+      clearedCount: continuationsSoFar,
+      finalIteration: maxContinuations,
+    };
+  }
+
   // 4. Plan steps remaining (Bug #11): routing outlined multiple steps
   //    but the model only completed 1 tool call. Auto-continue so the
   //    model finishes the remaining steps.
+  //
+  // 4a. Circuit-breaker (chat-loop fix). When tool calls in THIS turn failed
+  //     and the LLM's text response is plan-language describing "next steps"
+  //     rather than actual tool calls or concrete actions, refuse to continue.
+  //
+  //     continuationsSoFar >= 1 GUARDS the legitimate first-step-completion
+  //     case — the unified-agent-service.test.ts fixture for
+  //     plan_steps_remaining uses continuationsSoFar: 0 with response "Step 1
+  //     done." (no plan words), so on the very first continuation nothing
+  //     fires and plan_steps_remaining behaves as designed. The guard
+  //     intentionally lives AT THIS CALL SITE, not inside
+  //     _detectFailurePlanLoop, because the helper is a pure predicate and
+  //     should not embed policy about turn iteration — that decision belongs
+  //     to the caller that already knows the counter.
+  //
+  //     Reason is `failure_plan_loop` (not `no_continuation_needed`) so
+  //     SSE/log lines distinguish a breaker-encoded stop from a legitimate
+  //     "LLM response is structurally complete, no further work needed"
+  //     decision. Operators can grep for this token to spot repeated
+  //     tool-failure → plan-only-text cycles.
   if (planStepsCount >= 2 && steps.length >= 1 && steps.length < planStepsCount) {
+    if (continuationsSoFar >= 1 && _detectFailurePlanLoop(steps, input.responseText)) {
+      return {
+        continue: false,
+        reason: 'failure_plan_loop',
+        continuationPrompt: '',
+        continuationsSoFar,
+        clearedCount: continuationsSoFar,
+        finalIteration: maxContinuations,
+      };
+    }
     return {
       continue: true,
       reason: 'plan_steps_remaining',

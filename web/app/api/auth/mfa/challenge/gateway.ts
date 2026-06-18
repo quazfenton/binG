@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid or expired MFA token' }, { status: 401 });
     }
 
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       return NextResponse.json({ success: false, error: 'Database not available' }, { status: 500 });

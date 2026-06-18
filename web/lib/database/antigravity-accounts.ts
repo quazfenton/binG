@@ -19,7 +19,7 @@ import crypto from 'crypto';
 
 // Lazy-load getDatabase to prevent better-sqlite3 from being bundled in client
 function getDatabase() {
-  const { getDatabase: getDb } = require('@/lib/database/connection');
+  const { getDatabase: getDb } = require('@/lib/database/connection-shim');
   return getDb();
 }
 

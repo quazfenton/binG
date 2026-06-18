@@ -344,4 +344,77 @@ describe('transactional-vfs: Transaction', () => {
     await tx.rollback();
     await tx.rollback(); // no throw
   });
+
+  // ========================================================================
+  // Pass-X: HMR-protective guards (chat-loop bug regression).
+  //
+  // Root cause: under Next.js HMR (Turbopack circular dep between
+  // git-backed-vfs.ts and virtual-filesystem-service.ts), the cached Map at
+  // globalThis.__gitVFSInstances__ can transiently resolve
+  // `virtualFilesystem.forOwner(ownerId)` to undefined or to a detached
+  // instance lacking `enableBatchMode` / `disableBatchMode` /
+  // `flushBatch`. The fix in git-backed-vfs.ts heals the poisoned cache;
+  // the four defensive guards in transactional-vfs.ts make commit &
+  // rollback tolerant of detached instances so the per-chat-API WARN
+  // is silenced at the source.
+  // ========================================================================
+  describe('Pass-X: HMR-detached GitBackedVFS tolerance', () => {
+    // CRITICAL: snapshot the original `forOwner` mock so afterEach can
+    // restore it. Without this restore, each test's per-test mock override
+    // leaks into sibling describes (the existing 'commit() runs all queued
+    // edits' assertion relies on the default mock returning a stub with
+    // enableBatchMode/flushBatch), silently breaking unrelated tests.
+    let originalForOwner: any;
+
+    beforeEach(async () => {
+      const realVFS = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
+      originalForOwner = (realVFS as any).forOwner;
+    });
+
+    afterEach(async () => {
+      const realVFS = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
+      (realVFS as any).forOwner = originalForOwner;
+    });
+
+    it('commit does NOT throw when forOwner returns undefined (poisoned-cache recovery)', async () => {
+      const realVFS = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
+      (realVFS as any).forOwner = vi.fn(() => undefined);
+
+      const tx = beginTransaction('owner-hmr-1');
+      tx.write('a.ts', 'A');
+      const r = await tx.commit();
+      // Commit completed despite HMR-detached gitVFS — writes fell through
+      // to per-write auto-commit (degraded mode, but no TypeError).
+      expect(r).toBeDefined();
+      expect(r.failed).toBe(0);
+      expect(contentByPath.get('a.ts')).toBe('A');
+    });
+
+    it('commit does NOT throw when forOwner returns object missing enableBatchMode (detached-prototype recovery)', async () => {
+      const realVFS = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
+      // Detached instance: exists, but lacks the class-immutable methods
+      // that would normally survive HMR-class-identity changes.
+      (realVFS as any).forOwner = vi.fn(() => ({
+        // no enableBatchMode, no disableBatchMode, no flushBatch
+      }));
+
+      const tx = beginTransaction('owner-hmr-2');
+      tx.write('a.ts', 'A');
+      const r = await tx.commit();
+      expect(r).toBeDefined();
+      expect(r.failed).toBe(0);
+      expect(contentByPath.get('a.ts')).toBe('A');
+    });
+
+    it('rollback does NOT throw when forOwner returns undefined during batch exit', async () => {
+      const realVFS = (await import('@/lib/virtual-filesystem/index.server')).virtualFilesystem;
+      (realVFS as any).forOwner = vi.fn(() => undefined);
+
+      const tx = beginTransaction('owner-hmr-3');
+      tx.write('a.ts', 'A');
+      // Rollback must complete even if the batch-exit fails silently.
+      await expect(tx.rollback()).resolves.toBeUndefined();
+      expect(tx.isOpen).toBe(false);
+    });
+  });
 });

@@ -23,7 +23,7 @@ import { reconcileScopePathWithSessionId, DETECTION_TERMS, withDetectionTerms } 
 import { getSnapshotBroadcaster } from './snapshot-broadcaster';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
 // Bug #10/#25: import the shared error classes directly. Previously these

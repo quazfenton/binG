@@ -11,7 +11,7 @@
  * - Security context (SSRF checks, rate limit state)
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Integrations:Audit');

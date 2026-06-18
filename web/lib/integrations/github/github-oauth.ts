@@ -5,7 +5,7 @@
  * Similar to Google OAuth but for GitHub API access.
  */
 
-import { getDatabase, encryptApiKey, decryptApiKey } from '@/lib/database/connection';
+import { getDatabase, encryptApiKey, decryptApiKey } from '@/lib/database/connection-shim;
 import { randomBytes } from 'crypto';
 
 export const GITHUB_CONNECTION = 'github';

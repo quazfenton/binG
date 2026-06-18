@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       return NextResponse.json({ success: false, error: 'Database not available' }, { status: 500 });

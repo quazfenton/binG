@@ -113,7 +113,7 @@ export interface AuthAuditEntry {
  */
 export function logAuthEvent(entry: AuthAuditEntry, request?: NextRequest): void {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       logger.warn('Auth audit log skipped — DB not available');
@@ -165,7 +165,7 @@ export function getAuthAuditLog(userId: string, limit: number = 100): Array<{
   created_at: string;
 }> {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return [];
 

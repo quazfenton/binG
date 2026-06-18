@@ -11,8 +11,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth/auth0';
-import { getDatabase } from '@/lib/database/connection';
-import { decryptApiKey, encryptApiKey } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
+import { decryptApiKey, encryptApiKey } from '@/lib/database/connection-shim;
 import { createFigmaApi, FigmaApiError } from '@/lib/integrations/figma/api';
 import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/integrations/figma/config';
 import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/integrations/figma/oauth';

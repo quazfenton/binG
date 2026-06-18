@@ -11,7 +11,7 @@ import { NextRequest } from 'next/server';
 
 
 import { auth0 } from '@/lib/auth/auth0';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:EventsStream');

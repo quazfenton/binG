@@ -344,9 +344,15 @@ perl -i -ne 'print unless eof and not /\S/' lib.ts
 perl -i -pe 'chomp if eof' lib.ts
 BAD=$(commit_file "v2-tiny-trim")
 RANGE="${GOOD}..${BAD}"
-# Sanity check: code line count must be unchanged.  code_lines_before=$(git show ${GOOD}:lib.ts | grep -cv '^[[:space:]]*$')
-  code_lines_after=$(git show ${BAD}:lib.ts | grep -cv '^[[:space:]]*$')
-  echo "  non-blank lines: $code_lines_before → $code_lines_after (must match)"
+# Sanity check: code line count must be unchanged across the trim.
+# Both segments of `awk 'NF' | wc -l` exit 0 on any input — including files
+# with zero non-blank lines where `grep -c` would return rc=1. Both intend
+# "count non-blank lines"; awk has no false-match case, so the pipeline
+# stays rc=0. (The actual S8 bug was the swallowed code_lines_before=
+# assignment — the comment here is about pipeline hygiene, not exit codes.)
+code_lines_before=$(git show "${GOOD}:lib.ts" | awk 'NF' | wc -l)
+code_lines_after=$(git show  "${BAD}:lib.ts" | awk 'NF' | wc -l)
+echo "  non-blank lines: $code_lines_before → $code_lines_after (must match)"
   for mode in check-shrinkage check-braces check-exports check-functions check-truncation; do
     expects_pass "S8" "$mode" "$RANGE"
   done

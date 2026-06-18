@@ -152,7 +152,7 @@ export class WorkspaceJobManager {
    */
   listJobs(workspaceId: string, filters?: { status?: string }): WorkspaceJobRecord[] {
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return [];
 
@@ -245,7 +245,7 @@ export class WorkspaceJobManager {
    */
   async rehydrate(workspaceId: string): Promise<number> {
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return 0;
 
@@ -340,7 +340,7 @@ export class WorkspaceJobManager {
 
     // Remove from DB
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (db) {
         db.prepare('DELETE FROM workspace_jobs WHERE workspace_id = ?').run(workspaceId);
@@ -366,7 +366,7 @@ export class WorkspaceJobManager {
     job: EnhancedJob,
     config: EnhancedJobConfig & { description?: string; tags?: string[]; quotaCategory?: 'compute' | 'io' | 'api'; maxExecutions?: number },
   ): void {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return;
 
@@ -409,7 +409,7 @@ export class WorkspaceJobManager {
    * Update a job's status in the DB.
    */
   private updateJobStatus(jobId: string, status: string): void {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return;
 
@@ -420,7 +420,7 @@ export class WorkspaceJobManager {
    * Update a job's execution tracking in the DB.
    */
   private updateJobExecution(jobId: string, executionCount: number, lastExecutedAt: number): void {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return;
 
@@ -433,7 +433,7 @@ export class WorkspaceJobManager {
    * Update a job's last error in the DB.
    */
   private updateJobError(jobId: string, error: string): void {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return;
 
@@ -452,7 +452,7 @@ export class WorkspaceJobManager {
     this.schemaLoaded = true;
 
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return;
 

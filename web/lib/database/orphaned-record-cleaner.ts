@@ -8,7 +8,7 @@
  * @module database/orphaned-record-cleaner
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Database:OrphanedCleaner');

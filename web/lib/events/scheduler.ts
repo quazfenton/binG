@@ -13,7 +13,7 @@
  * @module events/scheduler
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { execSchemaFile } from '@/lib/database/schema';
 import { emitEvent } from './bus';
 import { createLogger } from '@/lib/utils/logger';

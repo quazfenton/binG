@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
         console.log('[Auth0 Post-Callback] Refreshed Auth0→local user mapping for:', localUserId);
       } else {
         // Try to find local user by trusted email and map it
-        const { getDatabase } = await import('@/lib/database/connection');
+        const { getDatabase } = await import('@/lib/database/connection-shim);
         const db = getDatabase();
         if (db) {
           const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(trustedEmail) as { id: string } | undefined;
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
           const { grantServicePermission } = await import('@/lib/oauth/permission-tracker');
 
           // Get the connection ID we just saved
-          const { getDatabase } = await import('@/lib/database/connection');
+          const { getDatabase } = await import('@/lib/database/connection-shim);
           const db = getDatabase();
           if (db) {
             const connRow = db.prepare(`

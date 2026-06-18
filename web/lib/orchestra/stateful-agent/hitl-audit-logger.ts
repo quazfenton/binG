@@ -11,7 +11,7 @@
  * - Automatic cleanup of old logs
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim;
 import { execSchemaFile } from '@/lib/database/schema';
 
 export interface AuditLogEntry {
