@@ -774,15 +774,17 @@ export default {
       // proxyHeaders, traceRequest, writeTraceLog, getCorsHeaders) and runs
       // the existing fetch + response build logic on cache miss.
       const buildProxyResponse = async () => {
-      // For long-running streaming paths (/v1/* chat completions) add a
-      // generous abort signal so a hung backend produces a clean error
-      // instead of hanging until Cloudflare's edge idle timeout.
-      // Non-streaming requests (static assets, API calls) don't need one
-      // since they complete in well under 30s.
       const isStreamingPath = url.pathname.startsWith('/v1/');
-      const abortSignals: AbortSignal[] = [request.signal];
-      if (isStreamingPath) abortSignals.push(AbortSignal.timeout(300_000));
-      const fetchSignal = AbortSignal.any(abortSignals);
+
+      // Only use the client's abort signal — do NOT add an artificial timeout.
+      // Cloudflare Workers imposes internal limits on subrequests:
+      //   30s  initial response headers  (cannot be increased)
+      //  100s  idle time between chunks  (cannot be increased)
+      // An AbortSignal.timeout() here would be misleading because those
+      // runtime limits take precedence.  The backend (bing/) manages its
+      // own timeouts per-provider, and the Worker should be gracious and
+      // let the backend decide when to abort.
+      const fetchSignal = request.signal;
 
       const proxyResponse = await fetch(target.url, {
         method: request.method,
@@ -818,11 +820,15 @@ export default {
       // slow reasoning steps), wrap the body in a TransformStream that
       // injects SSE heartbeat comments every 10s so the connection stays
       // alive until the next real chunk.
+      //
+      // Note: the heartbeat only applies to the *downstream* path
+      // (Worker → client).  The *upstream* (Worker → backend) fetch has
+      // no keep-alive — it is subject to CF's 100s idle chunk timeout
+      // (hard limit, not configurable).  Once the backend sends its first
+      // byte downstream heartbeats keep the edge connection alive
+      // indefinitely.
       if (isStreamingPath && responseBody) {
-        const ct = proxyResponse.headers.get('content-type') ?? '';
-        if (ct.includes('text/event-stream') || ct.includes('application/x-ndjson')) {
-          responseBody = createKeepAliveStream(responseBody, 10_000);
-        }
+        responseBody = createKeepAliveStream(responseBody, 10_000);
       }
 
       // ─── Observability: trace response status ──────────────────
@@ -855,22 +861,26 @@ export default {
       }
       return await buildProxyResponse();
     } catch (error) {
-      // Client disconnected — no CPU wasted building a response for nobody
       if (request.signal.aborted) {
         return new Response(null, { status: 499 });
       }
 
       const message = error instanceof Error ? error.message : 'Unknown error';
+      const isTimeout = error instanceof Error && (
+        error.name === 'TimeoutError' ||
+        message.includes('timeout') ||
+        message.includes('timed out') ||
+        message.includes('AbortError') ||
+        message.includes('network idle')
+      );
 
-      // Always trace proxy errors (502) — they represent real failures and
-      // should never be silent regardless of the TRACED_PATTERNS filter.
       traceRequest(request.method, url.pathname, { error: message }, ctx);
 
       return new Response(JSON.stringify({
-        error: 'Backend unavailable',
+        error: isTimeout ? 'Gateway Timeout' : 'Backend unavailable',
         detail: message,
       }), {
-        status: 502,
+        status: isTimeout ? 504 : 502,
         headers: {
           'Content-Type': 'application/json',
           ...getCorsHeaders(request, env),
@@ -883,35 +893,55 @@ export default {
 // ─── Helpers ──────────────────────────────────────────────────────────
 
 /**
- * Creates a TransformStream that forwards data chunks and injects SSE
- * heartbeat comments (":\n\n") during idle gaps longer than `idleTimeoutMs`.
+ * Wraps a ReadableStream and injects SSE heartbeat comments (":\n\n")
+ * during idle gaps longer than `idleTimeoutMs`.
  *
  * This keeps Cloudflare's edge idle timeout (~15-30s) from killing the
  * connection when the upstream LLM provider stalls mid-stream (e.g.,
  * during fallback chain evaluation or slow reasoning steps).
+ *
+ * Design notes:
+ *  - Uses a fixed-interval timer (~1/3 of idleTimeout) instead of a
+ *    "reset-on-data" setTimeout.  This avoids a subtle issue where
+ *    setTimeout does not reliably fire inside a ReadableStream's pull
+ *    loop on all Workers runtime versions.
+ *  - The timer only enqueues if no real data has been written since
+ *    the last heartbeat (tracked via `lastWrite` timestamp), so we
+ *    never inject a heartbeat immediately after a real chunk.
+ *  - Sends ":\n\n" (SSE comment + blank line) instead of ":\n" because
+ *    many SSE clients' idle-timer reset logic only triggers on a
+ *    complete event boundary (blank line).
  */
 function createKeepAliveStream(
   inner: ReadableStream,
   idleTimeoutMs = 10_000,
 ): ReadableStream {
   const encoder = new TextEncoder();
+  const checkInterval = Math.max(1000, Math.floor(idleTimeoutMs / 3));
   let timer: ReturnType<typeof setTimeout> | null = null;
   let reader: ReadableStreamDefaultReader<Uint8Array>;
+  let lastWrite = Date.now();
 
-  function resetTimer(controller: ReadableStreamDefaultController): void {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
+  const heartbeat = encoder.encode(':\n\n');
+
+  function watchDog(controller: ReadableStreamDefaultController): void {
+    if (Date.now() - lastWrite >= idleTimeoutMs) {
       try {
-        controller.enqueue(encoder.encode(':\n'));
-        resetTimer(controller);
-      } catch { /* stream closed, ignore */ }
-    }, idleTimeoutMs);
+        lastWrite = Date.now();
+        controller.enqueue(heartbeat);
+      } catch {
+        // stream closed — stop the watchdog
+        return;
+      }
+    }
+    timer = setTimeout(() => watchDog(controller), checkInterval);
   }
 
   return new ReadableStream({
     start(controller) {
       reader = inner.getReader();
-      resetTimer(controller);
+      lastWrite = Date.now();
+      timer = setTimeout(() => watchDog(controller), checkInterval);
 
       function pump(): void {
         reader.read().then(({ done, value }) => {
@@ -920,10 +950,8 @@ function createKeepAliveStream(
             controller.close();
             return;
           }
-          // Data arrived — reset the idle timer
-          if (timer) clearTimeout(timer);
+          lastWrite = Date.now();
           controller.enqueue(value);
-          resetTimer(controller);
           pump();
         }).catch(err => {
           if (timer) clearTimeout(timer);

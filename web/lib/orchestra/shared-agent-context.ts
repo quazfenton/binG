@@ -155,7 +155,7 @@ export function formatToolError(
  */
 export function validateToolArgs(
   toolName: string,
-  args: Record<string, any>,
+  args: Record<string, unknown>,
   requiredFields: string[],
 ): { error: StructuredToolError; missing: readonly string[] } | null {
   const missing = requiredFields.filter(f => args[f] === undefined || args[f] === null || args[f] === '');

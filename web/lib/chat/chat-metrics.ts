@@ -16,6 +16,30 @@ export interface OrchestrationFallbackRecord {
   lastAt: number | null;
 }
 
+/**
+ * Bug #117 (Pass-9 audit) — discriminated completion-outcome bucket.
+ *
+ * Counters the FINAL completion shape so operators can distinguish
+ * - `toolOnlyCompletions`: native-FC success — model emitted tool calls but no prose
+ * - `emptyCompletions`: total failure — model emitted nothing at all
+ * (text+ toolCall mixed responses or pure text responses are implicitly NOT counted here —
+ * those are the success baseline and don’t need discrimination).
+ *
+ * The bucket key `${provider}:${finishReason}` captures both cheaply
+ * so /api/health can surface "openai:stop" vs "mistral:length" per
+ * outcome without nested objects. Cardinality is naturally bounded
+ * (~20 providers × ~5 finishReason values = ~100 keys max).
+ *
+ * Naming note: `emptyCompletions` is intentionally camelCase to avoid
+ * collision with steer-service.ts’ `kind: ‘empty_completion’` value
+ * (which is a different namespace — Steer trigger kind, not metric key).
+ */
+export interface CompletionOutcomeRecord {
+  count: number;
+  byProviderAndReason: Record<string, number>;
+  lastAt: number | null;
+}
+
 interface ChatMetricsState {
   orchestrationFallbacks: OrchestrationFallbackRecord;
   doubleWriteBlocked: { count: number; paths: string[] };
@@ -56,6 +80,9 @@ interface ChatMetricsState {
     bySource: Record<string, number>;
     lastAt: number | null;
   };
+  /** Bug #117 (Pass-9) — final-shape discriminator */
+  emptyCompletions: CompletionOutcomeRecord;
+  toolOnlyCompletions: CompletionOutcomeRecord;
 }
 
 declare global {
@@ -63,7 +90,7 @@ declare global {
   var __chatMetrics__: ChatMetricsState | undefined;
 }
 
-function getState(): ChatMetricsState {
+export function getState(): ChatMetricsState {
   if (!globalThis.__chatMetrics__) {
     globalThis.__chatMetrics__ = {
       orchestrationFallbacks: { count: 0, lastReason: null, lastAt: null },
@@ -84,6 +111,16 @@ function getState(): ChatMetricsState {
       invalidJsonFallbacks: {
         count: 0,
         bySource: {},
+        lastAt: null,
+      },
+      emptyCompletions: {
+        count: 0,
+        byProviderAndReason: {},
+        lastAt: null,
+      },
+      toolOnlyCompletions: {
+        count: 0,
+        byProviderAndReason: {},
         lastAt: null,
       },
     };
@@ -280,6 +317,8 @@ export function _resetChatMetricsForTests(): void {
       recentAttempts: [],
     };
   }
+    globalThis.__chatMetrics__.emptyCompletions = { count: 0, byProviderAndReason: {}, lastAt: null };
+    globalThis.__chatMetrics__.toolOnlyCompletions = { count: 0, byProviderAndReason: {}, lastAt: null };
 }
 
 
@@ -306,6 +345,47 @@ export function recordInvalidJsonFallback(source: string): void {
     state.invalidJsonFallbacks.lastAt = Date.now();
   } catch (err) {
     logger.debug('[recordInvalidJsonFallback] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Bug #117 (Pass-9) — bump the empty-completion (total-failure) metric.
+ * Bucket key is `${provider}:${finishReason}` so operators can triage
+ * per-model whether a particular finishReason is correlated with the
+ * "model emitted nothing" failure mode.
+ */
+export function recordEmptyCompletion(provider: string, finishReason: string): void {
+  try {
+    const state = getState();
+    state.emptyCompletions.count += 1;
+    const key = `${provider}:${finishReason}`;
+    state.emptyCompletions.byProviderAndReason[key] =
+      (state.emptyCompletions.byProviderAndReason[key] ?? 0) + 1;
+    state.emptyCompletions.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordEmptyCompletion] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Bug #117 (Pass-9) — bump the tool-only-completion (native-FC success)
+ * metric. Mirrors `recordEmptyCompletion` and shares the bucket
+ * key format so /api/health can compose tool-only / empty side-by-side.
+ */
+export function recordToolOnlyCompletion(provider: string, finishReason: string): void {
+  try {
+    const state = getState();
+    state.toolOnlyCompletions.count += 1;
+    const key = `${provider}:${finishReason}`;
+    state.toolOnlyCompletions.byProviderAndReason[key] =
+      (state.toolOnlyCompletions.byProviderAndReason[key] ?? 0) + 1;
+    state.toolOnlyCompletions.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordToolOnlyCompletion] counter update failed', {
       error: err instanceof Error ? err.message : String(err),
     });
   }

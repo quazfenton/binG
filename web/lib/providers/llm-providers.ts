@@ -224,6 +224,7 @@ export interface StreamingResponse {
     request_files?: string[]
     write_diffs?: Array<{ path: string; diff: string }>
   }
+  completionOutcome?: 'text' | 'empty' | 'tool_only';
 }
 
 export interface ProviderConfig {

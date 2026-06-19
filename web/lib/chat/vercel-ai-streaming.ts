@@ -62,7 +62,16 @@ import {
   // Bug #119 (Pass-8 audit) — defensive JSON.parse metric recorder,
   // called from `tryParseToolArgs` below at every `JSON.parse(raw)` site.
   recordInvalidJsonFallback,
+  // Bug #117 (Pass-9 audit) — final-shape discriminator. Bumped at
+  // stream finalization (see comment block above the final yield chunk)
+  // so /api/health can surface tool-only-completion vs empty-completion
+  // distinct from text responses. Mutually-exclusive switch.
+  recordEmptyCompletion,
+  recordToolOnlyCompletion,
 } from './chat-metrics';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:Streaming');
 import { getModelsForPurpose } from './model-capability-registry';
 import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm-compat';
 
@@ -83,6 +92,27 @@ import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm
      downstream tool-args dispatcher keeps working with sensible defaults.
    - Bumps `chatMetrics.invalidJsonFallbacks` keyed by source so /api/health
      can surface per-callsite counts.
+ *
+ * **Behavior change vs. the previous inline catches** — review this table
+ * before modifying the helper, because any downstream consumer that branches
+ * on the parse-result shape (rather than treating the return as opaque args)
+ * will see a different value than at the old inline sites. The five cases are:
+ *
+ * | # | Input shape                       | Old (inline) | New (this helper)                                         |
+ * |---|-----------------------------------|--------------|-----------------------------------------------------------|
+ * | 1 | `JSON.parse` throws (malformed)   | return `{}`  | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ * | 2 | `JSON.parse` returns a plain obj  | return obj   | return obj  (NO metric bump — valid args)                  |
+ * | 3 | `JSON.parse` returns an array     | return arr   | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ * | 4 | `JSON.parse` returns `null`       | return null  | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ * | 5 | `JSON.parse` returns a primitive  | return val   | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ *
+ * The metric bump is keyed by the `source` argument (e.g. `tool-result-input`,
+ * `tool-call-args`, `text-mode-extract`) so /api/health surfaces per-callsite
+ * counts. Cases 3–5 are tightened vs. the old inline catches because arrays,
+ * null, and primitives are NEVER valid tool-call args; coercing them silently
+ * to `{}` was the documented behavior, but it now produces a metric row so
+ * operators can detect a provider that started returning shaped JSON instead
+ * of an args object.
  *
  * @param raw — the suspected JSON string (typically from a tool-args
    cache or chunk.input).
@@ -1366,7 +1396,7 @@ export async function* streamWithVercelAI(
   const healthCheckPromise = preflightProviderHealthCheck(provider, url);
 
   // Cache for tool call arguments - scoped to this stream invocation to prevent cross-request leaks
-  const toolCallArgsCache = new Map<string, any>();
+  const toolCallArgsCache = new Map<string, Record<string, unknown>>();
   // Bug #113 (Pass-8) deferred end-to-end adoption: parallel cache for
   // the StructuredToolError produced by validateToolArgs during the
   // tool-call chunk phase, consumed by the tool-result chunk phase to
@@ -3007,6 +3037,10 @@ while (thinkPingQueue.length > 0) {
 }
 
 // Get final usage and metadata (from the winner's result if speculative fallback was used)
+// Bug #117 (Pass-9) — closure-scoped text accumulator for the
+// completion-outcome discriminator. Populated just before the final
+// yield chunk. Either path (tool-only / empty) is mutually exclusive.
+let finalText: string = '';
 const finalResult = fallbackResultRef?.result || result;
 const usage = await finalResult.usage;
 const finishReason = (await finalResult.finishReason) || 'stop';
@@ -3408,6 +3442,31 @@ ${healingInstructions}` : healingInstructions)
       }
     }
 
+    // Bug #117 (Pass-9) — completion-outcome discriminator at stream
+    // finalization. Mutually-exclusive switch:
+    //   - toolCalls > 0 + no prose → toolOnlyCompletion (native FC success)
+    //   - toolCalls == 0 + no prose → emptyCompletion (real failure)
+    //   - any prose → no metric (default success)
+    // Best-effort: failures swallowed with debug log so a tail-side error
+    // (await / state) cannot abort the stream.
+    try {
+      const rawText: unknown = typeof (finalResult as any)?.text === 'function'
+        ? await (finalResult as any).text()
+        : ((finalResult as any)?.text ?? '');
+      finalText = typeof rawText === 'string' ? rawText : '';
+      const hasProse = finalText.trim().length > 0;
+      if (!hasProse) {
+        if (allToolCalls.length > 0) {
+          recordToolOnlyCompletion(actualProvider, finishReason);
+        } else {
+          recordEmptyCompletion(actualProvider, finishReason);
+        }
+      }
+    } catch (err) {
+      logger.warn('[Bug #117] completion-outcome metric emit failed (best-effort)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     // Final chunk with completion status and metadata
     yield {
       content: '',
@@ -3421,6 +3480,16 @@ ${healingInstructions}` : healingInstructions)
       },
       reasoning: reasoningContent || undefined,
       toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+      // Bug #117 (Pass-9) — informational outcome tag (peer to the metric
+      // bump above). Three mutually-exclusive values: 'tool_only' | 'empty' | 'text'.
+      // Bug #117 (Pass-9) — metadata aligned with metric dispatch:
+      // 'tool_only' only when NO prose + tools present; 'empty' when NO
+      // prose + no tools; 'text' otherwise (text+tools is the success
+      // baseline and does NOT bump either counter).
+      completionOutcome:
+        allToolCalls.length > 0 && finalText.trim().length === 0 ? 'tool_only'
+        : allToolCalls.length === 0 && finalText.trim().length === 0 ? 'empty'
+        : 'text',
       timestamp: new Date(),
       metadata: {
         vercelAI: true,
