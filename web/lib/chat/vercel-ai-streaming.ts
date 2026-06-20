@@ -1921,13 +1921,30 @@ export async function* streamWithVercelAI(
                 model: modelName,
               });
               if (detection.detected) {
-                emitFCGateZeroCallsLog({
-                  provider,
-                  model: modelName,
-                  availableTools,
-                  toolCallsDone: toolCallCount,
-                  responseLength: fullResponseText.length,
-                  steerLength: detection.steer?.length || 0,
+                // NEW-4 (audit 2026-06-20, latency mask; ~2-5ms/stream end):
+                // defer the chatLogger.warn emit out of the synchronous
+                // streamText.finish chunk handler. The detector itself
+                // (`wireFCGateZeroCallsSteer`) stays synchronous because its
+                // return value IS the chunk metadata (see `fcGateSteer`
+                // below); the emit is pure telemetry/observability
+                // (write [FC-GATE-ZERO-CALLS] to chatLogger) and can be
+                // deferred without losing the marker. `setImmediate` runs
+                // the callback in the next event-loop tick, AFTER the
+                // current chunk has been yielded to the consumer, so SSE
+                // fan-out isn't blocked. Best-effort: any throw from the
+                // emit (logger pipe collapse, etc.) cannot reach the outer
+                // hot path.
+                setImmediate(() => {
+                  try {
+                    emitFCGateZeroCallsLog({
+                      provider,
+                      model: modelName,
+                      availableTools,
+                      toolCallsDone: toolCallCount,
+                      responseLength: fullResponseText.length,
+                      steerLength: detection.steer?.length || 0,
+                    });
+                  } catch { /* best-effort, non-fatal */ }
                 });
                 fcGateSteer = detection.steer;
               }

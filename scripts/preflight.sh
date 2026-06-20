@@ -29,6 +29,12 @@
 #   intentional, not a defect.
 
 set -euo pipefail
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "Error: pnpm is not installed or not in PATH" >&2
+  exit 2
+fi
+
 cd "$(dirname "$0")/.."
 
 FLAGS="--check=vendor"
@@ -56,7 +62,13 @@ if [ "${RC}" -eq 0 ]; then
   echo "==> Preflight PASS"
   exit 0
 fi
-echo "==> Preflight FAIL (drift detected; rc=${RC})" >&2
-echo "    hint: pnpm check:vendor-drift --check=vendor --update   (regenerate snapshots)" >&2
+if [ "${RC}" -eq 1 ]; then
+  echo "==> Preflight FAIL (drift detected; rc=${RC})" >&2
+  echo "    hint: pnpm check:vendor-drift --check=vendor --update   (regenerate snapshots)" >&2
+elif [ "${RC}" -eq 2 ]; then
+  echo "==> Preflight FAIL (misconfiguration; rc=${RC})" >&2
+else
+  echo "==> Preflight FAIL (unexpected error; rc=${RC})" >&2
+fi
 echo "    hint: PREFLIGHT_WARN_ONLY=1 bash scripts/preflight.sh  (advisory only)" >&2
 exit "${RC}"

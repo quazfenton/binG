@@ -211,8 +211,8 @@ def load_seen_ids(out_dir: Path) -> set[int]:
                 cid = data.get("id")
                 if isinstance(cid, int):
                     seen.add(cid)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  [WARN] skipping corrupt file {f.name}: {e}", file=sys.stderr)
     return seen
 
 
@@ -353,22 +353,13 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
 
     result = FetchResult()
 
-    # Determine start page: --start-page overrides everything
+    # Determine start page: --start-page overrides everything.
+    # Otherwise always start from page 1 when not in overwrite mode —
+    # new comments go to the LAST page (GitHub orders oldest-first), not page 1,
+    # so resuming from last_page_fetched+1 would miss them. Dedup handles
+    # re-skipping existing comments efficiently.
     if args.start_page is not None:
         start_page = args.start_page
-    elif state.last_page_fetched > 0 and not args.overwrite:
-        # Check if any new comments appeared on page 1 (which would shift pages)
-        try:
-            probe, _ = fetch_comments_page(config, 1)
-            new_ids = [c["id"] for c in probe if c["id"] not in seen_ids]
-            if not new_ids:
-                start_page = state.last_page_fetched + 1
-            else:
-                if not args.quiet:
-                    print(f"  {len(new_ids)} new comment(s) detected — re-fetching from page 1")
-                start_page = 1
-        except Exception:
-            start_page = state.last_page_fetched + 1
     else:
         start_page = 1
 
@@ -388,7 +379,7 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
 
         try:
             raw_comments, total_pages = fetch_comments_page(config, page)
-        except Exception as e:
+        except (requests.RequestException, RuntimeError, OSError) as e:
             print(f"\n  ERROR: {e}")
             result.message = str(e)
             break
@@ -432,7 +423,10 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
         time.sleep(0.5)
 
     # If we exited the loop normally (not a break), there may be more pages.
-    result.has_more_comments = not result.stopped_early and result.pages_fetched > 0
+    # If we exited because the API returned empty, there are no more comments.
+    result.has_more_comments = (not result.stopped_early
+                                and result.pages_fetched > 0
+                                and result.total_fetched > 0)
 
     state.total_pages = total_pages_observed
     save_state(out_dir, state)

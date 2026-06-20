@@ -1,5 +1,5 @@
 import { open } from "node:fs/promises";
-import { unlink } from "node:fs/promises";
+import { unlink } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ export async function acquireSingletonLock(): Promise<boolean> {
       await fd.close();
 
       _releaseLock = () => {
-        unlink(PID_FILE).catch(() => {});
+        try { unlink(PID_FILE); } catch { /* best-effort */ }
         _releaseLock = null;
       };
 

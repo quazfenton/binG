@@ -274,9 +274,17 @@ async function classifyRequest(
     // Bug #66: promote to warn so operators know the classifier is degraded
     chatLogger.warn('Task classifier failed, using regex fallback', { error: error.message });
     // Bug #66: increment counter for health endpoint visibility
-    import('@/lib/chat/chat-metrics').then(({ recordClassifierFallback }) => {
-      recordClassifierFallback();
-    }).catch(() => {});
+    // @audit-NEW-3-batched (audit 2026-06-20): mirror the fix applied to the
+    // tool-call-tracker site. `void` prefix silences ESLint
+    // no-floating-promises; outer `.catch` covers module-load failure.
+    // requestId is NOT in scope here (classifyRequest runs BEFORE requestId
+    // is set at L419) so closure capture doesn't apply — body stays silent
+    // because a counter increment is observability-grade telemetry.
+    void import('@/lib/chat/chat-metrics')
+      .then(({ recordClassifierFallback }) => {
+        recordClassifierFallback();
+      })
+      .catch(() => {});
 
     let isCodeRequest = false;
     if (STRONG_CODE_PATTERN.test(content)) {
@@ -855,7 +863,7 @@ export async function POST(request: NextRequest) {
     // O(1) Session File Tracking: Track file references incrementally as messages flow
     // This avoids re-scanning messages with regex on every context generation
     //
-    // NEW-3 (latency mask; ~10-25ms/request): drop the `await` so trackSessionFiles
+    // @audit-NEW-3-batched (latency mask; ~10-25ms/request): drop the `await` so trackSessionFiles
     // runs in the background while the LLM call setup proceeds. File-tracking is
     // observability-grade telemetry — losing-then-retried is acceptable. Two
     // defense-in-depth niceties from the original try/catch:
@@ -901,7 +909,34 @@ export async function POST(request: NextRequest) {
     // SECURITY: Use persistent anonymous session ID from cookie if available
     // Sanitize to prevent path traversal attacks (e.g., ".." or "/" in cookie value)
     // Use resolveFilesystemOwner for consistent anonymous session handling
-    const ownerResolution = await resolveFilesystemOwner(request);
+    //
+    // Tier 1 #2 (audit 2026-06-20, Top 5 Quick Win, ~5-20ms/request): fire
+    // `resolveFilesystemOwner(request)` concurrently with `classifyRequest(...)`
+    // so the auth-derived setup chain (~5-20ms) overlaps with the ML-bound
+    // classifier (~50-150ms). Saves the smaller of the two (typically the
+    // owner-resolution time) per request.
+    //
+    // Trade-off vs NEW-2: previously, `denialContextPromise` +
+    // `mem0ResultPromise` were eagerly fired BEFORE the classifyRequest
+    // await, so the DB-bound I/O overlapped with the classifier. Those two
+    // promises MUST capture `filesystemOwnerId` at Promise construction time
+    // (the denials getRecentDenials() binds `${filesystemOwnerId}$${resolvedConversationId}`;
+    // mem0Search binds `userId: filesystemOwnerId`), so we cannot fire them
+    // before the owner resolves. Net effect: the small NEW-2 overlap with
+    // classifyRequest is replaced by a smaller Tier 1 #2 overlap with
+    // resolveFilesystemOwner. The deny + mem0 promises still overlap with
+    // the 5-way Promise.all (workspaceSessionContext / hybrid / v1PromptSuffix)
+    // that follows — so their latency is masked by wsCtx / hybrid / v1Prompt
+    // building rather than by the ML classifier. Wallclock delta ≈ T(resolveFilesystemOwner).
+    //
+    // Safe per dependency analysis: classifyRequest is a pure function (no
+    // shared state with resolveFilesystemOwner). anonSessionIdToSet capture
+    // is local-scope so no race. The downstream reader sees the same
+    // {ownerId, classification} shape irrespective of eager vs. late await.
+    const [ownerResolution, classification] = await Promise.all([
+      resolveFilesystemOwner(request),
+      classifyRequest(messages, attachedFilesystemFiles),
+    ]);
     const filesystemOwnerId = ownerResolution.ownerId;
     anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
 
@@ -920,20 +955,17 @@ export async function POST(request: NextRequest) {
     // Use multi-factor task classifier instead of regex-based detection
     // IMPORTANT: classify on original messages (user's actual input), not processedMessages
     // which has system prompts, workspace context, memory, etc. prepended
-    // NEW-2 (latency mask; ~50-150ms/request): fire mem0Search + getRecentDenials
-    // DB-bound Promises BEFORE awaiting the ML-bound classifyRequest below.
-    // Classifier is the slowest single op in this region (~50-150ms; loads a
-    // heavy ML model). Starting the DB queries eagerly lets them run concurrently
-    // with classifyRequest instead of serially after — masks ML latency behind I/O.
     //
-    // Safe per dependency analysis: classifyRequest is a pure function (no shared
-    // state with the DB queries). mem0Search .catch → graceful fallback to
-    // {success:false, results:[]} is preserved verbatim. Downstream reader at
-    // L967-L971 sees the same shape irrespective of eager vs. late await.
-    // buildWorkspaceSessionContext + buildHybridWorkspaceContext stay AFTER the
-    // classifyRequest await because they capture shouldUseContextPackFinal
-    // (= useContextPack || (enableFilesystemEdits && isCodeRequest)) into their
-    // arg list at Promise.all construction time — invariant preserved.
+    // NEW-2 (latency mask; ~30-50ms/request): denialContextPromise + mem0ResultPromise
+    // fire here, AFTER the Tier 1 #2 parallel await so filesystemOwnerId is
+    // available. Their latency still overlaps with the 5-way Promise.all
+    // (buildWorkspaceSessionContext / buildHybridWorkspaceContext / v1Prompt)
+    // that consumes them, masking the DB I/O behind those ML / composition
+    // calls. mem0Search .catch → graceful fallback to {success:false,
+    // results:[]} is preserved verbatim. buildWorkspaceSessionContext +
+    // buildHybridWorkspaceContext still capture shouldUseContextPackFinal
+    // (= useContextPack || (enableFilesystemEdits && isCodeRequest)) into
+    // their arg list at Promise.all construction time — invariant preserved.
     const denialContextPromise = filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}$${resolvedConversationId}`,
       4,
@@ -951,7 +983,6 @@ export async function POST(request: NextRequest) {
         })
       : Promise.resolve({ success: false, results: [] });
 
-    const classification = await classifyRequest(messages, attachedFilesystemFiles);
     const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
@@ -1472,18 +1503,29 @@ const config: UnifiedAgentConfig = {
                 // Track tool call success/failure in telemetry for model ranking
                 // Uses generated toolCallId for deduplication
                 if (toolName) {
-                  import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-                    toolCallTracker.recordToolCall({
-                      model: actualModel,
-                      provider: actualProvider,
-                      toolName,
-                      success: result?.success !== false,
-                      error: result?.error,
-                      timestamp: Date.now(),
-                      conversationId,
-                      toolCallId: `agent-${toolName}-${Date.now()}`,
+                  // @audit-NEW-3-batched (audit 2026-06-20): mirror the trackSessionFiles
+                  // fix at L857-L879 for the outer-import rejection + ALS scope
+                  // teardown after response finalize. The onToolExecution callback
+                  // sometimes fires AFTER the SSE stream ends — snapshotting
+                  // requestId into a closure-local BEFORE the void chain keeps
+                  // correlation even when chatLogger's ALS scope is gone.
+                  const toolTelemetryReqId = requestId;
+                  void import('@/lib/tools/tool-call-tracker')
+                    .then(({ toolCallTracker }) => {
+                      toolCallTracker.recordToolCall({
+                        model: actualModel,
+                        provider: actualProvider,
+                        toolName,
+                        success: result?.success !== false,
+                        error: result?.error,
+                        timestamp: Date.now(),
+                        conversationId,
+                        toolCallId: `agent-${toolName}-${Date.now()}`,
+                      });
+                    })
+                    .catch((error: any) => {
+                      chatLogger.debug('Tool call telemetry failed (non-critical)', { requestId: toolTelemetryReqId, error: error.message });
                     });
-                  }).catch(() => {});
                 }
               };
 

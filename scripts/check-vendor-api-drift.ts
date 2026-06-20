@@ -520,7 +520,7 @@ async function main(): Promise<number> {
 main()
   .then(rc => process.exit(rc))
   .catch(err => {
-    console.error(`[check-vendor-api-drift] fatal: ${err.message ?? err}`);
+    console.error(`[check-vendor-api-drift] fatal: ${err instanceof Error ? err.message : String(err)}`);
     if (err.stack) console.error(err.stack);
     process.exit(2);
   });

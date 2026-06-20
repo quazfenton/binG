@@ -54,14 +54,15 @@ function stripStringsComments(line) {
   s = s.replace(/\/\*[\s\S]*?\*\//g, '');
   s = s.replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
   s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
-  s = s.replace(/`[^`]*`/g, '``');
+  // Strip template literals, including embedded expressions ${...}
+  s = s.replace(/`(?:[^`\\$]|\\.|\$\{[^}]*\})*`/g, '``');
   return s;
 }
 
 console.log('\n--- Brace stack at each potentially suspicious boundary ---');
 var anchorLines = [1140, 1145, 1150, 1155, 1160, 1170, 1180, 1200, 1210, 1350, 1357, 1394, 1700, 1705, 1712, 1713, 1738, 1800, 1900, 1909, 1955, 1961];
 var src_lines = src.split('\n');
-var maxAnchor = anchorLines[anchorLines.length - 1];
+var maxAnchor = Math.min(anchorLines[anchorLines.length - 1], src_lines.length);
 var anchorIndex = 0;
 var stack = [];
 for (var lineNum = 1; lineNum <= maxAnchor; lineNum++) {

@@ -333,9 +333,7 @@ describe('decideAutoContinue', () => {
     });
     expect(decision.continue).toBe(true);
     expect(decision.forceSignal).toBe(true);
-    // Both detectors fired; advanced reason takes priority. The
-    // specific reason depends on detector signal[0]; we only assert
-    // it's NOT 'file_edits_present' (the basic reason).
+    expect(decision.reason).toBe('read-then-stall');
     clearContinuationCount(requestId);
   });
 

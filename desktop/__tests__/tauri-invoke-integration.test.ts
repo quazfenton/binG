@@ -239,8 +239,8 @@ describe('File Operations Integration Tests', () => {
       const filePath = path.join(workspaceRoot, 'image.png');
       await fs.writeFile(filePath, binaryData);
 
-      const result = await fs.readFile(filePath) as Buffer;
-      expect(result.equals(binaryData)).toBe(true);
+      const result = await fs.readFile(filePath);
+      expect(Buffer.isBuffer(result) && result.equals(binaryData)).toBe(true);
     });
 
     it('should return null for missing files', async () => {

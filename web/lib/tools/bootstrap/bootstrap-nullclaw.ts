@@ -102,7 +102,7 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
         // isAvailable() is true when the module loaded, but that doesn't
         // mean a container exists. Check for NULLCLAW_URL (URL mode) or
         // verify the container pool has a ready entry.
-        hasContainer = !!process.env.NULLCLAW_URL || !!((nullclawIntegration as any).getReadyContainerCount?.());
+        hasContainer = !!process.env.NULLCLAW_URL;
       }
     } catch { /* nullclaw integration unavailable */ }
     if (hasContainer) {

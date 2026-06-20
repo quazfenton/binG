@@ -386,33 +386,61 @@ export class VFSBatchOperations {
 
   /**
    * Execute batch file write operations
+   *
+   * NEW Meta-coalesce (audit 2026-06-20): concurrent `writeFile`/`deletePath`
+   * calls previously triggered N separate `persistWorkspace` calls, each of
+   * which wraps everything in a `db.transaction(() => { ... })` (better-sqlite3,
+   * SYNCHRONOUS — blocks the event loop while the transaction body runs).
+   * `Promise.all` over 10 ops therefore serialized through the event-loop
+   * mutex, yielding ZERO real wallclock parallelism.
+   *
+   * `virtualFilesystem.applyBatchMutations(...)` is the audit's coalesced
+   * path: loads the workspace ONCE, applies all mutations to the in-memory
+   * `workspace.files` Map, then runs ONE shared `persistWorkspace` (which
+   * internally wraps everything in a single SQLite transaction). N fsyncs
+   * collapse into 1 fsync — saves ~9 x (5-20ms) per batch (~45-180ms saved).
+   *
+   * Backward-compat: `BatchOperationResult` shape unchanged (success flag,
+   * processed[], totalFiles, successful, failed, duration, optional error).
+   * Partial-success semantics preserved (replication of prior `allSettled`
+   * semantics — individual validation failures don't abort the rest).
+   *
+   * Semantic difference vs. prior shape: events (`onFileChange` /
+   * `onSnapshotChange`) emit ONCE per batch (single `snapshotChange` covers
+   * the whole batch, plus N `fileChange` events post-persist) instead of once
+   * per write. Listeners that depended on the per-write snapshot for
+   * granule-level cache invalidation should consult the `processed` array.
    */
   async batchWrite(operations: BatchFileOperation[]): Promise<BatchOperationResult> {
     const startTime = Date.now();
     const processed: BatchOperationResult['processed'] = [];
-    let successful = 0;
-    let failed = 0;
 
     try {
-      // Meta #2 cap: bound concurrent ops in batchWrite() to 10.
-      const limit27 = getVfsLimiter({ inputSize: operations.length });
-      const opResults27 = await Promise.all(
-        operations.map(op => limit27.runExclusive(async () => {
-          try {
-            if (op.type === 'delete') {
-              await virtualFilesystem.deletePath(this.ownerId, op.path);
-            } else {
-              await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
-            }
-            return { status: 'success' as const, processed: { path: op.path, success: true } };
-          } catch (error: any) {
-            return { status: 'error' as const, processed: { path: op.path, success: false, error: error.message } };
-          }
-        }))
-      );
-      for (const r of opResults27) {
-        processed.push(r.processed);
-        if (r.status === 'success') successful++; else failed++;
+      // Meta #2 cap retained: bound batch size to 10 per chunk (same as the
+      // prior cap-enforced Semaphore(10)). For a batch of >10 ops, chunk into
+      // groups of 10 and let `applyBatchMutations` coalesce each chunk into
+      // its own single transaction.
+      const CHUNK = VFS_CAP_DEFAULT;
+      let successful = 0;
+      let failed = 0;
+      for (let i = 0; i < operations.length; i += CHUNK) {
+        const chunk = operations.slice(i, i + CHUNK);
+        const chunkResult = await virtualFilesystem.applyBatchMutations(
+          this.ownerId,
+          chunk.map(op => op.type === 'delete'
+            ? { type: 'delete' as const, path: op.path }
+            : { type: 'write' as const, path: op.path, content: op.content ?? '' },
+          ),
+        );
+        for (const p of chunkResult.processed) {
+          processed.push({
+            path: p.path,
+            success: p.success,
+            ...(p.error ? { error: p.error } : {}),
+          });
+        }
+        successful += chunkResult.successful;
+        failed += chunkResult.failed;
       }
 
       return {
@@ -429,7 +457,7 @@ export class VFSBatchOperations {
         processed,
         totalFiles: operations.length,
         successful,
-        failed,
+        failed: processed.length - processed.filter(p => p.success).length,
         duration: Date.now() - startTime,
         error: error.message,
       };

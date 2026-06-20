@@ -828,7 +828,14 @@ export default {
       // byte downstream heartbeats keep the edge connection alive
       // indefinitely.
       if (isStreamingPath && responseBody) {
-        responseBody = createKeepAliveStream(responseBody, 10_000);
+        // Only inject heartbeats for text-based content types — binary
+        // (images, audio, octet-stream) would be corrupted by `:\n\n`.
+        // An empty/missing content-type defaults to allowed (some upstream
+        // SSE responses omit the header).
+        const ct = proxyResponse.headers.get('content-type') ?? '';
+        if (!ct.startsWith('image/') && !ct.startsWith('audio/') && !ct.startsWith('video/') && ct !== 'application/octet-stream') {
+          responseBody = createKeepAliveStream(responseBody, 10_000);
+        }
       }
 
       // ─── Observability: trace response status ──────────────────
