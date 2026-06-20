@@ -93,10 +93,9 @@ preview_output() {
 # Git history (parent commit) for the diff-based checks.
 make_repo() {
   local label="$1"
-  local tmpdir
-  tmpdir=$(mktemp -d "/tmp/integrity-test-${label}-XXXXXX")
-  TMPDIRS+=("$tmpdir")
-  cd "$tmpdir"
+  TMPDIR=$(mktemp -d "/tmp/integrity-test-${label}-XXXXXX")
+  TMPDIRS+=("$TMPDIR")
+  cd "$TMPDIR"
   git init -q
   git config user.email test@test
   git config user.name test

@@ -138,7 +138,13 @@ probeGuard('probe-chat-route CI guard', () => {
   }, PROBE_TIMEOUT_MS + 10_000);
 
   afterAll(() => {
-    if (existsSync(REPORT_PATH)) {
+    // In CI, keep the JSON so the workflow's
+    // `.github/workflows/probe-regression.yml` artifact-upload step can
+    // publish /tmp/probe-chat-route.json for PR-comment diffs. Local
+    // devs (CI unset, including PROBE_CI=1 manual smoke runs) still get
+    // cleanup so their /tmp doesn't accumulate stale reports across
+    // repeated runs.
+    if (existsSync(REPORT_PATH) && !process.env.CI) {
       try {
         unlinkSync(REPORT_PATH);
       } catch {

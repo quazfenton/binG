@@ -1,0 +1,101 @@
+name: probe-regression
+
+# Gate the probe-chat-route CI guard behind every PR so reviewers can see
+# per-layer latency deltas in the PR comment via the uploaded artifact.
+# Manual reruns are also exposed via workflow_dispatch for ad-hoc validations.
+on:
+  pull_request:
+    # Default event set on `pull_request:` is {opened, synchronize, reopened}
+    # but we list it explicitly so cold readers don't have to look up the
+    # default. Trim if a new trigger type becomes noisy (e.g. closed).
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+# Bundle successive pushes to the same PR into one logical run; cancel
+# the prior run so the artifact always reflects the latest commit.
+concurrency:
+  group: probe-regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Need at least one job below; defaults declared once at job level.
+permissions:
+  contents: read
+
+jobs:
+  probe-regression:
+    name: Probe chat-route regression guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        # All pnpm work happens inside the `web` workspace member.
+        working-directory: web
+
+    env:
+      # GHA already exports CI=true, but the guard's gate is
+      # `CI || PROBE_CI` and the task spec asked for the explicit form;
+      # setting both is belt-and-suspenders and readable in the run log.
+      PROBE_CI: '1'
+      CI: 'true'
+
+    steps:
+      # --------------------------------------------------------------- checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth: 0 keeps the full history so any future git-aware
+          # tooling (e.g. baseline comparison against main) has the data.
+          fetch-depth: 0
+
+      # --------------------------------------------------------------- toolchain
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # pnpm v9 is the current stable; no `packageManager` field in
+          # package.json, so we pin here. Bump when the project adopts a
+          # newer pnpm version.
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Matches web/.nvmrc (Node 22).
+          node-version: 22
+          cache: pnpm
+          # Workspace-root lockfile — pnpm-workspace.yaml lists `web` so
+          # the single root-level pnpm-lock.yaml covers every workspace
+          # member and is the correct cache key source.
+          cache-dependency-path: pnpm-lock.yaml
+
+      # ------------------------------------------------------------- install
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ----------------------------------------------------------- run guard
+      - name: Run probe-chat-route guard
+        # The guard test (`__tests__/probe-chat-route-guard.test.ts`)
+        # spawns `scripts/probe-chat-route.ts` as a child process and
+        # writes its verdicts to /tmp/probe-chat-route.json. The test's
+        # afterAll intentionally preserves that JSON when CI=true so the
+        # artifact-upload step below can pick it up. The path is relative
+        # to `working-directory: web` at job level — no `web/` prefix.
+        run: pnpm test __tests__/probe-chat-route-guard.test.ts
+
+      # ------------------------------------------------------ upload artifact
+      - name: Upload probe report JSON
+        # `if: always()` so the artifact still uploads on a regression
+        # failure — the JSON is the easiest way for reviewers to see
+        # WHICH layer regressed / over-budgeted in the PR comment.
+        # hashFiles() guard prevents a phantom-empty artifact when the
+        # probe crashes before writing JSON (e.g. ReferenceError in
+        # synthetic source) — `upload-artifact v4` would otherwise
+        # create an empty run-scoped artifact with this name, polluting
+        # the PR's artifact list.
+        if: always() && hashFiles('/tmp/probe-chat-route.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-chat-route-report
+          path: /tmp/probe-chat-route.json
+          if-no-files-found: warn
+          retention-days: 30

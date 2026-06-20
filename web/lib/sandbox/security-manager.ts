@@ -60,7 +60,7 @@ export class SandboxSecurityManager {
   //   3. Path containment (resolvePath) — prevents filesystem escape.
   //   4. Tool-argument validation — all tool inputs pass through Zod schemas
   //      that reject injection payloads before they reach the shell.
-  private static readonly SHELL_METADATA_CHARS = ['`'];
+  private static readonly SHELL_METADATA_CHARS = ['`', '$'];
 
 
   // Input size limits

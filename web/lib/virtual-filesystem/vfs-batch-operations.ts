@@ -238,9 +238,11 @@ export class VFSBatchOperations {
     const results: BatchExecutionResult[] = [];
 
     // Meta #2 cap (audit 2026-06-20): bound concurrent file ops in execute()
-    // to 10 to avoid Node fd exhaustion under large batches. Per-operation
+    // to avoid Node fd exhaustion under large batches. Use permits=1 to
+    // preserve operation ordering since queued operations may have implicit
+    // dependencies (e.g. create then read the same path). Per-operation
     // Semaphore (not singleton) — see /opt/bing/web/lib/vfs/concurrency-cap.ts.
-    const limit25 = getVfsLimiter({ inputSize: this._operations.length });
+    const limit25 = getVfsLimiter({ inputSize: 1 });
     const opResults25 = await Promise.all(
       this._operations.map(op => limit25.runExclusive(async () => {
         try {
@@ -334,16 +336,18 @@ export class VFSBatchOperations {
     sandboxId?: string
   ): Promise<BatchOperationResult> {
     const startTime = Date.now();
-    const processed: BatchOperationResult['processed'] = [];
+    const processed: BatchOperationResult['processed'] = new Array(operations.length);
     let successful = 0;
     let skipped = 0;
 
     // Meta #2 cap (audit 2026-06-20): bound concurrent ops in
     // batchWriteIncremental() to 10. The `continue` becomes an early `return`
     // from the map callback; we still update `processed` for parity.
-    const limit26 = getVfsLimiter({ inputSize: operations.length });
+    // Also enforce sequential execution (permits=1) so operations with
+    // implicit dependencies (e.g. create then read the same path) don't race.
+    const limit26 = getVfsLimiter({ inputSize: 1 });
     const opResults26 = await Promise.allSettled(
-      operations.map(op => limit26.runExclusive(async () => {
+      operations.map((op, index) => limit26.runExclusive(async () => {
         try {
           if (sandboxId && op.type !== 'delete') {
             const syncResult = await sandboxPersistenceManager.syncIncremental(
@@ -351,7 +355,7 @@ export class VFSBatchOperations {
               [{ path: op.path, content: op.content }]
             );
             if (syncResult.skipped > 0) {
-              processed.push({ path: op.path, success: true });
+              processed[index] = { path: op.path, success: true };
               return 'skipped' as const;
             }
           }
@@ -360,10 +364,10 @@ export class VFSBatchOperations {
           } else {
             await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
           }
-          processed.push({ path: op.path, success: true });
+          processed[index] = { path: op.path, success: true };
           return 'processed' as const;
         } catch (err: any) {
-          processed.push({ path: op.path, success: false, error: err.message });
+          processed[index] = { path: op.path, success: false, error: err.message };
           return 'error' as const;
         }
       }))

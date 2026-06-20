@@ -379,7 +379,7 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
 
         try:
             raw_comments, total_pages = fetch_comments_page(config, page)
-        except (requests.RequestException, RuntimeError, OSError) as e:
+        except (requests.RequestException, RuntimeError, OSError, ValueError) as e:
             print(f"\n  ERROR: {e}")
             result.message = str(e)
             break
@@ -413,9 +413,10 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
         # Stop early only when we've confirmed we're on the last known page
         # and every comment on it was already saved. Don't stop before the
         # last page — later pages may contain new comments even when an
-        # earlier page has none.
-        total_pages = total_pages_observed or 0
-        if new_on_page == 0 and page > start_page and page >= total_pages:
+        # earlier page has none. Also don't stop when total_pages is unknown
+        # (0) — the Link header may be unparseable, and stopping early would
+        # miss new comments on later pages.
+        if new_on_page == 0 and page > start_page and total_pages_observed > 0 and page >= total_pages_observed:
             if not args.quiet:
                 print(f"  All {len(raw_comments)} comments already saved — caught up.")
             result.stopped_early = True

@@ -7,7 +7,7 @@
   "packageManager": "pnpm@9.15.4",
   "private": true,
   "scripts": {
-    "dev": "node scripts/dev-runner.js",
+    "dev": "turbo dev",
     "dev:raw": "turbo dev",
     "dev:backend": "pnpm --filter backend dev",
     "dev:web": "pnpm --filter web dev",

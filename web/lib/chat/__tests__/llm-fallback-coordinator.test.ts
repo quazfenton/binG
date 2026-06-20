@@ -734,4 +734,184 @@ describe('coordinateConcurrentFallback', () => {
       vi.useRealTimers();
     }
   });
+
+  // ── Chain walk tests (per-fallback hardDeadlineMs) ──────────────────
+  // Bug #86 regression: the secondary Promise.race (primary vs. fallback #1)
+  // had no timeout arm, so when fallback #1 ALSO stalled past silenceMs —
+  // the ninerouter-class scenario, where every fallback hits the same stuck
+  // in-cluster network edge — the request wedged indefinitely. These tests
+  // guard against that regression.
+
+  it('throws within silenceMs + hardDeadlineMs + ε when both primary and fallback never produce (chain exhausted)', async () => {
+    // Regression test for Bug #86. With chain.length=1 and both factories
+    // returning never-resolving generators, the coordinator must surface
+    // a throw within the bounded window of (silenceMs + hardDeadlineMs) plus
+    // some slack for scheduler overhead — not wedge indefinitely.
+    vi.useFakeTimers();
+    try {
+      const silent = makeControllable<number>(); // never produces
+      const silenceMs = 30;
+      const hardDeadlineMs = 100;
+      const EPSILON = 100; // scheduler + microtask + chain-exhaustion overhead
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => silent,
+        createFallbackStream: () => silent,
+        fallbackChain: ['fb1'],
+        silenceMs,
+        hardDeadlineMs,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+
+      // Advance past silenceMs (fallback #1 created) + hardDeadlineMs
+      // (race 2 times out) + slack for the chain-exhaustion throw.
+      await vi.advanceTimersByTimeAsync(silenceMs + hardDeadlineMs + EPSILON);
+
+      // The chain has been exhausted (only 1 entry); the generator throws.
+      await expect(firstP).rejects.toThrow(/Concurrent fallback: chain exhausted/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('walks the chain to fallback #2 when fallback #1 stalls past hardDeadlineMs', async () => {
+    // Chain-walking happy path: fallback #1 times out, fallback #2 is fired
+    // in parallel with the still-in-flight primary; fallback #2 produces a
+    // chunk and wins the race.
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const fb1 = makeControllable<number>(); // stalls forever
+      const fb2 = makeControllable<number>(); // produces a chunk after creation
+      const silenceMs = 30;
+      const hardDeadlineMs = 100;
+      const factoryCalls: string[] = [];
+      const onFallbackWin = vi.fn();
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: (p) => {
+          factoryCalls.push(p);
+          if (p === 'fb1') return fb1;
+          if (p === 'fb2') return fb2;
+          throw new Error(`unexpected provider: ${p}`);
+        },
+        fallbackChain: ['fb1', 'fb2'],
+        silenceMs,
+        hardDeadlineMs,
+        onFallbackWin,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+
+      // Advance past silenceMs → fb1 created (chain iteration 0 begins).
+      await vi.advanceTimersByTimeAsync(silenceMs + 5);
+
+      // Advance past hardDeadlineMs → fb1 timed out, fb2 created
+      // (chain iteration 1 begins).
+      await vi.advanceTimersByTimeAsync(hardDeadlineMs + 5);
+
+      // fb2 produces a chunk.
+      fb2.push(99);
+      fb2.end();
+
+      const first = await firstP;
+      expect(first.done).toBe(false);
+      expect(first.value).toBe(99);
+
+      for await (const _ of iter) { /* drain */ }
+
+      // Both factories should have been called in chain order.
+      expect(factoryCalls).toEqual(['fb1', 'fb2']);
+      expect(onFallbackWin).toHaveBeenCalledTimes(1);
+      expect(onFallbackWin).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'fb2', index: 1 }),
+      );
+      // fb1 should have been aborted (timed out).
+      expect(fb1.aborted).toBe(true);
+      // fb2 should NOT have been aborted (winner).
+      expect(fb2.aborted).toBe(false);
+      // Primary should have been aborted (loser).
+      expect(primary.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('commits primary as winner when primary produces a chunk during the fallback chunk race (chain-walk sanity)', async () => {
+    // Sanity check: chain walking does NOT break the original
+    // primary-wins-during-race behavior. Primary produces a chunk during
+    // the chunk race for fallbackA (the chain's first entry); primary
+    // wins, fallbackA aborted, no further chain entries attempted.
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>();
+      const fallback = makeControllable<number>(); // stalls forever
+      const silenceMs = 30;
+      // Long enough that primary produces first instead of timing out.
+      const hardDeadlineMs = 1000;
+      const onFallbackWin = vi.fn();
+      const onLoser = vi.fn();
+      const factoryCalls: string[] = [];
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: (p) => {
+          factoryCalls.push(p);
+          return fallback;
+        },
+        // Don't override fallbackChain — use the mocked
+        // getConfiguredFallbackChain('primary') which returns
+        // ['fallbackA', 'fallbackB'].
+        silenceMs,
+        hardDeadlineMs,
+        onFallbackWin,
+        onLoser,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+
+      // Advance to silenceMs + 5ms so fallbackA is created and the
+      // chunk race is in flight — both primary.next() and
+      // fallbackA.next() are pending, and the hardDeadlineMs timer is
+      // registered.
+      await vi.advanceTimersByTimeAsync(silenceMs + 5);
+
+      // Primary produces a chunk during the fallback chunk race.
+      primary.push(99);
+      primary.end();
+
+      const first = await firstP;
+      expect(first.done).toBe(false);
+      expect(first.value).toBe(99);
+
+      for await (const _ of iter) { /* drain */ }
+
+      // Primary wins → fallbackA is the loser, fallbackB is never tried.
+      expect(onFallbackWin).not.toHaveBeenCalled();
+      expect(onLoser).toHaveBeenCalledTimes(1);
+      expect(onLoser).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: 'fallbackA',
+          source: 'fallback',
+          index: 0,
+        }),
+      );
+      expect(factoryCalls).toEqual(['fallbackA']);
+      expect(fallback.aborted).toBe(true);
+      expect(primary.aborted).toBe(false); // primary won
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

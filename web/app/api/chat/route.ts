@@ -450,7 +450,7 @@ export async function POST(request: NextRequest) {
   // (request.json() can only resolve/throw once; Node gracefully completes the
   // unconsumed promise without re-parsing).
   const authPromise = resolveRequestAuth(request, { allowAnonymous: true });
-  const rawBodyPromise = request.json();
+  const rawBodyPromise = request.json().catch(() => null);
   const authResult = await authPromise;
   const userId = authResult.userId || 'anonymous';
 

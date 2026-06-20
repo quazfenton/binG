@@ -14,10 +14,9 @@
  *   - This module resolves the fallback chain from
  *     `getConfiguredFallbackChain(primaryProvider)` by default (so it picks
  *     up the self-correcting derank loop in `llm-provider-health.ts`).
- *   - This module has no internal timeout/idle machinery of its own — the
- *     underlying stream factories are responsible for their own TTFT/idle
- *     budgets. The coordinator only fires a single parallel fallback after
- *     `silenceMs` of silence on the primary.
+ *   - This module has its own internal hard-deadline machinery — it does
+ *     NOT delegate TTFT/idle budgets to the underlying stream factories.
+ *     See the chain-walking note below.
  *
  * Design notes:
  *   - BOTH factories return `{ gen, abort }` so the coordinator can truly
@@ -26,13 +25,21 @@
  *     stream and returning the abort function. This is essential: without
  *     it, the user's "cancel the loser" requirement would be partially
  *     unmet (the fallback can be aborted, but the primary cannot).
- *   - The factories are invoked lazily: the fallback is NOT created until
- *     the primary has been silent for `silenceMs`. This avoids unnecessary
- *     work and API-credit usage on the common case where the primary
- *     responds promptly.
- *   - The coordinator only fires ONE parallel fallback (the next entry in
- *     the chain). If the user wants progressive escalation, they can wrap
- *     this function in a chain-walking outer loop (a future enhancement).
+ *   - The factories are invoked lazily: the FIRST fallback is NOT created
+ *     until the primary has been silent for `silenceMs`. This avoids
+ *     unnecessary work and API-credit usage on the common case where the
+ *     primary responds promptly.
+ *   - Chain walking: after the silence race times out, the coordinator
+ *     iterates `fallbackChain` from index 0 to `length-1`, RACING each
+ *     fallback against the still-in-flight primary with a per-iteration
+ *     `hardDeadlineMs` (default 30 s) ceiling. If a fallback stalls past
+ *     `hardDeadlineMs` (or errors, or fails to set up), the coordinator
+ *     aborts it and walks to the next entry. If the chain is exhausted
+ *     without any provider producing a chunk within its budget, the
+ *     generator throws. This bounds the worst-case stall to
+ *     `chain.length * hardDeadlineMs` and is the bug fix for the
+ *     ninerouter-class scenario where every fallback stalls past the
+ *     silence-on-primary timeout (Bug #86 regression).
  *
  * @see getConfiguredFallbackChain for the self-correcting chain source
  * @see llm-provider-health for the derank-by-bad-calls heuristic
@@ -96,6 +103,19 @@ export interface ConcurrentFallbackOptions<T> {
    * iterated without any parallel fallback).
    */
   silenceMs?: number;
+  /**
+   * Per-fallback hard deadline (ms) — the maximum wall-clock time the
+   * coordinator will wait for any single fallback stream to emit its first
+   * chunk before aborting that fallback and walking to the next entry in
+   * `fallbackChain`. Defaults to 30_000. The coordinator applies this
+   * ceiling per fallback iteration, NOT as a cumulative chain-wide budget
+   * — long chains therefore measure in roughly
+   * `chain.length * hardDeadlineMs` end-to-end in the worst case. If the
+   * chain is exhausted without any provider producing a chunk within its
+   * budget, the generator throws (the caller is responsible for
+   * surfacing the throw to the user as a streamed error).
+   */
+  hardDeadlineMs?: number;
   /** User's abort signal. Forwarded to both streams' iteration loops. */
   signal?: AbortSignal;
   /** Optional request ID for log correlation. */
@@ -122,6 +142,26 @@ export interface ConcurrentFallbackOptions<T> {
 const DEFAULT_SILENCE_MS = 20000;
 
 /**
+ * Default per-fallback hard deadline (ms) — the maximum wall-clock time the
+ * coordinator will wait for any SINGLE fallback stream to produce its first
+ * chunk. If a fallback stalls past this deadline the coordinator aborts it
+ * and walks to the next entry in the configured fallback chain. If the chain
+ * is exhausted without any provider producing a chunk within its budget, the
+ * generator throws — this is the bug fix for the wedged-request regression
+ * where `ninerouter` (and any other in-cluster provider that hits a stuck
+ * edge) would leave the secondary Promise.race (primary vs. fallback #1)
+ * dangling indefinitely, defeating every other abort/fallback mechanism.
+ *
+ * Picked at 30_000 ms to match `STREAM_TIMEOUTS.firstTokenTimeoutMs` from
+ * `vercel-ai-streaming.ts` so users see consistent per-stream TTFT semantics
+ * across both fallback paths. The coordinator applies this ceiling per
+ * fallback iteration (NOT as a cumulative chain-wide budget); a chain of
+ * length N therefore measures `chain.length * hardDeadlineMs` end-to-end
+ * in the worst case. Override per-call via `hardDeadlineMs`.
+ */
+const DEFAULT_HARD_DEADLINE_MS = 30000;
+
+/**
  * Discriminated union for the first-race result (primary chunk vs silence
  * timeout). Errors are also represented here so they can be surfaced.
  */
@@ -133,9 +173,20 @@ type FirstRaceResult<T> =
 
 /**
  * Discriminated union for the post-fallback-creation race result.
+ *
+ * New kinds (vs the original two-arm race):
+ *   - `fallback-timeout`: the per-fallback hard-deadline timer fired before
+ *     either side produced a chunk. The coordinator aborts the current
+ *     fallback and walks to the next entry in the chain. `provider` and
+ *     `index` are populated so the warning log surfaces WHICH fallback
+ *     stalled (useful for per-provider derank decisions).
+ *   - `aborted`: the user's `signal` aborted during the race. We abort
+ *     both streams and exit.
  */
 type ChunkRaceResult<T> =
   | { kind: 'chunk'; value: T; source: 'primary' | 'fallback' }
+  | { kind: 'fallback-timeout'; provider: string; index: number }
+  | { kind: 'aborted' }
   | { kind: 'primary-error'; error: unknown }
   | { kind: 'fallback-error'; error: unknown };
 
@@ -158,6 +209,7 @@ export async function* coordinateConcurrentFallback<T>(
     createFallbackStream,
     signal,
     silenceMs = DEFAULT_SILENCE_MS,
+    hardDeadlineMs = DEFAULT_HARD_DEADLINE_MS,
     requestId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     onFallbackWin,
     onLoser,
@@ -193,6 +245,18 @@ export async function* coordinateConcurrentFallback<T>(
   const primaryHandle = await createPrimaryStream();
   const primaryIt = primaryHandle.gen[Symbol.asyncIterator]();
 
+  // Capture the primary chunk promise at start so the chain walk can
+  // REUSE it instead of calling `primaryIt.next()` a second time. This
+  // matters because async-generator `.next()` calls are FIFO-paired with
+  // the gen's successive resolutions: the FIRST `.next()` is paired with
+  // the gen's first yield; if the gen then returns/throws, the SECOND
+  // `.next()` gets `{value:undefined, done:true}` rather than a second
+  // chunk. Concretely, calling `.next()` twice would manifest as the
+  // chain walk's race arm receiving `'primary stream done before
+  // producing'` immediately, even though the primary stream is still
+  // producing data — and wedge the request indefinitely.
+  const primaryPromiseAtStart: Promise<IteratorResult<T>> = primaryIt.next();
+
   // Cache the first primary result so if the timeout fires between
   // primary.next() resolving and the race starting, we don't orphan
   // (lose) that chunk.
@@ -200,8 +264,7 @@ export async function* coordinateConcurrentFallback<T>(
 
   // Race: first primary chunk vs silenceMs timeout vs user abort.
   const first: FirstRaceResult<T> = await Promise.race([
-    primaryIt
-      .next()
+    primaryPromiseAtStart
       .then((r): FirstRaceResult<T> => {
         firstPrimaryResult = r;
         return { kind: 'chunk', value: r };
@@ -243,150 +306,293 @@ export async function* coordinateConcurrentFallback<T>(
     return;
   }
 
-  // first.kind === 'timeout' — primary was silent. Fire the first fallback
-  // in parallel. But first, re-check the signal: the user might have
-  // aborted between the race resolving and us getting here.
+  // first.kind === 'timeout' — primary was silent for `silenceMs`. Walk
+  // the configured fallback chain, racing each entry against the
+  // still-in-flight primary with a per-fallback hard deadline. If the
+  // fallback stalls past `hardDeadlineMs` (or errors, or fails to set up),
+  // we abort it and walk to the next entry. This is the chain-walking
+  // upgrade to the original "fire ONE parallel fallback" semantics — see
+  // the module-level docstring for the regression context.
   if (signal?.aborted) {
     primaryHandle.abort();
     return;
   }
 
-  const fallbackProvider = chain[0];
-  const raceStartTime = Date.now();
-  let fallbackHandle: StreamHandle<T>;
-  try {
-    fallbackHandle = await createFallbackStream(fallbackProvider);
-  } catch (err) {
-    // Fallback setup failed — log and fall through to primary.
-    logger.warn('Concurrent fallback: setup failed, continuing with primary', {
-      primaryProvider,
-      fallbackProvider,
-      model,
-      requestId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    if (firstPrimaryResult && !firstPrimaryResult.done) {
-      yield firstPrimaryResult.value;
+  // Cross-iteration cache for primary chunks. We initialize from the
+  // first race's resolved result if available, and update this whenever
+  // a primary chunk resolves during a fallback race so the next race can
+  // use the cached value instead of calling `primaryIt.next()` again.
+  //
+  // Critical correctness detail: we must NOT call `primaryIt.next()` more
+  // than once per actual produced chunk. Calling `.next()` twice would
+  // orphan the first promise's chunk by advancing the iterator past it
+  // while the first awaiter is still pending. `pendingPrimary` therefore
+  // shares a single promise across iterations that haven't yet consumed
+  // the chunk, so a chunk that races after a fallback-timeout is
+  // preserved for the next iteration rather than lost.
+  // `primaryChunkCache` may regrow with the same value across iterations.
+  // When we consume the cache in race N (the sidecar `.then` then fires
+  // and re-arms `primaryChunkCache` from the same resolved Promise), the
+  // race arm in iteration `N+1` would see the cached chunk again — but
+  // this is harmless: `drainIterator` is the only path that actually
+  // advances the primary iterator (via subsequent `.next()` calls),
+  // so chunks are correctly drained after a winner commit. The degenerate
+  // case is "all fallbacks time out" where the cached chunk is never
+  // yielded — acceptable because that branch throws chain-exhausted
+  // anyway. Do NOT "fix" this by adding another `.next()` call: a
+  // second `.next()` would tilt the gen's FIFO-pairing and reintroduce
+  // the deadlock Bug #86 fixed at `primaryPromiseAtStart`.
+  let primaryChunkCache: IteratorResult<T> | null = firstPrimaryResult;
+  // Reuse race 1's primary promise for the chain walk — do NOT call
+  // `primaryIt.next()` again here. See the comment on
+  // `primaryPromiseAtStart` above for why a second `.next()` would tilt
+  // the FIFO-pairing against the consumer (the gen's RETURN-done would
+  // be paired with our chain-walk race arm).
+  let pendingPrimary: Promise<IteratorResult<T>> | null = primaryPromiseAtStart;
+
+  for (let fallbackIndex = 0; fallbackIndex < chain.length; fallbackIndex++) {
+    // Defense-in-depth: re-check user signal between iterations.
+    if (signal?.aborted) {
+      primaryHandle.abort();
+      return;
     }
-    yield* drainIterator(primaryIt, signal);
-    return;
-  }
-  const setupMs = Date.now() - raceStartTime;
-  // Defense-in-depth: the user might have aborted while the fallback
-  // factory was running (e.g. a slow import of the underlying SDK).
-  // Abort the fallback and return without racing.
-  if (signal?.aborted) {
-    fallbackHandle.abort();
-    primaryHandle.abort();
-    return;
-  }
-  const fallbackIt = fallbackHandle.gen[Symbol.asyncIterator]();
 
-  // Race: first chunk from primary (if not already) vs first chunk from fallback.
-  const raceResult: ChunkRaceResult<T> = await Promise.race([
-    firstPrimaryResult && !firstPrimaryResult.done
-      ? Promise.resolve({
-          kind: 'chunk' as const,
-          value: firstPrimaryResult.value as T,
-          source: 'primary' as const,
-        })
-      : primaryIt
-          .next()
-          .then(
-            (r): ChunkRaceResult<T> =>
-              r.done
-                ? { kind: 'primary-error', error: new Error('primary stream done before producing') }
-                : { kind: 'chunk', value: r.value, source: 'primary' },
-          )
-          .catch((err): ChunkRaceResult<T> => ({ kind: 'primary-error', error: err })),
-    fallbackIt
-      .next()
-      .then(
-        (r): ChunkRaceResult<T> =>
-          r.done
-            ? { kind: 'fallback-error', error: new Error('fallback stream done before producing') }
-            : { kind: 'chunk', value: r.value, source: 'fallback' },
-      )
-      .catch((err): ChunkRaceResult<T> => ({ kind: 'fallback-error', error: err })),
-  ]);
-
-  // Handle race errors.
-  if (raceResult.kind === 'primary-error') {
-    // Primary errored after the fallback was launched. Keep the fallback
-    // alive — the only live stream is `fallbackIt`, so aborting the
-    // fallback and draining the already-failed primary would lose the
-    // only rescue path. (Pre-fix bug: the wrong handle was aborted.)
-    primaryHandle.abort();
-    yield* drainIterator(fallbackIt, signal);
-    return;
-  }
-  if (raceResult.kind === 'fallback-error') {
-    // Fallback errored before producing a chunk. Try the primary instead.
-    fallbackHandle.abort();
-    if (firstPrimaryResult && !firstPrimaryResult.done) {
-      yield firstPrimaryResult.value;
+    const fallbackProvider = chain[fallbackIndex];
+    const raceStartTime = Date.now();
+    let fallbackHandle: StreamHandle<T>;
+    try {
+      fallbackHandle = await createFallbackStream(fallbackProvider);
+    } catch (err) {
+      logger.warn(
+        'Concurrent fallback: setup failed, walking to next',
+        {
+          primaryProvider,
+          fallbackProvider,
+          fallbackIndex,
+          model,
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      );
+      continue;
     }
-    yield* drainIterator(primaryIt, signal);
-    return;
-  }
+    const setupMs = Date.now() - raceStartTime;
+    if (signal?.aborted) {
+      fallbackHandle.abort();
+      primaryHandle.abort();
+      return;
+    }
+    const fallbackIt = fallbackHandle.gen[Symbol.asyncIterator]();
 
-  // We have a winner. Defense-in-depth: re-check the user signal before
-  // committing to the winner — if the user aborted during the race
-  // (between the race resolving and us getting here), drop the chunk
-  // and abort both streams instead of leaking partial data.
-  if (signal?.aborted) {
-    primaryHandle.abort();
-    fallbackHandle.abort();
-    return;
-  }
+    // Build the primary chunk promise with optional cache + shared
+    // pending promise. The `.then` sidecar updates the cache whenever
+    // the primary produces a chunk (regardless of whether we won this
+    // race), so a chunk that races after a fallback-timeout is preserved
+    // for the next iteration.
+    let primaryChunkPromise: Promise<IteratorResult<T>>;
+    if (primaryChunkCache !== null && !primaryChunkCache.done) {
+      // Consume the cache exactly once.
+      primaryChunkPromise = Promise.resolve(primaryChunkCache);
+      primaryChunkCache = null;
+    } else if (pendingPrimary !== null) {
+      // Reuse an outstanding primary.next() call — calling .next() again
+      // would orphan the prior promise's chunk.
+      primaryChunkPromise = pendingPrimary;
+    } else {
+      pendingPrimary = primaryIt.next();
+      primaryChunkPromise = pendingPrimary;
+    }
+    primaryChunkPromise
+      .then((r) => {
+        primaryChunkCache = r;
+      })
+      .catch(() => {
+        /* error captured by the race's catch arm */
+      });
 
-  // We have a winner. Abort the loser.
-  const fallbackLatencyMs = Date.now() - raceStartTime - setupMs;
-  if (raceResult.source === 'fallback') {
-    // Loser = primary. The primary has been running since start (silenceMs
-    // plus the time from the timeout to the race resolution).
+    // The chunk race for this fallback iteration has THREE arms:
+    //   1. primary chunk (cached, shared, or fresh `primaryIt.next()`)
+    //   2. fallback chunk (fresh `fallbackIt.next()`)
+    //   3. hard deadline (per-fallback TTFT, default 30_000 ms)
+    // If neither side produces a chunk within `hardDeadlineMs`, the race
+    // resolves with `'fallback-timeout'` and we walk to the next entry.
+    const raceResult: ChunkRaceResult<T> = await Promise.race([
+      primaryChunkPromise
+        .then(
+          (r): ChunkRaceResult<T> =>
+            r.done
+              ? {
+                  kind: 'primary-error',
+                  error: new Error('primary stream done before producing'),
+                }
+              : { kind: 'chunk', value: r.value, source: 'primary' },
+        )
+        .catch(
+          (err): ChunkRaceResult<T> => ({ kind: 'primary-error', error: err }),
+        ),
+      fallbackIt
+        .next()
+        .then(
+          (r): ChunkRaceResult<T> =>
+            r.done
+              ? {
+                  kind: 'fallback-error',
+                  error: new Error('fallback stream done before producing'),
+                }
+              : { kind: 'chunk', value: r.value, source: 'fallback' },
+        )
+        .catch(
+          (err): ChunkRaceResult<T> => ({ kind: 'fallback-error', error: err }),
+        ),
+      new Promise<ChunkRaceResult<T>>((resolve) => {
+        const t = setTimeout(
+          () =>
+            resolve({
+              kind: 'fallback-timeout',
+              provider: fallbackProvider,
+              index: fallbackIndex,
+            }),
+          hardDeadlineMs,
+        );
+        signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(t);
+            resolve({ kind: 'aborted' });
+          },
+          { once: true },
+        );
+      }),
+    ]);
+
+    // Defense-in-depth: re-check the user signal before deciding what
+    // the race outcome means. If the user aborted during the race, drop
+    // the chunk and abort both streams instead of leaking partial data.
+    if (signal?.aborted) {
+      primaryHandle.abort();
+      fallbackHandle.abort();
+      return;
+    }
+
+    if (raceResult.kind === 'aborted') {
+      primaryHandle.abort();
+      fallbackHandle.abort();
+      return;
+    }
+
+    if (raceResult.kind === 'fallback-timeout') {
+      logger.warn(
+        'Concurrent fallback: fallback stalled past hardDeadlineMs; walking to next',
+        {
+          primaryProvider,
+          fallbackProvider,
+          fallbackIndex,
+          hardDeadlineMs,
+          model,
+          requestId,
+        },
+      );
+      fallbackHandle.abort();
+      continue;
+    }
+
+    if (raceResult.kind === 'fallback-error') {
+      logger.warn(
+        'Concurrent fallback: fallback errored before chunk; walking to next',
+        {
+          primaryProvider,
+          fallbackProvider,
+          fallbackIndex,
+          model,
+          requestId,
+        },
+      );
+      fallbackHandle.abort();
+      continue;
+    }
+
+    if (raceResult.kind === 'primary-error') {
+      // Primary errored after this fallback was launched. Keep the
+      // fallback alive — it's our only rescue path now. (Pre-fix bug:
+      // the wrong handle was aborted; committing to the live fallback
+      // is correct.)
+      primaryHandle.abort();
+      yield* drainIterator(fallbackIt, signal);
+      return;
+    }
+
+    // raceResult.kind === 'chunk' — we have a winner for this iteration.
+    // Abort the loser and commit the winner's first chunk.
+    const fallbackLatencyMs = Date.now() - raceStartTime - setupMs;
+    // Preserve the original telemetry invariant: primaryLatencyMs is the
+    // "primary has been running since the silence race fired" measurement.
+    // For iteration 0 this is exact; for higher iterations it's a lower
+    // bound (chain-walk overhead is not counted). Acceptable for derank
+    // decisions in llm-provider-health, which cares about ORDERING more
+    // than absolute values.
     const primaryLatencyMs = Date.now() - raceStartTime + silenceMs;
-    onLoser?.({
-      provider: primaryProvider,
-      source: 'primary',
-      index: -1,
-      latencyMs: primaryLatencyMs,
-    });
-    onFallbackWin?.({ provider: fallbackProvider, index: 0, latencyMs: fallbackLatencyMs });
-    logger.warn('Concurrent fallback: fallback won the race', {
-      primaryProvider,
-      fallbackProvider,
-      model,
-      requestId,
-      primaryLatencyMs,
-      fallbackLatencyMs,
-    });
-    // Cancel the primary's underlying request.
-    primaryHandle.abort();
-  } else {
-    // Loser = fallback. Abort it via the factory-provided handle.
-    onLoser?.({
-      provider: fallbackProvider,
-      source: 'fallback',
-      index: 0,
-      latencyMs: fallbackLatencyMs,
-    });
-    fallbackHandle.abort();
-    logger.warn('Concurrent fallback: primary won the race', {
-      primaryProvider,
-      fallbackProvider,
-      model,
-      requestId,
-      fallbackLatencyMs,
-    });
+
+    if (raceResult.source === 'fallback') {
+      onLoser?.({
+        provider: primaryProvider,
+        source: 'primary',
+        index: -1,
+        latencyMs: primaryLatencyMs,
+      });
+      onFallbackWin?.({
+        provider: fallbackProvider,
+        index: fallbackIndex,
+        latencyMs: fallbackLatencyMs,
+      });
+      logger.warn('Concurrent fallback: fallback won the race', {
+        primaryProvider,
+        fallbackProvider,
+        fallbackIndex,
+        model,
+        requestId,
+        primaryLatencyMs,
+        fallbackLatencyMs,
+      });
+      // Cancel the primary's underlying request.
+      primaryHandle.abort();
+    } else {
+      onLoser?.({
+        provider: fallbackProvider,
+        source: 'fallback',
+        index: fallbackIndex,
+        latencyMs: fallbackLatencyMs,
+      });
+      fallbackHandle.abort();
+      logger.warn('Concurrent fallback: primary won the race', {
+        primaryProvider,
+        fallbackProvider,
+        fallbackIndex,
+        model,
+        requestId,
+        fallbackLatencyMs,
+      });
+    }
+
+    yield raceResult.value;
+
+    const winnerIt = raceResult.source === 'primary' ? primaryIt : fallbackIt;
+    yield* drainIterator(winnerIt, signal);
+    return;
   }
 
-  // Yield the winner's first chunk.
-  yield raceResult.value;
-
-  // Continue with the winner's iterator.
-  const winnerIt = raceResult.source === 'primary' ? primaryIt : fallbackIt;
-  yield* drainIterator(winnerIt, signal);
+  // Fell through the entire chain without any provider producing a chunk
+  // within its `hardDeadlineMs` budget. Abort primary and throw. This is
+  // the bug fix: previously the secondary race had no timeout arm, so
+  // when fallback #1 stalled (the ninerouter-class scenario, where every
+  // fallback hits the same stuck in-cluster network edge), the request
+  // wedged indefinitely. The caller is responsible for surfacing this
+  // throw upstream, typically by yielding a streamed error to the SSE
+  // channel in `app/api/chat/route.ts`.
+  primaryHandle.abort();
+  throw new Error(
+    `Concurrent fallback: chain exhausted after ${chain.length} attempts ` +
+      `(hardDeadlineMs=${hardDeadlineMs}): no provider produced a chunk.`,
+  );
 }
 
 /**

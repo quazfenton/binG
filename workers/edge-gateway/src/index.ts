@@ -829,11 +829,18 @@ export default {
       // indefinitely.
       if (isStreamingPath && responseBody) {
         // Only inject heartbeats for text-based content types — binary
-        // (images, audio, octet-stream) would be corrupted by `:\n\n`.
-        // An empty/missing content-type defaults to allowed (some upstream
-        // SSE responses omit the header).
-        const ct = proxyResponse.headers.get('content-type') ?? '';
-        if (!ct.startsWith('image/') && !ct.startsWith('audio/') && !ct.startsWith('video/') && ct !== 'application/octet-stream') {
+        // (images, audio, video, PDF, ZIP, octet-stream, fonts) would be
+        // corrupted by `:\n\n`. An empty/missing content-type defaults to
+        // allowed (some upstream SSE responses omit the header).
+        const raw = (proxyResponse.headers.get('content-type') ?? '').toLowerCase();
+        const ct = raw.split(';')[0].trim();
+        const isBinary = ct.startsWith('image/') || ct.startsWith('audio/') ||
+          ct.startsWith('video/') || ct.startsWith('font/') ||
+          ct.startsWith('multipart/') || ct.startsWith('application/x-') ||
+          ct === 'application/octet-stream' || ct === 'application/pdf' ||
+          ct === 'application/zip' || ct === 'application/gzip' ||
+          ct === 'application/x-tar';
+        if (!isBinary) {
           responseBody = createKeepAliveStream(responseBody, 10_000);
         }
       }
