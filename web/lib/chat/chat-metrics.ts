@@ -316,9 +316,9 @@ export function _resetChatMetricsForTests(): void {
       lastExhaustedAt: null,
       recentAttempts: [],
     };
-  }
     globalThis.__chatMetrics__.emptyCompletions = { count: 0, byProviderAndReason: {}, lastAt: null };
     globalThis.__chatMetrics__.toolOnlyCompletions = { count: 0, byProviderAndReason: {}, lastAt: null };
+  }
 }
 
 

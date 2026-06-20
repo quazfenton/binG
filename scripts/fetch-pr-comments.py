@@ -48,7 +48,7 @@ class CommentRecord:
 class PaginationState:
     last_page_fetched: int = 0
     total_pages: int = 0
-    per_page: int = 40
+    per_page: int = 30
 
 
 @dataclass
@@ -66,7 +66,7 @@ class FetchResult:
 class RepositoryConfig:
     repo: str
     pr_number: int
-    per_page: int = 40
+    per_page: int = 30
     token: Optional[str] = None
 
     @property
@@ -90,8 +90,10 @@ Examples:
                         help="Repository in 'owner/name' format (auto-detected from git if omitted)")
     parser.add_argument("--pr", "-p", type=int,
                         help="PR number (auto-detected to latest by default)")
-    parser.add_argument("--per-page", type=int, default=40,
-                        help="Comments per page (max 100, default: 40)")
+    parser.add_argument("--per-page", type=int, default=30,
+                        help="Comments per page (max 100, default: 30)")
+    parser.add_argument("--start-page", type=int, default=None,
+                        help="Page number to start fetching from (default: page 1, or resume from last)")
     parser.add_argument("--out-dir", "-o", type=str, default="./pr-comments",
                         help="Output directory (default: ./pr-comments)")
     parser.add_argument("--token", "-t", type=str,
@@ -130,12 +132,48 @@ def get_git_remote_repo() -> Optional[str]:
     return None
 
 
+def get_current_branch() -> Optional[str]:
+    """Get the current git branch name."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 def get_latest_pr_number(repo: str, token: Optional[str]) -> Optional[int]:
-    """Get the most recent PR number authored by the repo owner (or latest open if no token)."""
+    """
+    Get the PR number for auto-detection.
+    Priority:
+      1. Open PR matching the current git branch (head branch).
+      2. Most recently updated open PR authored by the repo owner (if token).
+      3. Most recently updated open PR.
+    """
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
+    # ── Priority 1: match current branch ─────────────────────────────────────
+    branch = get_current_branch()
+    if branch and branch != 'HEAD':
+        owner = repo.split('/')[0]
+        url = f"https://api.github.com/repos/{repo}/pulls"
+        params = {"state": "open", "head": f"{owner}:{branch}", "per_page": 1}
+        try:
+            r = requests.get(url, headers=headers, params=params, timeout=10)
+            if r.ok:
+                prs = r.json()
+                if prs:
+                    return prs[0]["number"]
+        except Exception:
+            pass
+
+    # ── Priority 2/3: fall back to latest open PR ────────────────────────────
     user = None
     if token:
         try:
@@ -298,8 +336,13 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
 
     result = FetchResult()
 
-    # Determine start page
-    start_page = state.last_page_fetched + 1 if state.last_page_fetched > 0 else 1
+    # Determine start page: --start-page overrides everything
+    if args.start_page is not None:
+        start_page = args.start_page
+    elif state.last_page_fetched > 0 and not args.overwrite:
+        start_page = state.last_page_fetched + 1
+    else:
+        start_page = 1
 
     if args.dry_run:
         print(f"[DRY RUN] Would fetch PR #{config.pr_number} comments from {config.repo}")

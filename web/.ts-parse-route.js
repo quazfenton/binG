@@ -50,34 +50,36 @@ if (last) {
 // Probe: scan line-by-line braces using AST-aware brace counter
 // (Strips strings + comments before counting.)
 function stripStringsComments(line) {
-  // Remove single-line comments
   var s = line.replace(/\/\/.*$/, '');
-  // Strip single-quoted strings
+  s = s.replace(/\/\*[\s\S]*?\*\//g, '');
   s = s.replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
-  // Strip double-quoted strings
   s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
-  // Strip template literals (rough — no nested ${...} handling)
-  s = s.replace(/`(?:[^`\\]|\\.)*`/g, '``');
+  s = s.replace(/`[^`]*`/g, '``');
   return s;
 }
 
 console.log('\n--- Brace stack at each potentially suspicious boundary ---');
 var anchorLines = [1140, 1145, 1150, 1155, 1160, 1170, 1180, 1200, 1210, 1350, 1357, 1394, 1700, 1705, 1712, 1713, 1738, 1800, 1900, 1909, 1955, 1961];
 var src_lines = src.split('\n');
+var maxAnchor = anchorLines[anchorLines.length - 1];
+var anchorIndex = 0;
 var stack = [];
-anchorLines.forEach(function (i) {
-  var ln = src_lines[i - 1] || '';
+for (var lineNum = 1; lineNum <= maxAnchor; lineNum++) {
+  var ln = src_lines[lineNum - 1] || '';
   var code = stripStringsComments(ln);
   for (var j = 0; j < code.length; j++) {
     var c = code[j];
-    if (c === '{') stack.push([i, j + 1, ln.trim().slice(0, 80)]);
+    if (c === '{') stack.push([lineNum, j + 1, ln.trim().slice(0, 80)]);
     else if (c === '}') {
       if (stack.length) stack.pop();
-      else console.log('  UNMATCHED } at L' + i + ',C' + (j + 1) + ': ' + ln.trim().slice(0, 80));
+      else console.log('  UNMATCHED } at L' + lineNum + ',C' + (j + 1) + ': ' + ln.trim().slice(0, 80));
     }
   }
-  console.log('  L' + i + ': stack depth = ' + stack.length);
-});
+  if (anchorIndex < anchorLines.length && lineNum === anchorLines[anchorIndex]) {
+    console.log('  L' + lineNum + ': stack depth = ' + stack.length);
+    anchorIndex++;
+  }
+}
 
 // Final dump: any unclosed innermost braces at L1970
 console.log('\n--- Innermost 5 unclosed braces at L1970 ---');

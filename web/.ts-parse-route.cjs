@@ -2,7 +2,8 @@
 const ts = require('typescript');
 const fs = require('fs');
 
-const RT = '/opt/bing/web/app/api/chat/route.ts';
+const path = require('path');
+const RT = path.join(__dirname, 'app/api/chat/route.ts');
 const src = fs.readFileSync(RT, 'utf8');
 
 const sf = ts.createSourceFile(
@@ -41,9 +42,10 @@ if (diags.length === 0) {
 // AST-aware brace counter (strips strings + comments)
 function stripStringsComments(line) {
   var s = line.replace(/\/\/.*$/, '');
+  s = s.replace(/\/\*[\s\S]*?\*\//g, '');
   s = s.replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
   s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
-  s = s.replace(/`(?:[^`\\]|\\.)*`/g, '``');
+  s = s.replace(/`[^`]*`/g, '``');
   return s;
 }
 
@@ -54,20 +56,25 @@ var anchorLines = [
   1850, 1900, 1901, 1909, 1955, 1958, 1961, 1962, 1965, 1970,
 ];
 var srcLines = src.split('\n');
+var maxAnchor = anchorLines[anchorLines.length - 1];
+var anchorIndex = 0;
 var stack = [];
-anchorLines.forEach(function (i) {
-  var ln = srcLines[i - 1] || '';
+for (var lineNum = 1; lineNum <= maxAnchor; lineNum++) {
+  var ln = srcLines[lineNum - 1] || '';
   var code = stripStringsComments(ln);
   for (var j = 0; j < code.length; j++) {
     var c = code[j];
-    if (c === '{') stack.push([i, j + 1, ln.trim().slice(0, 80)]);
+    if (c === '{') stack.push([lineNum, j + 1, ln.trim().slice(0, 80)]);
     else if (c === '}') {
       if (stack.length) stack.pop();
-      else console.log('  UNMATCHED } at L' + i + ',C' + (j + 1) + ': ' + ln.trim().slice(0, 80));
+      else console.log('  UNMATCHED } at L' + lineNum + ',C' + (j + 1) + ': ' + ln.trim().slice(0, 80));
     }
   }
-  console.log('  L' + i + ': stack depth = ' + stack.length);
-});
+  if (anchorIndex < anchorLines.length && lineNum === anchorLines[anchorIndex]) {
+    console.log('  L' + lineNum + ': stack depth = ' + stack.length);
+    anchorIndex++;
+  }
+}
 
 // Final dump at L1970
 console.log('\n--- Innermost 5 unclosed braces at L1970 ---');

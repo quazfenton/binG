@@ -1042,12 +1042,11 @@ describe('RT-005 threshold alignment rows', () => {
     expect(result.routing!.continue).toBe(true);
     expect(result.routing!.explicitContinue).toBe(false);
     const client = buildRoutingMetadataForClient(result.routing!);
-    // explicitContinue=false + planSteps.length=1 → computeShouldContinue=false
-    // Note: client.continue reads from computeShouldContinue (explicitContinue || multi-step)
-    // NOT from routing.continue. So even though routing.continue=true (env-default),
-    // client.continue=false because explicitContinue=false and planSteps=1.
-    // This is the label drift documented in RT-001: benign under env-default-on.
-    expect(typeof client.continue).toBe('boolean');
+    // explicitContinue=false + planSteps.length=1 → hasMultiplePlanSteps=false
+    // BUT routing.continue=true (env-default-on), and computeShouldContinue
+    // checks all three: explicitContinue || hasMultiplePlanSteps || routing.continue
+    // So client.continue=true (routing.continue kicks in).
+    expect(client.continue).toBe(true);
   });
 
   it('Row 2: 1-step, continue=false (explicit-off), env-default-on → routing.continue=false preserved', () => {

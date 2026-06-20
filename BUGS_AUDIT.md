@@ -4737,3 +4737,25 @@ The audit's 114 errors manifest **only when tsc is run with `--strict` enabled i
 2. **Track per-file strict-mode latent errors separately.** The surface-drift inventory above identifies the 10 actual files at their actual paths. A new Pass-3.5 (or Pass-9) could enable a per-file `tsc --strict` and capture the real current strict-only errors.
 3. **Do not retrofit the 114-error claim now.** It's confirmation that the audit was deferred-aspirational, not a current bug list. Future readers should skip Pass-3 in favor of: (a) running `tsc --strict` against current HEAD with the strict-mode renegotiation proposal, OR (b) inspecting the per-file surface-drift inventory above for targeted fixes.
 
+
+## Pass-9: Recent Log Audit — Bug Fixes
+
+### #117: chat-metrics discriminator split — `emptyCompletions` vs `toolOnlyCompletions`
+
+**Category:** observability / chat-metrics
+**Severity:** 🟢 Low (telemetry improvement, no user-visible regression)
+**Status:** ✅ FIXED
+
+**Resolution:** split a successful but tool-only completion from a failed empty completion in `/api/health?detailed` telemetry so operators can tell native-FC success from total model failure at a glance. Added two new discriminated counters (`emptyCompletions`, `toolOnlyCompletions`) keyed by `${provider}:${finishReason}` so /api/health can surface e.g. "openai:stop empty count" vs "openai:length empty count" without nested objects.
+
+**Files changed:**
+- `bing/web/lib/chat/chat-metrics.ts`: 2 new record functions (`recordEmptyCompletion`, `recordToolOnlyCompletion`, both best-effort try/catch so chat-metrics unavailability never breaks a stream); 2 new ChatMetricsState slots; new CompletionOutcomeRecord interface (top-level — was misplaced inside OrchestrationFallbackRecord's body during the multi-session edit history and triggered the TS1131/TS1128 cascade that was closed via brace-tracking relocate); _resetChatMetricsForTests rewritten verbatim with all 8 field resets inside the if (globalThis.__chatMetrics__) guard.
+- `bing/web/lib/chat/vercel-ai-streaming.ts`: imports recordEmptyCompletion + recordToolOnlyCompletion; closure-scoped finalText accumulator; emit block at L3445 calls the right record fn keyed by actualProvider + finalResult.finishReason; new completionOutcome metadata on the final yield chunk (mutually-exclusive 'text' | 'empty' | 'tool_only'); logger.warn on best-effort-catch (production-visible).
+- `bing/web/lib/providers/llm-providers.ts`: completionOutcome?: 'text' | 'empty' | 'tool_only' field added to StreamingResponse (was the missing field that triggered the TS2353 at the final-yield chunk site).
+- `bing/web/__tests__/bug-117-completion-outcome.test.ts`: 5 vitest cases covering accumulator + byBucket distribution + concurrent disjoint buckets + best-effort (no-throw) behaviour + getState resets; beforeEach(() => _resetChatMetricsForTests()) for test isolation (was missing — caused the "expected 1 to be +0" state-leak failure on the second it() block).
+
+**Validation:** tsc --noEmit clean (0 errors across the project). vitest on bug-117 + 4 sibling suites (bug-119, bug-113, bug-69, steer-service): 5 files / 104 tests passed / 0 failed.
+
+**Code-reviewer verdict:** YES-ship-ready with 3 non-blocking nits — (1) switch _resetChatMetricsForTests to a warm-init pattern (delete globalThis.__chatMetrics__; getState()) so future slots added to ChatMetricsState auto-reset; (2) discriminator currently only fires at the FINAL yield chunk so streams that abort/error before finalization under-count into emptyCompletions; (3) docblock drift audit (CompletionOutcomeRecord + tryParseToolArgs behavior-change table) recommended for Pass-10 prep.
+
+— ✅ FIXED

@@ -30,6 +30,9 @@ fastagent.secrets.yaml
 venv/
 .venv/
 
+# fetch-pr-comments.py output
+pr-comments/
+
 # vercel
 *.vercel
 

@@ -121,6 +121,10 @@ describe('BackgroundExecutor — runChildProcess timeout/double-settle fix (PR c
     // The kill should have been called (SIGTERM sent)
     expect(fakeProc.kill).toHaveBeenCalledWith('SIGTERM');
 
+    // Await and verify the settle event fired after timeout → kill → close
+    const settleResult = await execPromise;
+    expect(settleResult).toBeTruthy();
+
     // Clean up
     await exec.stopJob(job.jobId);
   });
@@ -167,6 +171,10 @@ describe('BackgroundExecutor — runChildProcess timeout/double-settle fix (PR c
     // SIGTERM should have been called once
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
     expect(fakeProc.kill).toHaveBeenCalledWith('SIGTERM');
+
+    // Guard against double-settle: the timer close already settled the promise,
+    // so the subsequent normal close must not fire executed/error again.
+    expect(settleCount).toBe(1);
 
     await exec.stopJob(job.jobId);
   });

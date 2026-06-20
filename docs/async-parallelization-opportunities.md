@@ -225,3 +225,61 @@ A recurring pattern across multiple route handlers: `verifyAuth(req)` and `req.j
 4. **`route.ts:883`** — `Promise.all([resolveFilesystemOwner(request), classifyRequest(messages, attachedFilesystemFiles)])`. Saves **5-20ms** per request. ~3 line change.
 
 5. **`architecture-integration.ts:630-903`** — `Promise.all` on all 10 tool source fetches + imports. Saves **tens to hundreds of ms** per request. ~20 line change, but pay attention to conditional guards.
+
+---
+
+## Review & Recommendations
+
+_Audit performed against the actual code in `/opt/bing/web/` to find unsafe-to-parallelize sites and additional async opportunities the original 81-site catalog missed. Thinks-by-Gemini review of the doc + relevant code._
+
+### Invalidations — sites to NOT parallelize as proposed
+
+**#7 — `buildWorkspaceSnapshot()` hoisted outside provider fallback loop** *(unified-agent-service.ts:3774)*
+- **Risk:** state cache eviction race. A provider executing functional tool operations (e.g. modifying files via `write_file`) and then failing leaves the hoisted snapshot stale for the next provider in the fallback chain — corrupted execution context (write-then-fail + read-stale-snapshot is a real bug class).
+- **Recommendation:** keep snapshot computation INSIDE the loop so each fallback attempt sees the latest VFS state. **Do NOT apply the proposed hoist.**
+
+**#14 — 19 sequential provider imports to `Promise.all`** *(llm-providers.ts:1525-1721)*
+- **Risk:** singleton initialization race. Many providers lazily share dynamic loader singletons (e.g. `if (!OpenAI) OpenAI = await import()`). Blasting 19 concurrent imports bypasses the `null` guard, triggering redundant dynamic imports and overwriting shared state — the second import to win the race clobbers the first's half-initialized exports.
+- **Recommendation:** introduce an async init lock/mutex on the loader before grouping into `Promise.all`, or keep the bulk of them sequential and parallelize only the "ready-to-import" subset.
+
+**#17 — 22 bootstrap phases in `Promise.all`** *(bootstrap.ts:102-378)*
+- **Risk:** OOM at cold start. Initializing 22 heavyweight sub-systems (AST caches, Git bindings, MCP, Tauri plugins, Composio, Arcade) concurrently spikes the JS heap past the `MEMORY_SOFT_THROTTLE_MB` ceiling and triggers immediate load-shedding during boot. A cold start that OOMs is worse than a slower sequential boot.
+- **Recommendation:** group into bounded sequential waves — `L0 (builtins) → L1 (infra deps) Promise.all → L2 (side-effect imports) Promise.all → L3 (control plane) → L4 (tool registrations) Promise.allSettled`. Use `p-limit` to cap concurrency, not unbounded `Promise.all`.
+
+**#64 — 11 parallel OAuth token refreshes** *(token-refresh.ts:259-274)*
+- **Risk:** idempotency / DB contention. Concurrent refreshes of the SAME OAuth token writing to the same backing store face write-lock contention or clobbering of identical rotation refresh tokens — invalidating the user's active session mid-stream.
+- **Recommendation:** strictly sequence refreshes per UNIQUE OAuth provider ID; only parallelize across DISTINCT providers whose refresh-targets are independent.
+
+### New LLM-side async opportunities NOT in the doc
+
+**NEW-1 — Auth + body parse overlap** *(chat/route.ts L370)*
+- `resolveRequestAuth(request)` and `request.json()` are heavily sequential I/O at the top of the hot path but share no dependencies. They run sequentially today.
+- **Fix:** `const [authResult, rawBody] = await Promise.all([resolveRequestAuth(req), req.json()]);`
+- **Impact:** ~15-40ms per request (auth check + body parse are both I/O-bound; main-thread CPU saved on top of wallclock).
+
+**NEW-2 — Pre-RAG retrieval unblocked by Task Classifier** *(chat/route.ts L1159)*
+- `mem0Search` and `getRecentDenials` do not depend on `classifyRequest`'s result but currently wait for it before joining the 4-way `Promise.all`. The classifier is ML-bound (~50-150ms) while mem0/denials are DB-bound (~50-150ms) — overlapping them masks the classifier's latency behind I/O.
+- **Fix:** fire the mem0 + denial Promises BEFORE awaiting `classifyRequest` so the ML latency is overlapped with DB I/O.
+- **Impact:** ~50-150ms per request.
+
+**NEW-3 — Backgrounding session file tracking** *(chat/route.ts L590)*
+- `await trackSessionFiles(...)` pauses the entire critical path to update historical file telemetry before reaching the AI SDK. File-tracking telemetry is observability-grade — losing-then-retried is acceptable.
+- **Fix:** drop the `await`, wrap in `.catch()` for fire-and-forget; or defer to the routed finalizer (`after(() => trackSessionFiles(...))`) so cleanup runs after the response is sent.
+- **Impact:** ~10-25ms per request.
+
+**NEW-4 — Background FC-Gate telemetry during final yield** *(vercel-ai-streaming.ts:990)*
+- `wireFCGateZeroCallsSteer` and `emitFCGateZeroCallsLog` run synchronously in the final `streamText.finish` chunk, blocking stream termination while they emit a metadata payload and write to the metrics queue.
+- **Fix:** schedule both in a non-blocking `setImmediate` or move into the chunk-pipeline's post-yield async tail; the metadata can be emitted slightly after the chunk lands without UI impact.
+- **Impact:** ~2-5ms shaved off each stream termination. Compounds across high-QPS paths.
+
+### Meta observations about the doc itself
+
+1. **Hidden lock contentions**: Tier 2 #15 claims 14 IndexedDB reads in parallel at startup, but the underlying `@bing/platform/secrets` IDB pool won't accept more than **4 concurrent reads** anyway. Parallelization shifts the bottleneck from "14 sequential awaits" to "14 requests queued at the IDB lock" — the wallclock may not improve, only the request topology changes. Audit the actual IDB driver before attaching the 14x win claim.
+
+2. **Missing I/O limits**: the catalog's "max impact" use of unbounded `Promise.all` (#78 `snapshotWorkspace` over all files, #11 polling every MCP server concurrently, #42-43 cloud-fs `syncToCloud`) without `p-limit` / `p-map` cap will degrade under load into event-loop flooding and Node **file-descriptor exhaustion** (default `ulimit -n=1024`). Apply bounded concurrency everywhere the input set is user-controlled.
+
+3. **Transaction serialization**: Tier 3 recommends parallelizing VFS batch operations (\u00a723-29), but the underlying `transactional-vfs.ts` mutex already serializes `pathExists` and `write_file` operations. Concurrent calls just queue sequentially inside the mutex — the top-level `Promise.all` is moot until the VFS locking layer is refactored. Coordinate with the VFS team before claiming Tier 3 wins.
+
+---
+
+_Document version: audit appended 2026-06-19. Original 81-site catalog preserved verbatim above; this section is additive only — the invalidations are explicit "do NOT apply" overrides, the new opportunities are drops-in candidates, and the meta notes are caveats about the catalog's assumptions._
