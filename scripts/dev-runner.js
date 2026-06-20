@@ -65,4 +65,15 @@ function forward(sig) {
 process.on('SIGINT', () => forward('SIGINT'));
 process.on('SIGTERM', () => forward('SIGTERM'));
 
-turbo.on('exit', (code) => process.exit(code ?? 1));
+turbo.on('error', (err) => {
+  console.error('[dev-runner] failed to spawn turbo:', err.message);
+  process.exit(1);
+});
+
+turbo.on('exit', (code, signal) => {
+  if (signal !== null) {
+    process.kill(process.pid, signal);
+  } else {
+    process.exit(code ?? 1);
+  }
+});

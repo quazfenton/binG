@@ -204,7 +204,7 @@ def get_latest_pr_number(repo: str, token: Optional[str]) -> Optional[int]:
 def load_seen_ids(out_dir: Path) -> set[int]:
     """Load comment IDs already saved in the output directory."""
     seen: set[int] = set()
-    for f in out_dir.glob("comment_*.json"):
+    for f in out_dir.glob("*.json"):
         try:
             with open(f) as fp:
                 data = json.load(fp)
@@ -237,10 +237,14 @@ def save_state(out_dir: Path, state: PaginationState) -> None:
         json.dump(asdict(state), fp, indent=2)
 
 
+_comment_seq: int = 0
+
 def save_comment(out_dir: Path, comment: CommentRecord) -> Path:
     """Save a single comment to a numbered file."""
+    global _comment_seq
+    _comment_seq += 1
     out_dir.mkdir(parents=True, exist_ok=True)
-    filepath = out_dir / f"comment_{comment.id}.json"
+    filepath = out_dir / f"{_comment_seq:04d}_comment_{comment.id}.json"
     with open(filepath, "w") as fp:
         json.dump(asdict(comment), fp, indent=2)
     return filepath
@@ -316,23 +320,36 @@ def fetch_comments_page(
 
 def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult:
     """Main fetch loop. Returns a FetchResult."""
+    global _comment_seq
     out_dir = Path(args.out_dir)
 
     if args.overwrite:
         if not args.quiet:
             print("  Overwrite mode: clearing existing files...")
-        for f in out_dir.glob("comment_*.json"):
+        for f in out_dir.glob("*.json"):
             f.unlink()
         # Reset state file immediately so a crash doesn't leave stale state
         out_dir.mkdir(parents=True, exist_ok=True)
         save_state(out_dir, PaginationState(per_page=config.per_page))
         state = PaginationState(per_page=config.per_page)
         seen_ids: set[int] = set()
+        _comment_seq = 0
     else:
         out_dir.mkdir(parents=True, exist_ok=True)
         state = load_state(out_dir)
         state.per_page = config.per_page
         seen_ids = load_seen_ids(out_dir)
+        # Seed seq from highest existing file number
+        _comment_seq = 0
+        for f in sorted(out_dir.glob("*.json")):
+            try:
+                name = f.stem  # e.g. "0001_comment_12345" or "comment_12345"
+                if name.startswith("comment_"):
+                    continue  # old format, no seq number
+                seq = int(name.split('_')[0])
+                _comment_seq = max(_comment_seq, seq)
+            except (ValueError, IndexError):
+                pass
 
     result = FetchResult()
 
@@ -340,7 +357,18 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
     if args.start_page is not None:
         start_page = args.start_page
     elif state.last_page_fetched > 0 and not args.overwrite:
-        start_page = state.last_page_fetched + 1
+        # Check if any new comments appeared on page 1 (which would shift pages)
+        try:
+            probe, _ = fetch_comments_page(config, 1)
+            new_ids = [c["id"] for c in probe if c["id"] not in seen_ids]
+            if not new_ids:
+                start_page = state.last_page_fetched + 1
+            else:
+                if not args.quiet:
+                    print(f"  {len(new_ids)} new comment(s) detected — re-fetching from page 1")
+                start_page = 1
+        except Exception:
+            start_page = state.last_page_fetched + 1
     else:
         start_page = 1
 

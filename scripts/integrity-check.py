@@ -117,9 +117,10 @@ def flush() -> None:
             ["python3", "-c",
              "import sys; sys.stderr.write({!r}); sys.stderr.flush()".format(payload)],
         )
-    except Exception:
-        # Last resort. We tried.
-        pass
+    except Exception as e:
+        # Last resort. Report the failure so corrupted files aren't silently skipped.
+        sys.stderr.write(f"[integrity-check] syntax-check subprocess fallback also failed: {e}\n")
+        sys.stderr.flush()
 
 
 # atexit covers sys.exit() from inside check_*(). When fail() is called,

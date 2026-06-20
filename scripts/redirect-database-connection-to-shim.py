@@ -366,10 +366,18 @@ def should_skip(path: Path) -> bool:
 
 def rewrite_file(path: Path, dry_run: bool) -> int:
     """Rewrite a single file. Returns number of substitutions."""
-    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        print(f"  [SKIP] cannot read {path}: {e}", file=sys.stderr)
+        return 0
     new_text, count = rewrite_text(text)
     if count > 0 and not dry_run:
-        path.write_text(new_text, encoding="utf-8")
+        try:
+            path.write_text(new_text, encoding="utf-8")
+        except Exception as e:
+            print(f"  [SKIP] cannot write {path}: {e}", file=sys.stderr)
+            return 0
     return count
 
 

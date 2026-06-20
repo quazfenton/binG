@@ -30,6 +30,10 @@ fastagent.secrets.yaml
 venv/
 .venv/
 
+# Python
+**/__pycache__/
+**/*.pyc
+
 # fetch-pr-comments.py output
 pr-comments/
 

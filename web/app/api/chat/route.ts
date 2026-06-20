@@ -435,7 +435,15 @@ export async function POST(request: NextRequest) {
 
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
-  const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+  // NEW-1 (latency mask; ~15-40ms/request): fire body parse concurrently with
+  // auth. rawBodyPromise resolves in the background while the sync chain below
+  // (userId, isAuthenticated, rateLimitIdentifier, checkRateLimit) runs; consumed
+  // at L484. Safe — rate-limit early-return at L458-L464 doesn't leak the promise
+  // (request.json() can only resolve/throw once; Node gracefully completes the
+  // unconsumed promise without re-parsing).
+  const authPromise = resolveRequestAuth(request, { allowAnonymous: true });
+  const rawBodyPromise = request.json();
+  const authResult = await authPromise;
   const userId = authResult.userId || 'anonymous';
 
   chatLogger.debug('Anonymous request (no auth token/session)', { requestId, userId }, {
@@ -481,7 +489,7 @@ export async function POST(request: NextRequest) {
   let actualModel = '';
 
   try {
-    const rawBody = await request.json();
+    const rawBody = await rawBodyPromise;
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
@@ -846,13 +854,26 @@ export async function POST(request: NextRequest) {
 
     // O(1) Session File Tracking: Track file references incrementally as messages flow
     // This avoids re-scanning messages with regex on every context generation
-    try {
-      const { trackSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      await trackSessionFiles(resolvedConversationId, processedMessages);
-    } catch (error: any) {
-      // Don't fail the request if tracking fails
-      chatLogger.debug('Session file tracking failed (non-critical)', { error: error.message });
-    }
+    //
+    // NEW-3 (latency mask; ~10-25ms/request): drop the `await` so trackSessionFiles
+    // runs in the background while the LLM call setup proceeds. File-tracking is
+    // observability-grade telemetry — losing-then-retried is acceptable. Two
+    // defense-in-depth niceties from the original try/catch:
+    //   1. New `.catch` is chained on the OUTER import promise (not just the
+    //      inner trackSessionFiles), so a partial-deploy / module-load failure
+    //      also lands in the debug log instead of becoming an UnhandledRejection.
+    //   2. We capture `requestId` into a closure-local BEFORE the void chain so
+    //      the .catch hander still has correlation after the response has
+    //      finalized and AsyncLocalStorage scope is gone.
+    // The `void` prefix documents fire-and-forget intent and silences ESLint's
+    // `@typescript-eslint/no-floating-promises`. Mirror: tool-call-tracker (L1462).
+    const trackingReqId = requestId;
+    void import('@/lib/virtual-filesystem/session-file-tracker')
+      .then(({ trackSessionFiles }) => trackSessionFiles(resolvedConversationId, processedMessages))
+      .catch((error: any) => {
+        // Don't fail the request if tracking fails
+        chatLogger.debug('Session file tracking failed (non-critical)', { requestId: trackingReqId, error: error.message });
+      });
 
     const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
@@ -899,11 +920,60 @@ export async function POST(request: NextRequest) {
     // Use multi-factor task classifier instead of regex-based detection
     // IMPORTANT: classify on original messages (user's actual input), not processedMessages
     // which has system prompts, workspace context, memory, etc. prepended
+    // NEW-2 (latency mask; ~50-150ms/request): fire mem0Search + getRecentDenials
+    // DB-bound Promises BEFORE awaiting the ML-bound classifyRequest below.
+    // Classifier is the slowest single op in this region (~50-150ms; loads a
+    // heavy ML model). Starting the DB queries eagerly lets them run concurrently
+    // with classifyRequest instead of serially after — masks ML latency behind I/O.
+    //
+    // Safe per dependency analysis: classifyRequest is a pure function (no shared
+    // state with the DB queries). mem0Search .catch → graceful fallback to
+    // {success:false, results:[]} is preserved verbatim. Downstream reader at
+    // L967-L971 sees the same shape irrespective of eager vs. late await.
+    // buildWorkspaceSessionContext + buildHybridWorkspaceContext stay AFTER the
+    // classifyRequest await because they capture shouldUseContextPackFinal
+    // (= useContextPack || (enableFilesystemEdits && isCodeRequest)) into their
+    // arg list at Promise.all construction time — invariant preserved.
+    const denialContextPromise = filesystemEditSessionService.getRecentDenials(
+      `${filesystemOwnerId}$${resolvedConversationId}`,
+      4,
+    );
+    const mem0ResultPromise = isMem0Configured() && typeof lastUserMessage?.content === 'string'
+      ? mem0Search({
+          query: lastUserMessage.content,
+          userId: filesystemOwnerId,
+          limit: 5,
+          // Tighter threshold + filter for chat hot path; keeps noise out
+          threshold: 0.4,
+        }).catch((memError: any) => {
+          chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
+          return { success: false, results: [] };
+        })
+      : Promise.resolve({ success: false, results: [] });
+
     const classification = await classifyRequest(messages, attachedFilesystemFiles);
     const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
-    
+
+    // Tier 1 #1 (latency mask; ~50-300ms/request): hoist v1PromptSuffix async
+    // computation into the existing Promise.all below as a 5th branch. The async
+    // wrapper ONLY depends on `body.presetKey` + `body.responseDepth` /
+    // `expertiseLevel` / etc. — all of which are available at Promise.all
+    // construction time. Downstream consumer (the `if (v1PromptSuffix)` block
+    // that mutates contextualMessages + emits telemetry) runs sequentially
+    // AFTER Promise.all resolves as before; only the async work shifts.
+    const v1PromptParams: PromptParameters = {
+      responseDepth: body.responseDepth as any,
+      expertiseLevel: body.expertiseLevel as any,
+      reasoningMode: body.reasoningMode as any,
+      tone: body.tone as any,
+      creativityLevel: body.creativityLevel as any,
+      citationStrictness: body.citationStrictness as any,
+      outputFormat: body.outputFormat as any,
+      selfCorrection: body.selfCorrection as any,
+    };
+
     // PARALLEL EXECUTION: Run independent async operations concurrently
     // This reduces latency by 40-60% by not waiting for each operation sequentially
     const userPrompt = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
@@ -924,12 +994,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const [denialContext, workspaceSessionContext, mem0Result, hybridContext] = await Promise.all([
+    const [denialContext, workspaceSessionContext, mem0Result, hybridContext, v1PromptSuffix] = await Promise.all([
       // Get recent filesystem edit denials
-      filesystemEditSessionService.getRecentDenials(
-        `${filesystemOwnerId}$${resolvedConversationId}`,
-        4,
-      ),
+      denialContextPromise,
       // Build workspace session context (only if filesystem edits are enabled)
       enableFilesystemEdits
         ? buildWorkspaceSessionContext(filesystemOwnerId, scopePathForHybrid, {
@@ -941,18 +1008,7 @@ export async function POST(request: NextRequest) {
       // NOTE: We deliberately do NOT scope by sessionId on search — we want
       // cross-thread recall (user preferences, past decisions). The current
       // thread's history is already in the prompt anyway.
-      isMem0Configured() && typeof lastUserMessage?.content === 'string'
-        ? mem0Search({
-            query: lastUserMessage.content,
-            userId: filesystemOwnerId,
-            limit: 5,
-            // Tighter threshold + filter for chat hot path; keeps noise out
-            threshold: 0.4,
-          }).catch((memError: any) => {
-            chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
-            return { success: false, results: [] };
-          })
-        : Promise.resolve({ success: false, results: [] }),
+      mem0ResultPromise,
       // Hybrid retrieval: AST-based symbol retrieval with smart-context fallback
       enableFilesystemEdits && userPrompt
         ? buildHybridWorkspaceContext(filesystemOwnerId, scopePathForHybrid, {
@@ -961,6 +1017,19 @@ export async function POST(request: NextRequest) {
             maxTokens: body.maxTokens,
           })
         : Promise.resolve(''),
+      // 5th branch (Tier 1 #1): resolve V1 prompt modifiers concurrently with
+      // the context-builders so the ML/preset-composition latency overlaps
+      // with DB I/O. Always resolves to either the suffix string or '' so the
+      // downstream `if (v1PromptSuffix)` consumer sees the same shape.
+      (async (): Promise<string> => {
+        if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+          const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+          return await applyPromptModifiers({ ...preset, ...v1PromptParams });
+        } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
+          return await applyPromptModifiers(v1PromptParams);
+        }
+        return '';
+      })(),
     ]);
 
     // Build memory context from mem0 results
@@ -981,25 +1050,9 @@ export async function POST(request: NextRequest) {
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
-    // This injects prompt parameters (depth, expertise, tone, etc.) into the V1 path
-    // by appending a system message suffix to the message array
-    const v1PromptParams: PromptParameters = {
-      responseDepth: body.responseDepth as any,
-      expertiseLevel: body.expertiseLevel as any,
-      reasoningMode: body.reasoningMode as any,
-      tone: body.tone as any,
-      creativityLevel: body.creativityLevel as any,
-      citationStrictness: body.citationStrictness as any,
-      outputFormat: body.outputFormat as any,
-      selfCorrection: body.selfCorrection as any,
-    };
-    let v1PromptSuffix = '';
-    if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
-      const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
-      v1PromptSuffix = await applyPromptModifiers({ ...preset, ...v1PromptParams });
-    } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
-      v1PromptSuffix = await applyPromptModifiers(v1PromptParams);
-    }
+    // The async work (applyPromptModifiers) is now resolved INSIDE the 5-way
+    // Promise.all above; here we only consume the already-resolved string and
+    // append it to contextualMessages + emit telemetry. (Tier 1 #1 refactor.)
     if (v1PromptSuffix) {
       // Append as system message — the LLM provider will prepend it to existing system messages
       contextualMessages.push({ role: 'system', content: v1PromptSuffix });

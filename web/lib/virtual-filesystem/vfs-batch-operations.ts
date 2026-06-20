@@ -10,6 +10,7 @@
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { sandboxPersistenceManager } from '@/lib/storage/persistence-manager';
+import { getVfsLimiter } from '@/lib/vfs/concurrency-cap';
 
 /**
  * Batch file operation
@@ -236,28 +237,34 @@ export class VFSBatchOperations {
   async execute(vfs: any): Promise<BatchExecutionResult[]> {
     const results: BatchExecutionResult[] = [];
 
-    for (const op of this._operations) {
-      try {
-        let file: VirtualFile | undefined;
-
-        switch (op.type) {
-          case 'create':
-          case 'update':
-            file = await vfs.writeFile(this.ownerId, op.path, op.content!);
-            break;
-          case 'delete':
-            await vfs.deletePath(this.ownerId, op.path);
-            break;
-          case 'read':
-            file = await vfs.readFile(this.ownerId, op.path);
-            break;
+    // Meta #2 cap (audit 2026-06-20): bound concurrent file ops in execute()
+    // to 10 to avoid Node fd exhaustion under large batches. Per-operation
+    // Semaphore (not singleton) — see /opt/bing/web/lib/vfs/concurrency-cap.ts.
+    const limit25 = getVfsLimiter({ inputSize: this._operations.length });
+    const opResults25 = await Promise.all(
+      this._operations.map(op => limit25.runExclusive(async () => {
+        try {
+          let file: VirtualFile | undefined;
+          switch (op.type) {
+            case 'create':
+            case 'update':
+              file = await vfs.writeFile(this.ownerId, op.path, op.content!);
+              break;
+            case 'delete':
+              await vfs.deletePath(this.ownerId, op.path);
+              break;
+            case 'read':
+              file = await vfs.readFile(this.ownerId, op.path);
+              break;
+          }
+          return { success: true as const, file };
+        } catch (err: any) {
+          return { success: false as const, error: err.message };
         }
-
-        results.push({ success: true, file });
-      } catch (err: any) {
-        results.push({ success: false, error: err.message });
-      }
-    }
+      }))
+    );
+    // Promise.all preserves input order; results array inherits order.
+    for (const r of opResults25) results.push(r);
 
     return results;
   }
@@ -331,34 +338,40 @@ export class VFSBatchOperations {
     let successful = 0;
     let skipped = 0;
 
-    for (const op of operations) {
-      try {
-        // Use persistence manager if sandboxId is provided for incremental sync
-        if (sandboxId && op.type !== 'delete') {
-          const syncResult = await sandboxPersistenceManager.syncIncremental(
-            { id: sandboxId } as any, 
-            [{ path: op.path, content: op.content }]
-          );
-          
-          if (syncResult.skipped > 0) {
-            skipped++;
-            processed.push({ path: op.path, success: true });
-            continue;
+    // Meta #2 cap (audit 2026-06-20): bound concurrent ops in
+    // batchWriteIncremental() to 10. The `continue` becomes an early `return`
+    // from the map callback; we still update `processed` for parity.
+    const limit26 = getVfsLimiter({ inputSize: operations.length });
+    const opResults26 = await Promise.allSettled(
+      operations.map(op => limit26.runExclusive(async () => {
+        try {
+          if (sandboxId && op.type !== 'delete') {
+            const syncResult = await sandboxPersistenceManager.syncIncremental(
+              { id: sandboxId } as any,
+              [{ path: op.path, content: op.content }]
+            );
+            if (syncResult.skipped > 0) {
+              processed.push({ path: op.path, success: true });
+              return 'skipped' as const;
+            }
           }
+          if (op.type === 'delete') {
+            await virtualFilesystem.deletePath(this.ownerId, op.path);
+          } else {
+            await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
+          }
+          processed.push({ path: op.path, success: true });
+          return 'processed' as const;
+        } catch (err: any) {
+          processed.push({ path: op.path, success: false, error: err.message });
+          return 'error' as const;
         }
-
-        // Standard write
-        if (op.type === 'delete') {
-          await virtualFilesystem.deletePath(this.ownerId, op.path);
-        } else {
-          await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
-        }
-
-        processed.push({ path: op.path, success: true });
-        successful++;
-      } catch (err: any) {
-        processed.push({ path: op.path, success: false, error: err.message });
-      }
+      }))
+    );
+    // Rebuild counters from the settled results so semantics are preserved.
+    for (const r of opResults26) {
+      if (r.status === 'fulfilled' && r.value === 'skipped') skipped++;
+      else if (r.status === 'fulfilled' && r.value === 'processed') successful++;
     }
 
     return {
@@ -381,27 +394,25 @@ export class VFSBatchOperations {
     let failed = 0;
 
     try {
-      for (const op of operations) {
-        try {
-          if (op.type === 'delete') {
-            await virtualFilesystem.deletePath(this.ownerId, op.path);
-          } else {
-            await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
+      // Meta #2 cap: bound concurrent ops in batchWrite() to 10.
+      const limit27 = getVfsLimiter({ inputSize: operations.length });
+      const opResults27 = await Promise.all(
+        operations.map(op => limit27.runExclusive(async () => {
+          try {
+            if (op.type === 'delete') {
+              await virtualFilesystem.deletePath(this.ownerId, op.path);
+            } else {
+              await virtualFilesystem.writeFile(this.ownerId, op.path, op.content);
+            }
+            return { status: 'success' as const, processed: { path: op.path, success: true } };
+          } catch (error: any) {
+            return { status: 'error' as const, processed: { path: op.path, success: false, error: error.message } };
           }
-          
-          processed.push({
-            path: op.path,
-            success: true,
-          });
-          successful++;
-        } catch (error: any) {
-          processed.push({
-            path: op.path,
-            success: false,
-            error: error.message,
-          });
-          failed++;
-        }
+        }))
+      );
+      for (const r of opResults27) {
+        processed.push(r.processed);
+        if (r.status === 'success') successful++; else failed++;
       }
 
       return {
@@ -472,63 +483,48 @@ export class VFSBatchOperations {
       const listing = await virtualFilesystem.listDirectory(this.ownerId);
       const files = listing.nodes.filter(node => node.type === 'file');
 
-      for (const file of files) {
-        // Check include/exclude patterns
-        if (config.include && !this.matchesPatterns(file.path, config.include)) {
-          continue;
-        }
-        if (config.exclude && this.matchesPatterns(file.path, config.exclude)) {
-          continue;
-        }
-
-        filesScanned++;
-
-        try {
-          // Read file
-          const fileData = await virtualFilesystem.readFile(this.ownerId, file.path);
-          let content = fileData.content;
-          let replacements = 0;
-
-          // Perform replacement
-          if (config.useRegex) {
-            const regex = new RegExp(
-              config.pattern,
-              config.replaceAll ? 'g' : ''
-            );
-            const matches = content.match(regex);
-            replacements = matches ? matches.length : 0;
-            content = content.replace(regex, config.replacement);
-          } else {
-            const index = content.indexOf(config.pattern);
-            if (index !== -1) {
-              replacements = 1;
-              content = content.replace(config.pattern, config.replacement);
-              
-              if (config.replaceAll) {
-                while (content.includes(config.pattern)) {
-                  content = content.replace(config.pattern, config.replacement);
-                  replacements++;
+      // Meta #2 cap: bound concurrent ops in searchAndReplace() to 10.
+      const limit28 = getVfsLimiter({ inputSize: files.length });
+      await Promise.allSettled(
+        files.map(file => limit28.runExclusive(async () => {
+          if (config.include && !this.matchesPatterns(file.path, config.include)) return;
+          if (config.exclude && this.matchesPatterns(file.path, config.exclude)) return;
+          filesScanned++;
+          try {
+            const fileData = await virtualFilesystem.readFile(this.ownerId, file.path);
+            let content = fileData.content;
+            let replacements = 0;
+            if (config.useRegex) {
+              const regex = new RegExp(
+                config.pattern,
+                config.replaceAll ? 'g' : ''
+              );
+              const matches = content.match(regex);
+              replacements = matches ? matches.length : 0;
+              content = content.replace(regex, config.replacement);
+            } else {
+              const index = content.indexOf(config.pattern);
+              if (index !== -1) {
+                replacements = 1;
+                content = content.replace(config.pattern, config.replacement);
+                if (config.replaceAll) {
+                  while (content.includes(config.pattern)) {
+                    content = content.replace(config.pattern, config.replacement);
+                    replacements++;
+                  }
                 }
               }
             }
+            if (replacements > 0) {
+              await virtualFilesystem.writeFile(this.ownerId, file.path, content);
+              modified.push({ path: file.path, replacements });
+              totalReplacements += replacements;
+            }
+          } catch (error: any) {
+            console.warn(`[VFSBatchOperations] Failed to process ${file.path}:`, error.message);
           }
-
-          // Write back if modified
-          if (replacements > 0) {
-            await virtualFilesystem.writeFile(this.ownerId, file.path, content);
-            
-            modified.push({
-              path: file.path,
-              replacements,
-            });
-            
-            totalReplacements += replacements;
-          }
-        } catch (error: any) {
-          // Skip files that can't be processed
-          console.warn(`[VFSBatchOperations] Failed to process ${file.path}:`, error.message);
-        }
-      }
+        }))
+      );
 
       return {
         modified,
@@ -553,24 +549,22 @@ export class VFSBatchOperations {
     let failed = 0;
 
     try {
-      for (const file of files) {
-        try {
-          const content = await virtualFilesystem.readFile(this.ownerId, file.source);
-          await virtualFilesystem.writeFile(this.ownerId, file.destination, content.content);
-          
-          processed.push({
-            path: `${file.source} -> ${file.destination}`,
-            success: true,
-          });
-          successful++;
-        } catch (error: any) {
-          processed.push({
-            path: `${file.source} -> ${file.destination}`,
-            success: false,
-            error: error.message,
-          });
-          failed++;
-        }
+      // Meta #2 cap: bound concurrent ops in batchCopy() to 10.
+      const limit29 = getVfsLimiter({ inputSize: files.length });
+      const opResults29 = await Promise.all(
+        files.map(file => limit29.runExclusive(async () => {
+          try {
+            const content = await virtualFilesystem.readFile(this.ownerId, file.source);
+            await virtualFilesystem.writeFile(this.ownerId, file.destination, content.content);
+            return { status: 'success' as const, processed: { path: `${file.source} -> ${file.destination}`, success: true } };
+          } catch (error: any) {
+            return { status: 'error' as const, processed: { path: `${file.source} -> ${file.destination}`, success: false, error: error.message } };
+          }
+        }))
+      );
+      for (const r of opResults29) {
+        processed.push(r.processed);
+        if (r.status === 'success') successful++; else failed++;
       }
 
       return {

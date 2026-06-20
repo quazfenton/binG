@@ -28,6 +28,7 @@ PASS=0
 FAIL=0
 SKIP=0
 declare -a FAILURES_LIST=()
+declare -a TMPDIRS=()
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,9 +37,10 @@ declare -a FAILURES_LIST=()
 banner() { printf '\n%s=== %s ===%s\n' "$BLUE" "$*" "$NC"; }
 
 cleanup_all() {
-  if [ -n "${TMPDIR:-}" ] && [ -d "$TMPDIR" ]; then
-    rm -rf "$TMPDIR"
-  fi
+  local d
+  for d in "${TMPDIRS[@]}"; do
+    [ -d "$d" ] && rm -rf "$d"
+  done
 }
 trap cleanup_all EXIT
 
@@ -91,8 +93,10 @@ preview_output() {
 # Git history (parent commit) for the diff-based checks.
 make_repo() {
   local label="$1"
-  TMPDIR=$(mktemp -d "/tmp/integrity-test-${label}-XXXXXX")
-  cd "$TMPDIR"
+  local tmpdir
+  tmpdir=$(mktemp -d "/tmp/integrity-test-${label}-XXXXXX")
+  TMPDIRS+=("$tmpdir")
+  cd "$tmpdir"
   git init -q
   git config user.email test@test
   git config user.name test

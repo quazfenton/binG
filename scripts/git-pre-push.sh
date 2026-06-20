@@ -109,15 +109,20 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     new_lines=${new_lines:-0}
     [[ "$old_lines" =~ ^[0-9]+$ ]] || old_lines=0
     [[ "$new_lines" =~ ^[0-9]+$ ]] || new_lines=0
-    if [ "$old_lines" -gt 100 ] && [ "$new_lines" -gt 0 ]; then
+    # Skip added files (no old version) or deleted files (no new version)
+    if [ "$old_lines" -eq 0 ] || [ "$new_lines" -eq 0 ]; then
+      continue
+    fi
+    if [ "$old_lines" -gt 100 ]; then
       lost=$(( old_lines - new_lines ))
       if [ "$lost" -gt 0 ]; then
         ratio=$(echo "scale=4; $new_lines / $old_lines" | bc 2>/dev/null || echo 1)
+        ratio_pct=$(echo "$ratio * 100 / 1" | bc 2>/dev/null || echo 0)
         if [ "$lost" -gt 1000 ] || [ "$(echo "$ratio < 0.50" | bc 2>/dev/null || echo 0)" = "1" ]; then
-          echo "❌ Layer 4 — $f: ${old_lines} → ${new_lines} lines (${lost} lost, ${ratio}% of original, likely truncation)"
+          echo "❌ Layer 4 — $f: ${old_lines} → ${new_lines} lines (${lost} lost, ${ratio_pct}% of original, likely truncation)"
           FAILURES+=("overwrite:$f")
         elif [ "$lost" -gt 200 ] || [ "$(echo "$ratio < 0.70" | bc 2>/dev/null || echo 0)" = "1" ]; then
-          echo "⚠️  Layer 4 — $f: ${old_lines} → ${new_lines} lines (${lost} lost, ${ratio}% of original, significant shrinkage)"
+          echo "⚠️  Layer 4 — $f: ${old_lines} → ${new_lines} lines (${lost} lost, ${ratio_pct}% of original, significant shrinkage)"
           # Warning only — not blocking
         fi
       fi

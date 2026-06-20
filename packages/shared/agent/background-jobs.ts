@@ -135,7 +135,7 @@ export class BackgroundExecutor extends EventEmitter {
             const backoff = Math.min(5000 * Math.pow(2, consecutiveFailures - 1), 300000);
             waitMs = Math.max(waitMs, backoff);
           }
-          await this.sleep(waitMs);
+          await this.sleep(waitMs, () => job.status !== 'running');
         }
       }
     };
@@ -415,8 +415,17 @@ export class BackgroundExecutor extends EventEmitter {
   /**
    * Sleep helper
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private sleep(ms: number, abortCheck?: () => boolean): Promise<void> {
+    return new Promise(resolve => {
+      const start = Date.now();
+      const poll = () => {
+        if (abortCheck?.() ?? false) { resolve(); return; }
+        const elapsed = Date.now() - start;
+        if (elapsed >= ms) { resolve(); return; }
+        setTimeout(poll, Math.min(200, ms - elapsed));
+      };
+      setTimeout(poll, Math.min(200, ms));
+    });
   }
 }
 

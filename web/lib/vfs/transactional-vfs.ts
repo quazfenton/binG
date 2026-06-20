@@ -576,22 +576,33 @@ export class Transaction {
       return;
     }
 
-    for (const file of this.snapshot.files) {
-      try {
-        if (file.created) {
-          // File was created by this transaction — remove it on rollback.
-          // deletePath is tolerant: a missing file is not an error.
-          await virtualFilesystem.deletePath(this.ownerId, file.path);
-        } else {
-          await virtualFilesystem.writeFile(this.ownerId, file.path, file.content);
+    // Tier 3 #24 refactor (Coordination Brief 2026-06-20): parallel rollback
+    // via Promise.all. Each entry is independent (no cross-file deps), saves
+    // ∝N write latency. Per-file try/catch preserved → logger.error in each
+    // callback so a single failed restore doesn't abort the rest. State
+    // transition to 'rolled-back' happens AFTER await Promise.all resolves,
+    // matching the original sequencing.
+    // NOTE: per audit Meta #2, files.length is user-controlled. Same follow-up
+    // recommendation as `takeSnapshot` — wrap in a `p-limit(10)` cap (or
+    // Semaphore from async-mutex) in a Tier-3 batch PR.
+    await Promise.all(
+      this.snapshot.files.map(async (file) => {
+        try {
+          if (file.created) {
+            // File was created by this transaction — remove it on rollback.
+            // deletePath is tolerant: a missing file is not an error.
+            await virtualFilesystem.deletePath(this.ownerId, file.path);
+          } else {
+            await virtualFilesystem.writeFile(this.ownerId, file.path, file.content);
+          }
+        } catch (err: any) {
+          logger.error(`[VFS:TX ${this.id}] Rollback failed for ${file.path}`, {
+            error: err?.message,
+            created: file.created,
+          });
         }
-      } catch (err: any) {
-        logger.error(`[VFS:TX ${this.id}] Rollback failed for ${file.path}`, {
-          error: err?.message,
-          created: file.created,
-        });
-      }
-    }
+      }),
+    );
 
     this.state = 'rolled-back';
   }
@@ -614,17 +625,21 @@ async function takeSnapshot(
   paths: string[],
 ): Promise<TransactionSnapshot> {
   const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
-  const files: TransactionSnapshot['files'] = [];
-  for (const p of paths) {
-    try {
-      const f = await virtualFilesystem.readFile(ownerId, p);
-      files.push({ path: f.path, content: f.content, version: f.version, created: false });
-    } catch {
-      // File doesn't exist yet — mark as `created: true` so rollback
-      // will deletePath it instead of writing empty content.
-      files.push({ path: p, content: '', version: 0, created: true });
-    }
-  }
+  // Tier 3 #23 refactor (Coordination Brief 2026-06-20): parallelize reads via
+  // Promise.all. Order is preserved (V8 resolves in registration order), so the
+  // resulting `files` array stays in `paths` order. Per-callback .then().catch()
+  // preserves the original "file missing → {created: true}" fallback semantics.
+  // NOTE: per audit Meta #2, paths.length is user-controlled (drives a chat-LLM
+  // agent's edits per turn). Consider wrapping `Promise.all` in a `p-limit(10)`
+  // cap (or `Semaphore` from async-mutex, already a direct dep) in a follow-up
+  // PR that batches the same cap across all Tier 3 sites.
+  const files: TransactionSnapshot['files'] = await Promise.all(
+    paths.map((p) =>
+      virtualFilesystem.readFile(ownerId, p)
+        .then((f) => ({ path: f.path, content: f.content, version: f.version, created: false }))
+        .catch(() => ({ path: p, content: '', version: 0, created: true })),
+    ),
+  );
   return { workspaceVersion, files };
 }
 

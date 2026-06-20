@@ -283,3 +283,134 @@ _Audit performed against the actual code in `/opt/bing/web/` to find unsafe-to-p
 ---
 
 _Document version: audit appended 2026-06-19. Original 81-site catalog preserved verbatim above; this section is additive only — the invalidations are explicit "do NOT apply" overrides, the new opportunities are drops-in candidates, and the meta notes are caveats about the catalog's assumptions._
+
+---
+
+## Coordination Brief — Tier 2 #15 + Tier 3 (2026-06-20)
+
+_Follow-up to the prior Meta observations. Verifies the **Meta #1** (IDB 4-cap) and **Meta #3** (VFS mutex refactor) \"hold pending team coordination\" claims against the actual code. **Both invalidated by code evidence.** The wins are claimable now; no VFS / platform team coordination required._
+
+### Meta #1 — IDB 4-concurrent-cap assumption (Tier 2 #15 invalidation)
+
+**Audit claim:** \"Tier 2 #15 claims 14 IndexedDB reads in parallel at startup, but the underlying `@bing/platform/secrets` IDB pool won't accept more than 4 concurrent reads anyway. Parallelization shifts the bottleneck from '14 sequential awaits' to '14 requests queued at the IDB lock' — the wallclock may not improve, only the request topology changes. Audit the actual IDB driver before attaching the 14x win claim.\"
+
+**Code evidence refutes the claim:**
+
+- **`/opt/bing/packages/platform/src/secrets/web.ts` is the IDB impl.** The desktop sibling `desktop.ts` uses OS Keychain (no IDB) — grep for `indexedDB`/`openDB`/`MAX_CONCURRENT`/`concurrentReads` returns 0 matches there.
+- `openDB()` is a thin `indexedDB.open(DB_NAME, DB_VERSION)` Promise wrapper. **No MAX_CONCURRENT constant, no semaphore, no queue** anywhere in the file (324 lines total). Verbatim from the file:
+
+```typescript
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => { /* create stores only */ };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+```
+
+- `idbGet/Put/Delete` each open a **fresh** `readonly`/`readwrite` IDB transaction per call (no shared serialization layer). IDB in modern browsers (Chrome, Firefox, Safari 2024+) accepts arbitrary concurrent `readonly` transactions on the same store.
+- The 4-cap assertion has no foundation in either the codebase or browser limits.
+
+**Tier 2 #15 anchor — currently sequential, trivially parallelizable:**
+
+`/opt/bing/web/lib/providers/provider-keys.ts` L192-216 hosts `getStoredProviderApiKeys(knownProviders)`. Currently a strict `for...of` with `await getProviderApiKey(provider)` per provider — 14 reads in series:
+
+```typescript
+export async function getStoredProviderApiKeys(): Promise<Record<string, string>> {
+  const keys: Record<string, string> = {};
+  const knownProviders = ['anthropic','openai','google','mistral','openrouter',
+    'nvidia','github','groq','together','deepinfra','fireworks','anyscale','lepton','chutes'];
+  for (const provider of knownProviders) {
+    const key = await getProviderApiKey(provider);
+    if (key) keys[provider] = key;
+  }
+  return keys;
+}
+```
+
+**Refactor recipe (5 lines, drop-in replacement):**
+
+```typescript
+export async function getStoredProviderApiKeys(): Promise<Record<string, string>> {
+  const knownProviders = ['anthropic','openai','google','mistral','openrouter',
+    'nvidia','github','groq','together','deepinfra','fireworks','anyscale','lepton','chutes'];
+  const entries = await Promise.allSettled(
+    knownProviders.map(async (p) => {
+      const key = await getProviderApiKey(p);
+      return key ? ([p, key] as const) : null;
+    }),
+  );
+  const keys: Record<string, string> = {};
+  for (const e of entries) if (e.status === 'fulfilled' && e.value) keys[e.value[0]] = e.value[1];
+  return keys;
+}
+```
+
+`Promise.allSettled` (not `Promise.all`) so a single provider failing doesn't poison the rest. LocalStorage-fallback path is the same — provider switch happens inside `getProviderApiKey` per provider, so the parallel read also exercises the fallback concurrently when IDB fails.
+
+**Recommendation:** **claim the Tier 2 #15 win.** No team coordination required. ~5–20ms saved per call to `getStoredProviderApiKeys`. Audit's optimistic estimate of \"Sum → max of 14\" stands.
+
+### Meta #3 — transactional-vfs.ts mutex refactor premise (Tier 3 invalidation)
+
+**Audit claim:** \"Tier 3 recommends parallelizing VFS batch operations (§23-29), but the underlying `transactional-vfs.ts` mutex already serializes `pathExists` and `write_file` operations. Concurrent calls just queue sequentially inside the mutex — the top-level `Promise.all` is moot until the VFS locking layer is refactored. Coordinate with the VFS team before claiming Tier 3 wins.\"
+
+**Code evidence: the premise is FACTUALLY WRONG. There is no mutex in this file.**
+
+- **Path typo in the audit.** The actual file is at `/opt/bing/web/lib/vfs/transactional-vfs.ts` (637 lines). The audit cites `/opt/bing/web/lib/virtual-filesystem/transactional-vfs.ts` — that path does not exist. Next-pass cleanup: correct all references.
+- **Concurrency model is OCC (optimistic concurrency control), not a mutex.** Grep for `Mutex|Lock|serialize|withLock|withRLock` in the file returns 0 hits on locking primitives (only the 3 import line `import { VersionMismatchError, ConcurrentModificationError } from './errors'` and the `strictConcurrency` option-flag name match).
+- `readWithVersion(ownerId, filePath)` (L70-79) is a **stateless wrapper** around `virtualFilesystem.readFile(ownerId, filePath)` — verbatim:
+
+```typescript
+export async function readWithVersion(ownerId: string, filePath: string): Promise<VersionedFile> {
+  const file = await virtualFilesystem.readFile(ownerId, filePath);
+  return { content: file.content, version: file.version, path: file.path, lastModified: file.lastModified };
+}
+```
+
+  **NO LOCK. NO SERIALIZATION.** Reads are naive pass-throughs.
+
+- `writeWithVersion` (L139-310) uses **CAS via per-file version tokens + retry loop** (default 3 attempts with jittered 2-10ms backoff). NOT a mutex:
+
+```typescript
+// L246-L263, paraphrased from the actual code
+for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  try {
+    return await virtualFilesystem.writeFile(ownerId, filePath, currentContent, language,
+      { ...vfsOptions, expectedVersion: baselineVersion, ...strictConcurrency ? { strictConcurrency: true } : {} });
+  } catch (err: any) {
+    if (err?.name === 'ConcurrentModificationError') throw err;  // strict mode: no retry
+    if (err?.name !== 'VersionMismatchError') throw err;          // non-OCC errors bubble up
+    fresh = await readWithVersion(ownerId, filePath);             // re-read on mismatch
+    baselineVersion = fresh.version;
+    currentContent = diffFn(fresh.content);
+    if (attempt < maxRetries) await sleep(2 + Math.floor(Math.random() * 8));  // jittered backoff
+  }
+}
+```
+
+  Concurrent writes to the same file race on the version token; the loser retries with fresh content via `diffFn`. **No mutex holds other writes/readers out.**
+
+- `Transaction` class (L326-603) batches edits into a **single GitBackedVFS shadow commit** via `enableBatchMode`/`flushBatch`. No mutex; `commit()` runs each edit through `writeWithVersion` in a `for` loop (sequentially *within* the commit, but commit batches them into one shadow commit so the wallclock cost per edit is ~one network round-trip to the Git shadow store, not per-edit).
+
+**Tier 3 wins ALREADY materialize — no refactor required for the read side:**
+
+- **#23 takeSnapshot (L612-633).** Reads are naive; convert `for (const p of paths) { try { readFile(p) } catch { /* mark created */ } }` to `Promise.all(paths.map(p => readFile(p).catch(...)))` saves ∝N read latency with **no VFS-team gate**.
+- **#24 rollback (L562-583).** Each snapshot file is restored independently; convert the sequential `writeFile`+`deletePath` loop to `Promise.all(f.map(f => f.created ? deletePath(f.path) : writeFile(f.path, f.content)))` saves ∝N write latency.
+- **#25-29 vfs-batch-operations** and **#30-45 smart-context / context-pack / desktop-vfs / cloud-fs** reads — all are naive pass-throughs to `virtualFilesystem.readFile`. Each entry can be `Promise.all`-ed with no upstream mutex concern.
+
+**Recommendation:** **claim ALL Tier 3 wins.** No VFS team coordination required. The coordinate-with-VFS-team premise was based on a misread of the concurrency model — OCC uses version-token race resolution, not mutual exclusion.
+
+### Summary
+
+| Meta # | Audit premise | Code evidence | Action |
+|--------|---------------|---------------|--------|
+| **#1 (IDB 4-cap)** | \"@bing/platform/secrets IDB pool caps at 4 concurrent reads\" | **Refuted.** `secrets/web.ts openDB()` has no concurrency primitives; reads are fresh `readonly` IDB tx per call. | Claim Tier 2 #15 win. Refactor `provider-keys.ts` L192-216 to `Promise.allSettled`. |
+| **#3 (VFS mutex)** | \"transactional-vfs.ts mutex serializes read+write ops\" | **Refuted.** No mutex in the file (OCC uses version tokens). Path is wrong in the audit (`vfs/` not `virtual-filesystem/vfs/`). | Claim all Tier 3 wins. No refactor needed — reads don't serialize. |
+
+### Footnote for next audit pass
+
+When auditing parallelization wins over Tier 3 sites, **do not assume a single-file mutex that this codebase does not have** — verify against the actual `/opt/bing/web/lib/vfs/transactional-vfs.ts` content (zero `Mutex` imports anywhere). Two corrections carried forward:
+1. The path `/opt/bing/web/lib/virtual-filesystem/transactional-vfs.ts` should read `/opt/bing/web/lib/vfs/transactional-vfs.ts` in any future references.
+2. The audit's label \"tier 3 mutex refactor\" should read \"tier 3 OCC version-token passes through reads — naive pass-through to virtualFilesystem.readFile. No mutation harness required.\"
