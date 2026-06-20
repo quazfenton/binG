@@ -10,7 +10,7 @@
 import type { VirtualFile } from './filesystem-types';
 import { virtualFilesystem } from './virtual-filesystem-service';
 import { sandboxPersistenceManager } from '@/lib/storage/persistence-manager';
-import { getVfsLimiter } from '@/lib/vfs/concurrency-cap';
+import { getVfsLimiter, VFS_CAP_DEFAULT } from '@/lib/vfs/concurrency-cap';
 
 /**
  * Batch file operation
@@ -456,7 +456,7 @@ export class VFSBatchOperations {
         success: false,
         processed,
         totalFiles: operations.length,
-        successful,
+        successful: processed.filter(p => p.success).length,
         failed: processed.length - processed.filter(p => p.success).length,
         duration: Date.now() - startTime,
         error: error.message,

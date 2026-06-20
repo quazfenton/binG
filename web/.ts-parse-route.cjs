@@ -25,7 +25,11 @@ diags.slice(0, 30).forEach(function (d, i) {
     var len = d.length || 0;
     var msg = typeof d.messageText === 'string'
       ? d.messageText
-      : d.messageText.messageText;
+      : flattenMessageText(d.messageText);
+
+    function flattenMessageText(mt) {
+      return typeof mt === 'string' ? mt : flattenMessageText(mt.messageText);
+    }
     var snippet = src.split('\n')[lc.line] || '';
     console.log(
       '  [' + i + '] cat=' + d.category + ' code=' + d.code +
@@ -45,7 +49,8 @@ function stripStringsComments(line) {
   s = s.replace(/\/\*[\s\S]*?\*\//g, '');
   s = s.replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
   s = s.replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
-  s = s.replace(/`[^`]*`/g, '``');
+  // Strip template literals, including embedded expressions ${...}
+  s = s.replace(/`(?:[^`\\$]|\\.|\$\{[^}]*\})*`/g, '``');
   return s;
 }
 
@@ -56,7 +61,7 @@ var anchorLines = [
   1850, 1900, 1901, 1909, 1955, 1958, 1961, 1962, 1965, 1970,
 ];
 var srcLines = src.split('\n');
-var maxAnchor = anchorLines[anchorLines.length - 1];
+var maxAnchor = Math.min(anchorLines[anchorLines.length - 1], srcLines.length);
 var anchorIndex = 0;
 var stack = [];
 for (var lineNum = 1; lineNum <= maxAnchor; lineNum++) {

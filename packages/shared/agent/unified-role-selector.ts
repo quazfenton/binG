@@ -827,7 +827,8 @@ export function composeUnifiedRolePrompt(
     }
 
     return prompt;
-  } catch {      // Best-effort fallback: raw prompt from whichever set the role came from.
+  } catch (err) {
+    log.warn('[unified-role-selector] composePrompt failed, falling back to raw prompt', { error: err instanceof Error ? err.message : String(err) });
     return getRawPrompt(role as UnifiedRole, source);
   }
 }

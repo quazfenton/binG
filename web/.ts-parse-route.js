@@ -4,7 +4,13 @@ const ts = require('typescript');
 const fs = require('fs');
 
 const RT = './app/api/chat/route.ts';
-const src = fs.readFileSync(RT, 'utf8');
+let src;
+try {
+  src = fs.readFileSync(RT, 'utf8');
+} catch {
+  console.error('ERROR: could not read', RT);
+  process.exit(1);
+}
 
 const sf = ts.createSourceFile(
   'route.ts',
@@ -25,7 +31,11 @@ diags.slice(0, 30).forEach(function (d, i) {
     var len = d.length || 0;
     var msg = typeof d.messageText === 'string'
       ? d.messageText
-      : d.messageText.messageText;
+      : flattenMessageText(d.messageText);
+
+    function flattenMessageText(mt) {
+      return typeof mt === 'string' ? mt : flattenMessageText(mt.messageText);
+    }
     var snippet = src.split('\n')[lc.line] || '';
     console.log(
       '  [' + i + '] cat=' + d.category + ' code=' + d.code +

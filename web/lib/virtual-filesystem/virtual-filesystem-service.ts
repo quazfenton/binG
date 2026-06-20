@@ -1875,6 +1875,11 @@ export class VirtualFilesystemService {
     return { deletedCount };
   }
 
+  /**
+   * Get diff summary for LLM context
+   * Returns a human-readable summary of all file changes
+   */
+  getDiffSummary(ownerId: string, maxDiffs: number = 100): string {
     const result = diffTracker.getDiffSummary(ownerId, maxDiffs);
     return JSON.stringify(result);
   }
@@ -2630,6 +2635,31 @@ class GitBackedVFSProxy {
    */
   async findAnonOwnerIds(maxAgeHours: number = 24 * 7): Promise<string[]> {
     return this.vfs.findAnonOwnerIds(maxAgeHours);
+  }
+
+  // NEW Meta-coalesce follow-up: passthrough to the base service's
+  // applyBatchMutations so the typed `virtualFilesystem` export (this
+  // proxy, not the base class) can exercise the batch-coalesced persist
+  // path. Git-tracking is intentionally omitted for the initial pass —
+  // layer it into the gitVFS.writeFile delegation if a future caller
+  // needs git-tracked batch writes.
+  async applyBatchMutations(
+    ownerId: string,
+    mutations: Array<{
+      type: 'write' | 'delete';
+      path: string;
+      content?: string;
+      language?: string;
+      options?: { failIfExists?: boolean; append?: boolean };
+    }>,
+  ): Promise<{
+    success: boolean;
+    successful: number;
+    failed: number;
+    processed: Array<{ path: string; success: boolean; error?: string }>;
+    duration: number;
+  }> {
+    return this.vfs.applyBatchMutations(ownerId, mutations);
   }
 }
 

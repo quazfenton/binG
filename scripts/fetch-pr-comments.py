@@ -410,10 +410,12 @@ def run_fetch(config: RepositoryConfig, args: argparse.Namespace) -> FetchResult
         result.pages_fetched += 1
         state.last_page_fetched = page
 
-        # Stop if this entire page was already seen and we've caught up.
-        # Only apply this heuristic after fetching at least one page's worth
-        # so the first page on a fresh run isn't incorrectly skipped.
-        if new_on_page == 0 and page > start_page:
+        # Stop early only when we've confirmed we're on the last known page
+        # and every comment on it was already saved. Don't stop before the
+        # last page — later pages may contain new comments even when an
+        # earlier page has none.
+        total_pages = total_pages_observed or 0
+        if new_on_page == 0 and page > start_page and page >= total_pages:
             if not args.quiet:
                 print(f"  All {len(raw_comments)} comments already saved — caught up.")
             result.stopped_early = True
