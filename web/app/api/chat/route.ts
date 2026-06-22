@@ -54,6 +54,19 @@ import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
 import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, type AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
+// Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
+// contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
+// already coerces via stringifyMessageContent; this import is the route's
+// belt-and-suspenders guard against any future drift — closing the silent
+// stream regression where non-string response shapes became `'[object Object]'`
+// at L1889 (operator-precedence floor: `+` binds tighter than `||`).
+import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
+// Inspector helpers (extracted to `lib/chat/shape-helpers.ts` in this turn
+// so they're unit-testable without a live LLM). Used at L1717-L1718 to emit
+// `[CHAT-ROUTE] processUnifiedAgentRequest returned` INFO lines that surface
+// a non-string response shape at INFO level — without this telemetry the
+// silent-stream regression is invisible until a user complains.
+import { shapeKeyOf, serializableTextLength } from '@/lib/chat/shape-helpers';
 // Bug #86 (Pass-6 audit): wire detectNeedsMoreTurns() from the
 // auto-continue-detector module. The detector is the single source of truth
 // for "did the LLM stop too early?" — it inspects 17+ named signals
@@ -100,6 +113,7 @@ function normalizeStepArgs(value: unknown): Record<string, unknown> | undefined 
   }
   return undefined;
 }
+
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
@@ -1399,6 +1413,16 @@ const config: UnifiedAgentConfig = {
       maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
       temperature,
       maxTokens,
+      // Forward `request.signal` so the orchestration pipeline
+      // (processUnifiedAgentRequest → runV1Api / runV2Native /
+      // coordinateConcurrentFallback) can `if (signal?.aborted)` and
+      // end the chain-walk on user-initiated stop. Without this, the
+      // user has no way to interrupt a stalling fallback chain that
+      // walks 7+ providers × 30s silence each (~4 min total). See the
+      // abortSignal JSDoc on UnifiedAgentConfig for the per-mode
+      // wiring status (this turn: just plumbed; downstream modes come
+      // in a follow-up).
+      abortSignal: request.signal,
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,
@@ -1632,10 +1656,33 @@ const config: UnifiedAgentConfig = {
 // Pair: @audit-phantom-L2053 in route.ts (canonical Stage 2 band reference).
 //        @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
                 result = await processUnifiedAgentRequest(currentConfig);
+                // Bug-fix #2: surface the post-await response shape at INFO level so
+                // future silent-stream regressions are visible in production without
+                // toggling LOG_LEVEL=debug. When result.response is non-string the
+                // route's emit paths ALL coerce to '[object Object]' (operator-
+                // precedence bug at L1889) and the user sees a stream with zero
+                // content chunks despite 27.7s of pre-Response setup.
+                chatLogger.info('[CHAT-ROUTE] processUnifiedAgentRequest returned', {
+                  requestId,
+                  responseType: typeof result.response,
+                  responseShapeKey: shapeKeyOf(result.response),
+                  responseLen: serializableTextLength(result.response),
+                  bufferLen: streamState.buffer.length,
+                  elapsedMs: Date.now() - requestStartTime,
+                });
                 sendStep(`Iteration ${iteration + 1}`, result.success ? 'completed' : 'failed');
 
-                // Accumulate this iteration's result
-                const iterContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '');
+                // Accumulate this iteration's result.
+                // (route-layer catch-all — Layer 3 of 3 per content-stringifier.ts JSDoc)
+                //
+                // Defense-in-depth: route the buffer+result.response concat
+                // through explicit type-narrowed variables. Non-string shapes
+                // (e.g. {role, parts:[…]} MessageContent, ContentPart arrays)
+                // are coerced via stringifyMessageContent — never fall through
+                // to `'[object Object]'`. Cheap O(n).
+                const bufferText = typeof streamState.buffer === 'string' ? streamState.buffer : '';
+                const responseText = typeof result.response === 'string' ? result.response : stringifyMessageContent(result.response);
+                const iterContent = bufferText + responseText;
                 if (result.steps) accumulatedSteps.push(...result.steps);
 
                 // Flush holdback chars
@@ -1876,7 +1923,16 @@ const config: UnifiedAgentConfig = {
               const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
 
               // SESSION NAMING: Detect if this is a new single-folder workspace
-              const responseContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '') || '';
+              // (route-layer catch-all — Layer 3 of 3 per content-stringifier.ts JSDoc)
+              //
+              // Defense-in-depth: route the buffer+result.response concat
+              // through explicit type-narrowed variables. Non-string shapes
+              // (e.g. {role, parts:[…]} MessageContent, ContentPart arrays)
+              // are coerced via stringifyMessageContent — never fall through
+              // to `'[object Object]'`. Cheap O(n).
+              const bufferText = typeof streamState.buffer === 'string' ? streamState.buffer : '';
+              const responseText = typeof result.response === 'string' ? result.response : stringifyMessageContent(result.response);
+              const responseContent = bufferText + responseText;
               try {
                 const { detectSingleFolderFromResponse, sessionNameExists } = await import('@/lib/session/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
@@ -2090,6 +2146,18 @@ const config: UnifiedAgentConfig = {
               controller.close();
             }
           },
+          // The runtime's cancel() transitions this stream to "closed"
+          // automatically per the WHATWG Streams spec — no explicit
+          // controller.close() needed (and the controller is the start()
+          // parameter, not in scope in cancel() anyway). We just record
+          // the disconnect as signal-class telemetry. Note: closing the
+          // SSE pipe makes the client see [DONE] immediately.
+          cancel(reason?: unknown) {
+            chatLogger.info('SSE stream cancelled by client disconnect', {
+              requestId,
+              reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
+            });
+          },
         });
 
         return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
@@ -2167,6 +2235,12 @@ const config: UnifiedAgentConfig = {
                 // Clean up the continuation counter on error so it doesn't leak.
                 clearContinuationCount(requestId);
               }
+            },
+            cancel(reason?: unknown) {
+              chatLogger.info('SSE stream cancelled by client disconnect', {
+                requestId,
+                reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
+              });
             },
           });
 
@@ -3691,9 +3765,10 @@ const config: UnifiedAgentConfig = {
                 controller.close();
               }
             },
-            cancel() {
+            cancel(reason?: unknown) {
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.warn('LLM stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+              chatLogger.info('SSE stream cancelled by client disconnect', { requestId: streamRequestId }, {
+                reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
                 chunkCount,
                 latencyMs: streamDuration,
               });
@@ -4140,9 +4215,10 @@ const config: UnifiedAgentConfig = {
                 cleanup();
               }
             },
-            cancel() {
+            cancel(reason?: unknown) {
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+              chatLogger.info('SSE stream cancelled by client disconnect', { requestId: streamRequestId }, {
+                reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
                 chunkCount,
                 latencyMs: streamDuration,
               });
@@ -4559,13 +4635,14 @@ const config: UnifiedAgentConfig = {
               cleanup();
             }
           },
-          cancel() {
+          cancel(reason?: unknown) {
             if (!streamClosed) {
               streamClosed = true;
               cleanup();
             }
             const streamDuration = Date.now() - streamStartTime;
-            chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
+            chatLogger.info('SSE stream cancelled by client disconnect', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
+              reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
               chunkCount,
               latencyMs: streamDuration,
             });
@@ -5003,6 +5080,12 @@ async function handleGatewayStreaming(params: {
       } finally {
         controller.close();
       }
+    },
+    cancel(reason?: unknown) {
+      chatLogger.info('SSE stream cancelled by client disconnect', {
+        requestId,
+        reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
+      });
     },
   });
 

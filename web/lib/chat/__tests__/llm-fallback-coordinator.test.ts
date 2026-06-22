@@ -31,7 +31,16 @@ vi.mock('@/lib/utils/logger', () => ({
   }),
 }));
 
-import { coordinateConcurrentFallback } from '../llm-fallback-coordinator';
+import {
+  coordinateConcurrentFallback,
+} from '../llm-fallback-coordinator';
+import {
+  _resetHealthForTests,
+  _getCallsForTests,
+  shouldDeprioritize,
+  getHealthScore,
+  SLOW_CALL_THRESHOLD_MS,
+} from '../llm-provider-health';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -147,6 +156,7 @@ function makeControllable<T>(): {
 describe('coordinateConcurrentFallback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetHealthForTests();
   });
 
   it('yields primary chunks when primary produces before silenceMs', async () => {
@@ -769,10 +779,14 @@ describe('coordinateConcurrentFallback', () => {
 
       // Advance past silenceMs (fallback #1 created) + hardDeadlineMs
       // (race 2 times out) + slack for the chain-exhaustion throw.
+      // Eagerly register matcher BEFORE advancing timers: the chain-exhausted throw
+      // leaks as an unhandled rejection when this microtask slips past the await-expect
+      // matcher under mock timers (chain-walks slowed by the abortable() factory wrapper).
+      const chainExhaustedMatcher = expect(firstP).rejects.toThrow(/Concurrent fallback: chain exhausted/);
       await vi.advanceTimersByTimeAsync(silenceMs + hardDeadlineMs + EPSILON);
 
       // The chain has been exhausted (only 1 entry); the generator throws.
-      await expect(firstP).rejects.toThrow(/Concurrent fallback: chain exhausted/);
+      await chainExhaustedMatcher;
     } finally {
       vi.useRealTimers();
     }
@@ -910,6 +924,240 @@ describe('coordinateConcurrentFallback', () => {
       expect(factoryCalls).toEqual(['fallbackA']);
       expect(fallback.aborted).toBe(true);
       expect(primary.aborted).toBe(false); // primary won
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // ── recordCall wiring tests (derank loop) ────────────────────────
+  // Verify that each warn-log site in the chain-walk loop feeds
+  // recordCall(...) with the right provider/latencyMs/errorType so
+  // the derank-by-bad-calls loop in llm-provider-health can move
+  // stalling/failing fallback providers to the tail of the configured
+  // chain on subsequent requests.
+
+  it('records a setup-fail bad call when the fallback factory throws', async () => {
+    _resetHealthForTests();
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const silenceMs = 30;
+      const hardDeadlineMs = 100;
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => {
+          throw new Error('fallback setup failed');
+        },
+        fallbackChain: ['fallbackA'],
+        silenceMs,
+        hardDeadlineMs,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+      const chainExhaustedMatcher = expect(firstP).rejects.toThrow(/Concurrent fallback: chain exhausted/);
+      await vi.advanceTimersByTimeAsync(silenceMs + hardDeadlineMs + 50);
+
+      // Chain has been exhausted (single fallback threw on setup).
+      await chainExhaustedMatcher;
+
+      const calls = _getCallsForTests('fallbackA');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].ok).toBe(false);
+      expect(calls[0].latencyMs).toBe(0);
+      expect(calls[0].errorType).toBe('setup-fail');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records a stall bad call when fallback stalls past hardDeadlineMs', async () => {
+    _resetHealthForTests();
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const stalled = makeControllable<number>(); // never produces
+      const silenceMs = 30;
+      const hardDeadlineMs = 80;
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => stalled,
+        fallbackChain: ['stalling-fb'],
+        silenceMs,
+        hardDeadlineMs,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+      const chainExhaustedMatcher = expect(firstP).rejects.toThrow(/Concurrent fallback: chain exhausted/);
+      await vi.advanceTimersByTimeAsync(silenceMs + hardDeadlineMs + 50);
+
+      await chainExhaustedMatcher;
+
+      const calls = _getCallsForTests('stalling-fb');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].ok).toBe(false);
+      expect(calls[0].latencyMs).toBe(hardDeadlineMs);
+      expect(calls[0].errorType).toBe('stall');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records an error bad call when the fallback stream errors before producing', async () => {
+    _resetHealthForTests();
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const failing = makeControllable<number>();
+      const silenceMs = 30;
+      const hardDeadlineMs = 500;
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => failing,
+        fallbackChain: ['erroring-fb'],
+        silenceMs,
+        hardDeadlineMs,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+      await vi.advanceTimersByTimeAsync(silenceMs + 5);
+      // Register matcher BEFORE failing.fail — the fail() triggers the factory reject
+      // path which walks the chain to exhaustion; firstP then rejects inside the await.
+      const chainExhaustedMatcher = expect(firstP).rejects.toThrow(/Concurrent fallback: chain exhausted/);
+      failing.fail(new Error('fallback authorization failed'));
+      await vi.advanceTimersByTimeAsync(10);
+
+      await chainExhaustedMatcher;
+
+      const calls = _getCallsForTests('erroring-fb');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].ok).toBe(false);
+      expect(calls[0].latencyMs).toBe(0);
+      expect(calls[0].errorType).toBe('error');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('records the fallback as a successful call when the primary wins the race', async () => {
+    _resetHealthForTests();
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>();
+      const fallback = makeControllable<number>(); // never produces
+      const silenceMs = 30;
+      const hardDeadlineMs = 500;
+
+      const onLoser = vi.fn();
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => fallback,
+        silenceMs,
+        hardDeadlineMs,
+        onLoser,
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+      await vi.advanceTimersByTimeAsync(silenceMs + 5);
+      primary.push(99);
+      primary.end();
+
+      const first = await firstP;
+      expect(first.value).toBe(99);
+      for await (const _ of iter) { /* drain */ }
+
+      // Sanity: primary did win (fallback was the loser).
+      expect(onLoser).toHaveBeenCalledTimes(1);
+      expect(onLoser).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: 'fallbackA', source: 'fallback' }),
+      );
+
+      // Gating regression: the fallback is recorded as a SUCCESSFUL call.
+      // isBadCall only flags records where `!ok || latencyMs > SLOW_CALL_THRESHOLD_MS`,
+      // so a fast loser is NOT counted as a bad call. This prevents a
+      // perfectly healthy fallback from being demoted just because it lost
+      // a coin flip against a faster primary. No errorType is attached on
+      // an ok=true record (errorType is reserved for actual failures).
+      const calls = _getCallsForTests('fallbackA');
+      expect(calls).toHaveLength(1);
+      expect(calls[0].ok).toBe(true);
+      expect(calls[0].errorType).toBeUndefined();
+      expect(calls[0].latencyMs).toBeGreaterThan(0);
+      expect(calls[0].latencyMs).toBeLessThan(SLOW_CALL_THRESHOLD_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT count a fast lost-race against shouldDeprioritize (gating regression)', async () => {
+    // Regression for the over-penalization flagged by the code reviewer:
+    // the original 'lost-race' wire recorded every primary-wins race as a
+    // bad call for the fallback. After gating via success=true, a fast
+    // loser must NOT contribute to the rolling bad-call count used by
+    // shouldDeprioritize(). Otherwise a perfectly functional fallback
+    // would be demoted after a few races just because the primary was
+    // marginally faster. The legitimate bad-call path (ok=false records
+    // from setup-fail / stall / error) is already covered by the three
+    // sibling recordCall wiring tests above, so this test focuses
+    // exclusively on the gating fix.
+    _resetHealthForTests();
+    vi.useFakeTimers();
+    try {
+      // Run DEPRIORITIZE_AFTER_COUNT+ lost-races (each fast, well under
+      // SLOW_CALL_THRESHOLD_MS). The fallback MUST remain healthy despite
+      // accumulating raced-but-lost records.
+      for (let i = 0; i < 5; i++) {
+        const primary = makeControllable<number>();
+        const fallback = makeControllable<number>(); // never produces
+        const silenceMs = 30;
+        const hardDeadlineMs = 500;
+
+        const gen = coordinateConcurrentFallback({
+          primaryProvider: 'primary',
+          model: 'm',
+          createPrimaryStream: () => primary,
+          createFallbackStream: () => fallback,
+          silenceMs,
+          hardDeadlineMs,
+        });
+
+        const iter = gen[Symbol.asyncIterator]();
+        const firstP = iter.next();
+        await vi.advanceTimersByTimeAsync(silenceMs + 5);
+        primary.push(i);
+        primary.end();
+
+        await firstP;
+        for await (const _ of iter) { /* drain */ }
+      }
+
+      // 5 lost-race calls recorded, but shouldDeprioritize MUST stay false
+      // because each is ok=true with latencyMs << SLOW_CALL_THRESHOLD_MS —
+      // none of them satisfy isBadCall, so the rolling bad-call count
+      // stays at 0 well below DEPRIORITIZE_AFTER_COUNT=3.
+      const calls = _getCallsForTests('fallbackA');
+      expect(calls).toHaveLength(5);
+      expect(calls.every((c) => c.ok === true)).toBe(true);
+      expect(calls.every((c) => c.errorType === undefined)).toBe(true);
+      expect(calls.every((c) => c.latencyMs < SLOW_CALL_THRESHOLD_MS)).toBe(true);
+      expect(shouldDeprioritize('fallbackA')).toBe(false);
+      // And getHealthScore (=good/total) must remain at 1.0 since every
+      // recorded call was good under isBadCall.
+      expect(getHealthScore('fallbackA')).toBe(1);
     } finally {
       vi.useRealTimers();
     }

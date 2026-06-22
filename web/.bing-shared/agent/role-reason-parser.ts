@@ -137,12 +137,12 @@ const SIGNAL_PREFIX_RE = new RegExp(
  * so it can match against any phrase within a multi-phrase input.
  */
 const SIGNAL_LOOSE_RE = new RegExp(
-  String.raw`(?<![A-Za-z])` + KW_GROUP_S + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
+  String.raw`(?<!\p{L})` + KW_GROUP_S + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
   'iu',
 );
 
 const EXPECTED_LOOSE_RE = new RegExp(
-  String.raw`(?<![A-Za-z])` + KW_GROUP_E + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
+  String.raw`(?<!\p{L})` + KW_GROUP_E + String.raw`\s*` + SEP_ATOM + String.raw`\s*(.+?)\s*$`,
   'iu',
 );
 
@@ -188,7 +188,7 @@ export function parseRoleReason(raw: unknown): ParsedRoleReason {
     if (phrases.length > 2 && process.env.ROLE_REASON_SILENT_DROPS !== 'true') {
       console.warn(
         `[role-reason-parser] input has ${phrases.length} phrases; only first two are used for signal/expected. ` +
-        `Extra phrase(s) (${phrases.length - 2}) appended to 'expected': ${phrases.slice(2).join(' | ')}`,
+        `Extra phrase(s) (${phrases.length - 2}) dropped: ${phrases.slice(2).map(s => s.length > 60 ? s.slice(0, 57) + '...' : s).join(' | ')}`,
       );
     }
 

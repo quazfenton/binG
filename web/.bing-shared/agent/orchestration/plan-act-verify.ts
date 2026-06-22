@@ -132,11 +132,17 @@ function buildToolResult(
   toolName: string,
   args: Record<string, any>,
   rawResult: any,
-  error?: Error
+  error?: Error | ToolError
 ): ToolResult {
   if (error) {
-    const errMsg = error.message || 'Unknown error';
-    const structuredError: ToolError = classifyToolError(toolName, errMsg, rawResult);
+    // SEV-12 pre-existing tsc TS2345 (`Argument of type 'ToolError' is not assignable to parameter of type 'Error'`) fix:
+    // callers (e.g. validateAndNormalizeArgs in this file at the tool-validation error path) now hand us a structured ToolError;
+    // preserve it directly via discriminant (`.type` is a string field on ToolError) instead of re-classifying.
+    // Runtime behavior unchanged for callers passing a raw Error — classifyToolError still derives from .message.
+    const structuredError: ToolError =
+      typeof (error as ToolError).type === 'string'
+        ? (error as ToolError)
+        : classifyToolError(toolName, (error as Error).message || 'Unknown error', rawResult);
     return {
       success: false,
       toolName,
@@ -1011,7 +1017,15 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         })) || [];
 
         return {
-          text: result.text || '',
+          // Bug #119 (Pass-8 audit) — defensive completion-shape guard.
+          // AI SDK v6 should always return `text: string`, but a malformed
+          // provider response can occasionally yield undefined/null here.
+          // Without this guard we silently coerce to `''` and lose the
+          // signal. The shared package cannot import `bing/web/lib/chat/
+          // chat-metrics` (cross-package boundary), so we log a warn
+          // marker here; the vercel-ai-streaming.ts path bumps the
+          // chat-metrics counter via `tryParseToolArgs` (sister fix).
+          text: typeof result.text === 'string' ? result.text : _invalidJsonFallback('orchestration.callLLM.happy-path', result.text),
           toolCalls,
           usage: result.usage || { totalTokens: 0 },
         };
@@ -1065,7 +1079,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         log.info('callLLM: plain-text fallback succeeded', { provider, model });
 
         return {
-          text: fallbackResult.text || '',
+          // Bug #119 (Pass-8 audit) — defensive completion-shape guard,
+          // see callLLM happy-path for rationale.
+          text: typeof fallbackResult.text === 'string' ? fallbackResult.text : _invalidJsonFallback('orchestration.callLLM.plain-text-fallback', fallbackResult.text),
           toolCalls: [],
           usage: fallbackResult.usage || { totalTokens: 0 },
         };
@@ -1164,3 +1180,21 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
 /** @deprecated Use PlanActVerifyOrchestrator instead */
 export const AgentOrchestrator = PlanActVerifyOrchestrator;
+
+
+/**
+ * Bug #119 (Pass-8 audit) — defensive completion-shape helper for the
+ * shared `orchestration` package. Returns a structured empty-text marker
+ * while logging a `[INVALID-JSON-FALLBACK]` warn so operators can grep
+ * run.log. This counter does NOT bump `chatMetrics.invalidJsonFallbacks`
+ * because the shared package cannot import `bing/web/lib/chat/chat-metrics`
+ * (cross-package boundary). The streaming-layer sister site
+ * `vercel-ai-streaming.ts` _does_ bump the counter via `tryParseToolArgs`.
+ */
+function _invalidJsonFallback(source: string, value: unknown): string {
+  log.warn(
+    '[INVALID-JSON-FALLBACK] orchestration completion shape unexpected — treating as empty text',
+    { source, observedType: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value },
+  );
+  return '';
+}

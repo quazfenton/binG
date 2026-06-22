@@ -342,8 +342,9 @@ async function main(): Promise<void> {
       tsx_version: (process.versions as Record<string, string | undefined>).tsx ?? 'unknown',
     },
   };
-  writeFileSync('/tmp/probe-chat-route.json', JSON.stringify(cumulative, null, 2));
-  console.log('\n  JSON report \u2192 /tmp/probe-chat-route.json');
+  const reportPath = process.env.PROBE_REPORT_PATH ?? '/tmp/probe-chat-route.json';
+  writeFileSync(reportPath, JSON.stringify(cumulative, null, 2));
+  console.log(`\n  JSON report \u2192 ${reportPath}`);
 }
 
 main().catch((e) => {

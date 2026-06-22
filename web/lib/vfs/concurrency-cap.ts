@@ -46,8 +46,11 @@ export const VFS_CAP_DEFAULT = 10;
 export function getVfsLimiter(opts: { permits?: number; inputSize?: number } = {}): Semaphore {
   // Floor at 1 to avoid the `new Semaphore(0)` silent-deadlock trap
   // (code-reviewer nit: caller passing `permits: 0` would otherwise deadlock
-  // every queued runExclusive callback forever).
-  const defaultCap = Math.min(VFS_CAP_DEFAULT, opts.inputSize ?? VFS_CAP_DEFAULT);
-  const wants = Math.max(1, opts.permits ?? defaultCap);
+  // every queued runExclusive callback forever). Also guard against NaN or
+  // Infinity which would produce an invalid Semaphore.
+  const safeSize = Number.isFinite(opts.inputSize) ? opts.inputSize! : VFS_CAP_DEFAULT;
+  const defaultCap = Math.min(VFS_CAP_DEFAULT, safeSize);
+  const rawPermits = opts.permits ?? defaultCap;
+  const wants = Number.isFinite(rawPermits) ? Math.max(1, rawPermits) : 1;
   return new Semaphore(wants);
 }

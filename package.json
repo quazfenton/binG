@@ -7,8 +7,7 @@
   "packageManager": "pnpm@9.15.4",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
-    "dev:raw": "turbo dev",
+    "dev": "pnpm --filter web dev",
     "dev:backend": "pnpm --filter backend dev",
     "dev:web": "pnpm --filter web dev",
     "dev:desktop": "pnpm --filter desktop tauri dev",
@@ -46,7 +45,6 @@
     "simple-git": "^3.36.0",
     "slugify": "^1.6.9",
     "tsx": "^4.21.0",
-    "turbo": "^2.0.0",
     "unified": "^11.0.5",
     "vitest": "^4.0.18"
   },

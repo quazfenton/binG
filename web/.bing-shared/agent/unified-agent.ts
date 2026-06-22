@@ -273,7 +273,7 @@ export class UnifiedAgent {
               initResults[capability] = false
           }
         } catch (error: any) {
-          log.error(`Failed to initialize capability ${capability}:`, error.message)
+          log.error(`Failed to initialize capability ${capability}: ${error.message}`)
           this.initializationErrors.set(capability, error)
           initResults[capability] = false
           
@@ -298,7 +298,7 @@ export class UnifiedAgent {
       return this.session
 
     } catch (error: any) {
-      log.error(`Initialization failed:`, error.message)
+      log.error(`Initialization failed: ${error.message}`)
       throw error
     }
   }

@@ -42,7 +42,7 @@ import { dirname, join } from 'node:path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(__dirname, '..');
 const PROBE_SCRIPT = join(PROJECT_ROOT, 'scripts', 'probe-chat-route.ts');
-const REPORT_PATH = '/tmp/probe-chat-route.json';
+const REPORT_PATH = process.env.PROBE_REPORT_PATH ?? '/tmp/probe-chat-route.json';
 
 // Local devs opt out unless either env var is set.
 const shouldRun = !!(process.env.CI || process.env.PROBE_CI);
@@ -55,6 +55,11 @@ const CUM_P50_THRESHOLD_MS = AUDIT_FLOOR_MS * (1 - TOLERANCE_FRACTION); // 60ms
 
 // Per-layer audit claim [low, high] — must mirror probe-stub-manifest.ts.
 // If this drifts, also update probe-stub-manifest.ts AUDIT_CLAIMS.
+// Per-layer OVER-BUDGET factor — measured_saved_p50_ms must stay within
+// audit_high * this factor; otherwise stub internal-latency is
+// double-counting with the wrapper (the prior calibration bug).
+const OVER_BUDGET_FACTOR = 1.25;
+
 const PER_LAYER_CLAIMS: Record<string, { low: number; high: number }> = {
   'NEW-1':      { low: 5,  high: 15  },
   'NEW-2':      { low: 10, high: 30  },
@@ -122,7 +127,13 @@ probeGuard('probe-chat-route CI guard', () => {
         `probe exited 0 but ${REPORT_PATH} not written (duration=${probeDurationSec.toFixed(2)}s)`,
       );
     }
-    report = JSON.parse(readFileSync(REPORT_PATH, 'utf-8')) as ProbeReport;
+    try {
+      report = JSON.parse(readFileSync(REPORT_PATH, 'utf-8')) as ProbeReport;
+    } catch (parseErr: any) {
+      throw new Error(
+        `Failed to parse ${REPORT_PATH}: ${parseErr?.message ?? parseErr}`,
+      );
+    }
     // Sanity-check JSON shape so a silent probe regression in the report
     // schema fails loud here.
     if (typeof report.cumulative_savings_p50_ms !== 'number') {
@@ -133,6 +144,15 @@ probeGuard('probe-chat-route CI guard', () => {
     if (!Array.isArray(report.per_layer_audit_vs_measured)) {
       throw new Error(
         `report missing per_layer_audit_vs_measured array: ${JSON.stringify(report).slice(0, 200)}`,
+      );
+    }
+    const knownLayers = new Set(Object.keys(PER_LAYER_CLAIMS));
+    const extraLayers = report.per_layer_audit_vs_measured.filter(
+      (r) => !knownLayers.has(r.layer),
+    );
+    if (extraLayers.length > 0) {
+      throw new Error(
+        `report contains unexpected layers not in PER_LAYER_CLAIMS: ${extraLayers.map((r) => r.layer).join(', ')}`,
       );
     }
   }, PROBE_TIMEOUT_MS + 10_000);
@@ -197,10 +217,6 @@ probeGuard('probe-chat-route CI guard', () => {
   // Use a per-layer loop so the name of each layer shows up in the vitest
   // failure list, making CI logs drill-downable.
   const layerNames = Object.keys(PER_LAYER_CLAIMS);
-  // Per-layer OVER-BUDGET factor — measured_saved_p50_ms must stay within
-  // audit_high * this factor; otherwise stub internal-latency is
-  // double-counting with the wrapper (the prior calibration bug).
-  const OVER_BUDGET_FACTOR = 1.25;
   for (const layer of layerNames) {
     it(`${layer} measured_saved_p50_ms sits inside audit [low, high*\u00b7${OVER_BUDGET_FACTOR}]`, () => {
       const entry = report.per_layer_audit_vs_measured.find((r) => r.layer === layer);

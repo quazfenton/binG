@@ -37,6 +37,14 @@ import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemR
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { ModalClient, maybeUseModal, getModalClient } from '@/lib/modal/modal-client';
+// Defense-in-depth: enforce the `UnifiedAgentResult.response: string` contract
+// at the service layer (L1568 below) so that even if Modal's wire response
+// shape drifts (e.g. ContentPart array, `{role, parts, content}` object),
+// the L1568 return site ALWAYS emits a string. TypeScript trusts the wire
+// shape via `this.post<AgentExecuteResponse>(...)` casts in modal-client.ts;
+// stringifyMessageContent is the runtime enforcement point. See
+// lib/chat/content-stringifier.ts for the contract surface.
+import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
 import { PROVIDER_DEFAULT_MODELS } from '../providers/provider-default-models';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
@@ -657,6 +665,25 @@ export interface UnifiedAgentConfig {
 
   // Streaming
   onStreamChunk?: (chunk: string) => void;
+  /**
+   * Caller-supplied AbortSignal. Upstream callers (e.g. the chat route's
+   * POST handler) forward `request.signal` here so a user-initiated stop
+   * can interrupt the orchestration chain.
+   *
+   * NOTE — landing-pad status: only this interface slot exists in this
+   * turn. Downstream execution modes (`runV1Api`, `runV2Native`,
+   * `runStatefulAgentMode`, `runOpencodeSDKMode`, `runMastraWorkflow`,
+   * etc.) do NOT yet read `config.abortSignal` and forward it into their
+   * primary HTTP / fallback pipelines. Until each mode is updated to
+   * forward this signal, the chain-walk in `llm-fallback-coordinator.ts`
+   * only interrupts on its own `hardDeadlineMs` budget per provider —
+   * callers passing this signal today will still see the same ~4-min
+   * application-code tail until the per-mode wiring lands.
+   *
+   * Optional. When undefined, modes fall back to their internal
+   * timeout / circuit-breaker machinery (no caller-side interruption).
+   */
+  abortSignal?: AbortSignal;
 
   // Agent settings
   maxSteps?: number;
@@ -1546,7 +1573,12 @@ export async function processUnifiedAgentRequest(
 
         return {
           success: true,
-          response: modalResult.response,
+          // Defense-in-depth: stringifyMessageContent enforces the
+          // `UnifiedAgentResult.response: string` contract. ModalClient.executeAgent
+          // ALSO applies this coercion at the wire layer (lib/modal/modal-client.ts:97),
+          // but a future call site (no-modal path that constructs modalResult directly)
+          // could regress the runtime shape — surface it from the service layer too.
+          response: stringifyMessageContent(modalResult.response),
           mode: 'v1-api',
           metadata: {
             provider: 'modal',
@@ -2032,7 +2064,7 @@ async function runV2Native(
 
   return {
     success: true,
-    response: result.response,
+    response: stringifyMessageContent(result.response),
     steps,
     totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
     mode: 'v2-native',
@@ -2114,7 +2146,7 @@ async function runDesktopMode(
 
     return {
       success: true,
-      response: result.response,
+      response: stringifyMessageContent(result.response),
       steps,
       totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
       mode: 'desktop',
@@ -2188,7 +2220,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
 
     return {
       success: result.success,
-      response: result.response,
+      response: stringifyMessageContent(result.response),
       steps,
       totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
       mode: 'v2-native',  // StatefulAgent runs as V2 native
@@ -2237,7 +2269,7 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   
   return {
     success: true,
-    response: result.response,
+    response: stringifyMessageContent(result.response),
     steps: (result.bashCommands || []).map(cmd => ({
       toolName: 'execute_command',
       args: { command: cmd.command },
@@ -2283,7 +2315,7 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   
   return {
     success: true,
-    response: result.response,
+    response: stringifyMessageContent(result.response),
     steps: (result.bashCommands || []).map(cmd => ({
       toolName: 'execute_command',
       args: { command: cmd.command },
@@ -5445,7 +5477,7 @@ async function runV1Orchestrated(
         // Both fallbacks failed after budget exhaustion — return partial orchestrated result with budgetExhausted signal so callers can distinguish degraded response
         return {
           success: true,
-          response: cleanedResponse,
+          response: stringifyMessageContent(cleanedResponse),
           steps,
           totalSteps: stepsCount,
           mode: 'v1-agent-loop',
@@ -5473,7 +5505,7 @@ async function runV1Orchestrated(
 
     return {
       success: true,
-      response: cleanedResponse,
+      response: stringifyMessageContent(cleanedResponse),
       steps,
       totalSteps: stepsCount,
       mode: 'v1-agent-loop',

@@ -1,0 +1,14 @@
+          // ── cancel(reason) ────────────────────────────────────────
+          // Called by the runtime when the SSE consumer (browser /
+          // curl / EventSource) disconnects. By the time cancel()
+          // runs, request.signal has already fired `abort` so
+          // config.abortSignal is `aborted: true` for any execution
+          // mode that checks it on its next reactive poll. We just
+          // record the disconnect here as signal-class telemetry.
+          // The runtime transitions this stream to "closed"
+          // automatically per WHATWG, so the client sees [DONE]
+          // immediately — no explicit controller.close() needed.
+          // Note: the in-flight processUnifiedAgentRequest inside
+          // start() keeps running server-side until it honors
+          // config.abortSignal (landing-pad status — see the abortSignal
+          // JSDoc on UnifiedAgentConfig).

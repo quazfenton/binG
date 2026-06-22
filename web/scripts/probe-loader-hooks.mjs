@@ -146,6 +146,12 @@ function generateStubSource(entry, spec) {
     // Emit: export const NAME = async (...args) => {
     //   return taggedUpstream(LAYER, 'parallel', LATENCY, await (STUB_BODY)(...args));
     // };
+    // Skip keys that aren't valid JS identifiers — interpolating them
+    // directly into `export const ${name}` would produce parse errors.
+    if (!/^[$_\p{L}][$_\p{L}0-9]*$/u.test(name)) {
+      console.error(`[probe-loader-hooks] skipping invalid export name: ${name}`);
+      continue;
+    }
     const stubSource = stubFn.toString();
     lines.push(`export const ${name} = async (...args) => {`);
     lines.push(
@@ -207,9 +213,18 @@ class NextResponseShim {
     this._cookies = new Map();
   }
   static json(body, init) {
+    const mergedHeaders = { 'content-type': 'application/json' };
+    if (init && init.headers) {
+      const h = init.headers;
+      if (typeof h.forEach === 'function') {
+        h.forEach((v, k) => { mergedHeaders[k] = v; });
+      } else {
+        Object.assign(mergedHeaders, h);
+      }
+    }
     return new NextResponseShim(JSON.stringify(body), {
       ...(init || {}),
-      headers: { 'content-type': 'application/json', ...((init && init.headers) || {}) },
+      headers: mergedHeaders,
     });
   }
   async json() {

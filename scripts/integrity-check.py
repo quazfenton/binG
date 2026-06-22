@@ -119,8 +119,11 @@ def flush() -> None:
         )
     except Exception as e:
         # Last resort. Report the failure so corrupted files aren't silently skipped.
-        sys.stderr.write(f"[integrity-check] syntax-check subprocess fallback also failed: {e}\n")
-        sys.stderr.flush()
+        try:
+            sys.stderr.write(f"[integrity-check] syntax-check subprocess fallback also failed: {e}\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
 
 
 # atexit covers sys.exit() from inside check_*(). When fail() is called,
@@ -304,7 +307,7 @@ def check_shrinkage(commit_range: str) -> None:
 
         old_len = len(old)
         new_len = len(new)
-        if old_len <= 500 or new_len == 0:
+        if old_len <= 50 or new_len == 0:
             continue
 
         ratio = new_len / old_len
@@ -691,10 +694,12 @@ def check_syntax(commit_range: str) -> None:
         except subprocess.CalledProcessError:
             continue
 
-        tmpfile = f"/tmp/integrity-check-{os.getpid()}-{f.replace('/', '_')}{ext}"
         try:
-            with open(tmpfile, 'wb') as fh:
-                fh.write(new_content)
+            with tempfile.NamedTemporaryFile(
+                prefix='integrity-check-', suffix=ext, delete=False,
+            ) as tf:
+                tf.write(new_content)
+                tmpfile = tf.name
 
             cmd_template = EXT_SYNTAX_CHECK[ext]
             cmd = [arg.replace('{file}', tmpfile) for arg in cmd_template]
@@ -716,7 +721,8 @@ def check_syntax(commit_range: str) -> None:
             pass
         finally:
             try:
-                os.unlink(tmpfile)
+                if tmpfile:
+                    os.unlink(tmpfile)
             except OSError:
                 pass
 

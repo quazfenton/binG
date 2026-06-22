@@ -48,6 +48,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
+import { recordCall } from './llm-provider-health';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('LLM:FallbackCoordinator');
@@ -222,7 +223,20 @@ export async function* coordinateConcurrentFallback<T>(
 
   // Coordinator disabled: just iterate the primary.
   if (silenceMs <= 0) {
-    const handle = await createPrimaryStream();
+    let handle: StreamHandle<T>;
+    try {
+      handle = await abortable(
+        Promise.resolve(createPrimaryStream()),
+        signal,
+        'Concurrent fallback: primary setup aborted (silenceMs disabled)',
+      );
+    } catch (err) {
+      if (isAbortError(err, signal)) {
+        logger.debug('Concurrent fallback: primary setup aborted (silenceMs disabled)', { primaryProvider, model, requestId });
+        return;
+      }
+      throw err;
+    }
     yield* drainIterator(handle.gen, signal);
     return;
   }
@@ -236,7 +250,20 @@ export async function* coordinateConcurrentFallback<T>(
       model,
       requestId,
     });
-    const handle = await createPrimaryStream();
+    let handle: StreamHandle<T>;
+    try {
+      handle = await abortable(
+        Promise.resolve(createPrimaryStream()),
+        signal,
+        'Concurrent fallback: primary setup aborted (no fallbacks)',
+      );
+    } catch (err) {
+      if (isAbortError(err, signal)) {
+        logger.debug('Concurrent fallback: primary setup aborted by user (no fallbacks)', { primaryProvider, model, requestId });
+        return;
+      }
+      throw err;
+    }
     yield* drainIterator(handle.gen, signal);
     return;
   }
@@ -361,8 +388,29 @@ export async function* coordinateConcurrentFallback<T>(
     const raceStartTime = Date.now();
     let fallbackHandle: StreamHandle<T>;
     try {
-      fallbackHandle = await createFallbackStream(fallbackProvider);
+      // Factory await wrapped in `abortable(...)` so a stalled setup
+      // (OpenCode container spin-up, HTTP/2 SETUP hang) bails within
+      // ~1s of user-initiated stop rather than hanging the chain walk
+      // for the full setup duration.
+      fallbackHandle = await abortable(
+        Promise.resolve(createFallbackStream(fallbackProvider)),
+        signal,
+        'Concurrent fallback: fallback setup aborted',
+      );
     } catch (err) {
+      // User-initiated abort during fallback setup: do NOT walk to the
+      // next provider — abort the still-in-flight primary and exit.
+      if (isAbortError(err, signal)) {
+        logger.warn('Concurrent fallback: fallback setup aborted by user; halting chain walk', {
+          primaryProvider,
+          fallbackProvider,
+          fallbackIndex,
+          model,
+          requestId,
+        });
+        primaryHandle.abort();
+        return;
+      }
       logger.warn(
         'Concurrent fallback: setup failed, walking to next',
         {
@@ -374,6 +422,10 @@ export async function* coordinateConcurrentFallback<T>(
           error: err instanceof Error ? err.message : String(err),
         },
       );
+      // Feed the derank-by-bad-calls loop in llm-provider-health so
+      // providers whose fallback factories are broken get demoted on
+      // subsequent requests via getConfiguredFallbackChain.
+      recordCall(fallbackProvider, false, 0, 'setup-fail');
       continue;
     }
     const setupMs = Date.now() - raceStartTime;
@@ -492,6 +544,10 @@ export async function* coordinateConcurrentFallback<T>(
           requestId,
         },
       );
+      // Derank-on-stall: record the fallback as a failed call with the
+      // full hardDeadlineMs budget so shouldDeprioritize() / getHealthScore()
+      // bump this provider's bad-call counter for the rolling window.
+      recordCall(fallbackProvider, false, hardDeadlineMs, 'stall');
       fallbackHandle.abort();
       continue;
     }
@@ -507,6 +563,9 @@ export async function* coordinateConcurrentFallback<T>(
           requestId,
         },
       );
+      // Derank-on-error: capture the operator-visible failure so the next
+      // getConfiguredFallbackChain re-ordering can move this provider later.
+      recordCall(fallbackProvider, false, 0, 'error');
       fallbackHandle.abort();
       continue;
     }
@@ -571,6 +630,19 @@ export async function* coordinateConcurrentFallback<T>(
         requestId,
         fallbackLatencyMs,
       });
+      // derank-on-slow-lost-race: the fallback produced later than the
+      // primary during the chunk race. Record with `success: true` so the
+      // existing isBadCall heuristic only flags this provider when the
+      // measured fallbackLatencyMs exceeds SLOW_THRESHOLD_MS (the same
+      // 30s ceiling every other call site uses). A fast loser (typical
+      // race outcome — a few hundred ms after silenceMs) is a normal
+      // outcome and MUST NOT be counted as a bad call, otherwise a
+      // perfectly healthy fallback gets demoted just because it lost
+      // a coin flip against a faster primary. No errorType tag is
+      // attached here because ok=true means this record isn't an error;
+      // operators wanting race-loss telemetry should look at the
+      // onLoser callback, not the health tracker.
+      recordCall(fallbackProvider, true, fallbackLatencyMs);
     }
 
     yield raceResult.value;
@@ -610,4 +682,64 @@ async function* drainIterator<T>(
     if (next.done) return;
     yield next.value;
   }
+}
+
+/**
+ * Race a promise against an AbortSignal. Resolves with the underlying
+ * value if the promise resolves first; rejects with an `AbortError`-
+ * tagged error if the signal fires first. The signal listener is
+ * removed in both branches so races that resolve non-abort do NOT
+ * leak the abort handler into the signal's listener registry.
+ *
+ * This helper closes the chain-walk "factory awaits do not see signal"
+ * gap: a stalled `createFallbackStream(...)` factory (e.g., OpenCode
+ * container spin-up, HTTP/2 SETUP hang) used to wedge for the full
+ * setup duration. With this helper, the setup abandon propagates
+ * within ~1s of the user hitting stop.
+ */
+function abortable<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+  errorMsg: string,
+): Promise<T> {
+  if (signal?.aborted) {
+    return Promise.reject(makeAbortError(errorMsg, signal));
+  }
+  if (!signal) {
+    return promise;
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(makeAbortError(errorMsg, signal));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
+function makeAbortError(msg: string, signal: AbortSignal): Error {
+  const reason = signal.reason as { name?: string } | undefined;
+  const err = new Error(msg) as Error & { name: string; code: string };
+  err.name = reason?.name ?? 'AbortError';
+  err.code = 'ABORT_ERR';
+  return err;
+}
+
+/**
+ * Predicate: did `abortable()` (or any abort-aware boundary) throw
+ * because `signal` fired (rather than a real underlying error)?
+ */
+function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
+  if (!signal) return false;
+  const e = err as { name?: string; code?: string } | null | undefined;
+  return Boolean(e && (e.name === 'AbortError' || e.code === 'ABORT_ERR'));
 }

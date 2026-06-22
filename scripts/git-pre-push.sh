@@ -68,6 +68,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 
   # ── Layer 3: Structural integrity (shrinkage + brace balance + exports + functions) ──
   if [ -x "$SCRIPT_DIR/integrity-check.py" ]; then
+    # Layer 3 checks run
     if ! "$SCRIPT_DIR/integrity-check.py" --mode check-shrinkage --range "$range"; then
       FAILURES+=("shrinkage")
     fi
@@ -91,6 +92,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     if ! "$SCRIPT_DIR/integrity-check.py" --mode check-each-commit --range "$range"; then
       FAILURES+=("per-commit-integrity")
     fi
+  else
+    echo "⚠️  Layer 3 — integrity-check.py not found or not executable at $SCRIPT_DIR/integrity-check.py"
   fi
 
   # ── Layer 4: Line-count corruption (severe shrinkage) ──────────────────

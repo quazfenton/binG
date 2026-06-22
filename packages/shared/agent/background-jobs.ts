@@ -259,7 +259,7 @@ export class BackgroundExecutor extends EventEmitter {
             const backoff = Math.min(5000 * Math.pow(2, consecutiveFailures - 1), 300000);
             waitMs = Math.max(waitMs, backoff);
           }
-          await this.sleep(waitMs);
+          await this.sleep(waitMs, () => job.status !== 'running');
         }
       }
     };

@@ -1,0 +1,6 @@
+          // The runtime's cancel() transitions this stream to "closed"
+          // automatically per the WHATWG Streams spec — no explicit
+          // controller.close() needed (and the controller is the start()
+          // parameter, not in scope in cancel() anyway). We just record
+          // the disconnect as signal-class telemetry. Note: closing the
+          // SSE pipe makes the client see [DONE] immediately.

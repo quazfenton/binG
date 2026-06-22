@@ -5,7 +5,7 @@
  * Sibling checks (one script, two checks):
  *   vendor-drift       — pin vendor-API export sets at install time; fail on
  *                        drift. Snapshots live under scripts/vendor-api-snapshots/.
- *   env-completeness   — pin /opt/bing/turbo.json `build.passThroughEnv` against
+ *   env-completeness   — pin the inline allowlist (in this script) against
  *                        every `process.env.X` reference surfaced in source.
  *                        Reports the cross-product and groups missing vars by
  *                        category (API_KEY / DEPLOYMENT_ENV / MODEL_CONFIG /
@@ -17,7 +17,7 @@
  * reference to a `process.env.X` whose X is not in the build.passThroughEnv
  * allowlist (or covered by its wildcard, e.g. `NEXT_PUBLIC_*`) shows up as a
  * finding here, and the operator's workflow is `--warn-only` first → review
- * exemptions → bump turbo.json before re-running in strict mode.
+ * exemptions → bump the inline allowlist before re-running in strict mode.
  *
  * EXIT CODES
  *   0   all checks passed (or --warn-only mode prints findings but exits 0)
@@ -73,7 +73,6 @@ const topN = parseInt(getOpt('top', String(30)) ?? '30', 10);
 const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');
 const SNAPSHOT_DIR = path.join(SCRIPT_DIR, 'vendor-api-snapshots');
-const TURBO_PATH = path.join(PROJECT_ROOT, 'turbo.json');
 
 const c = {
   reset: '\x1b[0m',
@@ -398,16 +397,17 @@ function collectReferences(verbose: boolean): Map<string, number> {
 async function checkEnvCompleteness(opts: { strict: boolean; verbose: boolean; topN: number }): Promise<{ pass: boolean; details: string[] }> {
   const details: string[] = [];
 
-  const counter = collectReferences(opts.verbose);
-
-  let turbo: any;
-  try {
-    turbo = JSON.parse(fs.readFileSync(TURBO_PATH, 'utf-8'));
-  } catch (e: any) {
-    details.push(`  ${red('[env-completeness]')} failed to read ${TURBO_PATH}: ${e.message}`);
-    return { pass: false, details };
-  }
-  const allowlist: string[] = Array.isArray(turbo?.tasks?.build?.passThroughEnv) ? turbo.tasks.build.passThroughEnv : [];
+  const counter = collectReferences(opts.verbose);  // Build-time pass-through env allowlist. Wildcards (`*`) are honored by
+  // `globMatch` below — keep that semantics in sync if editing this list.
+  const allowlist: ReadonlyArray<string> = [
+    'NODE_ENV',
+    'CI',
+    'NEXT_PUBLIC_*',
+    'DATABASE_URL',
+    'JWT_SECRET',
+    'ENCRYPTION_KEY',
+    'REDIS_URL',
+  ];
 
   // Exemptions. The non-strict (default) mode mirrors what Next.js reads at
   // build time when `ci` env vars are not present: if Next.js isn't reading
@@ -458,7 +458,7 @@ async function checkEnvCompleteness(opts: { strict: boolean; verbose: boolean; t
         details.push(`        ${e.count.toString().padStart(5)}  ${e.name}`);
       }
     }
-    details.push(`    → ${cyan('bump')} /opt/bing/turbo.json's build.passThroughEnv, or pass ${cyan('--strict')} to expose even exempted categories.`);
+    details.push(`    → ${cyan('bump')} the allowlist in scripts/check-vendor-api-drift.ts, or pass ${cyan('--strict')} to expose even exempted categories.`);
   }
 
   return { pass, details };
@@ -520,7 +520,7 @@ async function main(): Promise<number> {
 main()
   .then(rc => process.exit(rc))
   .catch(err => {
-    console.error(`[check-vendor-api-drift] fatal: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`[check-vendor-api-drift] fatal: ${err instanceof Error ? err.message : (err?.message ?? String(err))}`);
     if (err.stack) console.error(err.stack);
     process.exit(2);
   });
