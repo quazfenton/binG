@@ -45,6 +45,15 @@ import { ModalClient, maybeUseModal, getModalClient } from '@/lib/modal/modal-cl
 // stringifyMessageContent is the runtime enforcement point. See
 // lib/chat/content-stringifier.ts for the contract surface.
 import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
+// Inspector-pair audit (shapeKeyOf + serializableTextLength) hoisted from
+// the chat-route emit point (`app/api/chat/route.ts:1668-L1669`) into the
+// service layer so the audit fires from EVERY processUnifiedAgentRequest
+// caller (v1 priority router, v2-native, stateful-agent, OpenCode SDK,
+// agent-loop orchestration fallback) — not just the chat route's narrow
+// post-await log line. The chat-route emit is preserved (different prefix,
+// distinct route-local fields like bufferLen/elapsedMs) for defense-in-depth
+// grep-ability. See `auditResponseShape` below.
+import { shapeKeyOf, serializableTextLength } from '@/lib/chat/shape-helpers';
 import { PROVIDER_DEFAULT_MODELS } from '../providers/provider-default-models';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
@@ -671,14 +680,16 @@ export interface UnifiedAgentConfig {
    * can interrupt the orchestration chain.
    *
    * NOTE — landing-pad status: only this interface slot exists in this
-   * turn. Downstream execution modes (`runV1Api`, `runV2Native`,
+   * turn. The v1-api modes (`runV1ApiWithTools`, `runV1ApiCompletion`,
+   * including their server-side continuation turns) now forward this
+   * signal into `streamWithConcurrentFallback` so a user-initiated stop
+   * cancels the upstream HTTP request and re-arms the fallback
+   * coordinator's user-abort race arm. Other modes (`runV2Native`,
    * `runStatefulAgentMode`, `runOpencodeSDKMode`, `runMastraWorkflow`,
-   * etc.) do NOT yet read `config.abortSignal` and forward it into their
-   * primary HTTP / fallback pipelines. Until each mode is updated to
-   * forward this signal, the chain-walk in `llm-fallback-coordinator.ts`
-   * only interrupts on its own `hardDeadlineMs` budget per provider —
-   * callers passing this signal today will still see the same ~4-min
-   * application-code tail until the per-mode wiring lands.
+   * etc.) do NOT yet forward it — for those the chain-walk in
+   * `llm-fallback-coordinator.ts` only interrupts on its own
+   * `hardDeadlineMs` budget per provider, and the route-level hard
+   * deadline (app/api/chat/route.ts) is the final backstop.
    *
    * Optional. When undefined, modes fall back to their internal
    * timeout / circuit-breaker machinery (no caller-side interruption).
@@ -1320,6 +1331,40 @@ export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
 }
 
 /**
+ * Hoisted from the chat-route layer (route.ts:1668-L1669). Emits one
+ * `[AGENT-SERVICE] processUnifiedAgentRequest returned` INFO line per outer
+ * return of `processUnifiedAgentRequest`, so an audit of the response shape
+ * is visible regardless of which sub-mode (v1-api / v2-native / stateful-
+ * agent / OpenCode SDK / V1 agent loop) returned or whether the route layer
+ * was bypassed (e.g. when an upstream caller invokes the service directly).
+ *
+ * Side-effect note: when the orchestrator's fallback chain cascades (Phase 1
+ * fails → Phase 2 text-mode fallback), this helper fires TWICE for the same
+ * outer request — once for the failed step's shape, once for the rescued
+ * step's shape. This is intentional: each cadence surfaces what the
+ * failing step actually returned so operators can see whether the failure
+ * was a shape drift (ContentPart array, `{role, parts, content}` object,
+ * StreamingResponse chunk) vs. an empty/error path.
+ */
+function auditResponseShape(
+  result: UnifiedAgentResult,
+  meta: { provider?: string; model?: string; mode?: string },
+): void {
+  // Use the file-local `log` (from createLogger('UnifiedAgentService')) —
+  // `agentLog` is also imported but not used for INFO calls anywhere else
+  // in this file, so adopting `log` keeps the audit sink-aligned with the
+  // 100+ existing `log.info(...)` call sites in this file's other paths.
+  log.info('[AGENT-SERVICE] processUnifiedAgentRequest returned', {
+    provider: meta.provider ?? (result.metadata?.provider as string | undefined),
+    model: meta.model ?? (result.metadata?.model as string | undefined),
+    mode: meta.mode ?? result.mode,
+    responseType: typeof result.response,
+    responseShapeKey: shapeKeyOf(result.response),
+    responseLen: serializableTextLength(result.response),
+  });
+}
+
+/**
  * Unified agent request processor
  *
  * Routes to OpenCode V2 Engine (primary) or V1 API (fallback) based on configuration.
@@ -1571,7 +1616,7 @@ export async function processUnifiedAgentRequest(
           tokensUsed: modalResult.tokensUsed,
         });
 
-        return {
+        const modalReturn: UnifiedAgentResult = {
           success: true,
           // Defense-in-depth: stringifyMessageContent enforces the
           // `UnifiedAgentResult.response: string` contract. ModalClient.executeAgent
@@ -1590,6 +1635,8 @@ export async function processUnifiedAgentRequest(
             modalEndpoint: 'executeAgent',
           },
         };
+        auditResponseShape(modalReturn, { provider: 'modal', model: modalResult.model, mode: 'v1-api' });
+        return modalReturn;
       } else {
         log.warn('[UnifiedAgent] ⚠️ Modal returned failure, falling back', {
           error: modalResult.error,
@@ -1800,9 +1847,7 @@ export async function processUnifiedAgentRequest(
       result.mode !== mode ||
       result.metadata?.fallbackFrom != null ||
       result.metadata?.fallbackReason != null ||
-      result.metadata?.fallbackChain != null;
-
-    if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && roleSelection?.continue !== false) {
+      result.metadata?.fallbackChain != null;      if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && roleSelection?.continue !== false) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
 
       // For orchestrated modes, retry with text-only fallback
@@ -1822,7 +1867,7 @@ export async function processUnifiedAgentRequest(
             { originalMode: mode, fallbackMode: 'v1-api', phase1Result: 'no-tools' },
           );
         } catch { /* best-effort */ }
-        return {
+        const auditedFallback: UnifiedAgentResult = {
           ...fallbackResult,
           metadata: {
             ...fallbackResult.metadata,
@@ -1830,9 +1875,12 @@ export async function processUnifiedAgentRequest(
             originalMode: mode,
           }
         };
+        auditResponseShape(auditedFallback, { provider: config.provider, model: config.model, mode });
+        return auditedFallback;
       }
     }
 
+    auditResponseShape(result, { provider: config.provider, model: config.model, mode });
     return result;
   } catch (error) {
     log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
@@ -1873,6 +1921,7 @@ export async function processUnifiedAgentRequest(
           ? `${config.filesystemOwnerId}$${config.conversationId || 'default'}`
           : (config.conversationId || config.userId || 'default'),
       });
+      auditResponseShape(degradedResult, { provider: config.provider, model: config.model, mode });
       return degradedResult;
     }
 
@@ -1880,7 +1929,7 @@ export async function processUnifiedAgentRequest(
     log.error('[UnifiedAgent] ✗ ALL MODES FAILED', {
       triedModes: Array.from(triedModes),
     });
-    return {
+    const allFailedResult: UnifiedAgentResult = {
       success: false,
       response: 'I\'m sorry, I wasn\'t able to process your request. All available AI providers and execution modes were exhausted. This can happen due to API key issues, rate limits, or network problems. Please try again in a moment, or check that your API keys are configured correctly.',
       mode,
@@ -1891,6 +1940,8 @@ export async function processUnifiedAgentRequest(
         allProvidersFailed: true,
       },
     };
+    auditResponseShape(allFailedResult, { provider: config.provider, model: config.model, mode });
+    return allFailedResult;
   }
 }
 
@@ -3894,6 +3945,12 @@ async function runV1ApiWithTools(
         maxSteps: config.maxSteps || 15,
         tools: aiSdkTools,
         toolCallStreaming: true,
+        // Forward the caller's abort signal so (a) a user-initiated stop
+        // truly cancels the upstream HTTP request and (b) the fallback
+        // coordinator's user-abort race arm is actually wired. Without
+        // this the request hangs for the full ~4-min idle ceiling even
+        // after the user presses stop. See UnifiedAgentConfig.abortSignal.
+        signal: config.abortSignal,
       })) {
         if (chunk.content) {
           response += chunk.content;
@@ -4336,6 +4393,9 @@ async function runV1ApiWithTools(
             maxSteps: config.maxSteps || 15,
             tools: aiSdkTools,
             toolCallStreaming: true,
+            // Forward the caller's abort signal (continuation turn) — see note
+            // at the primary streamWithConcurrentFallback call site above.
+            signal: config.abortSignal,
           })) {
             if (chunk.content) {
               contResponse += chunk.content;
@@ -4782,6 +4842,9 @@ async function runV1ApiWithTools(
             maxSteps: config.maxSteps || 15,
             tools: aiSdkTools,
             toolCallStreaming: true,
+            // Forward the caller's abort signal (continuation turn) — see note
+            // at the primary streamWithConcurrentFallback call site above.
+            signal: config.abortSignal,
           })) {
             if (chunk.content) {
               contContent += chunk.content;
@@ -5713,6 +5776,10 @@ async function runV1ApiCompletion(
         // handler. Force tools to undefined so the LLM completes in
         // text mode only.
         tools: undefined,
+        // Forward the caller's abort signal so a user-initiated stop (or the
+        // route-level hard deadline) truly cancels the upstream HTTP request
+        // and re-arms the fallback coordinator's user-abort race arm.
+        signal: config.abortSignal,
       };
 
       if (config.onStreamChunk) {

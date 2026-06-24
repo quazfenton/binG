@@ -1401,6 +1401,19 @@ FORMAT RULES:
 
     const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
 
+    // Route-level stall backstop. `agentTurnAbort` is fired by the stall
+    // watchdog inside the streaming `start()` (idle-based — reset on every
+    // SSE emit) when the agent turn produces NO output for
+    // CHAT_ROUTE_STALL_TIMEOUT_MS. Merging it with `request.signal` means a
+    // user-initiated stop OR a watchdog timeout both propagate down through
+    // `config.abortSignal` into the LLM HTTP call, and the route also races
+    // the awaited `processUnifiedAgentRequest` against the watchdog so the
+    // response is freed even if the underlying SDK/provider ignores the abort.
+    const agentTurnAbort = new AbortController();
+    const agentTurnSignal: AbortSignal = request.signal
+      ? AbortSignal.any([request.signal, agentTurnAbort.signal])
+      : agentTurnAbort.signal;
+
 const config: UnifiedAgentConfig = {
       userMessage: task,  // User message only — NOT the filesystem context
       userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
@@ -1413,16 +1426,17 @@ const config: UnifiedAgentConfig = {
       maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
       temperature,
       maxTokens,
-      // Forward `request.signal` so the orchestration pipeline
+      // Forward a COMBINED abort signal so the orchestration pipeline
       // (processUnifiedAgentRequest → runV1Api / runV2Native /
       // coordinateConcurrentFallback) can `if (signal?.aborted)` and
-      // end the chain-walk on user-initiated stop. Without this, the
+      // end the chain-walk on user-initiated stop OR on the route-level
+      // stall watchdog (see `agentTurnAbort` below). Without this, the
       // user has no way to interrupt a stalling fallback chain that
-      // walks 7+ providers × 30s silence each (~4 min total). See the
-      // abortSignal JSDoc on UnifiedAgentConfig for the per-mode
-      // wiring status (this turn: just plumbed; downstream modes come
-      // in a follow-up).
-      abortSignal: request.signal,
+      // walks 7+ providers × 30s silence each (~4 min total). The
+      // watchdog's controller is merged here so a fired watchdog truly
+      // cancels the in-flight LLM HTTP request. See the abortSignal
+      // JSDoc on UnifiedAgentConfig for the per-mode wiring status.
+      abortSignal: agentTurnSignal,
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,
@@ -1464,7 +1478,52 @@ const config: UnifiedAgentConfig = {
     if (useUnifiedAgentStream) {
       const streamBody = new ReadableStream({
           async start(controller) {
-            const emit = createSSEEmitter(controller);
+            const rawEmit = createSSEEmitter(controller);
+            // Idle-based stall watchdog state. `lastActivityAt` is bumped on
+            // every SSE emit (steps, tokens, tool events, etc.) so a stream
+            // that is actively producing output is never killed; only a turn
+            // that goes silent for CHAT_ROUTE_STALL_TIMEOUT_MS is aborted.
+            let lastActivityAt = Date.now();
+            const emit: typeof rawEmit = (eventType, payload) => {
+              lastActivityAt = Date.now();
+              return rawEmit(eventType, payload);
+            };
+            // Rejects when the watchdog fires so the route stops awaiting
+            // `processUnifiedAgentRequest` even if the underlying SDK/provider
+            // never settles its promise (e.g. ignores the abort signal).
+            let stallReject: ((err: Error) => void) | null = null;
+            const stallPromise = new Promise<never>((_, reject) => {
+              stallReject = reject;
+            });
+            // Avoid an unhandled-rejection warning in the normal (no-stall)
+            // path: the watchdog is cleared in `finally`, so this promise
+            // simply stays pending; the noop catch is defensive.
+            stallPromise.catch(() => { /* observed via Promise.race */ });
+            const ROUTE_STALL_TIMEOUT_MS = parseInt(
+              process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000',
+              10,
+            );
+            const stallWatchdog = setInterval(() => {
+              if (agentTurnAbort.signal.aborted) return;
+              const idleMs = Date.now() - lastActivityAt;
+              if (idleMs >= ROUTE_STALL_TIMEOUT_MS) {
+                chatLogger.error(
+                  '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
+                  { requestId, idleMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS },
+                );
+                const stallErr = new Error(
+                  `Chat route stall watchdog: no output for ${idleMs}ms ` +
+                  `(threshold ${ROUTE_STALL_TIMEOUT_MS}ms)`,
+                );
+                // Emit an error SSE event so the client sees the failure.
+                try { emit(SSE_EVENT_TYPES.ERROR, { message: stallErr.message }); } catch { /* best-effort */ }
+                // Cancel the in-flight LLM HTTP call (signal is now forwarded
+                // through config.abortSignal → streamWithConcurrentFallback).
+                try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
+                // Free the response even if the inner promise never settles.
+                stallReject?.(stallErr);
+              }
+            }, Math.min(ROUTE_STALL_TIMEOUT_MS, 15000));
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
@@ -1655,7 +1714,10 @@ const config: UnifiedAgentConfig = {
 //
 // Pair: @audit-phantom-L2053 in route.ts (canonical Stage 2 band reference).
 //        @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
-                result = await processUnifiedAgentRequest(currentConfig);
+                result = await Promise.race([
+                  processUnifiedAgentRequest(currentConfig),
+                  stallPromise,
+                ]);
                 // Bug-fix #2: surface the post-await response shape at INFO level so
                 // future silent-stream regressions are visible in production without
                 // toggling LOG_LEVEL=debug. When result.response is non-string the
@@ -2143,6 +2205,7 @@ const config: UnifiedAgentConfig = {
               streamState.parser.emittedEdits.clear();
               streamState.parser.unclosedPositions.clear();
             } finally {
+              clearInterval(stallWatchdog);
               controller.close();
             }
           },

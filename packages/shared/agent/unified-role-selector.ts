@@ -828,7 +828,8 @@ export function composeUnifiedRolePrompt(
 
     return prompt;
   } catch (err) {
-    log.warn('[unified-role-selector] composePrompt failed, falling back to raw prompt', { error: err instanceof Error ? err.message : String(err) });
+    // eslint-disable-next-line no-console
+    console.warn('[unified-role-selector] composePrompt failed, falling back to raw prompt', { error: err instanceof Error ? err.message : String(err) });
     return getRawPrompt(role as UnifiedRole, source);
   }
 }

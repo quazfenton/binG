@@ -117,6 +117,14 @@ export interface ConcurrentFallbackOptions<T> {
    * surfacing the throw to the user as a streamed error).
    */
   hardDeadlineMs?: number;
+  /**
+   * Idle timeout per chunk (ms). After yielding a chunk, if the next chunk
+   * does not arrive within this window the stream is treated as stalled and
+   * the coordinator walks to the next fallback in the chain. Defaults to
+   * undefined (no idle timeout — relies solely on the route-level stall
+   * watchdog and SDK timeouts).
+   */
+  idleTimeoutPerChunkMs?: number;
   /** User's abort signal. Forwarded to both streams' iteration loops. */
   signal?: AbortSignal;
   /** Optional request ID for log correlation. */
@@ -211,6 +219,7 @@ export async function* coordinateConcurrentFallback<T>(
     signal,
     silenceMs = DEFAULT_SILENCE_MS,
     hardDeadlineMs = DEFAULT_HARD_DEADLINE_MS,
+    idleTimeoutPerChunkMs,
     requestId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     onFallbackWin,
     onLoser,
@@ -237,7 +246,7 @@ export async function* coordinateConcurrentFallback<T>(
       }
       throw err;
     }
-    yield* drainIterator(handle.gen, signal);
+    yield* drainIterator(handle.gen, signal, idleTimeoutPerChunkMs);
     return;
   }
 
@@ -264,7 +273,7 @@ export async function* coordinateConcurrentFallback<T>(
       }
       throw err;
     }
-    yield* drainIterator(handle.gen, signal);
+    yield* drainIterator(handle.gen, signal, idleTimeoutPerChunkMs);
     return;
   }
 
@@ -322,7 +331,7 @@ export async function* coordinateConcurrentFallback<T>(
     if (first.value && !first.value.done) {
       yield first.value.value;
     }
-    yield* drainIterator(primaryIt, signal);
+    yield* drainIterator(primaryIt, signal, idleTimeoutPerChunkMs);
     return;
   }
 
@@ -576,8 +585,23 @@ export async function* coordinateConcurrentFallback<T>(
       // the wrong handle was aborted; committing to the live fallback
       // is correct.)
       primaryHandle.abort();
-      yield* drainIterator(fallbackIt, signal);
-      return;
+      try {
+        yield* drainIterator(fallbackIt, signal, idleTimeoutPerChunkMs);
+        return;
+      } catch (err) {
+        if (err instanceof IdleTimeoutError) {
+          logger.warn('Concurrent fallback: fallback stalled post-first-chunk; walking to next', {
+            primaryProvider,
+            fallbackProvider,
+            fallbackIndex,
+            model,
+            requestId,
+          });
+          fallbackHandle.abort();
+          continue;
+        }
+        throw err;
+      }
     }
 
     // raceResult.kind === 'chunk' — we have a winner for this iteration.
@@ -648,8 +672,23 @@ export async function* coordinateConcurrentFallback<T>(
     yield raceResult.value;
 
     const winnerIt = raceResult.source === 'primary' ? primaryIt : fallbackIt;
-    yield* drainIterator(winnerIt, signal);
-    return;
+    try {
+      yield* drainIterator(winnerIt, signal, idleTimeoutPerChunkMs);
+      return;
+    } catch (err) {
+      if (err instanceof IdleTimeoutError) {
+        logger.warn('Concurrent fallback: winner stalled post-first-chunk; walking to next fallback', {
+          primaryProvider,
+          fallbackProvider: raceResult.source === 'primary' ? 'primary' : fallbackProvider,
+          stalledProvider: raceResult.source,
+          fallbackIndex,
+          model,
+          requestId,
+        });
+        continue;
+      }
+      throw err;
+    }
   }
 
   // Fell through the entire chain without any provider producing a chunk
@@ -671,17 +710,47 @@ export async function* coordinateConcurrentFallback<T>(
  * Drain an async iterator, yielding each value until the iterator is
  * exhausted or the signal is aborted. Used as a final continuation step
  * after the race resolves to a winner.
+ *
+ * When `idleTimeoutMs` is set, a rolling idle timer fires between chunks:
+ * after yielding a value, if the next `it.next()` does not resolve within
+ * `idleTimeoutMs`, the generator throws `IdleTimeoutError`. This lets the
+ * caller (e.g. the chain-walk loop in `coordinateConcurrentFallback`)
+ * detect a post-first-chunk stall and walk to the next fallback rather
+ * than relying solely on the route-level stall watchdog.
  */
+export class IdleTimeoutError extends Error {
+  name = 'IdleTimeoutError' as const;
+  constructor(timeoutMs: number) {
+    super(`Stream idle timeout: no chunk received within ${timeoutMs}ms`);
+  }
+}
+
 async function* drainIterator<T>(
   it: AsyncIterator<T>,
   signal?: AbortSignal,
+  idleTimeoutMs?: number,
 ): AsyncGenerator<T> {
   while (true) {
     if (signal?.aborted) return;
-    const next = await it.next();
+    const next = idleTimeoutMs !== undefined
+      ? await raceWithTimeout(it.next(), idleTimeoutMs)
+      : await it.next();
     if (next.done) return;
     yield next.value;
   }
+}
+
+/** Race a promise against an idle timeout. If the timeout wins, throw. */
+async function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const result = await Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new IdleTimeoutError(ms)), ms);
+    }),
+  ]);
+  clearTimeout(timer!);
+  return result;
 }
 
 /**
