@@ -30,7 +30,8 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // SSE emission) in a single call site change.
 import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
-import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
+import { is530Blacklisted, handleProviderError, reset530Counter, maybeReset530OnSuccess } from './provider-530-tracker';
+import { maybeResetServerErrorOnSuccess } from './provider-server-error-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -4915,6 +4916,12 @@ async function runV1ApiWithTools(
         };
       }
 
+      // PR-F: clear the 530-blacklist counter on this provider's success.
+      // Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
+      maybeReset530OnSuccess(providerName);
+      // PR-G: clear the 5xx-blacklist counter on this provider's success.
+      // Gated by ENABLE_SERVER_ERROR_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
+      maybeResetServerErrorOnSuccess(providerName);
       return {
         success: true,
         response: finalResponse,
@@ -5966,6 +5973,12 @@ async function runV1ApiCompletion(
       const cleanedResponse = stripRoutingMarkers(truncatedCompletion);
       const isEmpty = !cleanedResponse || !cleanedResponse.trim();
 
+// PR-F: clear the 530-blacklist counter on this provider's success.
+// Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
+maybeReset530OnSuccess(providerName);
+// PR-G: clear the 5xx-blacklist counter on this provider's success.
+// Gated by ENABLE_SERVER_ERROR_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
+maybeResetServerErrorOnSuccess(providerName);
 return {
         success: true,
         response: cleanedResponse || '',

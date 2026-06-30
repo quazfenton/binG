@@ -669,3 +669,55 @@ describe('POST /api/chat — response shape audit ([CHAT-ROUTE] processUnifiedAg
     );
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// Route-level stall watchdog — the fix for "POST /api/chat stays pending
+// indefinitely; nothing streams; no fallback/timeout fires."
+//
+// The unified streaming path awaits `processUnifiedAgentRequest(...)` inside
+// the SSE `start(controller)` callback. If that await never settles (provider
+// wedged, SDK ignores abort, or a pre-LLM preamble hang), the response stayed
+// open until the user manually aborted (~4 min observed). The watchdog races
+// the await against an idle deadline and, on expiry, emits an error SSE event,
+// aborts the agent turn, and closes the stream — guaranteeing the request is
+// always bounded regardless of whether the inner promise ever settles.
+// ────────────────────────────────────────────────────────────────────
+describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs)', () => {
+  const ORIGINAL_TIMEOUT = process.env.CHAT_ROUTE_STALL_TIMEOUT_MS;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (ORIGINAL_TIMEOUT === undefined) {
+      delete process.env.CHAT_ROUTE_STALL_TIMEOUT_MS;
+    } else {
+      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = ORIGINAL_TIMEOUT;
+    }
+  });
+
+  it('terminates the SSE stream (no infinite pending) when the agent turn never settles', async () => {
+    // Short watchdog so the test is fast. The route reads this env var at
+    // runtime inside start(), so setting it here takes effect for this call.
+    process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '200';
+
+    // The exact failure mode: processUnifiedAgentRequest never resolves.
+    vi.mocked(processUnifiedAgentRequest).mockImplementation(
+      () => new Promise(() => { /* never resolves — simulates a wedged turn */ }) as any,
+    );
+
+    const res = await POST(makeReq() as any);
+
+    // If the watchdog works, the route's `finally { controller.close() }`
+    // runs and draining completes. If it does NOT, drainResponse hangs and
+    // the 5s test timeout fails — which is itself the regression signal.
+    await drainResponse(res);
+
+    expect(chatLogger.error).toHaveBeenCalledWith(
+      '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
+      expect.objectContaining({ thresholdMs: 200 }),
+    );
+  }, 5000);
+});

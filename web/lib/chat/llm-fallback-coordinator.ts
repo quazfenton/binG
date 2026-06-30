@@ -49,6 +49,8 @@
 
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { recordCall } from './llm-provider-health';
+// PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
+import { maybeReset530OnSuccess } from '../orchestra/provider-530-tracker';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('LLM:FallbackCoordinator');
@@ -299,6 +301,8 @@ export async function* coordinateConcurrentFallback<T>(
   let firstPrimaryResult: IteratorResult<T> | null = null;
 
   // Race: first primary chunk vs silenceMs timeout vs user abort.
+  let firstRaceTimer: NodeJS.Timeout | undefined;
+  let firstRaceAbortListener: (() => void) | undefined;
   const first: FirstRaceResult<T> = await Promise.race([
     primaryPromiseAtStart
       .then((r): FirstRaceResult<T> => {
@@ -307,20 +311,25 @@ export async function* coordinateConcurrentFallback<T>(
       })
       .catch((err): FirstRaceResult<T> => ({ kind: 'primary-error', error: err })),
     new Promise<FirstRaceResult<T>>((resolve) => {
-      const t = setTimeout(
+      firstRaceTimer = setTimeout(
         () => resolve({ kind: 'timeout' }),
         silenceMs,
       );
-      signal?.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(t);
+      if (signal) {
+        firstRaceAbortListener = () => {
+          if (firstRaceTimer) clearTimeout(firstRaceTimer);
+          firstRaceTimer = undefined;
           resolve({ kind: 'aborted' });
-        },
-        { once: true },
-      );
+        };
+        signal.addEventListener('abort', firstRaceAbortListener, { once: true });
+      }
     }),
-  ]);
+  ]).finally(() => {
+    if (FALLBACK_RACE_CLEANUP_ENABLED) {
+      if (firstRaceTimer) clearTimeout(firstRaceTimer);
+      if (signal && firstRaceAbortListener) signal.removeEventListener('abort', firstRaceAbortListener);
+    }
+  });
 
   if (first.kind === 'primary-error') {
     throw first.error;
@@ -477,6 +486,8 @@ export async function* coordinateConcurrentFallback<T>(
     //   3. hard deadline (per-fallback TTFT, default 30_000 ms)
     // If neither side produces a chunk within `hardDeadlineMs`, the race
     // resolves with `'fallback-timeout'` and we walk to the next entry.
+    let race2Timer: NodeJS.Timeout | undefined;
+    let race2AbortListener: (() => void) | undefined;
     const raceResult: ChunkRaceResult<T> = await Promise.race([
       primaryChunkPromise
         .then(
@@ -506,7 +517,7 @@ export async function* coordinateConcurrentFallback<T>(
           (err): ChunkRaceResult<T> => ({ kind: 'fallback-error', error: err }),
         ),
       new Promise<ChunkRaceResult<T>>((resolve) => {
-        const t = setTimeout(
+        race2Timer = setTimeout(
           () =>
             resolve({
               kind: 'fallback-timeout',
@@ -515,16 +526,21 @@ export async function* coordinateConcurrentFallback<T>(
             }),
           hardDeadlineMs,
         );
-        signal?.addEventListener(
-          'abort',
-          () => {
-            clearTimeout(t);
+        if (signal) {
+          race2AbortListener = () => {
+            if (race2Timer) clearTimeout(race2Timer);
+            race2Timer = undefined;
             resolve({ kind: 'aborted' });
-          },
-          { once: true },
-        );
+          };
+          signal.addEventListener('abort', race2AbortListener, { once: true });
+        }
       }),
-    ]);
+    ]).finally(() => {
+      if (FALLBACK_RACE_CLEANUP_ENABLED) {
+        if (race2Timer) clearTimeout(race2Timer);
+        if (signal && race2AbortListener) signal.removeEventListener('abort', race2AbortListener);
+      }
+    });
 
     // Defense-in-depth: re-check the user signal before deciding what
     // the race outcome means. If the user aborted during the race, drop
@@ -667,6 +683,9 @@ export async function* coordinateConcurrentFallback<T>(
       // operators wanting race-loss telemetry should look at the
       // onLoser callback, not the health tracker.
       recordCall(fallbackProvider, true, fallbackLatencyMs);
+      // PR-C: clear the 530-blacklist counter on the loser's behalf so a
+      // healthy fallback that lost this race isn't penalised across future requests.
+      maybeReset530OnSuccess(fallbackProvider);
     }
 
     yield raceResult.value;
@@ -707,6 +726,23 @@ export async function* coordinateConcurrentFallback<T>(
 }
 
 /**
+ * PR-B race-cleanup guard.
+ *
+ * When true (default ON), every Promise.race inside this module captures
+ * its setTimeout handle and any AbortSignal listener in outer scope, and
+ * clears both via a `.finally()` chained to the race. Without this guard,
+ * the setTimeout remains armed until it naturally fires (or forever if
+ * the timeout window is long) and the abort listener stays attached to
+ * the user's signal even after the race has resolved — a memory leak
+ * per concurrent fallback request.
+ *
+ * Operators can disable by setting `ENABLE_FALLBACK_RACE_CLEANUP=0`.
+ * The effect is purely a leak fix; no observable streaming behavior
+ * changes.
+ */
+const FALLBACK_RACE_CLEANUP_ENABLED = process.env.ENABLE_FALLBACK_RACE_CLEANUP !== '0';
+
+/**
  * Drain an async iterator, yielding each value until the iterator is
  * exhausted or the signal is aborted. Used as a final continuation step
  * after the race resolves to a winner.
@@ -740,17 +776,29 @@ async function* drainIterator<T>(
   }
 }
 
-/** Race a promise against an idle timeout. If the timeout wins, throw. */
+/**
+ * Race a promise against an idle timeout. If the timeout wins, throw
+ * `IdleTimeoutError`.
+ *
+ * PR-B: wraps the body in try/finally so the underlying setTimeout is
+ * cleared even on the timeout-wins (rejection) path. Previously this
+ * helper only cleared the timer on the success path; when the timeout
+ * fired first, the rejection propagated out and the `clearTimeout` line
+ * was skipped, leaving an orphaned timer in Node's queue until it
+ * naturally fired (or forever if ms was very large).
+ */
 async function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const result = await Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new IdleTimeoutError(ms)), ms);
-    }),
-  ]);
-  clearTimeout(timer!);
-  return result;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new IdleTimeoutError(ms)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**

@@ -1163,3 +1163,241 @@ describe('coordinateConcurrentFallback', () => {
     }
   });
 });
+
+/**
+ * PR-B race-cleanup regression tests.
+ *
+ * Verifies that `coordinateConcurrentFallback` and the helper
+ * `raceWithTimeout` no longer leak setTimeout handles or
+ * AbortSignal listeners after each Promise.race resolves. With the
+ * `ENABLE_FALLBACK_RACE_CLEANUP` flag (default ON), every race captures
+ * its timer + listener in outer scope and clears both via a `.finally()`
+ * chained to the race.
+ *
+ * T-B1: no leaked setTimeout after the primary wins the silence-vs-primary race.
+ * T-B2: no leaked setTimeout after the fallback wins the same race.
+ * T-B3: no leaked setTimeout after the user-aborts during a race.
+ * T-B4: no leaked AbortSignal listener after each race resolves.
+ * T-B5: raceWithTimeout's timer is cleared even on the rejection path.
+ *
+ * Note: tests use the same `vi.useFakeTimers()` pattern as the existing
+ * tests in this file so they slot in cleanly. The race coordinator's
+ * `for-await` pattern tracks timer setup via the timestamp the listener
+ * was added to the symbol — vitest's `vi.getTimerCount()` is the source
+ * of truth.
+ */
+describe('PR-B race-cleanup regression (llm-fallback-coordinator)', () => {
+  beforeEach(() => {
+    // Default ON: do not delete process.env.ENABLE_FALLBACK_RACE_CLEANUP.
+    // Each test exercises the flag-on path (the default behavior). Rollback
+    // path (`ENABLE_FALLBACK_RACE_CLEANUP=0`) disables cleanup; we don't
+    // test that explicitly because the existing tests already cover all
+    // observable behavior — the flag only controls cleanup.
+  });
+
+  it('T-B1: no leaked setTimeout after primary wins the silence-vs-primary race', async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>();
+      primary.push(99);
+      primary.end();
+      const unusedFactory = () => {
+        throw new Error('fallback factory must not run when primary wins');
+      };
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: unusedFactory,
+        silenceMs: 1000,
+      });
+      // Drain completely.
+      for await (const _ of gen) { /* drain */ }
+      // Primary produced before silenceMs — no fallback was created and no
+      // chunk race ran. Only the silence-vs-primary race fired, and its
+      // timer should be cleared (via the .finally() cleanup hook).
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T-B2: no leaked setTimeout after fallback wins the chunk race (per-fallback hardDeadline cleaned up)', async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const fallback = makeControllable<number>();
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => fallback,
+        silenceMs: 30,
+        hardDeadlineMs: 200,
+      });
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+      // Advance past silenceMs so the fallback is created and the chunk
+      // race begins. Both arms and the hardDeadline timer are now armed.
+      await vi.advanceTimersByTimeAsync(40);
+      // Fallback produces a chunk and wins.
+      fallback.push(42);
+      fallback.end();
+      const first = await firstP;
+      expect(first.value).toBe(42);
+      for await (const _ of iter) { /* drain */ }
+      // No timers should remain — chunk-race timer cleared via .finally().
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T-B3: no leaked setTimeout after user-abort during either race', async () => {
+    vi.useFakeTimers();
+    try {
+      // To exercise BOTH race-site .finally() cleanups, we abort AFTER
+      // silenceMs elapses (so the fallback is created) and DURING the
+      // chunk race (race site 2). This way both `firstRaceTimer` (race
+      // site 1) and `race2Timer` (race site 2) are armed when we abort,
+      // and BOTH handles' abort() paths fire.
+      const primary = makeControllable<number>(); // never produces
+      const fallback = makeControllable<number>(); // never produces
+      const controller = new AbortController();
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => fallback,
+        signal: controller.signal,
+        silenceMs: 50,
+        hardDeadlineMs: 500,
+      });
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+      // Advance past silenceMs so the fallback is created and the
+      // chunk race begins — both race timers are now armed.
+      await vi.advanceTimersByTimeAsync(70);
+      // Abort DURING the chunk race. Both the chunk-race `.finally()` and
+      // the abort-listener removal fire.
+      controller.abort();
+      // Advance further so any pending timers settle.
+      await vi.advanceTimersByTimeAsync(20);
+      for await (const _ of iter) { /* empty */ }
+      await firstP.catch(() => { /* may reject on abort */ });
+      // PR-B guarantee: every race's setTimeout cleared and listener
+      // removed. No orphaned timers.
+      expect(vi.getTimerCount()).toBe(0);
+      // Both handles must have been aborted by the coordinator.
+      expect(primary.aborted).toBe(true);
+      expect(fallback.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T-B4: no leaked AbortSignal listener on signal after each race resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>();
+      primary.push(1);
+      primary.end();
+      const controller = new AbortController();
+      // Track listener count via a wrapper around addEventListener.
+      const originalAdd = controller.signal.addEventListener.bind(controller.signal);
+      const originalRemove = controller.signal.removeEventListener.bind(controller.signal);
+      let liveListeners = 0;
+      let peakListeners = 0;
+      controller.signal.addEventListener = (type: string, listener: any, opts?: any) => {
+        if (type === 'abort') {
+          liveListeners += 1;
+          if (liveListeners > peakListeners) peakListeners = liveListeners;
+        }
+        return originalAdd(type, listener, opts);
+      };
+      controller.signal.removeEventListener = (type: string, listener: any, opts?: any) => {
+        if (type === 'abort') {
+          liveListeners -= 1;
+        }
+        return originalRemove(type, listener, opts);
+      };
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: () => {
+          throw new Error('factory must not run when primary produced before silenceMs');
+        },
+        signal: controller.signal,
+        silenceMs: 1000,
+      });
+      for await (const _ of gen) { /* drain */ }
+      // After every race resolves, the PR-B .finally() should remove
+      // any abort listeners attached by the coordinator.
+      expect(liveListeners).toBe(0);
+      // Sanity: at least one listener was added and then removed during
+      // the silence-vs-primary race. (If peakListeners stayed 0 the test
+      // accidentally skipped the cleanup path.)
+      expect(peakListeners).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T-B5: raceWithTimeout timer is cleared even when the timeout wins (rejection path)', async () => {
+    vi.useFakeTimers();
+    try {
+      // The only way to exercise `raceWithTimeout` publicly is through
+      // `drainIterator`, which `coordinateConcurrentFallback` invokes when
+      // `idleTimeoutPerChunkMs` is set and the silence-vs-primary race
+      // resolution path reaches drain. We pick a primary that NEVER
+      // produces and `idleTimeoutPerChunkMs: 50`; the first .next() call
+      // races against a 50ms timer that must fire before the test
+      // mock-clock advances.
+      const primary = makeControllable<number>(); // never produces
+
+      // Fire-and-forget the coordinator. Inside drainIterator,
+      // raceWithTimeout(it.next(), 50) is awaiting the never-resolving
+      // primary.next() against a 50ms setTimeout. The Promise.race will
+      // resolve by reject (timer wins). drainIterator's await throws
+      // IdleTimeoutError, the for-await catches it, and the async IIFE
+      // resolves with the caught error.
+      const errorP = (async () => {
+        try {
+          for await (const _ of coordinateConcurrentFallback({
+            primaryProvider: 'no-chain',
+            model: 'm',
+            createPrimaryStream: () => primary,
+            createFallbackStream: () => { throw new Error('unused'); },
+            silenceMs: 0, // disables coordinator; just exercises drainIterator
+            idleTimeoutPerChunkMs: 50,
+          })) { /* drain */ }
+          return null;
+        } catch (err) {
+          return err as Error;
+        }
+      })();
+
+      // Yield microtasks so drainIterator reaches raceWithTimeout and
+      // registers the 50ms setTimeout.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Advance the fake clock past 50ms so the idle-timeout timer
+      // fires. raceWithTimeout's try/finally will clear the timer
+      // BEFORE the rejection propagates out.
+      await vi.advanceTimersByTimeAsync(80);
+
+      const err = await errorP;
+      // The thrown error must be IdleTimeoutError — confirming we
+      // actually exercised raceWithTimeout.
+      expect(err).not.toBeNull();
+      expect((err as Error).name).toBe('IdleTimeoutError');
+      // PR-B guarantee: the timer was cleared in the try/finally block,
+      // so vi.getTimerCount() reports 0 even after the rejection path.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

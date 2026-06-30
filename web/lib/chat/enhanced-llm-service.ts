@@ -32,7 +32,7 @@ import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
-import { is530Blacklisted, handleProviderError } from '@/lib/orchestra/provider-530-tracker';
+import { is530Blacklisted, handleProviderError, maybeReset530OnSuccess } from '@/lib/orchestra/provider-530-tracker';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -1430,6 +1430,8 @@ export class EnhancedLLMService {
         tokensUsed: response.tokensUsed,
         finishReason: response.finishReason,
       });
+      // PR-C: clear the 530-blacklist counter on success (default OFF flag — no-op when disabled).
+      maybeReset530OnSuccess(provider);
       return response;
     } catch (error) {
       const type = classifyFailure(error);

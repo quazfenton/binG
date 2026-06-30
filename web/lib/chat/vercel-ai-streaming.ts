@@ -29,6 +29,8 @@ import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
 import { recordCall } from './llm-provider-health';
+// PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
+import { maybeReset530OnSuccess } from '../orchestra/provider-530-tracker';
 // Pass-2 cross-cutting theme: record mid-stream stalls (TTFT/idle timeout)
 // so the degradation chain shows the silent failure that contributed to
 // the user reprompting. sessionId is best-effort — not always available
@@ -551,6 +553,26 @@ export const STREAM_TIMEOUTS = {
 } as const;
 
 /**
+ * PR-A stream-timer finalize guard.
+ *
+ * When true (default ON), the `streamWithVercelAI` async generator wraps its
+ * OUTER try/catch in a `finally` clause that clears the four timing primitives
+ * (`ttftTimeoutId`, `hardDeadlineTimeoutId`, `thinkPingIntervalId`,
+ * `idleTimeoutId`) on every exit path — normal completion, thrown error,
+ * AbortError, or explicit `return` from inside the catch block.
+ *
+ * Without this guard, the think-ping `setInterval` and the pending idle
+ * `setTimeout` leak when the generator exits via a path that doesn't reach the
+ * inner `finally` at line ~3049 (e.g., the `Responses API` openrouter fallback
+ * `return`, a thrown non-AbortError from `streamText`, or any path inside the
+ * OUTER catch that returns early).
+ *
+ * Operators can disable by setting `ENABLE_STREAM_TIMER_FINALIZE=0`. The
+ * effect is purely a leak fix; no observable streaming behavior changes.
+ */
+const STREAM_TIMER_FINALIZE_ENABLED = process.env.ENABLE_STREAM_TIMER_FINALIZE !== '0';
+
+/**
  * Bug #104 (Pass-7 audit) — per-model server-side timeout overrides.
  *
  * Some upstream providers enforce a hard timeout that is STRICTER than the
@@ -1018,6 +1040,7 @@ export async function preflightProviderHealthCheck(
     // Can't determine base URL — assume reachable (don't block)
     // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
     recordCall(provider, true, 0);
+    maybeReset530OnSuccess(provider);
     return { reachable: true, latencyMs: 0 };
   }
 
@@ -1041,6 +1064,7 @@ export async function preflightProviderHealthCheck(
     clearTimeout(timeoutId);
     // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
     recordCall(provider, true, Date.now() - startTime);
+    maybeReset530OnSuccess(provider);
     return { reachable: true, latencyMs: Date.now() - startTime };
   } catch {
     clearTimeout(timeoutId);
@@ -1978,8 +2002,12 @@ export async function* streamWithVercelAI(
           }
         }
         return;
-      } catch (error: any) {
-        if (error.name === 'AbortError') return;
+  } catch (error: any) {
+    if (STREAM_TIMER_FINALIZE_ENABLED && error.name !== 'AbortError') {
+      // PR-A: prevent leak if we re-throw or fall through. Clear safe-to-clear timers now.
+      stopThinkPingInterval();
+    }
+    if (error.name === 'AbortError') return;
         chatLogger.error('Custom provider streaming failed', { provider, model: modelName, error: error.message });
         throw error;
       }
@@ -3750,9 +3778,6 @@ ${healingInstructions}` : healingInstructions)
       latencyMs: Date.now() - startTime,
     });
 
-    // Cleanup timeout
-    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
-        if (idleTimeoutId) clearTimeout(idleTimeoutId);
 
     error.metadata = {
       ...error.metadata,
@@ -3763,6 +3788,28 @@ ${healingInstructions}` : healingInstructions)
       latencyMs: Date.now() - startTime,
     };
     throw error;
+  }
+  finally {
+    // PR-A — clear the four timing primitives on every exit path: normal
+    // completion, thrown error, AbortError, or explicit `return` from
+    // inside the catch block. Without this guard the think-ping
+    // `setInterval` and any pending idle `setTimeout` leak when the
+    // generator exits via a path that doesn't reach an inner `finally`
+    // (e.g., the openrouter fallback `return`, a thrown non-AbortError
+    // from `streamText`, or any path that returns from inside the OUTER
+    // try without entering the OUTER catch).
+    //
+    // Gated by `STREAM_TIMER_FINALIZE_ENABLED` (default ON). Operators
+    // can disable with `ENABLE_STREAM_TIMER_FINALIZE=0` — purely a leak
+    // fix, no observable streaming behavior change. The inline `if (t)`
+    // truthy guard matches the file's existing convention at lines 1468
+    // and 1595-1599, and compiles cleanly under strict null checks.
+    if (STREAM_TIMER_FINALIZE_ENABLED) {
+      if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+      if (hardDeadlineTimeoutId) clearTimeout(hardDeadlineTimeoutId);
+      if (idleTimeoutId) clearTimeout(idleTimeoutId);
+      stopThinkPingInterval();
+    }
   }
 }
 
