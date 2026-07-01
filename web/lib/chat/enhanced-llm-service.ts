@@ -33,6 +33,12 @@ import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
 import { is530Blacklisted, handleProviderError, maybeReset530OnSuccess } from '@/lib/orchestra/provider-530-tracker';
+// PR-E: success-side reset for the 5xx-blacklist tracker; parallels maybeReset530OnSuccess.
+import { maybeResetServerErrorOnSuccess } from '@/lib/orchestra/provider-server-error-tracker';
+// PR-E: opt-in wire-up so 5xx server errors (parallel to 530 origin-unreachable) are tracked via
+// recordServerErrorIfApplicable which feeds both the 5xx-blacklist tracker AND falls through to
+// handleProviderError for non-server-error 5xx-code fallbacks. Single source of truth at line 730.
+import { isServerErrorBlacklisted, recordServerErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -659,7 +665,12 @@ export class EnhancedLLMService {
         if (fallbackChain.length > 0) {
           for (const fallbackProvider of fallbackChain) {
             // FIX: Skip providers blacklisted for 2+ consecutive 530 errors
-            if (is530Blacklisted(fallbackProvider)) {
+            if (is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider)) {
+                // PR-E: 5xx-blacklist iteration skip (paired with 530 skip). The provider
+                // is excluded from the chain regardless of whether the cause was origin-unreachable
+                // (530/1016/tunnel-DNS) or generic 5xx (500/502/503/504).
+                // is530Blacklisted(...) || isServerErrorBlacklisted(...) share the same iteration-step
+                // fallback: skip and move to the next provider in the chain.
               chatLogger.warn('530 BLACKLISTED in enhanced-llm-service, skipping fallback', { fallbackProvider });
               continue;
             }
@@ -727,6 +738,12 @@ export class EnhancedLLMService {
               return await postProcessToolCalls(response);
         } catch (fallbackError: any) {
           fallbackAttempted = true;
+          // PR-E: 5xx error path BEFORE the 530 handle. recordServerErrorIfApplicable
+          // inspects `fallbackError.status`/`.statusCode`/`.message` and routes
+          // 500/502/503/504 events to the server-error tracker while letting non-server
+          // errors (4xx, etc.) fall through unchanged. handleProviderError below
+          // handles ONLY the 530-origin-unreachable case from here on out.
+          recordServerErrorIfApplicable(fallbackProvider, fallbackError);
           handleProviderError(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
@@ -1431,7 +1448,13 @@ export class EnhancedLLMService {
         finishReason: response.finishReason,
       });
       // PR-C: clear the 530-blacklist counter on success (default OFF flag — no-op when disabled).
+      // PR-E: pair the 5xx success-reset alongside the 530-reset. Both tracks
+      // are independently blacklisted and independently recoverable; a provider
+      // that succeeds a 5xx-storm caller could clear both, while a provider that
+      // recovered from a 530 tunnel-DNS event should NOT be affected by an
+      // unrelated 5xx blacklist.
       maybeReset530OnSuccess(provider);
+      maybeResetServerErrorOnSuccess(provider);
       return response;
     } catch (error) {
       const type = classifyFailure(error);

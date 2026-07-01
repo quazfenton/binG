@@ -31,7 +31,11 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
 import { is530Blacklisted, handleProviderError, reset530Counter, maybeReset530OnSuccess } from './provider-530-tracker';
-import { maybeResetServerErrorOnSuccess } from './provider-server-error-tracker';
+import {
+  isServerErrorBlacklisted,
+  maybeResetServerErrorOnSuccess,
+  recordServerErrorIfApplicable,
+} from './provider-server-error-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -3687,7 +3691,7 @@ async function runV1ApiWithTools(
     // FIX: Skip providers with open circuit breakers (unless first request of session)
     if (circuitBreakerMgr) {
       const breaker = circuitBreakerMgr.getBreaker(providerName);
-    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED, skipping " + providerName); continue; }
+    if (is530Blacklisted(providerName) || isServerErrorBlacklisted(providerName)) { log.warn("530 BLACKLISTED, skipping " + providerName); continue; }
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
         // On first request of session, reset OPEN circuit instead of skipping
         if (isFirstRequestThisSession) {
@@ -4962,6 +4966,11 @@ async function runV1ApiWithTools(
       };
     } catch (error: any) {
       lastError = error;
+      // PR-E: 5xx error path BEFORE the 530 handle. Parallels the wire-up at
+      // lib/chat/enhanced-llm-service.ts:730. recordServerErrorIfApplicable
+      // routes 500/502/503/504 events into the server-error-blacklist while
+      // non-server errors fall through unchanged.
+      recordServerErrorIfApplicable(providerName, error);
       handleProviderError(providerName, error);
 
       // FIX: Record failure in circuit-breaker and model-ranker so failing providers
@@ -5733,7 +5742,7 @@ async function runV1ApiCompletion(
       break;
     }
 
-    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
+    if (is530Blacklisted(providerName) || isServerErrorBlacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
     const modelForProvider = getModelForProvider(providerName);
     try {
       log.info('[V1-API-COMPLETION] ┌─ ATTEMPT ───────────────────');
@@ -5999,6 +6008,11 @@ return {
       };
     } catch (error: any) {
       lastError = error;
+      // PR-E: 5xx error path BEFORE the 530 handle. Parallels the wire-up at
+      // lib/chat/enhanced-llm-service.ts:730. recordServerErrorIfApplicable
+      // routes 500/502/503/504 events into the server-error-blacklist while
+      // non-server errors fall through unchanged.
+      recordServerErrorIfApplicable(providerName, error);
       handleProviderError(providerName, error);
 
       // FIX: Invalidate cache so subsequent requests pick a different provider

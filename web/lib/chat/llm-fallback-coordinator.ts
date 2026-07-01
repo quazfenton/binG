@@ -51,6 +51,8 @@ import { getConfiguredFallbackChain } from '../providers/provider-fallback-chain
 import { recordCall } from './llm-provider-health';
 // PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
 import { maybeReset530OnSuccess } from '../orchestra/provider-530-tracker';
+// PR-E: 5xx success-side reset paired at the chunk-race loser-success site.
+import { maybeResetServerErrorOnSuccess } from '../orchestra/provider-server-error-tracker';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('LLM:FallbackCoordinator');
@@ -685,7 +687,13 @@ export async function* coordinateConcurrentFallback<T>(
       recordCall(fallbackProvider, true, fallbackLatencyMs);
       // PR-C: clear the 530-blacklist counter on the loser's behalf so a
       // healthy fallback that lost this race isn't penalised across future requests.
-      maybeReset530OnSuccess(fallbackProvider);
+      // PR-E: mirror enhanced-llm-service.ts:1434 — pair the 5xx success-reset
+    // alongside the 530 reset in the chunk-race loser-success arm. A
+    // healthy fallback that lost a race but produced a chunk via the
+    // primary's natural completion is the SAME shape as a primary's
+    // natural success — both tracks should be cleared.
+    maybeReset530OnSuccess(fallbackProvider);
+    maybeResetServerErrorOnSuccess(fallbackProvider);
     }
 
     yield raceResult.value;
