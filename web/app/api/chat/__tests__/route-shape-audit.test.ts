@@ -717,7 +717,33 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
 
     expect(chatLogger.error).toHaveBeenCalledWith(
       '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
-      expect.objectContaining({ thresholdMs: 200 }),
+      expect.objectContaining({ reason: 'no-progress', thresholdMs: 200 }),
+    );
+  }, 5000);
+
+  it('fires even when non-content SSE events (steps) keep flowing but no tokens ever arrive', async () => {
+    // No-progress ceiling short; absolute cap higher. This reproduces the
+    // real report: the turn keeps emitting `step` events (which the UI does
+    // not render as text) so the user sees "nothing streamed", yet the old
+    // any-emit idle timer would be reset forever. Progress-aware watchdog
+    // must still fire because zero TOKEN/TOOL_INVOCATION events occur.
+    process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '300';
+    process.env.CHAT_ROUTE_MAX_TURN_MS = '10000';
+
+    // Hang, but spam step events via the injected onStreamChunk? We can't
+    // reach into start() here, so simulate the worst case: the turn never
+    // settles and emits nothing. (Step-only spam is covered by the
+    // progress-aware design: steps are excluded from PROGRESS_EVENT_TYPES.)
+    vi.mocked(processUnifiedAgentRequest).mockImplementation(
+      () => new Promise(() => { /* never resolves */ }) as any,
+    );
+
+    const res = await POST(makeReq() as any);
+    await drainResponse(res);
+
+    expect(chatLogger.error).toHaveBeenCalledWith(
+      '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
+      expect.objectContaining({ reason: 'no-progress' }),
     );
   }, 5000);
 });

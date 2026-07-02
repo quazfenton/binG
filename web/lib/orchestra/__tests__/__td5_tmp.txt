@@ -1,0 +1,39 @@
+    it('T-D5 pure-record contract: non-5xx errors do not RESET the 5xx counter (PR-H)', async () => {
+      // PR-H regression defense. Pre-PR-H, the combined helper reset the
+      // 5xx counter when probed with non-server-error input, which meant
+      // a 530 storm OR any non-5xx error path could silently wipe
+      // accumulated 5xx history. The new record5xxErrorIfApplicable
+      // is strictly incremental: a provider with count=1 stays at count=1
+      // when probed with 530/404/401/400/501 inputs.
+      const mod = await import('../provider-server-error-tracker?env-d-h-regression');
+
+      // Establish a partial 5xx tally.
+      mod.recordServerError('prior-5xx');
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+
+      // Probe with each non-5xx error class - the count must NOT be wiped.
+      mod.record5xxErrorIfApplicable('prior-5xx', { status: 530 });
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+      mod.record5xxErrorIfApplicable('prior-5xx', { status: 404 });
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+      mod.record5xxErrorIfApplicable('prior-5xx', { status: 401 });
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+      mod.record5xxErrorIfApplicable('prior-5xx', { status: 400 });
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+      mod.record5xxErrorIfApplicable('prior-5xx', { status: 501 });
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+
+      // A REAL 5xx error brings it to 2 and trips the blacklist - confirms
+      // the helper is still wired and count=1 was preserved.
+      mod.record5xxErrorIfApplicable('prior-5xx', { status: 502 });
+      expect(mod.getServerErrorCount('prior-5xx')).toBe(2);
+      expect(mod.isServerErrorBlacklisted('prior-5xx')).toBe(true);
+
+      // Sanity: a fresh provider with a sequence of non-5xx errors stays at 0.
+      mod.record5xxErrorIfApplicable('clean', { status: 530 });
+      mod.record5xxErrorIfApplicable('clean', { status: 404 });
+      mod.record5xxErrorIfApplicable('clean', { status: 401 });
+      expect(mod.getServerErrorCount('clean')).toBe(0);
+      expect(mod.isServerErrorBlacklisted('clean')).toBe(false);
+    });
+

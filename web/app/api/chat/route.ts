@@ -1479,13 +1479,22 @@ const config: UnifiedAgentConfig = {
       const streamBody = new ReadableStream({
           async start(controller) {
             const rawEmit = createSSEEmitter(controller);
-            // Idle-based stall watchdog state. `lastActivityAt` is bumped on
-            // every SSE emit (steps, tokens, tool events, etc.) so a stream
-            // that is actively producing output is never killed; only a turn
-            // that goes silent for CHAT_ROUTE_STALL_TIMEOUT_MS is aborted.
-            let lastActivityAt = Date.now();
+            // ── Stall watchdog state ────────────────────────────────────────
+            // `lastProgressAt` tracks REAL progress only — actual answer tokens
+            // and tool activity. It is deliberately NOT bumped by step / status
+            // / heartbeat / reasoning events, because a wedged turn can keep
+            // emitting those forever while the user sees NOTHING in the UI
+            // (the exact "pending indefinitely, nothing streamed" report). An
+            // idle timer keyed on *any* emit would be reset by that noise and
+            // never fire. Progress = TOKEN content or TOOL_INVOCATION events.
+            const now0 = Date.now();
+            let lastProgressAt = now0;
+            const PROGRESS_EVENT_TYPES = new Set<unknown>([
+              SSE_EVENT_TYPES.TOKEN,
+              SSE_EVENT_TYPES.TOOL_INVOCATION,
+            ]);
             const emit: typeof rawEmit = (eventType, payload) => {
-              lastActivityAt = Date.now();
+              if (PROGRESS_EVENT_TYPES.has(eventType)) lastProgressAt = Date.now();
               return rawEmit(eventType, payload);
             };
             // Rejects when the watchdog fires so the route stops awaiting
@@ -1499,31 +1508,46 @@ const config: UnifiedAgentConfig = {
             // path: the watchdog is cleared in `finally`, so this promise
             // simply stays pending; the noop catch is defensive.
             stallPromise.catch(() => { /* observed via Promise.race */ });
+            // No-progress idle ceiling (default 120s): fires when no token/tool
+            // output has arrived for this long, regardless of step/heartbeat
+            // noise.
             const ROUTE_STALL_TIMEOUT_MS = parseInt(
               process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000',
               10,
             );
+            // Absolute hard cap (default 300s): an unconditional upper bound on
+            // a single agent turn. This is the guaranteed backstop even if some
+            // future code path bumps progress on non-content events — the turn
+            // can never outlive this deadline.
+            const ROUTE_MAX_TURN_MS = parseInt(
+              process.env.CHAT_ROUTE_MAX_TURN_MS || '300000',
+              10,
+            );
+            const fireStall = (reason: string, detail: Record<string, unknown>) => {
+              if (agentTurnAbort.signal.aborted) return;
+              chatLogger.error(
+                '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
+                { requestId, reason, ...detail },
+              );
+              const stallErr = new Error(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
+              // Emit an error SSE event so the client sees the failure.
+              try { emit(SSE_EVENT_TYPES.ERROR, { message: stallErr.message }); } catch { /* best-effort */ }
+              // Cancel the in-flight LLM HTTP call (signal is now forwarded
+              // through config.abortSignal → streamWithConcurrentFallback).
+              try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
+              // Free the response even if the inner promise never settles.
+              stallReject?.(stallErr);
+            };
             const stallWatchdog = setInterval(() => {
               if (agentTurnAbort.signal.aborted) return;
-              const idleMs = Date.now() - lastActivityAt;
-              if (idleMs >= ROUTE_STALL_TIMEOUT_MS) {
-                chatLogger.error(
-                  '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
-                  { requestId, idleMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS },
-                );
-                const stallErr = new Error(
-                  `Chat route stall watchdog: no output for ${idleMs}ms ` +
-                  `(threshold ${ROUTE_STALL_TIMEOUT_MS}ms)`,
-                );
-                // Emit an error SSE event so the client sees the failure.
-                try { emit(SSE_EVENT_TYPES.ERROR, { message: stallErr.message }); } catch { /* best-effort */ }
-                // Cancel the in-flight LLM HTTP call (signal is now forwarded
-                // through config.abortSignal → streamWithConcurrentFallback).
-                try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
-                // Free the response even if the inner promise never settles.
-                stallReject?.(stallErr);
+              const noProgressMs = Date.now() - lastProgressAt;
+              const turnMs = Date.now() - now0;
+              if (turnMs >= ROUTE_MAX_TURN_MS) {
+                fireStall('max-turn', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
+              } else if (noProgressMs >= ROUTE_STALL_TIMEOUT_MS) {
+                fireStall('no-progress', { idleMs: noProgressMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS });
               }
-            }, Math.min(ROUTE_STALL_TIMEOUT_MS, 15000));
+            }, Math.min(ROUTE_STALL_TIMEOUT_MS, ROUTE_MAX_TURN_MS, 15000));
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
