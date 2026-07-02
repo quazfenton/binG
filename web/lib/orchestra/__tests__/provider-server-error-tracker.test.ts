@@ -104,56 +104,101 @@ describe('provider-server-error-tracker — PR-D 5xx resettable blacklist (defau
     const mod = await import('../provider-server-error-tracker?env-d-detection');
 
     // Provider-agnostic: hit the per-call entry point
-    // `recordServerErrorIfApplicable(provider, error)` so we test the
+    // `record5xxErrorIfApplicable(provider, error)` so we test the
     // actual isServerError detection, not just the typed
     // `recordServerError` incrementer.
     for (const status of [500, 502, 503, 504]) {
       const provider = `p-${status}`;
-      mod.recordServerErrorIfApplicable(provider, { status });
+      mod.record5xxErrorIfApplicable(provider, { status });
       expect(
         mod.getServerErrorCount(provider),
         `expected status ${status} to increment`,
       ).toBe(1);
       // Second hit at default threshold of 2 trips the blacklist.
-      mod.recordServerErrorIfApplicable(provider, { status });
+      mod.record5xxErrorIfApplicable(provider, { status });
       expect(
         mod.isServerErrorBlacklisted(provider),
         `expected status ${status} (count 2) to be blacklisted`,
       ).toBe(true);
     }
 
-    // 404 — client error, NOT a server error. Two consecutive 404s
-    // must NOT trip the blacklist (they should RESET it as the
-    // recordServerErrorIfApplicable helper expects non-server errors
-    // to clear the counter).
-    mod.recordServerErrorIfApplicable('client-err', { status: 404 });
-    mod.recordServerErrorIfApplicable('client-err', { status: 404 });
+    // 404 — client error, NOT a server error. Two consecutive 404s must
+    // NOT trip the blacklist (PR-H pure-record contract: non-5xx inputs
+    // are a no-op for the 5xx counter; the helper does NOT decrement the
+    // counter on non-server errors). The test fixture starts at count=0
+    // so the assertion holds coincidentally; T-D5 below exercises the
+    // non-zero preservation case explicitly.
+    mod.record5xxErrorIfApplicable('client-err', { status: 404 });
+    mod.record5xxErrorIfApplicable('client-err', { status: 404 });
     expect(mod.getServerErrorCount('client-err')).toBe(0);
     expect(mod.isServerErrorBlacklisted('client-err')).toBe(false);
 
     // 530 is the origin-unreachable code — must NOT count here, that's
-    // the separate 530 tracker's responsibility. Two consecutive 530s
-    // should leave this tracker at 0 (it's a non-server-error failure
-    // from this tracker's POV, so the helper resets the counter).
-    mod.recordServerErrorIfApplicable('530-provider', { status: 530 });
-    mod.recordServerErrorIfApplicable('530-provider', { status: 530 });
+    // the separate 530 tracker's responsibility. PR-H pure-record
+    // contract: 530 inputs are non-server-error from THIS tracker's POV,
+    // so the helper is a strict no-op here (it does NOT wipe a prior 5xx
+    // tally — the combined-helper cross-reset behavior is REMOVED).
+    // T-D5 below is the explicit regression-defense for the non-zero
+    // preservation case; this assertion still passes because the test
+    // fixture starts at count=0.
+    mod.record5xxErrorIfApplicable('530-provider', { status: 530 });
+    mod.record5xxErrorIfApplicable('530-provider', { status: 530 });
     expect(mod.getServerErrorCount('530-provider')).toBe(0);
     expect(mod.isServerErrorBlacklisted('530-provider')).toBe(false);
 
     // Message-based detection: a plain-string message should also
     // trip the detector when statusCode fields are absent.
-    mod.recordServerErrorIfApplicable('msg-503', {
+    mod.record5xxErrorIfApplicable('msg-503', {
       message: 'HTTP 503 Service Unavailable',
     });
-    mod.recordServerErrorIfApplicable('msg-503', {
+    mod.record5xxErrorIfApplicable('msg-503', {
       message: 'HTTP 503 Service Unavailable',
     });
     expect(mod.isServerErrorBlacklisted('msg-503')).toBe(true);
 
     // Status field alias — some libs use `statusCode` instead of `status`.
-    mod.recordServerErrorIfApplicable('statusCode-502', { statusCode: 502 });
-    mod.recordServerErrorIfApplicable('statusCode-502', { statusCode: 502 });
+    mod.record5xxErrorIfApplicable('statusCode-502', { statusCode: 502 });
+    mod.record5xxErrorIfApplicable('statusCode-502', { statusCode: 502 });
     expect(mod.isServerErrorBlacklisted('statusCode-502')).toBe(true);
+  });
+
+  it('T-D5 pure-record contract: non-5xx errors do not RESET the 5xx counter (PR-H)', async () => {
+    // PR-H regression defense. Pre-PR-H, the combined helper reset the
+    // 5xx counter when probed with non-server-error input, which meant
+    // a 530 storm OR any non-5xx error path could silently wipe
+    // accumulated 5xx history. The new record5xxErrorIfApplicable
+    // is strictly incremental: a provider with count=1 stays at count=1
+    // when probed with 530/404/401/400/501 inputs.
+    const mod = await import('../provider-server-error-tracker?env-d-h-regression');
+
+    // Establish a partial 5xx tally.
+    mod.recordServerError('prior-5xx');
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+
+    // Probe with each non-5xx error class - the count must NOT be wiped.
+    mod.record5xxErrorIfApplicable('prior-5xx', { status: 530 });
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+    mod.record5xxErrorIfApplicable('prior-5xx', { status: 404 });
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+    mod.record5xxErrorIfApplicable('prior-5xx', { status: 401 });
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+    mod.record5xxErrorIfApplicable('prior-5xx', { status: 400 });
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+    mod.record5xxErrorIfApplicable('prior-5xx', { status: 501 });
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(1);
+
+    // A REAL 5xx error brings it to 2 and trips the blacklist - confirms
+    // the helper is still wired and count=1 was preserved.
+    mod.record5xxErrorIfApplicable('prior-5xx', { status: 502 });
+    expect(mod.getServerErrorCount('prior-5xx')).toBe(2);
+    expect(mod.isServerErrorBlacklisted('prior-5xx')).toBe(true);
+
+    // Sanity: a fresh provider with a sequence of non-5xx errors stays at 0.
+    mod.record5xxErrorIfApplicable('clean', { status: 530 });
+    mod.record5xxErrorIfApplicable('clean', { status: 404 });
+    mod.record5xxErrorIfApplicable('clean', { status: 401 });
+    expect(mod.getServerErrorCount('clean')).toBe(0);
+    expect(mod.isServerErrorBlacklisted('clean')).toBe(false);
   });
 });
 

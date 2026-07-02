@@ -32,13 +32,14 @@ import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
-import { is530Blacklisted, handleProviderError, maybeReset530OnSuccess } from '@/lib/orchestra/provider-530-tracker';
+import { is530Blacklisted, record530ErrorIfApplicable, maybeReset530OnSuccess } from '@/lib/orchestra/provider-530-tracker';
 // PR-E: success-side reset for the 5xx-blacklist tracker; parallels maybeReset530OnSuccess.
 import { maybeResetServerErrorOnSuccess } from '@/lib/orchestra/provider-server-error-tracker';
 // PR-E: opt-in wire-up so 5xx server errors (parallel to 530 origin-unreachable) are tracked via
-// recordServerErrorIfApplicable which feeds both the 5xx-blacklist tracker AND falls through to
-// handleProviderError for non-server-error 5xx-code fallbacks. Single source of truth at line 730.
-import { isServerErrorBlacklisted, recordServerErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
+// record5xxErrorIfApplicable (5xx tracker) and record530ErrorIfApplicable
+// (530 tracker) fire in tandem — pure record-or-noop helpers that NEVER
+// cross-wipe each other's counter. Single source of truth at line 730.
+import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -738,13 +739,14 @@ export class EnhancedLLMService {
               return await postProcessToolCalls(response);
         } catch (fallbackError: any) {
           fallbackAttempted = true;
-          // PR-E: 5xx error path BEFORE the 530 handle. recordServerErrorIfApplicable
-          // inspects `fallbackError.status`/`.statusCode`/`.message` and routes
-          // 500/502/503/504 events to the server-error tracker while letting non-server
-          // errors (4xx, etc.) fall through unchanged. handleProviderError below
-          // handles ONLY the 530-origin-unreachable case from here on out.
-          recordServerErrorIfApplicable(fallbackProvider, fallbackError);
-          handleProviderError(fallbackProvider, fallbackError);
+          // PR-E + PR-H: both trackers fire here in parallel — pure
+          // record-or-noop, NEVER cross-wipe each other's Map. Non-
+          // matching error signatures (4xx, 5xx-mismatch, 530-mismatch)
+          // leave both counters untouched; only the corresponding
+          // success-path helpers decrement them on a successful
+          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,

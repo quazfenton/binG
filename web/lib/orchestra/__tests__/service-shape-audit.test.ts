@@ -265,7 +265,7 @@ vi.mock('@/lib/orchestra/steer-service', () => ({
 
 vi.mock('@/lib/orchestra/provider-530-tracker', () => ({
   is530Blacklisted: vi.fn().mockReturnValue(false),
-  handleProviderError: vi.fn(),
+  record530ErrorIfApplicable: vi.fn(),
   reset530Counter: vi.fn(),
 }));
 

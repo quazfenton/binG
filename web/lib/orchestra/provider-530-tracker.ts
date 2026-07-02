@@ -127,13 +127,42 @@ export function get530Count(provider: string): number {
 }
 
 /**
- * Handle an error from a provider attempt — record 530 if applicable,
- * reset otherwise.
+ * PR-H — PURE record-or-noop helper (replaces the prior combined
+ * `handleProviderError`).
+ *
+ * Increments the consecutive 530-error counter for `provider` when
+ * `error` is a 530 / 1016 / tunnel-DNS signature; otherwise no-ops.
+ *
+ * Cross-tracker-decouple rationale (PR-H): the previous combined
+ * helper reset the 530 counter whenever the inspected error was NOT
+ * a 530 — which meant a 5xx error from the parallel server-error
+ * tracker would silently wipe accumulated 530 history. Symmetrically,
+ * `record5xxErrorIfApplicable` in the server-error tracker would
+ * wipe the 5xx counter on a 530 error. Either direction caused spurious
+ * counter wipes; this PR-H fix decouples them.
+ *
+ * This helper is NOW strictly incremental: none of `is530Error`
+ * return false → counter is untouched. The only documented ways to
+ * decrement the 530 counter are:
+ *   - The success-path helper `maybeReset530OnSuccess(provider)`
+ *     (gated by `ENABLE_530_RESET_ON_SUCCESS=1`, default OFF).
+ *   - The unconditional internal helper `reset530Counter(provider)`
+ *     (not exported; reserved for the helper layer).
+ *
+ * For symmetry with `record5xxErrorIfApplicable` in the server-error
+ * tracker, this function is also renamed to make its pure-record
+ * contract unmistakable to callers reading the import site.
+ *
+ * Production call sites: `chat/enhanced-llm-service.ts:747`,
+ * `orchestra/unified-agent-service.ts:4974+6016`. Each fires
+ * IN PARALLEL with `record5xxErrorIfApplicable`; neither wipes the
+ * other's counter.
  */
-export function handleProviderError(provider: string, error: any): void {
+export function record530ErrorIfApplicable(provider: string, error: any): void {
   if (is530Error(error)) {
     record530Error(provider);
-  } else {
-    reset530Counter(provider);
   }
+  // PURE record-or-noop: non-530 inputs are a no-op for the 530
+  // counter. Counter is decremented ONLY via the success-side helpers
+  // above. This decoupling is the PR-H fix.
 }

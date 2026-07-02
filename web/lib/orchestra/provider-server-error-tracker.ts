@@ -1,3 +1,4 @@
+
 /**
  * Provider Server Error Tracker (PR-D)
  *
@@ -18,13 +19,22 @@
  * two failure modes in a single counter.
  *
  * Reset conditions:
- *   - Any non-server-error success or failure resets the counter
- *     (controller already wires this via `recordServerErrorIfApplicable`).
  *   - PR-D opt-in success reset: when
  *     `ENABLE_SERVER_ERROR_RESET_ON_SUCCESS=1` is set, a successful
  *     round-trip calls `maybeResetServerErrorOnSuccess(provider)`,
  *     clearing the counter immediately on the next successful call
  *     rather than waiting for a subsequent non-server-error to roll it.
+ *
+ * PR-H — decouple cross-tracker contamination: `record5xxErrorIfApplicable`
+ * is now PURE record-or-noop. The previous combined helper
+ * `recordServerErrorIfApplicable` reset the 5xx counter when probed with a
+ * 530 error, which spuriously cleared 5xx history whenever a 530 storm
+ * raced the producer's 404/4xx error path. The helper is now symmetric
+ * with `record530ErrorIfApplicable` in the 530 tracker — both recorders
+ * increment-or-noop, neither cross-wipes the other's Map. Explicit resets
+ * live on the SUCCESS side (`maybeResetServerErrorOnSuccess` /
+ * `maybeReset530OnSuccess`) and on the operator-only non-server-error
+ * path (call `resetServerErrorCounter` directly if you need that).
  *
  * @see provider-530-tracker.ts for the parallel implementation that
  *      tracks Cloudflare origin-unreachable failures.
@@ -199,20 +209,46 @@ export function getServerErrorCount(provider: string): number {
 }
 
 /**
- * Record a server error if `error` qualifies; otherwise reset the
- * counter. This is the entry point the production call sites use —
- * `chat/enhanced-llm-service.ts`, `unified-agent-service.ts`, etc.
- * — so a single call either increments OR clears depending on the
- * failure class. Mirrors `handleProviderError` in the 530 tracker
- * without conflating the two trackers.
+ * PR-H — PURE record-or-noop helper (replaces the prior
+ * `recordServerErrorIfApplicable` combined helper).
+ *
+ * Increments the consecutive 5xx-server-error counter for `provider`
+ * when `error` qualifies as a server error (500/502/503/504);
+ * otherwise no-ops.
+ *
+ * Cross-tracker-decouple rationale (PR-H): the previous combined
+ * helper reset the 5xx counter whenever the inspected error was NOT
+ * a server error — which meant a 530 error from the parallel tunnel
+ * tracker would silently wipe accumulated 5xx history. Symmetrically,
+ * the 530 tracker's combined helper reset the 530 counter on a 5xx
+ * error. Either direction caused spurious counter wipes and let
+ * unhealthy providers slip past the blacklist threshold.
+ *
+ * This helper is NOW strictly incremental: none of `isServerError`
+ * return false → counter is untouched. The only documented ways to
+ * decrement the counter are:
+ *   - The success-path helper `maybeResetServerErrorOnSuccess(provider)`
+ *     (gated by `ENABLE_SERVER_ERROR_RESET_ON_SUCCESS=1`, default OFF).
+ *   - The unconditional internal helper `resetServerErrorCounter(provider)`
+ *     (not exported; reserved for the helper layer).
+ *
+ * For symmetry with `record530ErrorIfApplicable` in the 530 tracker,
+ * this function is also renamed to make its pure-record contract
+ * unmistakable to callers reading the import site.
+ *
+ * Production call sites: `chat/enhanced-llm-service.ts:746`,
+ * `orchestra/unified-agent-service.ts:4973+6015`. Each fires
+ * IN PARALLEL with `record530ErrorIfApplicable`; neither wipes the
+ * other's counter.
  */
-export function recordServerErrorIfApplicable(
+export function record5xxErrorIfApplicable(
   provider: string,
   error: any,
 ): void {
   if (isServerError(error)) {
     recordServerError(provider);
-  } else {
-    resetServerErrorCounter(provider);
   }
+  // PURE record-or-noop: non-server-error inputs are a no-op for the
+  // 5xx counter. Counter is decremented ONLY via the success-side
+  // helpers above. This decoupling is the PR-H fix.
 }

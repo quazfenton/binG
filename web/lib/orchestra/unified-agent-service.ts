@@ -30,11 +30,11 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // SSE emission) in a single call site change.
 import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
-import { is530Blacklisted, handleProviderError, reset530Counter, maybeReset530OnSuccess } from './provider-530-tracker';
+import { is530Blacklisted, record530ErrorIfApplicable, reset530Counter, maybeReset530OnSuccess } from './provider-530-tracker';
 import {
   isServerErrorBlacklisted,
   maybeResetServerErrorOnSuccess,
-  recordServerErrorIfApplicable,
+  record5xxErrorIfApplicable,
 } from './provider-server-error-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
@@ -4966,12 +4966,13 @@ async function runV1ApiWithTools(
       };
     } catch (error: any) {
       lastError = error;
-      // PR-E: 5xx error path BEFORE the 530 handle. Parallels the wire-up at
-      // lib/chat/enhanced-llm-service.ts:730. recordServerErrorIfApplicable
-      // routes 500/502/503/504 events into the server-error-blacklist while
-      // non-server errors fall through unchanged.
-      recordServerErrorIfApplicable(providerName, error);
-      handleProviderError(providerName, error);
+      // PR-E + PR-H: both trackers fire here in parallel — pure
+      // record-or-noop, NEVER cross-wipe each other's Map. Parallels
+      // lib/chat/enhanced-llm-service.ts:746. Non-matching error
+      // signatures leave both counters untouched; only the corresponding
+      // success-path helpers decrement them (gated by ENABLE_*_RESET_ON_SUCCESS).
+      record5xxErrorIfApplicable(providerName, error);
+      record530ErrorIfApplicable(providerName, error);
 
       // FIX: Record failure in circuit-breaker and model-ranker so failing providers
       // get de-ranked and circuit-breaker trips after repeated failures
@@ -6008,12 +6009,13 @@ return {
       };
     } catch (error: any) {
       lastError = error;
-      // PR-E: 5xx error path BEFORE the 530 handle. Parallels the wire-up at
-      // lib/chat/enhanced-llm-service.ts:730. recordServerErrorIfApplicable
-      // routes 500/502/503/504 events into the server-error-blacklist while
-      // non-server errors fall through unchanged.
-      recordServerErrorIfApplicable(providerName, error);
-      handleProviderError(providerName, error);
+      // PR-E + PR-H: both trackers fire here in parallel — pure
+      // record-or-noop, NEVER cross-wipe each other's Map. Parallels
+      // lib/chat/enhanced-llm-service.ts:746. Non-matching error
+      // signatures leave both counters untouched; only the corresponding
+      // success-path helpers decrement them (gated by ENABLE_*_RESET_ON_SUCCESS).
+      record5xxErrorIfApplicable(providerName, error);
+      record530ErrorIfApplicable(providerName, error);
 
       // FIX: Invalidate cache so subsequent requests pick a different provider
       invalidateDynamicDefaultsCache();

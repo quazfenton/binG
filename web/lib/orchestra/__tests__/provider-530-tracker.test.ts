@@ -127,4 +127,50 @@ describe('provider-530-tracker — PR-C ENABLE_530_RESET_ON_SUCCESS (default OFF
     // Cleanup for any subsequent tests in this file.
     delete process.env.ENABLE_530_RESET_ON_SUCCESS;
   });
+
+  it('T-C7 pure-record contract: non-530 errors do not RESET the 530 counter (PR-H)', async () => {
+    // PR-H regression defense. Mirror of T-D5 on the 530 side. Pre-PR-H,
+    // the combined `handleProviderError` helper reset the 530 counter when
+    // probed with non-530 input, which meant a 5xx storm OR a 4xx error
+    // path could silently wipe accumulated 530 history. The new
+    // `record530ErrorIfApplicable` is strictly incremental: a provider
+    // with count=1 stays at count=1 when probed with 500/502/404/401/400
+    // inputs. This is the symmetric regression test for the 530 side —
+    // T-D5 covers the 5xx side; together they pin both directions of the
+    // cross-tracker decouple.
+    const mod = await import('../provider-530-tracker?env-c-h-regression');
+
+    // Establish a partial 530 tally.
+    mod.record530Error('prior-530');
+    expect(mod.get530Count('prior-530')).toBe(1);
+
+    // Probe with each non-530 error class - the count must NOT be wiped.
+    mod.record530ErrorIfApplicable('prior-530', { status: 500 });
+    expect(mod.get530Count('prior-530')).toBe(1);
+    mod.record530ErrorIfApplicable('prior-530', { status: 502 });
+    expect(mod.get530Count('prior-530')).toBe(1);
+    mod.record530ErrorIfApplicable('prior-530', { status: 404 });
+    expect(mod.get530Count('prior-530')).toBe(1);
+    mod.record530ErrorIfApplicable('prior-530', { status: 401 });
+    expect(mod.get530Count('prior-530')).toBe(1);
+    mod.record530ErrorIfApplicable('prior-530', { status: 400 });
+    expect(mod.get530Count('prior-530')).toBe(1);
+    mod.record530ErrorIfApplicable('prior-530', { status: 501 }); // Not Implemented
+    expect(mod.get530Count('prior-530')).toBe(1);
+
+    // A REAL 530 error brings it to 2 and trips the blacklist - confirms
+    // the helper is still wired and count=1 was preserved through all
+    // non-530 probes above.
+    mod.record530ErrorIfApplicable('prior-530', { status: 530 });
+    expect(mod.get530Count('prior-530')).toBe(2);
+    expect(mod.is530Blacklisted('prior-530')).toBe(true);
+
+    // Sanity: a fresh provider with a sequence of non-530 errors stays at 0
+    // and does not trip the blacklist.
+    mod.record530ErrorIfApplicable('clean', { status: 500 });
+    mod.record530ErrorIfApplicable('clean', { status: 404 });
+    mod.record530ErrorIfApplicable('clean', { status: 401 });
+    expect(mod.get530Count('clean')).toBe(0);
+    expect(mod.is530Blacklisted('clean')).toBe(false);
+  });
 });

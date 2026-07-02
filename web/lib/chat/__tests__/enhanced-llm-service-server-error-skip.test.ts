@@ -85,7 +85,7 @@ vi.mock('@/lib/orchestra/provider-server-error-tracker', () => ({
     provider === 'stuck-1' || provider === 'stuck-2',
   ),
   recordServerError: vi.fn(),
-  recordServerErrorIfApplicable: vi.fn(),
+  record5xxErrorIfApplicable: vi.fn(),
   maybeResetServerErrorOnSuccess: vi.fn(),
   resetServerErrorCounter: vi.fn(),
   getServerErrorCount: vi.fn().mockReturnValue(0),
@@ -96,7 +96,7 @@ vi.mock('@/lib/orchestra/provider-server-error-tracker', () => ({
 import {
   isServerErrorBlacklisted,
   is530Blacklisted as is530BlacklistedFromServerErrorTracker,
-  recordServerErrorIfApplicable,
+  record5xxErrorIfApplicable,
 } from '@/lib/orchestra/provider-server-error-tracker';
 
 // Lightweight chain-iteration simulator that mirrors the guard pattern
@@ -171,10 +171,10 @@ describe('PR-E: 5xx blacklist forces the chain to skip the bad provider', () => 
     expect(tried).toEqual(['stuck-1']); // short-circuited early
   });
 
-  it('recordServerErrorIfApplicable is NOT called for skipped providers (forward-looking)', () => {
+  it('record5xxErrorIfApplicable is NOT called for skipped providers (forward-looking)', () => {
     // The 5xx-record is associated with the FALL-THROUGH path (a non-blacklisted
     // provider that errors). Skipped providers are dropped before any
-    // provider-specific error can land — recordServerErrorIfApplicable should
+    // provider-specific error can land — record5xxErrorIfApplicable should
     // remain uncalled. Forward-looking assertion: if a future regression routes
     // the error-recording call even for skipped providers, this surfaces.
     walkChain(
@@ -182,6 +182,6 @@ describe('PR-E: 5xx blacklist forces the chain to skip the bad provider', () => 
       () => {},
       (p) => p === 'mistral',
     );
-    expect(recordServerErrorIfApplicable).not.toHaveBeenCalled();
+    expect(record5xxErrorIfApplicable).not.toHaveBeenCalled();
   });
 });
