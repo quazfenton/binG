@@ -298,7 +298,7 @@ async function classifyRequest(
       .then(({ recordClassifierFallback }) => {
         recordClassifierFallback();
       })
-      .catch(() => {});
+      .catch((err) => chatLogger.warn('recordClassifierFallback failed', {}, { error: String(err) }));
 
     let isCodeRequest = false;
     if (STRONG_CODE_PATTERN.test(content)) {
@@ -3710,7 +3710,7 @@ const config: UnifiedAgentConfig = {
                           requestId: streamRequestId,
                           path: 'streaming',
                         },
-                      }).catch(() => {});
+                      }).catch((err) => chatLogger.warn('mem0 store failed (streaming path)', { requestId: streamRequestId }, { error: String(err) }));
                     }
 
                     break; // Exit loop when complete
@@ -3833,7 +3833,7 @@ const config: UnifiedAgentConfig = {
                   actualModel,
                   (completedToolCalls.length > 0 ? completedToolCalls : undefined) as any,
                   streamState.buffer.length,
-                ).catch(() => {});
+                ).catch((err) => chatLogger.warn('logRequestComplete failed (LLM stream)', { requestId: streamRequestId }, { error: String(err) }));
 
                 cleanup();
               } catch (streamError) {
@@ -4204,7 +4204,7 @@ const config: UnifiedAgentConfig = {
                   actualModel,
                   undefined, // ToolLoopAgent tools tracked separately
                   finalContent?.length || 0,
-                ).catch(() => {}); // fire-and-forget — don't block stream
+                ).catch((err) => chatLogger.warn('logRequestComplete failed (ToolLoopAgent)', { requestId: streamRequestId }, { error: String(err) }));
 
                 // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
                 if (isMem0Configured()) {
@@ -4216,7 +4216,7 @@ const config: UnifiedAgentConfig = {
                       requestId: streamRequestId,
                       path: 'tool-loop',
                     },
-                  }).catch(() => {});
+                  }).catch((err) => chatLogger.warn('mem0 store failed (tool-loop path)', { requestId: streamRequestId }, { error: String(err) }));
                 }
 
                 // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
@@ -4639,7 +4639,7 @@ const config: UnifiedAgentConfig = {
                     requestId: streamRequestId,
                     path: 'fallback-streaming',
                   },
-                }).catch(() => {});
+                }).catch((err) => chatLogger.warn('mem0 store failed (fallback-streaming)', { requestId: streamRequestId }, { error: String(err) }));
               }
 
               // Log provider latency for observability
@@ -4662,7 +4662,7 @@ const config: UnifiedAgentConfig = {
                 actualModel,
                 undefined, // Tool calls tracked separately in agentic path
                 clientResponse.content?.length || 0,
-              ).catch(() => {}); // fire-and-forget — don't block stream
+              ).catch((err) => chatLogger.warn('logRequestComplete failed (fallback-streaming)', { requestId: streamRequestId }, { error: String(err) }));
 
               if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
                 streamClosed = true;
@@ -4776,7 +4776,7 @@ const config: UnifiedAgentConfig = {
         actualModel,
         undefined, // No tool calls in non-streaming path
         clientResponse.content?.length || 0,
-      ).catch(() => {}); // fire-and-forget
+      ).catch((err) => chatLogger.warn('logRequestComplete failed (non-streaming)', { requestId }, { error: String(err) }));
 
       // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
       // This runs after the response is sent to not delay the client
@@ -4790,7 +4790,7 @@ const config: UnifiedAgentConfig = {
             requestId,
             path: 'non-streaming',
           },
-        }).catch(() => {});
+        }).catch((err) => chatLogger.warn('mem0 store failed (non-streaming)', { requestId }, { error: String(err) }));
       }
 
       const responseStatus = clientResponse.success ? 200 : 500;
@@ -5163,9 +5163,17 @@ async function handleGatewayStreaming(params: {
         }
       } catch (error) {
         chatLogger.error('Stream error', { requestId }, { error: String(error) });
+        // Send SSE error event BEFORE controller.error() so the client receives
+        // a structured error (matching the V2 path at line ~4712). Without this,
+        // the client only sees a raw stream rejection via controller.error() with
+        // no event: error payload, making it harder to show a user-facing message.
+        try {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ message: errMsg, canRetry: true })}\n\n`));
+        } catch {
+          // best-effort — stream may already be closing
+        }
         controller.error(error);
-      } finally {
-        controller.close();
       }
     },
     cancel(reason?: unknown) {

@@ -683,6 +683,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Clear timeout recovery ref on new request
     timeoutRecoveryRef.current = null;
 
+      // CRITICAL: fetch-level timeout — prevents indefinite hang when the
+      // tunnel/proxy is broken but TCP accepts the connection. Without this,
+      // the UI stays in "loading" forever because handleStreamingResponse
+      // (and its 120s streaming timeout) is never entered.
+      const _fetchTimeoutId = setTimeout(() => {
+        if (!abortController.signal.aborted) abortController.abort(new Error('Request timed out'));
+      }, 60000);
       const response = await fetch(options.api, {
         method: 'POST',
         headers: buildRequestHeaders(),
@@ -690,6 +697,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         body: JSON.stringify(requestBody),
         signal: abortController.signal,
       });
+      clearTimeout(_fetchTimeoutId);
 
       // Call onResponse callback
       if (options.onResponse) {
@@ -933,6 +941,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               },
             };
 
+            const _retryFetchTimeoutId = setTimeout(() => {
+              if (!retryAbortController.signal.aborted) retryAbortController.abort(new Error('Retry request timed out'));
+            }, 60000);
             const retryResponse = await fetch(options.api, {
               method: 'POST',
               headers: buildRequestHeaders(),
@@ -940,6 +951,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               body: JSON.stringify(retryRequestBody),
               signal: retryAbortController.signal,
             });
+            clearTimeout(_retryFetchTimeoutId);
 
             if (!retryResponse.ok || !retryResponse.body) {
               // Bug #61: record the rotated attempt as failure with the actual
