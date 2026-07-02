@@ -478,8 +478,21 @@ export async function* coordinateConcurrentFallback<T>(
       .then((r) => {
         primaryChunkCache = r;
       })
-      .catch(() => {
-        /* error captured by the race's catch arm */
+      // PR-X — pendingPrimary reset: after the sidecar settles, clear the
+      // slot so the next chain iteration makes a fresh decision (use the
+      // cache OR fire a fresh `primaryIt.next()`). Without this clear,
+      // the resolved/done promise stays pinned, and every subsequent race
+      // arm re-uses the same already-settled promise — producing a
+      // perpetual `primary-error` OR an infinite yield of the cached
+      // chunk (when primary emitted exactly one chunk then stalled,
+      // drainIterator fired IdleTimeoutError → `continue` → re-entered
+      // the loop with pendingPrimary still pinned). Result: /api/chat
+      // hangs indefinitely. Mirrors PR-H's "pure record-or-noop"
+      // contract from the cross-tracker decouple — single source of
+      // truth in `.finally()` so the reset can never be silently
+      // omitted from one arm of the sidecar.
+      .finally(() => {
+        pendingPrimary = null;
       });
 
     // The chunk race for this fallback iteration has THREE arms:

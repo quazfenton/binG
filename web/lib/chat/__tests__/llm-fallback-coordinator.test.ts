@@ -1162,6 +1162,117 @@ describe('coordinateConcurrentFallback', () => {
       vi.useRealTimers();
     }
   });
+
+  // ── PR-X: pendingPrimary reset regression ────────────────────────────────────────────────────────────
+  //
+  // Pre-PR-X: the sidecar attached to `primaryChunkPromise` never cleared
+  // `pendingPrimary` after the promise settled. In the *chunk-yield-then-
+  // stall* scenario (primary emits 1 chunk then blocks on subsequent
+  // `.next()` calls without ever firing `done` or `fail`), the sidecar
+  // populates `primaryChunkCache` once. Without the reset, the next chain
+  // iteration's `if (primaryChunkCache !== null && !...done)` branch
+  // consumes the cached chunk, yields it, then `drainIterator(primaryIt)`
+  // stalls (primary still blocked) and throws `IdleTimeoutError` →
+  // `continue`. The next iteration reuses the SAME pinned
+  // `primaryChunkPromise` (now resolved), which the race arm converts
+  // synchronously to a fresh chunk-yield. NET: an infinite yield loop
+  // re-emitting the cached chunk every ~idleTimeoutMs. /api/chat hangs
+  // indefinitely.
+  //
+  // The fix: `.finally(() => { pendingPrimary = null; })` chained after the
+  // cache-writing `.then`. Single source of truth that fires whether the
+  // promise resolves or rejects — mirrors the PR-H "pure record-or-noop"
+  // contract from the cross-tracker decouple. The next iteration now
+  // enters the `else` branch and fires a FRESH `primaryIt.next()`,
+  // bypassing the cached chunk and letting the chain walk make forward
+  // progress (chains out to throw) instead of hanging.
+  //
+  // T-X1: chunk-yield-then-stall yields bounded chunks then chain-exhausts.
+  //       Pre-PR-X: yields `42` every iteration indefinitely (infinite
+  //                 yield loop). The cap inside the consumer (`>= 3`) is
+  //                 a smoking-gun indicator.
+  //       Post-PR-X: yields `42` exactly once, then chain walks to the
+  //                  fallback timeout path and exhausts via throw.
+  it('T-X1: chunk-yield-then-stall yields bounded chunks then chain-exhausts (PR-X)', async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>();
+      const fallbackA = makeControllable<number>();
+      const fallbackB = makeControllable<number>();
+
+      const factory = (p: string) =>
+        p === 'fallbackA' ? fallbackA : p === 'fallbackB' ? fallbackB : null;
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'primary',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: factory as any,
+        fallbackChain: ['fallbackA', 'fallbackB'],
+        silenceMs: 20,
+        hardDeadlineMs: 50,
+        idleTimeoutPerChunkMs: 40,
+      });
+
+      // PRIMARY: emit exactly ONE chunk during the silence race, then
+      // leave the controllable in a permanently-pending state. This is
+      // the chunk-yield-then-stall scenario the bug fires on.
+      setTimeout(() => primary.push(42), 21);
+
+      const chunks: number[] = [];
+      let exitReason: 'throw' | 'done' | 'cap-reached' | null = null;
+
+      const consume = (async () => {
+        try {
+          for await (const c of gen) {
+            chunks.push(c);
+            // Cap to keep pre-fix infinite loop from running forever in
+            // the test runtime. Smoking-gun signal: `cap-reached` on a
+            // stalling scenario indicates pendingPrimary is pinned.
+            if (chunks.length >= 3) {
+              exitReason = 'cap-reached';
+              return;
+            }
+          }
+          exitReason = 'done';
+        } catch {
+          // Post-fix: chain-exhausted throw is the expected termination.
+          exitReason = 'throw';
+        }
+      })();
+
+      // Worst-case post-fix fake-time budget:
+      //   silenceMs (20) + drain idleTimeout (40) + 2 chain fallbacks
+      //   × hardDeadlineMs (50) = 160ms. Drive in steps so each await
+      //   microtask flush can re-enter the generator; add 3x margin.
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(200);
+      await consume;
+
+      // Smoking-gun assertions:
+      //   Pre-PR-X: chunks.length >= 3 (cap reached at the test hard
+      //     cap that prevents infinite CI runs) and exitReason equals
+      //     'cap-reached' — the pinned `pendingPrimary` causes the
+      //     cached chunk to be re-yielded on every iteration; the
+      //     consumer hits its cap.
+      //   Post-PR-X: chunks.length < 3 (bounded: <cap+1=3 yields: the
+      //     first via the iter-1 primary-race path, the second via
+      //     cache regrowth on iter-2 consume; afterward iter 2's fresh
+      //     `primaryIt.next()` blocks, hardDeadlineMs walks to the
+      //     next fallback, chain exhausts) and exitReason equals
+      //     'throw' (chain-exhausted throw, NOT the cap).
+      // The strict assertion is `chunks.length < 3`: pre-fix would
+      // reach the cap (3) and exit via 'cap-reached'; post-fix stays
+      // bounded (< 3) and exits via 'throw'.
+      expect(chunks.length).toBeLessThan(3);
+      expect(exitReason).toBe('throw');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 /**
