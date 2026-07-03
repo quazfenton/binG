@@ -2649,6 +2649,25 @@ export async function* streamWithConcurrentFallback(
     return;
   }
 
+  // PR-Z — first-chunk upstream timeout. The Vercel AI SDK's internal
+  // `firstTokenTimeoutMs` (default 30s via LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS
+  // in vercel-ai-streaming.ts:516) fires AFTER the silenceMs (20s) has
+  // already started the chain-walk in `coordinateConcurrentFallback`. On
+  // a Mistral hang (TCP/DNS) with no first chunk, both timers race and
+  // the auto-controlled cleanup can bleed past 60s before any abort
+  // propagates to the chain-walk's `signal?.aborted` check. Layer a
+  // CLEARABLE first-chunk envelope around `streamWithVercelAI` so the
+  // upstream controller aborts at `firstChunkTimeoutMs` regardless of
+  // which internal timer fires. The envelope's `try/finally` clears the
+  // timer on first success so long healthy streams (TTFT > 15s) are
+  // unaffected. Default 25s covers any real provider's worst-case
+  // cold-start while bounding the Mistral hang to O(silenceMs +
+  // firstChunkTimeoutMs) wall-clock — well within the 120s route-level
+  // stall watchdog (route layer's hard ceiling).
+  const firstChunkTimeoutMs = parseInt(
+    process.env.LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS || '25000', 10,
+  );
+
   // Helper: wrap streamWithVercelAI in a StreamHandle with an abort handle.
   const wrapAsHandle = (providerOverride?: string) => {
     const controller = new AbortController();
@@ -2672,7 +2691,7 @@ export async function* streamWithConcurrentFallback(
           ),
         ) || options.model
       : options.model;
-    const gen = streamWithVercelAI({
+    const upstreamGen = streamWithVercelAI({
       ...rest,
       ...(providerOverride
         ? { provider: providerOverride, model: modelForHandle }
@@ -2680,8 +2699,42 @@ export async function* streamWithConcurrentFallback(
       signal: mergedSignal,
       speculativeFallbackMs: 0,
     } as any);
+    // PR-Z — clearable first-chunk envelope. Race a setTimeout against
+    // the FIRST `.next()` resolution on the underlying iterator; clear
+    // the timer on success via try/finally so a thrown (aborted)
+    // upstream still cleans up. Yields the first chunk manually, then
+    // iterates the rest synchronously — same call pattern as
+    // `drainIterator` in llm-fallback-coordinator.ts but inline so the
+    // timer can observe the first `.next()` resolution.
+    const upstreamIter = upstreamGen[Symbol.asyncIterator]();
+    let firstChunkTimer: NodeJS.Timeout | undefined = setTimeout(
+      () => controller.abort(new Error(
+        `Upstream first-chunk timeout exceeded (${firstChunkTimeoutMs}ms)`,
+      )),
+      firstChunkTimeoutMs,
+    );
+    const firstChunkEnvelope: AsyncGenerator<any> = (async function* () {
+      try {
+        const first = await upstreamIter.next();
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
+        if (!first.done) yield first.value;
+        while (true) {
+          const next = await upstreamIter.next();
+          if (next.done) return;
+          yield next.value;
+        }
+      } finally {
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
+      }
+    })();
     return Promise.resolve({
-      gen,
+      gen: firstChunkEnvelope,
       abort: () => controller.abort(),
     });
   };
