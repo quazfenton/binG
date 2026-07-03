@@ -234,7 +234,7 @@ Add a CI guardrail that pins the vendor-API export set at install time and break
 /opt/bing/package.json                                                (+3 scripts: check:vendor-drift, check:vendor-drift:update, preflight)
 /opt/bing/web/package.json                                            (+vaul ^0.9.6 entry so WATCH_LIST picks up the hoisted install)
 /opt/bing/web/lib/utils/empty-module.ts                               (SEV-15 anchor: cites snapshots + regeneration command)
-.bing/.tickets/ARCH-001-vendor-shape-consolidation.md                 (this ticket)
+.tickets/ARCH-001-vendor-shape-consolidation.md                       (this ticket)
 
 === Verification ===
 Catalog grep `as unknown as AutoContinueResultData` across all 4 cast sites:               0 hits (Flag 1 drift intact)

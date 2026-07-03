@@ -43,6 +43,19 @@ import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
 // cross-wipe each other's counter. Single source of truth at line 730.
 import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
 
+// @internal -- test seam. Captured by `streamWithConcurrentFallback` at
+// first call (assignment lives inside `wrapAsHandle`'s enclosing body),
+// read by `web/__tests__/chat/enhanced-llm-service-envelope.test.ts` to
+// lock PR-S (Stage 3 R2, commit 061a4f5a). Production code MUST NOT
+// import `__getWrapAsHandleForTests` directly; use the public
+// `streamWithConcurrentFallback` surface instead.
+type __CapturedWrapAsHandle = (
+  providerOverride?: string
+) => Promise<{ gen: AsyncGenerator<unknown>; abort: () => void }>;
+const __testEnvelopes: { wrapAsHandle?: __CapturedWrapAsHandle } = {};
+export const __getWrapAsHandleForTests = (): __CapturedWrapAsHandle | undefined =>
+  __testEnvelopes.wrapAsHandle;
+
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
   retryOptions?: {
@@ -2786,6 +2799,7 @@ export async function* streamWithConcurrentFallback(
       gen: firstChunkEnvelope,
       abort: () => controller.abort(),
     });
+    __testEnvelopes.wrapAsHandle = wrapAsHandle;
   };
 
   yield* coordinateConcurrentFallback({
