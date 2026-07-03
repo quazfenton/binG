@@ -2724,13 +2724,46 @@ export async function* streamWithConcurrentFallback(
     const firstChunkEnvelope: AsyncGenerator<any> = (async function* () {
       try {
         const first = await upstreamIter.next();
-        // PR-Z2 (Stage 2 follow-up): success-path timer clear removed -- the
-        // `finally` clause below clears firstChunkTimer regardless of
-        // completion path, so the inline clear here is redundant. Single
-        // source of truth in `finally`.
-        // PR-Z2 (Stage 2 follow-up): early return when first.done -- saves
-        // one extra `.next()` round-trip when the upstream is empty.
+        // PR-S2 (Stage 3 R2 fix) -- RE-INSTATE the success-path timer clear
+        // that PR-Z2 / Z-5 (LOW DRY) removed. The PR-Z2 rationale was:
+        //   "the `finally` clause below clears firstChunkTimer regardless
+        //    of completion path, so the inline clear here is redundant."
+        // That reasoning collapsed two distinct lifecycle windows:
+        //   (a) generator completion (return / throw) -- where the
+        //       `finally` fires and clears the timer,
+        //   (b) the post-first-chunk drain loop -- where the generator
+        //       is alive (yielding chunks) and the timer is still armed.
+        // The PR-Z2 fix conflates (a) and (b): the `finally` only runs
+        // on (a), while the generator's lifetime extends WELL PAST
+        // `firstChunkTimeoutMs` during a healthy-but-slow stream
+        // (e.g. anthropic / openrouter TTFT 2s + 30s inter-chunk gap).
+        // With the timer UNDISARMED after first-chunk arrival, the
+        // `firstChunkTimeoutMs` deadline elapses while the envelope is
+        // suspended on `await upstreamIter.next()` -- the timer fires,
+        // `controller.abort(new Error('Upstream first-chunk timeout ...'))`
+        // propagates through the merged signal, and the suspended
+        // `await upstreamIter.next()` throws AbortError -- silently
+        // cutting off an entirely healthy stream mid-drain.
+        //
+        // Stage 3 R2 (P0): this is the regression. The semantically
+        // correct fix splits the two windows:
+        //   - `first.done === true` (empty upstream): let the
+        //     `finally` handle teardown as before.
+        //   - `first.done === false` (chunk arrived): the FIRST-CHUNK
+        //     deadline is FULLY SATISFIED. Disarm the timer
+        //     immediately so it cannot fire on a healthy mid-drain
+        //     slow cadence that exceeds the FIRST-chunk window.
+        //
+        // PR-Z2's other improvement -- early return on `first.done` --
+        // is preserved (line immediately below). The ordering
+        // (early-return on done BEFORE clear-on-success) is intentional:
+        // on the empty-stream path we want zero overhead and the
+        // `finally` cleanup is sufficient.
         if (first.done) return;
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
         yield first.value;
         while (true) {
           const next = await upstreamIter.next();
