@@ -2664,9 +2664,16 @@ export async function* streamWithConcurrentFallback(
   // cold-start while bounding the Mistral hang to O(silenceMs +
   // firstChunkTimeoutMs) wall-clock — well within the 120s route-level
   // stall watchdog (route layer's hard ceiling).
-  const firstChunkTimeoutMs = parseInt(
-    process.env.LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS || '25000', 10,
+  // PR-Z2 (Stage 2 follow-up): NaN-guarded parseInt so a typo env-var
+  // (e.g. LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS=abc) cannot silently fall through
+  // to setTimeout(0), which would abort the upstream envelope on the FIRST tick.
+  const _rawFirstChunkMs = parseInt(
+    process.env.LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS ?? '25000', 10,
   );
+  const firstChunkTimeoutMs =
+    Number.isFinite(_rawFirstChunkMs) && _rawFirstChunkMs > 0
+      ? _rawFirstChunkMs
+      : 25000;
 
   // Helper: wrap streamWithVercelAI in a StreamHandle with an abort handle.
   const wrapAsHandle = (providerOverride?: string) => {
@@ -2716,11 +2723,14 @@ export async function* streamWithConcurrentFallback(
     const firstChunkEnvelope: AsyncGenerator<any> = (async function* () {
       try {
         const first = await upstreamIter.next();
-        if (firstChunkTimer !== undefined) {
-          clearTimeout(firstChunkTimer);
-          firstChunkTimer = undefined;
-        }
-        if (!first.done) yield first.value;
+        // PR-Z2 (Stage 2 follow-up): success-path timer clear removed -- the
+        // `finally` clause below clears firstChunkTimer regardless of
+        // completion path, so the inline clear here is redundant. Single
+        // source of truth in `finally`.
+        // PR-Z2 (Stage 2 follow-up): early return when first.done -- saves
+        // one extra `.next()` round-trip when the upstream is empty.
+        if (first.done) return;
+        yield first.value;
         while (true) {
           const next = await upstreamIter.next();
           if (next.done) return;

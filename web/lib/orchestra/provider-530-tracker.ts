@@ -35,12 +35,18 @@ const BLACKLIST_THRESHOLD = 2;
  * Inspects error.message, error.status, and error.statusCode.
  */
 function is530Error(error: any): boolean {
-  // Check status code fields
+  // Check status code fields. Parity with provider-server-error-tracker's
+  // isServerError -- guard against string-typed `status`/`statusCode`
+  // slipping past strict equality. PR-H2 (Stage 2 follow-up).
   const status = error?.status || error?.statusCode || 0;
-  if (status === 530) return true;
+  if (typeof status === 'number' && status === 530) return true;
 
-  // Check error message against the tunnel DNS error regex
-  const msg = (error?.message || '').toString();
+  // Check error message against the tunnel DNS error regex.
+  // PR-H2: `String(... ?? '')` instead of `(error?.message || '').toString()`
+  // so a `message: null` or `message: undefined` does not produce the
+  // string `"null"` / `"undefined"` and accidentally match a future
+  // wider regex.
+  const msg = String(error?.message ?? '');
   if (TUNNEL_DNS_ERROR.test(msg)) return true;
 
   return false;
