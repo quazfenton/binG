@@ -10,3 +10,6 @@ docs/
 node_modules/
 .git/
 *.db
+heap-snapshots/
+logs/
+.next/

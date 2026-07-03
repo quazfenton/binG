@@ -1,8 +1,5 @@
 {
-  "version": 2,
-  "buildCommand": "NODE_ENV=production bash scripts/vercel-build.sh",
-  "installCommand": "npm install --legacy-peer-deps",
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "https://shared-ingress.veli0.workers.dev/api/:path*" }
-  ]
+  "rootDirectory": "..",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "cd web && next build"
 }

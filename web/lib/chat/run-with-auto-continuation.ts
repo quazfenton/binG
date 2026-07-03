@@ -327,7 +327,7 @@ function responseHasCompletionIndicator(response: string, indicator: string): bo
   if (!indicator) return false;
   // Tight match — bracketed sentinel so we don't false-positive on
   // prose that mentions a "build complete" phrase.
-  return response.includes(indicator);
+  return response.toLowerCase().includes(indicator.toLowerCase());
 }
 
 /**
@@ -534,7 +534,11 @@ export async function runWithAutoContinuation(
     }
 
     // ── Cap-driven stop (defense-in-depth) ────────────────────────────
-    if (effectiveDecision.continuationsSoFar >= maxContinuations) {
+    // Use `iter` (loop counter) instead of `effectiveDecision.continuationsSoFar`
+    // because the BUGS2.md rescue path synthesizes a local counter that plateaus
+    // at 1 — the shared counter is cleared by decideAutoContinue on every
+    // continue=false return. `iter` correctly tracks the true continuation count.
+    if (iter >= maxContinuations) {
       log_(`wrapper-level max continuations (${maxContinuations}) reached`, {
         iteration: iter,
       });

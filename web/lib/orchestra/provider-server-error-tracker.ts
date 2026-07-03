@@ -50,8 +50,8 @@ const _consecutiveServerErrorCount = new Map<string, number>();
 /**
  * Default blacklist threshold (2), overridable via env var
  * `SERVER_ERROR_BLACKLIST_THRESHOLD`. Values are coerced to int and
- * clamped to >= 1 — a 0 / NaN / negative value is treated as 1 to
- * keep the tracker always meaningful.
+ * clamped to >= 1 — a 0 / NaN / negative value falls back to the
+ * default (2) to keep the tracker always meaningful.
  */
 function readBlacklistThreshold(): number {
   const raw = process.env.SERVER_ERROR_BLACKLIST_THRESHOLD;
@@ -97,7 +97,7 @@ const SERVER_ERROR_STATUS_CODES = new Set([500, 502, 503, 504]);
  * (530's signature is handled by the dedicated 530 tracker, not here).
  */
 const SERVER_ERROR_MESSAGE_PATTERN =
-  /\b(?:500|internal server error\b)|(?:502|bad gateway\b)|(?:503|service unavailable\b)|(?:504|gateway timeout\b)/i;
+  /\b(?:500\b|internal server error\b)|(?:502\b|bad gateway\b)|(?:503\b|service unavailable\b)|(?:504\b|gateway timeout\b)/i;
 
 /**
  * Check if an error qualifies as a tracked server error.

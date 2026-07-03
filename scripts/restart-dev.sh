@@ -81,14 +81,20 @@ EOF
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --port)       PORT="$2"; shift 2 ;;
+    --port)       PORT="${2?--port requires a value}"; shift 2 ;;
     --no-install) DO_INSTALL=0; shift ;;
-    --wait)       WAIT_SECONDS="$2"; shift 2 ;;
+    --wait)       WAIT_SECONDS="${2?--wait requires a value}"; shift 2 ;;
     --wait-huge)  WAIT_SECONDS_CAP=86400; shift ;;   # 1-day ceiling; opt-in for impatient debugging
     --help|-h)    usage; exit 0 ;;
     *)            printf '%s[ERROR]%s unknown argument: %s\n' "$RED" "$NC" "$1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+# Reject non-numeric / zero / negative / leading-zero PORT
+if ! [[ "$PORT" =~ ^[1-9][0-9]*$ ]] || [ "$PORT" -gt 65535 ]; then
+  printf '%s[ERROR]%s --port must be a positive integer 1-65535; got: %s\n' "$RED" "$NC" "$PORT" >&2
+  exit 1
+fi
 
 # Reject non-numeric / zero / negative / leading-zero --wait up-front
 # (catches `--wait abc`, `--wait 0`, `--wait -1`, AND `--wait 007` with
@@ -190,8 +196,9 @@ elif command -v lsof >/dev/null 2>&1; then
   fi
 fi
 if (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -qE ":${PORT}\b"; then
-  printf '%s[WARN]%s port %s still bound after cleanup. Try `fuser -k %s/tcp` manually.\n' \
-    "$YELLOW" "$NC" "$PORT" "$PORT"
+  printf '%s[ERROR]%s port %s still bound after cleanup. Try `fuser -k %s/tcp` manually.\n' \
+    "$RED" "$NC" "$PORT" "$PORT"
+  exit 1
 fi
 
 # ── Step 2: idempotent install (offline + frozen-lockfile) ──────────────
@@ -225,6 +232,14 @@ rm -f "$LOG_FILE"
 nohup pnpm exec next dev -p "$PORT" > "$LOG_FILE" 2>&1 &
 NEXT_DEV_PID=$!
 printf '  bg pid: %s\n  log:    %s\n' "$NEXT_DEV_PID" "$LOG_FILE"
+
+# Verify the process actually started
+sleep 2
+if ! kill -0 "$NEXT_DEV_PID" 2>/dev/null; then
+  printf '%s[ERROR]%s dev server process exited immediately after launch. Check log:\n' "$RED" "$NC"
+  tail -10 "$LOG_FILE" || true
+  exit 1
+fi
 
 ready=0
 for i in $(seq 1 "$WAIT_SECONDS"); do

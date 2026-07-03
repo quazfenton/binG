@@ -53,8 +53,9 @@ Hit-rate tuning moved to constants near top-of-file:
 - SHRINK_RATIO_BLOCK = 0.5                 (block on <50% size)
 - SHRINK_RATIO_WARN = 0.7                   (warn on <70% size)
 """
-
 import sys
+import tempfile
+
 import os
 import re
 import subprocess
@@ -264,7 +265,8 @@ def _git(*args: str) -> str | None:
             ["git", *args],
             stderr=subprocess.DEVNULL,
         ).decode(errors="replace")
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        emit(f"[WARN] git command failed: git {' '.join(args)} (rc={e.returncode})")
         return None
 
 

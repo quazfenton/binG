@@ -234,7 +234,7 @@ describe('runWithAutoContinuation — caps', () => {
     });
     // 1 base + 1 continuation = 2 iters before the cap fires.
     expect(outcome.totalIterations).toBeLessThanOrEqual(3);
-    expect(outcome.stopReason === 'resolved' || outcome.stopReason === 'max_continuations_reached').toBe(true);
+    expect(outcome.stopReason).toBe('max_continuations_reached');
     expect(calls).toBeGreaterThanOrEqual(1);
   });
 
@@ -270,7 +270,7 @@ describe('runWithAutoContinuation — baseExecute throws', () => {
     const outcome = await runWithAutoContinuation(baseExecute, [], { requestId: RID });
     expect(outcome.stopReason).toBe('base_execute_threw');
     expect(outcome.finalResult.success).toBe(false);
-    expect(outcome.finalResult.error).toContain('synthetic llm 500');
+    expect(outcome.finalResult.error).toEqual(expect.stringContaining('synthetic llm 500'));
   });
 
   it('still pushes an iteration audit row when baseExecute throws', async () => {

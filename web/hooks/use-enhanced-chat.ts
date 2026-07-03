@@ -826,7 +826,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        // Request was cancelled
+        setIsLoading(false);
+        abortControllerRef.current = null;
+        setAgentStatus('idle');
         return;
       }
 

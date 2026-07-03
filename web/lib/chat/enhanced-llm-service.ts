@@ -1233,21 +1233,23 @@ export class EnhancedLLMService {
       // This mirrors the behavior of generateResponse() which tries every fallback in the chain
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
       
-      // First pass: try healthy providers
+      // First pass: try healthy providers, skipping blacklisted ones
       let availableFallbacks = fallbacks.filter(fallbackProvider => {
         const hasConfig = !!this.getProviderConfigForRequest(fallbackProvider, requestId);
         const isHealthy = this.isProviderHealthy(fallbackProvider);
         const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
-        if (!hasConfig || !isHealthy || !supportsStream) {
+        const isBlacklisted = is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider);
+        if (!hasConfig || !isHealthy || !supportsStream || isBlacklisted) {
           chatLogger.debug('Streaming fallback excluded provider', {
             requestId,
             provider: fallbackProvider,
             hasConfig,
             isHealthy,
             supportsStreaming: supportsStream,
+            isBlacklisted,
           });
         }
-        return hasConfig && isHealthy && supportsStream;
+        return hasConfig && isHealthy && supportsStream && !isBlacklisted;
       });
 
       // SAFETY NET: If no healthy providers available, try ALL configured providers as a last resort
@@ -1367,6 +1369,9 @@ export class EnhancedLLMService {
             latencyMs: fallbackLatency,
             error: errorMsg,
           });
+          // Record error for blacklist tracking (mirrors non-streaming fallback)
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
           fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
           lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
           // Continue to next fallback in chain

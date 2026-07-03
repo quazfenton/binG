@@ -1192,7 +1192,7 @@ function getReasoningTag(provider: string): { tagName: string; separator?: strin
   }
 }
 
-/**/**
+/**
  * Wraps an async generator with speculative fallback support.
  *
  * Starts iterating the primary generator. If no chunk arrives within

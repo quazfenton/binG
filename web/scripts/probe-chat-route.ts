@@ -33,7 +33,8 @@
 import { register } from 'node:module';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { performance } from 'node:perf_hooks';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 // --------------------------------------------------------------------------
@@ -342,7 +343,8 @@ async function main(): Promise<void> {
       tsx_version: (process.versions as Record<string, string | undefined>).tsx ?? 'unknown',
     },
   };
-  const reportPath = process.env.PROBE_REPORT_PATH ?? '/tmp/probe-chat-route.json';
+  const reportPath = process.env.PROBE_REPORT_PATH || '/tmp/probe-chat-route.json';
+  mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, JSON.stringify(cumulative, null, 2));
   console.log(`\n  JSON report \u2192 ${reportPath}`);
 }

@@ -721,7 +721,7 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
     );
   }, 5000);
 
-  it('fires even when non-content SSE events (steps) keep flowing but no tokens ever arrive', async () => {
+  it('fires the stall watchdog when the turn never settles (never-resolving mock)', async () => {
     // No-progress ceiling short; absolute cap higher. This reproduces the
     // real report: the turn keeps emitting `step` events (which the UI does
     // not render as text) so the user sees "nothing streamed", yet the old

@@ -15,8 +15,13 @@
  * and status fields.
  *
  * Reset conditions:
- * - Any non-530 success or failure resets the counter for that provider
- * - This allows providers to be retried if the tunnel recovers
+ * - ONLY `maybeReset530OnSuccess(provider)` resets the counter (default OFF —
+ *   gated by `ENABLE_530_RESET_ON_SUCCESS=1`). The counter is NEVER reset
+ *   on non-530 failures — it accumulates monotonically until explicitly
+ *   cleared or the process restarts.
+ * - This is a intentional simplification: non-530 failures from a tunnel-dead
+ *   provider are indistinguishable from genuine provider issues, so
+ *   auto-reset on non-530 error could let a blacklisted provider slip back in.
  */
 
 import { TUNNEL_DNS_ERROR } from '../errors/failure-classifier';
