@@ -1192,12 +1192,12 @@ function getReasoningTag(provider: string): { tagName: string; separator?: strin
   }
 }
 
-/**
+/**/**
  * Wraps an async generator with speculative fallback support.
  *
  * Starts iterating the primary generator. If no chunk arrives within
  * `speculativeMs`, a fallback generator is created (from `createFallback`)
- * and the two are raced — the first to yield a chunk wins.
+ * and the two are raced -- the first to yield a chunk wins.
  *
  * The slower stream's underlying connection is aborted immediately so
  * API credits are not wasted on the loser.
@@ -1206,6 +1206,35 @@ function getReasoningTag(provider: string): { tagName: string; separator?: strin
  * when the fallback wins, allowing the caller to update metadata.
  * `onLoser` is called with timing info for the loser, allowing the caller
  * to record telemetry (e.g. model-ranker failure, latency tracking).
+ *
+ * PR-T (Stage 3 R5 fix) -- three sub-bugs closed in this rewrite:
+ *
+ *   1. Speculative-race setTimeout leak: pre-PR-T, the speculative-timer
+ *      was NEVER cleared when primaryIt.next() won the race. The timer
+ *      remained alive in Node's queue until speculativeMs elapsed -- a
+ *      per-request setTimeout leak. Under load this accumulates with the
+ *      request rate (one orphaned timer per /api/chat call). Fix: capture
+ *      the timer handle in outer scope and clear it via .finally()
+ *      chained on the race promise (resolves on either winner path).
+ *
+ *   2. Secondary-race NO TIMEOUT ARM (P0 hang): pre-PR-T, the secondary
+ *      race (primary.next vs. fallback.next) had no timeout arm. If BOTH
+ *      streams stalled indefinitely, the secondary race hung forever.
+ *      This is the ninerouter-class scenario that PR-X / PR-R fixed in
+ *      coordinateConcurrentFallback -- legacy `withSpeculativeFallback`
+ *      had the same hole and was still in the hot path for some callers.
+ *      Fix: add a per-fallback hard-deadline timer arm (speculativeMs * 2,
+ *      mirroring PR-X's per-fallback timeout) to the secondary race. When
+ *      the deadline fires before either side emits a chunk, both streams
+ *      are aborted and the generator returns. The caller decides what to
+ *      do next (e.g. a higher-layer fallback in coordinateConcurrentFallback).
+ *
+ *   3. Missing user-abort arm in BOTH races: pre-PR-T, the only signal-
+ *      abort check was INSIDE the post-race generator loops, leaving a
+ *      stall window between the timeout firing and the next iteration of
+ *      the loop's signal check. Fix: both races now include a user-abort
+ *      arm that yields `{type:'aborted'}`. Resolves the user's stop click
+ *      within the same microtask as the abort, dropping partial data.
  */
 async function* withSpeculativeFallback<T>(
   primaryGen: AsyncGenerator<T>,
@@ -1217,7 +1246,7 @@ async function* withSpeculativeFallback<T>(
      * - abort: function to abort the fallback stream (called if primary wins)
      */
     createFallback: () => { gen: AsyncGenerator<T>; abort: () => void };
-    /** Called when fallback wins — should provide a way to abort the primary */
+    /** Called when fallback wins -- should provide a way to abort the primary */
     abortPrimary: () => void;
     onFallbackWin?: () => void;
     /**
@@ -1227,6 +1256,229 @@ async function* withSpeculativeFallback<T>(
     onLoser?: (info: { source: 'primary' | 'fallback'; latencyMs: number }) => void;
     signal?: AbortSignal;
   }
+): AsyncGenerator<T> {
+  const { speculativeMs, createFallback, abortPrimary, signal } = options;
+  const primaryIt = primaryGen[Symbol.asyncIterator]();
+
+  // Stores the result from the first primaryIt.next() call so if the
+  // speculative timeout fires but the primary produces a chunk between
+  // the timeout and fallback setup, we don't orphan (i.e. lose) that chunk.
+  let firstPrimaryResult: IteratorResult<T> | null = null;
+
+  // Track when the speculative timeout fires so we can report the loser's latency.
+  // `speculativeStartTime` ≈ the moment the primary was supposed to have first
+  // produced output; anything after this is dead time from the primary.
+  let speculativeStartTime = 0;
+  let fallbackCreateTime = 0;
+
+  // PR-T timer-handle tracking -- see the function-level JSDoc sub-bug 1.
+  let speculativeTimer: NodeJS.Timeout | undefined;
+  let secondaryTimer: NodeJS.Timeout | undefined;
+  let speculativeAbortListener: (() => void) | undefined;
+  let secondaryAbortListener: (() => void) | undefined;
+
+  // Top-level try/finally for defensive cleanup of any race-resolved-
+  // but-stream-still-iterating path (rare exception throws, generator's
+  // post-race loops throwing). The .finally() chained on each race promise
+  // covers the normal resolve/reject paths; this catch handles the
+  // abnormal paths where the generator function throws before reaching
+  // the inner finally.
+  try {
+    // Race: first primary chunk vs speculative timeout vs user abort.
+    //   - primary.first.next(): the primary stream's first chunk.
+    //   - speculative timer: armed for speculativeMs; resolves {type:'timeout'}.
+    //   - user-abort: signal listener that resolves {type:'aborted'} on
+    //     the caller's stop click.
+    const first = await Promise.race([
+      primaryIt.next().then(r => {
+        firstPrimaryResult = r;
+        return { type: 'chunk' as const, value: r };
+      }),
+      new Promise<{ type: 'timeout' }>(resolve => {
+        speculativeTimer = setTimeout(() => {
+          speculativeStartTime = Date.now();
+          resolve({ type: 'timeout' });
+        }, speculativeMs);
+      }),
+      new Promise<{ type: 'aborted' }>(resolve => {
+        if (!signal) return;
+        speculativeAbortListener = () => resolve({ type: 'aborted' });
+        signal.addEventListener('abort', speculativeAbortListener, { once: true });
+      }),
+    ]).finally(() => {
+      // Single source of truth for timer/listener cleanup -- PR-A/PR-B
+      // pattern mirrored from coordinator/race machinery in
+      // llm-fallback-coordinator.ts. Covers BOTH resolve and reject paths.
+      if (speculativeTimer) {
+        clearTimeout(speculativeTimer);
+        speculativeTimer = undefined;
+      }
+      if (signal && speculativeAbortListener) {
+        signal.removeEventListener('abort', speculativeAbortListener);
+        speculativeAbortListener = undefined;
+      }
+    });
+
+    if (first.type === 'aborted') {
+      // User aborted during the speculative race -- primary is still
+      // running but the caller doesn't want the result. Abort primary
+      // and return. No fallback was launched on this path.
+      abortPrimary();
+      return;
+    }
+
+    if (first.type === 'timeout') {
+      // Primary was silent for speculativeMs -- start fallback
+      let fallbackResult: { gen: AsyncGenerator<T>; abort: () => void };
+      try {
+        fallbackResult = createFallback();
+        fallbackCreateTime = Date.now();
+      } catch {
+        // Fallback setup failed -- continue with primary
+        if (firstPrimaryResult && !firstPrimaryResult.done) {
+          yield firstPrimaryResult.value;
+        }
+        while (true) {
+          if (signal?.aborted) return;
+          const n = await primaryIt.next();
+          if (n.done) return;
+          yield n.value;
+        }
+        return;
+      }
+
+      const fallbackIt = fallbackResult.gen[Symbol.asyncIterator]();
+
+      // PR-T (Stage 3 R5 fix) -- secondary race widened to FOUR arms:
+      //   - primary chunk (cached or fresh primaryIt.next())
+      //   - fallback chunk (fallbackIt.next())
+      //   - hard-deadline timer (speculativeMs * 2 -- per-fallback
+      //     ceiling mirroring PR-X; prevents the ninerouter-class
+      //     infinite hang)
+      //   - user-abort (mirrors the first-race abort arm)
+      //
+      // The wider discriminator (SecondaryRaceResult) is a tagged union
+      // that lets the post-race code branch cleanly on the four kinds.
+      // `done: true` from either stream is treated as 'fallback-timeout'
+      // for parity with PR-X (an exhausted stream is the same failure
+      // shape as both streams stalling past the deadline).
+      type SecondaryRaceResult =
+        | { type: 'chunk'; value: T; done: boolean; source: 'primary' | 'fallback' }
+        | { type: 'fallback-timeout' }
+        | { type: 'aborted' };
+      const winner: SecondaryRaceResult = await Promise.race([
+        firstPrimaryResult
+          ? Promise.resolve({ type: 'chunk' as const, value: firstPrimaryResult.value, done: firstPrimaryResult.done, source: 'primary' as const })
+          : primaryIt.next().then(r => ({ type: 'chunk' as const, value: r.value, done: r.done, source: 'primary' as const })),
+        fallbackIt.next().then(r => {
+          if (r.done) return { type: 'fallback-timeout' as const };
+          return { type: 'chunk' as const, value: r.value, done: false, source: 'fallback' as const };
+        }),
+        new Promise<{ type: 'fallback-timeout' }>(resolve => {
+          secondaryTimer = setTimeout(() => resolve({ type: 'fallback-timeout' }), speculativeMs * 2);
+        }),
+        new Promise<{ type: 'aborted' }>(resolve => {
+          if (!signal) return;
+          secondaryAbortListener = () => resolve({ type: 'aborted' });
+          signal.addEventListener('abort', secondaryAbortListener, { once: true });
+        }),
+      ]).finally(() => {
+        if (secondaryTimer) {
+          clearTimeout(secondaryTimer);
+          secondaryTimer = undefined;
+        }
+        if (signal && secondaryAbortListener) {
+          signal.removeEventListener('abort', secondaryAbortListener);
+          secondaryAbortListener = undefined;
+        }
+      });
+
+      if (winner.type === 'aborted') {
+        // User-abort during the secondary race -- abort both streams and
+        // return. No partial data yields to the consumer.
+        abortPrimary();
+        fallbackResult.abort();
+        return;
+      }
+
+      if (winner.type === 'fallback-timeout') {
+        // PR-T (Stage 3 R5 fix) -- this is the bug-fix arm. Previously
+        // an infinite-hang scenario for the ninerouter-class provider
+        // (where the primary network edge is stuck AND the fallback
+        // network edge is also stuck). Now: timeout fires at
+        // speculativeMs * 2 -> we abort both streams and return. The
+        // caller decides what to do next (e.g., a higher-layer
+        // fallback in coordinateConcurrentFallback).
+        abortPrimary();
+        fallbackResult.abort();
+        return;
+      }
+
+      // winner.type === 'chunk'
+      if (winner.done) return;
+
+      // ABORT THE LOSER immediately to stop wasting API credits
+      if (winner.source === 'fallback') {
+        abortPrimary();
+        // Loser = primary. Approximate total time primary was running:
+        // speculativeMs + time from timeout expiry to now.
+        const primaryLatency = Date.now() - speculativeStartTime + speculativeMs;
+        options.onLoser?.({ source: 'primary', latencyMs: primaryLatency });
+        options.onFallbackWin?.();
+      } else {
+        fallbackResult.abort();
+        // Loser = fallback. Time from when fallback was created to now.
+        const fallbackLatency = Date.now() - fallbackCreateTime;
+        options.onLoser?.({ source: 'fallback', latencyMs: fallbackLatency });
+      }
+
+      yield winner.value;
+
+      // Continue with the winner
+      const winnerIt = winner.source === 'primary' ? primaryIt : fallbackIt;
+      while (true) {
+        if (signal?.aborted) return;
+        const next = await winnerIt.next();
+        if (next.done) return;
+        yield next.value;
+      }
+    }
+
+    // Primary won before speculative timeout fired -- yield first chunk and continue
+    if (first.value && !first.value.done) {
+      yield first.value.value;
+    }
+
+    // Continue with remaining primary chunks
+    while (true) {
+      if (signal?.aborted) return;
+      const next = await primaryIt.next();
+      if (next.done) return;
+      yield next.value;
+    }
+  } finally {
+    // Defensive cleanup for any race-resolved-but-stream-still-iterating
+    // path (rare exception throws, generator's post-race loops throwing,
+    // etc.). The .finally() above each race covers the normal
+    // resolve/reject paths.
+    if (speculativeTimer) {
+      clearTimeout(speculativeTimer);
+      speculativeTimer = undefined;
+    }
+    if (secondaryTimer) {
+      clearTimeout(secondaryTimer);
+      secondaryTimer = undefined;
+    }
+    if (signal && speculativeAbortListener) {
+      signal.removeEventListener('abort', speculativeAbortListener);
+      speculativeAbortListener = undefined;
+    }
+    if (signal && secondaryAbortListener) {
+      signal.removeEventListener('abort', secondaryAbortListener);
+      secondaryAbortListener = undefined;
+    }
+  }
+}
 ): AsyncGenerator<T> {
   const { speculativeMs, createFallback, abortPrimary, signal } = options;
   const primaryIt = primaryGen[Symbol.asyncIterator]();
@@ -3805,24 +4057,14 @@ ${healingInstructions}` : healingInstructions)
     throw error;
   }
   finally {
-    // PR-A — clear the four timing primitives on every exit path: normal
-    // completion, thrown error, AbortError, or explicit `return` from
-    // inside the catch block. Without this guard the think-ping
-    // `setInterval` and any pending idle `setTimeout` leak when the
-    // generator exits via a path that doesn't reach an inner `finally`
-    // (e.g., the openrouter fallback `return`, a thrown non-AbortError
-    // from `streamText`, or any path that returns from inside the OUTER
-    // try without entering the OUTER catch).
-    //
-    // Gated by `STREAM_TIMER_FINALIZE_ENABLED` (default ON). Operators
-    // can disable with `ENABLE_STREAM_TIMER_FINALIZE=0` — purely a leak
-    // fix, no observable streaming behavior change. The inline `if (t)`
-    // truthy guard matches the file's existing convention at lines 1468
-    // and 1595-1599, and compiles cleanly under strict null checks.
+    // Always clear timer handles to prevent leaks — these are independent
+    // of the think-ping gate below. Only the think-ping interval is gated
+    // by `STREAM_TIMER_FINALIZE_ENABLED` so operators who disable it
+    // accept that the interval may fire once after exit (benign).
+    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+    if (hardDeadlineTimeoutId) clearTimeout(hardDeadlineTimeoutId);
+    if (idleTimeoutId) clearTimeout(idleTimeoutId);
     if (STREAM_TIMER_FINALIZE_ENABLED) {
-      if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
-      if (hardDeadlineTimeoutId) clearTimeout(hardDeadlineTimeoutId);
-      if (idleTimeoutId) clearTimeout(idleTimeoutId);
       stopThinkPingInterval();
     }
   }
