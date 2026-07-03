@@ -28,7 +28,7 @@ import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
 import { chatRequestLogger } from './chat-request-logger';
-import { isCLIProvider } from './vercel-ai-streaming';
+import { isCLIProvider, streamWithVercelAI } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
@@ -43,18 +43,143 @@ import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
 // cross-wipe each other's counter. Single source of truth at line 730.
 import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
 
-// @internal -- test seam. Captured by `streamWithConcurrentFallback` at
-// first call (assignment lives inside `wrapAsHandle`'s enclosing body),
-// read by `web/__tests__/chat/enhanced-llm-service-envelope.test.ts` to
-// lock PR-S (Stage 3 R2, commit 061a4f5a). Production code MUST NOT
-// import `__getWrapAsHandleForTests` directly; use the public
-// `streamWithConcurrentFallback` surface instead.
-type __CapturedWrapAsHandle = (
-  providerOverride?: string
-) => Promise<{ gen: AsyncGenerator<unknown>; abort: () => void }>;
-const __testEnvelopes: { wrapAsHandle?: __CapturedWrapAsHandle } = {};
-export const __getWrapAsHandleForTests = (): __CapturedWrapAsHandle | undefined =>
-  __testEnvelopes.wrapAsHandle;
+/**
+ * PR-S2 (Stage 3 R2 lock target) — the success-path `clearTimeout` re-arm
+ * inside `firstChunkEnvelope`'s generator (the three lines beneath
+ * `if (first.done) return;`) is what prevents R2 from re-emerging under
+ * any future DRY cleanup that removes it as "redundant with finally".
+ *
+ * The factory below was LIFTED out of `streamWithConcurrentFallback`'s
+ * closure so the R2 regression test (PR-S commit 061a4f5a) can exercise
+ * the success-path re-arm independently of the concurrent-fallback
+ * pipeline. The lock document lives under
+ * web/__tests__/chat/enhanced-llm-service-envelope.test.ts.
+ */
+export interface WrapAsHandleEnv {
+  /** Vercel-AI stream options that get spread into `streamWithVercelAI(...)`. */
+  rest: any;
+  /** Caller's high-level options; `options.model` is used for cross-provider model resolution. */
+  options: { model: string; provider?: string; [k: string]: any };
+  /** Optional findCompatibleModel function; resolves a model the fallback provider's catalog can serve. */
+  findCompatibleModelFn?: (requestedModel: string, availableModels: string[]) => string | null;
+  /** Test seam: override the parsed `LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS` env var (defaults to 25000ms). */
+  firstChunkTimeoutMsOverride?: number;
+}
+
+/**
+ * PR-S2 (Stage 3 R2 defense-in-depth) — factory that returns the SAME `wrapAsHandle`
+ * callable the production `streamWithConcurrentFallback` uses. The closure-local
+ * details are identical to the in-place definition that lived at this site before;
+ * only the closure-scope variables (`rest`, `options`, `findCompatibleModelFn`)
+ * are now passed explicitly to keep the factory testable in isolation.
+ */
+export const wrapAsHandleForConcurrentFallback = (
+  env: WrapAsHandleEnv,
+): ((providerOverride?: string) => Promise<{
+  gen: AsyncGenerator<unknown>;
+  abort: () => void;
+}>) => {
+  const { rest, options, findCompatibleModelFn, firstChunkTimeoutMsOverride } = env;
+  // PR-Z2 (NaN-guarded parseInt): a typo env-var
+  // (e.g. LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS=abc) MUST NOT silently fall through
+  // to setTimeout(0), which would abort the upstream envelope on the FIRST tick.
+  const _rawFirstChunkMs = firstChunkTimeoutMsOverride ?? parseInt(
+    process.env.LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS ?? '25000', 10,
+  );
+  const firstChunkTimeoutMs =
+    Number.isFinite(_rawFirstChunkMs) && _rawFirstChunkMs > 0
+      ? _rawFirstChunkMs
+      : 25000;
+
+  return (providerOverride?: string) => {
+    const controller = new AbortController();
+    const mergedSignal = rest.signal
+      ? AbortSignal.any([rest.signal, controller.signal])
+      : controller.signal;
+    // Cross-provider model resolution: pick a model ID the fallback
+    // provider's catalog can actually serve. Without this, a stalled
+    // primary can launch a fallback with an unsupported model ID and
+    // fail immediately. When no resolver is provided (tests or
+    // external callers), fall through to `options.model`.
+    const modelForHandle = providerOverride && findCompatibleModelFn
+      ? findCompatibleModelFn(
+          options.model,
+          ((PROVIDERS as any)[providerOverride]?.models || []).map((m: any) =>
+            typeof m === 'string' ? m : m.id,
+          ),
+        ) || options.model
+      : options.model;
+    const upstreamGen = streamWithVercelAI({
+      ...rest,
+      ...(providerOverride
+        ? { provider: providerOverride, model: modelForHandle }
+        : {}),
+      signal: mergedSignal,
+      speculativeFallbackMs: 0,
+    } as any);
+    // PR-Z — clearable first-chunk envelope. Race a setTimeout against
+    // the FIRST `.next()` resolution on the underlying iterator.
+    const upstreamIter = upstreamGen[Symbol.asyncIterator]();
+    let firstChunkTimer: NodeJS.Timeout | undefined = setTimeout(
+      () => controller.abort(new Error(
+        `Upstream first-chunk timeout exceeded (${firstChunkTimeoutMs}ms)`,
+      )),
+      firstChunkTimeoutMs,
+    );
+    const firstChunkEnvelope: AsyncGenerator<any> = (async function* () {
+      try {
+        const first = await upstreamIter.next();
+        // PR-S2 (Stage 3 R2 fix) -- RE-INSTATE the success-path timer clear
+        // that PR-Z2 / Z-5 (LOW DRY) removed. The PR-Z2 rationale was:
+        //   "the finally clause below clears firstChunkTimer regardless
+        //    of completion path, so the inline clear here is redundant."
+        // That reasoning collapsed two distinct lifecycle windows:
+        //   (a) generator completion (return / throw) -- where the
+        //       finally fires and clears the timer,
+        //   (b) the post-first-chunk drain loop -- where the generator
+        //       is alive (yielding chunks) and the timer is still armed.
+        // The PR-Z2 fix conflates (a) and (b): the finally only runs
+        // on (a), while the generator's lifetime extends WELL PAST
+        // firstChunkTimeoutMs during a healthy-but-slow stream
+        // (e.g. anthropic / openrouter TTFT 2s + 30s inter-chunk gap).
+        // With the timer UNDISARMED after first-chunk arrival, the
+        // firstChunkTimeoutMs deadline elapses while the envelope is
+        // suspended on `await upstreamIter.next()` -- the timer fires,
+        // controller.abort propagates through the merged signal, and
+        // the suspended await throws AbortError -- silently cutting off
+        // an entirely healthy stream mid-drain.
+        //
+        // === LOCK TARGET — DO NOT REMOVE THE CLEAR-ON-SUCCESS BLOCK ===
+        // Removing the 3 lines immediately below `if (first.done) return;`
+        // re-introduces R2. The regression test at
+        // web/__tests__/chat/enhanced-llm-service-envelope.test.ts
+        // catches this exact removal — DO NOT edit without updating
+        // the test.
+        // =================================================================
+        if (first.done) return;
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
+        yield first.value;
+        while (true) {
+          const next = await upstreamIter.next();
+          if (next.done) return;
+          yield next.value;
+        }
+      } finally {
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
+      }
+    })();
+    return Promise.resolve({
+      gen: firstChunkEnvelope,
+      abort: () => controller.abort(),
+    });
+  };
+};
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -2695,112 +2820,18 @@ export async function* streamWithConcurrentFallback(
       : 25000;
 
   // Helper: wrap streamWithVercelAI in a StreamHandle with an abort handle.
-  const wrapAsHandle = (providerOverride?: string) => {
-    const controller = new AbortController();
-    const mergedSignal = rest.signal
-      ? AbortSignal.any([rest.signal, controller.signal])
-      : controller.signal;
-    // Cross-provider model resolution: if the caller passed a
-    // findCompatibleModel function (EnhancedLLMService does this), use
-    // it to pick a model ID that the fallback provider's catalog can
-    // actually serve. Without this, a stalled primary can launch a
-    // fallback with an unsupported model ID and fail immediately,
-    // turning the rescue into a no-op on exactly the cross-provider
-    // case this feature exists for. When no resolver is provided
-    // (e.g. from tests or external callers), fall through to the
-    // original model ID.
-    const modelForHandle = providerOverride && findCompatibleModelFn
-      ? findCompatibleModelFn(
-          options.model,
-          ((PROVIDERS as any)[providerOverride]?.models || []).map((m: any) =>
-            typeof m === 'string' ? m : m.id,
-          ),
-        ) || options.model
-      : options.model;
-    const upstreamGen = streamWithVercelAI({
-      ...rest,
-      ...(providerOverride
-        ? { provider: providerOverride, model: modelForHandle }
-        : {}),
-      signal: mergedSignal,
-      speculativeFallbackMs: 0,
-    } as any);
-    // PR-Z — clearable first-chunk envelope. Race a setTimeout against
-    // the FIRST `.next()` resolution on the underlying iterator; clear
-    // the timer on success via try/finally so a thrown (aborted)
-    // upstream still cleans up. Yields the first chunk manually, then
-    // iterates the rest synchronously — same call pattern as
-    // `drainIterator` in llm-fallback-coordinator.ts but inline so the
-    // timer can observe the first `.next()` resolution.
-    const upstreamIter = upstreamGen[Symbol.asyncIterator]();
-    let firstChunkTimer: NodeJS.Timeout | undefined = setTimeout(
-      () => controller.abort(new Error(
-        `Upstream first-chunk timeout exceeded (${firstChunkTimeoutMs}ms)`,
-      )),
-      firstChunkTimeoutMs,
-    );
-    const firstChunkEnvelope: AsyncGenerator<any> = (async function* () {
-      try {
-        const first = await upstreamIter.next();
-        // PR-S2 (Stage 3 R2 fix) -- RE-INSTATE the success-path timer clear
-        // that PR-Z2 / Z-5 (LOW DRY) removed. The PR-Z2 rationale was:
-        //   "the `finally` clause below clears firstChunkTimer regardless
-        //    of completion path, so the inline clear here is redundant."
-        // That reasoning collapsed two distinct lifecycle windows:
-        //   (a) generator completion (return / throw) -- where the
-        //       `finally` fires and clears the timer,
-        //   (b) the post-first-chunk drain loop -- where the generator
-        //       is alive (yielding chunks) and the timer is still armed.
-        // The PR-Z2 fix conflates (a) and (b): the `finally` only runs
-        // on (a), while the generator's lifetime extends WELL PAST
-        // `firstChunkTimeoutMs` during a healthy-but-slow stream
-        // (e.g. anthropic / openrouter TTFT 2s + 30s inter-chunk gap).
-        // With the timer UNDISARMED after first-chunk arrival, the
-        // `firstChunkTimeoutMs` deadline elapses while the envelope is
-        // suspended on `await upstreamIter.next()` -- the timer fires,
-        // `controller.abort(new Error('Upstream first-chunk timeout ...'))`
-        // propagates through the merged signal, and the suspended
-        // `await upstreamIter.next()` throws AbortError -- silently
-        // cutting off an entirely healthy stream mid-drain.
-        //
-        // Stage 3 R2 (P0): this is the regression. The semantically
-        // correct fix splits the two windows:
-        //   - `first.done === true` (empty upstream): let the
-        //     `finally` handle teardown as before.
-        //   - `first.done === false` (chunk arrived): the FIRST-CHUNK
-        //     deadline is FULLY SATISFIED. Disarm the timer
-        //     immediately so it cannot fire on a healthy mid-drain
-        //     slow cadence that exceeds the FIRST-chunk window.
-        //
-        // PR-Z2's other improvement -- early return on `first.done` --
-        // is preserved (line immediately below). The ordering
-        // (early-return on done BEFORE clear-on-success) is intentional:
-        // on the empty-stream path we want zero overhead and the
-        // `finally` cleanup is sufficient.
-        if (first.done) return;
-        if (firstChunkTimer !== undefined) {
-          clearTimeout(firstChunkTimer);
-          firstChunkTimer = undefined;
-        }
-        yield first.value;
-        while (true) {
-          const next = await upstreamIter.next();
-          if (next.done) return;
-          yield next.value;
-        }
-      } finally {
-        if (firstChunkTimer !== undefined) {
-          clearTimeout(firstChunkTimer);
-          firstChunkTimer = undefined;
-        }
-      }
-    })();
-    return Promise.resolve({
-      gen: firstChunkEnvelope,
-      abort: () => controller.abort(),
-    });
-    __testEnvelopes.wrapAsHandle = wrapAsHandle;
-  };
+  // PR-S2 factory delegation: production caller delegates to the module-level
+  // `wrapAsHandleForConcurrentFallback` factory. The result is a closure that
+  // is byte-for-byte identical to the previous closure-local definition; only
+  // the closure-scope variables (`rest`, `options`, `findCompatibleModelFn`)
+  // are now passed as explicit parameters. The factory's JSDoc + the LOCK
+  // TARGET comment (3 lines under `if (first.done) return;`) is the single
+  // source of truth for R2's success-path clearTimeout re-arm semantics.
+  const wrapAsHandle = wrapAsHandleForConcurrentFallback({
+    rest,
+    options,
+    findCompatibleModelFn,
+  });
 
   yield* coordinateConcurrentFallback({
     primaryProvider: options.provider,

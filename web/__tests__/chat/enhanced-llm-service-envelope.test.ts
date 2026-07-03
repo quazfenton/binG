@@ -21,25 +21,46 @@
  * fires at t=25s while the iterator is awaiting the 2nd chunk, aborts
  * the controller, and `gen.next()` throws AbortError -- the test fails.
  *
- * How the test reaches `wrapAsHandle`: the function is closure-local
- * inside `streamWithConcurrentFallback`'s body. We expose a captured
- * reference via `__getWrapAsHandleForTests()` (test seam, @internal)
- * which holds a pointer to the SAME function instance used in
- * production when `streamWithConcurrentFallback`'s body executes at
- * first call.
+ * How the test reaches `wrapAsHandle`: the factory was lifted out of
+ * `streamWithConcurrentFallback`'s closure into the module-level
+ * `wrapAsHandleForConcurrentFallback` export, so the test can drive
+ * it directly with a synchronous firstChunkTimeoutMs override (default
+ * 25s would force the test to await real wall-clock time, which is
+ * impossible under vi.useFakeTimers without an override), and we can
+ * assert the success-path clearTimeout re-arm in isolation.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// Hoist: replace streamWithVercelAI BEFORE the test seam import resolves.
+// Hoist: replace streamWithVercelAI BEFORE the factory import resolves.
 // The auto-mock turns streamWithVercelAI into a vi.fn() we configure in
 // beforeEach for each scenario.
 vi.mock('@/lib/chat/vercel-ai-streaming');
 
 import * as vercelAIStreaming from '@/lib/chat/vercel-ai-streaming';
-import { __getWrapAsHandleForTests } from '@/lib/chat/enhanced-llm-service';
+import { wrapAsHandleForConcurrentFallback } from '@/lib/chat/enhanced-llm-service';
 
 const streamWithVercelAIMock = vi.mocked(vercelAIStreaming.streamWithVercelAI);
+
+// Regression-scenario timings (short wall-clock windows):
+//   ttftMs = 100   (TTFT — first chunk arrives in 100ms)
+//   gap    = 300   (inter-chunk gap — second chunk arrives 300ms after first)
+//   firstChunkTimeoutMsOverride = 200
+// Scenario invariant: TTFT (100) < firstChunkTimeoutMs (200) < gap (300).
+// Without PR-S, the 200ms timer would fire at wall-clock 200ms while the
+// iterator is suspended awaiting chunk-2 at wall-clock 400ms — AbortError.
+// With PR-S, the timer is disarmed at the 100ms chunk-1 arrival, so the
+// 300ms gap elapses cleanly and chunk-2 delivers.
+//
+// Why real setTimeout (not vi.useFakeTimers): vitest's fake-timer
+// interaction with the `while { await upstreamIter.next() }` post-
+// chunk-1 drain loop appears to wall-clock block for the full timer
+// window in this vitest version (the test hit the 30s default timeout
+// under fake timers). Real setTimeout with these short durations
+// completes in ~400ms regardless of vitest internals.
+const TTFT_MS = 100;
+const INTER_CHUNK_GAP_MS = 300;
+const FIRST_CHUNK_TIMEOUT_MS = 200;
 
 /**
  * Mock upstream that yields chunk-1 after TTFT (default 2000ms) and
@@ -74,71 +95,92 @@ async function* buildMockUpstream(opts?: {
 
 describe('R2 Regression (PR-S 061a4f5a): wrapAsHandle success-path clearTimeout re-arm', () => {
   beforeEach(() => {
-    vi.useFakeTimers();
-    streamWithVercelAIMock.mockImplementation(() =>
-      // wrapAsHandle awaits streamWithVercelAI(...) and then takes
-      // .[Symbol.asyncIterator]() on the returned value. We return a
-      // Promise resolving to an object whose Symbol.asyncIterator yields
-      // the buildMockUpstream async generator.
-      Promise.resolve({
-        [Symbol.asyncIterator]: () => buildMockUpstream(),
-      } as any),
-    );
+    // Production `streamWithVercelAI` is declared `async function*`,
+    // so the factory call `streamWithVercelAI(...)` synchronously returns
+    // an AsyncGenerator (NOT a Promise wrapping one). The mock must
+    // mirror this — `Promise.resolve(...)` would force the factory's
+    // `upstreamGen[Symbol.asyncIterator]()` to read the symbol on a
+    // Promise (returns undefined) and throw TypeError.
+    streamWithVercelAIMock.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => buildMockUpstream({
+        ttftMs: TTFT_MS,
+        interChunkGapMs: INTER_CHUNK_GAP_MS,
+      }),
+    } as any));
   });
 
   afterEach(() => {
-    vi.useRealTimers();
     streamWithVercelAIMock.mockReset();
   });
 
   /**
-   * Core regression: TTFT 2s + inter-chunk gap 30s exceeds
-   * firstChunkTimeoutMs 25s. PR-S locks the success-path clearTimeout
-   * so chunk-2 still delivers at t=32s (>= firstChunkTimeoutMs 25s).
+   * R2 regression: TTFT < firstChunkTimeoutMs < inter-chunk-gap.
+   * PR-S2 (commit 061a4f5a) re-instated the inline success-path
+   * `clearTimeout(firstChunkTimer)` re-arm inside the factory's
+   * `firstChunkEnvelope` generator. Without it, the firstChunkTimer
+   * keeps running after chunk-1 arrives and fires at the
+   * firstChunkTimeoutMs deadline WHILE the iterator is suspended on
+   * `await upstreamIter.next()` awaiting chunk-2 -- the controller
+   * abort propagates through the merged signal and `gen.next()` throws
+   * AbortError mid-drain, silently cutting off an otherwise healthy
+   * stream.
    *
-   * A future DRY revert that removes the inline
-   * `clearTimeout(firstChunkTimer); firstChunkTimer = undefined;` line
-   * (e.g. PR-Z2's "redundant with finally" rationale comes back) makes
-   * the test fail: at t=25s the un-disarmed timer fires and aborts the
-   * controller, so gen.next() at t=30s throws AbortError.
+   * Concretely with the test timings:
+   *   t=0:   wrapAsHandle() arms firstChunkTimer (200ms)
+   *   t=100: chunk-1 yields; PR-S2 disarms firstChunkTimer
+   *   t=200: WITHOUT PR-S, the (un-disarmed) timer fires here, AbortError
+   *          WITH PR-S, the timer is gone -- no abort
+   *   t=400: chunk-2 yields (after the 300ms gap)
+   *
+   * A future DRY revert that removes the `clearTimeout(firstChunkTimer)`
+   * 3 lines beneath `if (first.done) return;` inside the factory's
+   * `firstChunkEnvelope` generator (e.g. PR-Z2's "redundant with finally"
+   * rationale resurfaces) makes this test fail at the second try/catch
+   * with a clear "R2 regression re-introduced" message.
    */
-  it('delivers chunk-2 when TTFT=2s + inter-chunk gap=30s exceeds firstChunkTimeoutMs=25s (PR-S disarms timer)', async () => {
-    const wrapAsHandle = __getWrapAsHandleForTests();
-    expect(wrapAsHandle).toBeDefined();
+  it(`delivers chunk-2 when TTFT=${TTFT_MS}ms + inter-chunk gap=${INTER_CHUNK_GAP_MS}ms exceeds firstChunkTimeoutMs=${FIRST_CHUNK_TIMEOUT_MS}ms (PR-S disarms timer)`, async () => {
+    const wrapAsHandle = wrapAsHandleForConcurrentFallback({
+      rest: { provider: 'openai', model: 'mock', messages: [] } as any,
+      options: { model: 'mock' } as any,
+      // No findCompatibleModelFn -- factory falls through to `options.model`.
+      firstChunkTimeoutMsOverride: FIRST_CHUNK_TIMEOUT_MS,
+    });
+    expect(typeof wrapAsHandle).toBe('function');
 
     // (1) Establish the envelope. wrapAsHandle() arms the firstChunkTimer
-    //     INSIDE its closure (defaults in this code path: 25s).
-    const handle = await wrapAsHandle!();
+    //     INSIDE its closure (200ms in this code path).
+    const start = Date.now();
+    const handle = await wrapAsHandle();
     expect(handle.gen).toBeDefined();
     expect(typeof handle.abort).toBe('function');
 
-    // (2) Advance to TTFT (2s) and read chunk-1.
-    //     vi.advanceTimersByTimeAsync flushes pending microtasks after
-    //     advancing, so the awaited setTimeout() in the upstream can
-    //     resolve and the iterator can yield.
-    await vi.advanceTimersByTimeAsync(2000);
+    // (2) Wait for TTFT (100ms wall-clock) and read chunk-1. PR-S2
+    //     disarms firstChunkTimer immediately on chunk-1 arrival.
+    await new Promise<void>((r) => setTimeout(r, TTFT_MS));
+    expect(Date.now() - start).toBeGreaterThanOrEqual(TTFT_MS);
     const first = await handle.gen.next();
     expect(first.done).toBe(false);
     expect(first.value.content).toBe('chunk-1');
     expect((first.value as any).finishReason).toBeUndefined();
 
-    // (3) Advance PAST firstChunkTimeoutMs (25s). Without PR-S: timer
-    //     was never disarmed after chunk-1 arrived at t=2s, so the
-    //     deadline elapses at t=25s mid-drain and aborts via controller.
-    //     With PR-S: timer was cleared at t=2s — no abort.
-    await vi.advanceTimersByTimeAsync(25000);
+    // (3) Wait for the timer deadline to elapse (FIRST_CHUNK_TIMEOUT_MS).
+    //     The PR-S2-disarmed timer is gone, so NO abort should fire here.
+    //     If PR-S2 is reverted, the un-disarmed timer would fire inside
+    //     this window and abort the controller.
+    await new Promise<void>((r) => setTimeout(r, FIRST_CHUNK_TIMEOUT_MS));
+    expect(Date.now() - start).toBeGreaterThanOrEqual(TTFT_MS + FIRST_CHUNK_TIMEOUT_MS);
 
-    // (4) Advance past the inter-chunk gap (chunk-2 yielded at t=32s).
+    // (4) Wait past the inter-chunk gap so chunk-2 yields, then read it.
+    //     chunk-2 arrives at t=400ms (TTFT_MS + INTER_CHUNK_GAP_MS).
     //     gen.next() at this point should return chunk-2 (NOT throw).
-    //     Without PR-S: throws AbortError.
-    await vi.advanceTimersByTimeAsync(7000);
+    await new Promise<void>((r) => setTimeout(r, INTER_CHUNK_GAP_MS));
     let second: IteratorResult<any>;
     try {
       second = await handle.gen.next();
     } catch (err: any) {
       throw new Error(
         'R2 regression re-introduced: gen.next() threw during the ' +
-        'post-chunk-1 drain -- `' + err?.message + '`. PR-S ' +
+        'post-chunk-1 drain -- `' + (err?.message ?? String(err)) + '`. PR-S ' +
         '(061a4f5a) success-path clearTimeout re-arm is missing.',
       );
     }
