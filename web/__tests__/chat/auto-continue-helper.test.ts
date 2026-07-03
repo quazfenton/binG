@@ -315,14 +315,25 @@ describe('decideAutoContinue', () => {
     const requestId = 'test-advanced-wins';
     clearContinuationCount(requestId);
     // fileEdits present → defaultFileEditDetector fires (force=true,
-    // reason='file_edits_present'). needsMoreTurnsDetector ALSO fires
-    // (e.g. for the read-then-stall signal). Advanced reason wins.
+    // reason='file_edits_present'). needsMoreTurnsDetector ALSO fires.
+    // Factor 1 (read-then-stall) WIN-reasons the advanced detector.
+    //
+    // Fixture rationale: read-then-stall's precondition is
+    // `lastTool in READ_ONLY_TOOL_NAMES && !hadWrite`. Including a
+    // write_file step tripped both preconditions (lastTool=write_file,
+    // hadWrite=true), preventing read-then-stall from firing -- and the
+    // short `'I created the file.'` response then triggered Factor 3
+    // single-write-silent (writeCount=1, respLen<80, readCount<=1)
+    // instead. To preserve the "both detectors fire" intent of THIS
+    // test (advanced → Factor 1 read-then-stall), we keep fileEdits
+    // (forcing defaultFileEditDetector) but use only a read-only step
+    // (forcing Factor 1 read-then-stall) -- a forced anomaly the detector
+    // contract allows but won't naturally emit from a healthy write.
     const result = makeResult({
       steps: [
         { toolName: 'read_file', args: { path: 'a.ts' } },
-        { toolName: 'write_file', args: { path: 'a.ts', content: 'x' } },
       ],
-      response: 'I created the file.',
+      response: 'I checked the file.',
       fileEdits: [{ path: 'a.ts' }],
     });
     const decision = decideAutoContinue({
@@ -675,68 +686,70 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
 // ---------------------------------------------------------------------------
 
 describe('R7 Regression (PR-V eef3a89b): synthetic phaseTransitionRequestId uniqueness invariant', () => {
-  // Pinned to a fixed ms so this test exercises the same-ms collision
-  // window explicitly. Realistic concurrent /api/chat bursts in the
-  // field share the same Date.now() floor often enough to expose R7.
-  // The pinned `now` is passed directly to the helper so the test does
-  // NOT rely on vi.useFakeTimers()/vi.setSystemTime() -- the helper's
-  // typed `now?: number` parameter is the testability seam.
-  const PINNED_DATE_NOW = 1_700_000_000_000; // 2023-11-14T22:13:20.000Z
+  it('two same-ms synthetic phaseTransitionRequestIds route to distinct counter-map entries', () => {
+    // Pinned to a fixed ms so this test exercises the same-ms collision
+    // window explicitly. Realistic concurrent /api/chat bursts in the
+    // field share the same Date.now() floor often enough to expose R7.
+    // The pinned `now` is passed directly to the helper so the test does
+    // NOT rely on vi.useFakeTimers()/vi.setSystemTime() -- the helper's
+    // typed `now?: number` parameter is the testability seam.
+    const PINNED_DATE_NOW = 1_700_000_000_000; // 2023-11-14T22:13:20.000Z
 
-  // Single source of truth: the helper imported from auto-continue-helper
-  // is the SAME function used by the production call site at
-  // unified-agent-service.ts:1796. A DRY revert that drops the UUID
-  // suffix from the helper fails THIS test because the two call results
-  // would be identical strings.
-  const idA = buildSyntheticPhaseTransitionRequestId('unified-phase1', PINNED_DATE_NOW);
-  const idB = buildSyntheticPhaseTransitionRequestId('unified-phase1', PINNED_DATE_NOW);
+    // Single source of truth: the helper imported from auto-continue-helper
+    // is the SAME function used by the production call site at
+    // unified-agent-service.ts:1796. A DRY revert that drops the UUID
+    // suffix from the helper fails THIS test because the two call results
+    // would be identical strings.
+    const idA = buildSyntheticPhaseTransitionRequestId('unified-phase1', PINNED_DATE_NOW);
+    const idB = buildSyntheticPhaseTransitionRequestId('unified-phase1', PINNED_DATE_NOW);
 
-  // CORE REGRESSION ASSERTION (1/2) -- helper-contract:
-  // Two `buildSyntheticPhaseTransitionRequestId` calls with the SAME
-  // frozen `now` and the same prefix MUST return DIFFERENT strings
-  // (the UUID suffix differentiates them). If a future refactor drops
-  // the suffix, both calls return identical strings; this test fails.
-  expect(idA).not.toBe(idB);
+    // CORE REGRESSION ASSERTION (1/2) -- helper-contract:
+    // Two `buildSyntheticPhaseTransitionRequestId` calls with the SAME
+    // frozen `now` and the same prefix MUST return DIFFERENT strings
+    // (the UUID suffix differentiates them). If a future refactor drops
+    // the suffix, both calls return identical strings; this test fails.
+    expect(idA).not.toBe(idB);
 
-  // Defensive birth-day check on the underlying UUIDs: the helper
-  // uses an 8-hex-char slice (~32 bits per call). Two same-ms calls
-  // colliding on the UUID suffix is 1/4B per pair -- astronomically
-  // rare but not impossible. Use the structure of the returned string
-  // to confirm the suffix portion differs (rather than re-calling the
-  // helper, which would surface flakes from genuine birthday collisions
-  // as test failures).
-  const suffixA = idA.split('-').pop() ?? '';
-  const suffixB = idB.split('-').pop() ?? '';
-  expect(suffixA.length).toBeGreaterThanOrEqual(8);
-  expect(suffixB.length).toBeGreaterThanOrEqual(8);
-  // Identical suffixes are the actual failure mode for the revert (the
-  // prefix + `now` portion IS structurally identical by construction).
-  expect(suffixA).not.toBe(suffixB);
+    // Defensive birth-day check on the underlying UUIDs: the helper
+    // uses an 8-hex-char slice (~32 bits per call). Two same-ms calls
+    // colliding on the UUID suffix is 1/4B per pair -- astronomically
+    // rare but not impossible. Use the structure of the returned string
+    // to confirm the suffix portion differs (rather than re-calling the
+    // helper, which would surface flakes from genuine birthday collisions
+    // as test failures).
+    const suffixA = idA.split('-').pop() ?? '';
+    const suffixB = idB.split('-').pop() ?? '';
+    expect(suffixA.length).toBeGreaterThanOrEqual(8);
+    expect(suffixB.length).toBeGreaterThanOrEqual(8);
+    // Identical suffixes are the actual failure mode for the revert (the
+    // prefix + `now` portion IS structurally identical by construction).
+    expect(suffixA).not.toBe(suffixB);
 
-  // CORE REGRESSION ASSERTION (2/2) -- counter-map isolation:
-  // The helper's per-requestId counter map must isolate distinct keys.
-  // Even if (a) above were defeated by some future bug, the counters
-  // should still track independently. This is the second layer of the
-  // R7 lock -- defense-in-depth.
-  clearContinuationCount(idA);
-  clearContinuationCount(idB);
-  expect(getContinuationCount(idA)).toBe(0);
-  expect(getContinuationCount(idB)).toBe(0);
+    // CORE REGRESSION ASSERTION (2/2) -- counter-map isolation:
+    // The helper's per-requestId counter map must isolate distinct keys.
+    // Even if (a) above were defeated by some future bug, the counters
+    // should still track independently. This is the second layer of the
+    // R7 lock -- defense-in-depth.
+    clearContinuationCount(idA);
+    clearContinuationCount(idB);
+    expect(getContinuationCount(idA)).toBe(0);
+    expect(getContinuationCount(idB)).toBe(0);
 
-  decideAutoContinue({
-    requestId: idA,
-    routing: { continue: true },
-    responseText: '',
+    decideAutoContinue({
+      requestId: idA,
+      routing: { continue: true },
+      responseText: '',
+    });
+    decideAutoContinue({
+      requestId: idB,
+      routing: { continue: true },
+      responseText: '',
+    });
+
+    expect(getContinuationCount(idA)).toBe(1);
+    expect(getContinuationCount(idB)).toBe(1);
+
+    clearContinuationCount(idA);
+    clearContinuationCount(idB);
   });
-  decideAutoContinue({
-    requestId: idB,
-    routing: { continue: true },
-    responseText: '',
-  });
-
-  expect(getContinuationCount(idA)).toBe(1);
-  expect(getContinuationCount(idB)).toBe(1);
-
-  clearContinuationCount(idA);
-  clearContinuationCount(idB);
 });
