@@ -456,44 +456,99 @@ export async function* coordinateConcurrentFallback<T>(
     }
     const fallbackIt = fallbackHandle.gen[Symbol.asyncIterator]();
 
-    // Build the primary chunk promise with optional cache + shared
-    // pending promise. The `.then` sidecar updates the cache whenever
-    // the primary produces a chunk (regardless of whether we won this
-    // race), so a chunk that races after a fallback-timeout is preserved
-    // for the next iteration.
+    // Build the primary chunk promise for this race iteration. Three
+    // paths: (1) cache-consume when a prior iter pinned a non-done chunk,
+    // (2) pendingPrimary-reuse when the previous iter's `.next()` is
+    // still in flight (its resolution may yield a NEW chunk during this
+    // race), or (3) fresh `.next()` when neither is available.
+    //
+    // PR-R — cache-sidecar scope fix (closes R1 + R3 + R4):
+    //   R1 (re-pin staleness): the pre-PR-R sidecar was attached to
+    //     `primaryChunkPromise` regardless of which path produced it.
+    //     On path 1 (cache-consume), `Promise.resolve(primaryChunkCache)`
+    //     fires the `.then(r => primaryChunkCache = r)` synchronously,
+    //     RE-PINNING the same value. Every subsequent chain iteration
+    //     then re-entered path 1, replayed the cached chunk, and any
+    //     chunk the iterator actually produced in the meantime was
+    //     orphaned (Bug #86 FIFO-pairing would re-emerge if a fresh
+    //     `.next()` were issued while the prior pin was somehow still
+    //     outstanding — the corner case behind the regression).
+    //   R3 (infinite-loop chain walk): the failure-mode multiplier of
+    //     R1. If the iterator stalls mid-drain (one chunk then blocks
+    //     indefinitely), `drainIterator` throws `IdleTimeoutError` →
+    //     `continue` → next iter re-enters path 1 with the same pinned
+    //     cache → race resolves to `primary-error` → fallback wins →
+    //     `drainIterator` on the new fallback stalls → `continue` →
+    //     re-enter path 1 (cache still pinned from before) → … loop
+    //     continues capped only by `chain.length * hardDeadlineMs`.
+    //     /api/chat hangs. After PR-R, path 1 is excluded from the
+    //     sidecar so the cache cannot re-pin itself across iterations.
+    //   R4 (cache completion hardening): the pre-PR-R sidecar also
+    //     pinned `done: true` entries into `primaryChunkCache`. Today
+    //     `!primaryChunkCache.done` excludes them from replay, but as
+    //     defense-in-depth against any future code path that loosens
+    //     the check (e.g., a fast-path that skips the check entirely
+    //     on assumption of "cache always means streaming"), PR-R clears
+    //     the cache to `null` on `r.done === true` rather than pinning
+    //     a sentinel entry.
+    //
+    // The fix: ONLY attach the sidecar on paths 2 + 3 (where a live
+    // promise is outstanding and a new chunk can still resolve). Path 1
+    // is excluded — its value is already known.
     let primaryChunkPromise: Promise<IteratorResult<T>>;
     if (primaryChunkCache !== null && !primaryChunkCache.done) {
-      // Consume the cache exactly once.
+      // Path 1: cache-consume. NO sidecar attached — re-attaching would
+      // re-pin the same value (R1).
       primaryChunkPromise = Promise.resolve(primaryChunkCache);
       primaryChunkCache = null;
     } else if (pendingPrimary !== null) {
-      // Reuse an outstanding primary.next() call — calling .next() again
-      // would orphan the prior promise's chunk.
+      // Path 2: pendingPrimary-reuse. Re-issuing `.next()` would tilt
+      // the gen's FIFO-pairing against the consumer (Bug #86); the
+      // outstanding `.next()` is reused as-is. Sidecar attached below.
       primaryChunkPromise = pendingPrimary;
     } else {
+      // Path 3: fresh `.next()`. Sidecar attached below.
       pendingPrimary = primaryIt.next();
       primaryChunkPromise = pendingPrimary;
     }
-    primaryChunkPromise
-      .then((r) => {
-        primaryChunkCache = r;
-      })
-      // PR-X — pendingPrimary reset: after the sidecar settles, clear the
-      // slot so the next chain iteration makes a fresh decision (use the
-      // cache OR fire a fresh `primaryIt.next()`). Without this clear,
-      // the resolved/done promise stays pinned, and every subsequent race
-      // arm re-uses the same already-settled promise — producing a
-      // perpetual `primary-error` OR an infinite yield of the cached
-      // chunk (when primary emitted exactly one chunk then stalled,
-      // drainIterator fired IdleTimeoutError → `continue` → re-entered
-      // the loop with pendingPrimary still pinned). Result: /api/chat
-      // hangs indefinitely. Mirrors PR-H's "pure record-or-noop"
-      // contract from the cross-tracker decouple — single source of
-      // truth in `.finally()` so the reset can never be silently
-      // omitted from one arm of the sidecar.
-      .finally(() => {
+    if (pendingPrimary !== null && primaryChunkPromise === pendingPrimary) {
+      // Identity gate (post-fix vs leaky `pendingPrimary !== null`):
+      //   - Path 1 (cache-consume) sets `primaryChunkPromise =
+      //     Promise.resolve(primaryChunkCache)` — a fresh resolved
+      //     promise whose reference is NOT `pendingPrimary`. The gate
+      //     correctly excludes path 1 from receiving the sidecar,
+      //     closing R1 (no re-pin of the cached value across iters).
+      //   - Paths 2 (pendingPrimary-reuse) and 3 (fresh `.next()`)
+      //     both make `primaryChunkPromise` reference-identical to
+      //     `pendingPrimary`. The gate correctly attaches the sidecar
+      //     so a chunk resolving during this race is captured for the
+      //     next iter.
+      // The first-iter boundary is the canary case: `pendingPrimary =
+      // primaryPromiseAtStart` is non-null when iter 0 enters path 1,
+      // so a `pendingPrimary !== null` gate alone leaks the re-pin.
+      //
+      // PR-R — R4 hardening: pin the cache only when the promise
+      // resolves to a non-done chunk. A `done: true` resolution is the
+      // gen's exhausted sentinel — clearing `primaryChunkCache` to
+      // `null` here (rather than pinning the sentinel) means the next
+      // chain iteration falls through to a fresh `.next()` and resolves
+      // cleanly via `primary-error`, rather than being tricked into a
+      // replay by a sentinel cache entry.
+      pendingPrimary.then((r) => {
+        primaryChunkCache = r.done ? null : r;
+      });
+      // PR-X — pendingPrimary reset (preserved): clear the pin slot on
+      // resolve OR reject so the next chain iteration makes a fresh
+      // decision. Single source of truth mirroring PR-H's
+      // record-or-noop contract. The identity gate ensures this same
+      // `pendingPrimary` reference — the one we wrote into in path 2
+      // (reused) or path 3 (fresh-pinned) — is the one we now null out,
+      // so a future iter can enter any of the three paths without a
+      // stale pin poisoning its decision.
+      pendingPrimary.finally(() => {
         pendingPrimary = null;
       });
+    }
 
     // The chunk race for this fallback iteration has THREE arms:
     //   1. primary chunk (cached, shared, or fresh `primaryIt.next()`)
