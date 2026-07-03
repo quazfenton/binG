@@ -2649,6 +2649,26 @@ export async function* streamWithVercelAI(
               }
             }, fbTimeoutMs);
 
+    // PR-U (Stage 3 R6 fix) -- defensive try/catch around the createFallback
+    // body so a throw AFTER `setTimeout` arms `fbTimeoutId` doesn't leave
+    // the timer in Node's queue for `fbTimeoutMs` (60s default). Pre-PR-U,
+    // any throw AFTER L2646 (e.g., a misconfigured provider blowing up
+    // inside `streamText`, or an AbortSignal.any plumbing error) would
+    // skip the existing L2691 / L2705 cleanup paths because those
+    // clearTimeout sites are reachable ONLY after `createFallback`
+    // successfully returned the { gen, abort } handle. The catch
+    // block below closes that gap.
+    //
+    // The catch is intentionally NARROW -- it clears fbTimeoutId and
+    // RE-throws so upstream callers (withSpeculativeFallback after
+    // PR-T) can herd the setup-fail into the chain-walk's
+    // `recordCall(fb, false, 0, 'setup-fail')` log + the next chain
+    // entry. The L2691 / L2705 cleanup paths continue to handle the
+    // SUCCESSFUL-return paths (fallback wins the race -- L2705 clears;
+    // fallback aborts -- L2691 clears). Those sites are idempotent so
+    // a no-op clear in catch is safe even after the abort-handler has
+    // already nulled the timer.
+    try {
     // Bug fix: the fallback's network request previously only honored
     // fbController.signal (the speculative-race cancel), so the global
     // firstTokenTimeoutMs / idleTimeoutMs never aborted it. Merge all
@@ -2692,6 +2712,18 @@ export async function* streamWithVercelAI(
                 fbController.abort();
               },
             };
+            } catch (err) {
+              // PR-U -- defensive clear on throw. Idempotent w.r.t. the
+              // existing L2691 / L2705 cleanup paths because both of those
+              // sites null `fbTimeoutId` after clearing, so a subsequent
+              // `if (fbTimeoutId)` check in the catch finds null and the
+              // clearTimeout call is a no-op.
+              if (fbTimeoutId) {
+                clearTimeout(fbTimeoutId);
+                fbTimeoutId = null;
+              }
+              throw err;
+            }
           },
           abortPrimary: () => {
             if (timeoutController && !timeoutController.signal.aborted) {
