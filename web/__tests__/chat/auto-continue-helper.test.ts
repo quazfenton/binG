@@ -22,8 +22,10 @@ import {
   decideAutoContinue,
   defaultFileEditDetector,
   needsMoreTurnsDetector,
+  getContinuationCount,
   clearContinuationCount,
   DETECTOR_BUCKET_REASONS,
+  buildSyntheticPhaseTransitionRequestId,
   type AutoContinueResultData,
   type ContinuationDecision,
 } from '@/lib/chat/auto-continue-helper';
@@ -650,3 +652,91 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
   });
 });
 
+
+
+// ---------------------------------------------------------------------------
+// R7 Regression (PR-V commit eef3a89b): synthetic phaseTransitionRequestId
+// uniqueness invariant.
+//
+// Context: when `phaseTransitionRequestId` falls through to the synthetic
+// fallback in `web/lib/orchestra/unified-agent-service.ts:1796`, the prior
+// implementation used `Date.now()`-only. Two concurrent /api/chat
+// requests landing in the SAME millisecond would compute the IDENTICAL
+// synthetic id, join the IDENTICAL counter bucket in _continuationCounters,
+// and trip the MAX_CONTINUATIONS=3 cap prematurely for unrelated fan-out
+// producers. PR-V appended a crypto.randomUUID() suffix to guarantee
+// process-uniqueness regardless of ms-floor.
+//
+// This regression test pins the same-Date.now()-floor invariant: two
+// synthetic IDs constructed with the SAME frozen Date.now() but DIFFERENT
+// UUID suffixes route to distinct counter buckets. If a future DRY cleanup
+// drops the UUID suffix, the two IDs become identical strings, the
+// helpers' counter map collides them, and the assertion below fails.
+// ---------------------------------------------------------------------------
+
+describe('R7 Regression (PR-V eef3a89b): synthetic phaseTransitionRequestId uniqueness invariant', () => {
+  // Pinned to a fixed ms so this test exercises the same-ms collision
+  // window explicitly. Realistic concurrent /api/chat bursts in the
+  // field share the same Date.now() floor often enough to expose R7.
+  // The pinned `now` is passed directly to the helper so the test does
+  // NOT rely on vi.useFakeTimers()/vi.setSystemTime() -- the helper's
+  // typed `now?: number` parameter is the testability seam.
+  const PINNED_DATE_NOW = 1_700_000_000_000; // 2023-11-14T22:13:20.000Z
+
+  // Single source of truth: the helper imported from auto-continue-helper
+  // is the SAME function used by the production call site at
+  // unified-agent-service.ts:1796. A DRY revert that drops the UUID
+  // suffix from the helper fails THIS test because the two call results
+  // would be identical strings.
+  const idA = buildSyntheticPhaseTransitionRequestId('unified-phase1', PINNED_DATE_NOW);
+  const idB = buildSyntheticPhaseTransitionRequestId('unified-phase1', PINNED_DATE_NOW);
+
+  // CORE REGRESSION ASSERTION (1/2) -- helper-contract:
+  // Two `buildSyntheticPhaseTransitionRequestId` calls with the SAME
+  // frozen `now` and the same prefix MUST return DIFFERENT strings
+  // (the UUID suffix differentiates them). If a future refactor drops
+  // the suffix, both calls return identical strings; this test fails.
+  expect(idA).not.toBe(idB);
+
+  // Defensive birth-day check on the underlying UUIDs: the helper
+  // uses an 8-hex-char slice (~32 bits per call). Two same-ms calls
+  // colliding on the UUID suffix is 1/4B per pair -- astronomically
+  // rare but not impossible. Use the structure of the returned string
+  // to confirm the suffix portion differs (rather than re-calling the
+  // helper, which would surface flakes from genuine birthday collisions
+  // as test failures).
+  const suffixA = idA.split('-').pop() ?? '';
+  const suffixB = idB.split('-').pop() ?? '';
+  expect(suffixA.length).toBeGreaterThanOrEqual(8);
+  expect(suffixB.length).toBeGreaterThanOrEqual(8);
+  // Identical suffixes are the actual failure mode for the revert (the
+  // prefix + `now` portion IS structurally identical by construction).
+  expect(suffixA).not.toBe(suffixB);
+
+  // CORE REGRESSION ASSERTION (2/2) -- counter-map isolation:
+  // The helper's per-requestId counter map must isolate distinct keys.
+  // Even if (a) above were defeated by some future bug, the counters
+  // should still track independently. This is the second layer of the
+  // R7 lock -- defense-in-depth.
+  clearContinuationCount(idA);
+  clearContinuationCount(idB);
+  expect(getContinuationCount(idA)).toBe(0);
+  expect(getContinuationCount(idB)).toBe(0);
+
+  decideAutoContinue({
+    requestId: idA,
+    routing: { continue: true },
+    responseText: '',
+  });
+  decideAutoContinue({
+    requestId: idB,
+    routing: { continue: true },
+    responseText: '',
+  });
+
+  expect(getContinuationCount(idA)).toBe(1);
+  expect(getContinuationCount(idB)).toBe(1);
+
+  clearContinuationCount(idA);
+  clearContinuationCount(idB);
+});

@@ -28,7 +28,7 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // chat/route.ts SSE streaming path. Closing the six gaps listed in the
 // audit (counter cleanup, requestId keying, hardcoded 3, helper.default,
 // SSE emission) in a single call site change.
-import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
+import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount, buildSyntheticPhaseTransitionRequestId } from '@/lib/chat/auto-continue-helper';
 import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
 import { is530Blacklisted, record530ErrorIfApplicable, reset530Counter } from './provider-530-tracker';
 // PR-W -- DRY helper consumed at the success-return reset pair.
@@ -1787,13 +1787,19 @@ export async function processUnifiedAgentRequest(
   // collisions across concurrent /api/chat bursts -- the prior
   // `Date.now()`-only id collided across fan-out producers in the same
   // millisecond and let unrelated requests share a counter bucket,
-  // defeating the per-request INVARIANT).
+  // defeating the per-request INVARIANT). The inline `Date.now()`-only
+  // fallback was promoted to the shared helper `buildSyntheticPhaseTransitionRequestId`
+  // in `web/lib/chat/auto-continue-helper.ts` so production callers and the
+  // R7 regression test share the same source-of-truth function. A future DRY
+  // revert that drops the UUID suffix in the helper fails the regression test
+  // immediately -- the test calls `buildSyntheticPhaseTransitionRequestId`
+  // directly with a pinned `now` and asserts distinct returned strings.
   const phaseTransitionRequestId =
     (config.conversationId && config.conversationId !== '000')
       ? config.conversationId
       : (config.sessionId && config.sessionId !== '000')
         ? config.sessionId
-        : `unified-phase1-${Date.now()}-${crypto?.randomUUID?.()?.slice(0, 8) ?? Math.random().toString(36).slice(2, 10)}`;
+        : buildSyntheticPhaseTransitionRequestId();
   const autoDecision = decideAutoContinue({
     requestId: phaseTransitionRequestId,
     routing: roleSelection

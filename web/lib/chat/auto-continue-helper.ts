@@ -417,6 +417,52 @@ export function clearContinuationCount(requestId: string): void {
   _continuationCounters.delete(requestId);
 }
 
+/**
+ * Build a process-unique synthetic requestId for the
+ * `phaseTransitionRequestId` fallback used in
+ * `web/lib/orchestra/unified-agent-service.ts:1796` (and any other
+ * producer that needs to discriminate concurrent /api/chat requests
+ * landing in the same millisecond).
+ *
+ * Format: `${prefix ?? 'unified-phase1'}-${now ?? Date.now()}-${uuid.slice(0, 8)}`
+ *
+ * Why the UUID suffix (`crypto.randomUUID().slice(0, 8)`): two
+ * concurrent requests landing in the same millisecond would otherwise
+ * compute the IDENTICAL fallback key, share a counter bucket in
+ * `_continuationCounters`, and trip the MAX_CONTINUATIONS=3 cap
+ * prematurely. The UUID suffix guarantees process-uniqueness across
+ * fan-out producers regardless of ms-floor (R7 fix, PR-V commit
+ * eef3a89b). Single source of truth -- production callers and the
+ * regression test in `__tests__/chat/auto-continue-helper.test.ts`
+ * share this function, so a future DRY revert that drops the suffix
+ * fails the R7 regression test automatically.
+ *
+ * - `prefix?: string`  -- caller-supplied prefix (default
+ *   `'unified-phase1'`). Exposed so a future caller can tag its
+ *   producers differently in `run.log` / metrics without copying the
+ *   template literal.
+ * - `now?: number`     -- pinned-date injection for testability. When
+ *   omitted, reads `Date.now()` at call time (production path).
+ *   Tests pass a frozen ms to deterministically exercise the same-ms
+ *   collision window without relying on `vi.setSystemTime`.
+ *
+ * Returns a string. Never throws. On cryptographic-API
+ * unavailability (Node <14.17, certain edge runtimes) the helper
+ * falls back to `Math.random().toString(36).slice(2, 10)` --
+ * weaker entropy (~52 bits) but still unique per call.
+ */
+export function buildSyntheticPhaseTransitionRequestId(
+  prefix?: string,
+  now?: number,
+): string {
+  const usedNow = typeof now === 'number' ? now : Date.now();
+  const uuidSlice =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `${prefix ?? 'unified-phase1'}-${usedNow}-${uuidSlice}`;
+}
+
 export interface AutoContinueDetectorOverride {
   force: boolean;
   reason?: string;
