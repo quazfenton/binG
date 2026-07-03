@@ -145,7 +145,9 @@ const REGION_COMPLETION = extractFunctionBody(
 // site is `maybeReset530OnSuccess(<identifier>)` and the canonical
 // identifier is `providerName`. Looser matches (e.g. accepting
 // `maybeReset530(p)`) would defeat the regression test's intent.
-const ANCHOR = /maybeReset530OnSuccess\s*\(\s*providerName\s*\)/;
+// PR-W -- forward-compatible anchor: accepts EITHER the manual pair (pre-W)
+// OR the new both-trackers helper (post-W).
+const ANCHOR = /maybeReset(?:530OnSuccess|BothTrackers)\s*\(\s*providerName\s*\)/;
 
 describe('PR-F wire-up regression: maybeReset530OnSuccess call sites inside the v1-api function bodies', () => {
   it('runV1ApiWithTools body contains maybeReset530OnSuccess(providerName)', () => {

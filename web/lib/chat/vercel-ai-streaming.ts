@@ -31,6 +31,8 @@ import { chatLogger } from './chat-logger';
 import { recordCall } from './llm-provider-health';
 // PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
 import { maybeReset530OnSuccess } from '../orchestra/provider-530-tracker';
+// PR-W -- DRY helper consumed at the success-return reset pair.
+import { maybeResetBothTrackers } from '../orchestra/provider-530-tracker';
 // PR-E: 5xx success-side reset paired at the two PR-C success-sites.
 import { maybeResetServerErrorOnSuccess } from '../orchestra/provider-server-error-tracker';
 // Pass-2 cross-cutting theme: record mid-stream stalls (TTFT/idle timeout)
@@ -1047,8 +1049,8 @@ export async function preflightProviderHealthCheck(
     // independently blacklisted and independently recoverable; a single
     // provider-level success event should clear BOTH pending blacklists so
     // the next provider selection does not re-block on a stale one.
-    maybeReset530OnSuccess(provider);
-    maybeResetServerErrorOnSuccess(provider);
+    // PR-W -- single-call both-trackers reset (replaces the manual pair).
+    maybeResetBothTrackers(provider);
     return { reachable: true, latencyMs: 0 };
   }
 
@@ -1077,8 +1079,8 @@ export async function preflightProviderHealthCheck(
     // independently blacklisted and independently recoverable; a single
     // provider-level success event should clear BOTH pending blacklists so
     // the next provider selection does not re-block on a stale one.
-    maybeReset530OnSuccess(provider);
-    maybeResetServerErrorOnSuccess(provider);
+    // PR-W -- single-call both-trackers reset (replaces the manual pair).
+    maybeResetBothTrackers(provider);
     return { reachable: true, latencyMs: Date.now() - startTime };
   } catch {
     clearTimeout(timeoutId);

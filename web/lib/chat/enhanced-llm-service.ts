@@ -33,6 +33,8 @@ import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
 import { is530Blacklisted, record530ErrorIfApplicable, maybeReset530OnSuccess } from '@/lib/orchestra/provider-530-tracker';
+// PR-W -- DRY helper consumed at the success-return reset pair.
+import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
 // PR-E: success-side reset for the 5xx-blacklist tracker; parallels maybeReset530OnSuccess.
 import { maybeResetServerErrorOnSuccess } from '@/lib/orchestra/provider-server-error-tracker';
 // PR-E: opt-in wire-up so 5xx server errors (parallel to 530 origin-unreachable) are tracked via
@@ -1455,8 +1457,8 @@ export class EnhancedLLMService {
       // that succeeds a 5xx-storm caller could clear both, while a provider that
       // recovered from a 530 tunnel-DNS event should NOT be affected by an
       // unrelated 5xx blacklist.
-      maybeReset530OnSuccess(provider);
-      maybeResetServerErrorOnSuccess(provider);
+      // PR-W -- single-call both-trackers reset (replaces the manual pair).
+      maybeResetBothTrackers(provider);
       return response;
     } catch (error) {
       const type = classifyFailure(error);

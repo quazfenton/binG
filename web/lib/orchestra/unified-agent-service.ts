@@ -31,6 +31,8 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
 import { is530Blacklisted, record530ErrorIfApplicable, reset530Counter, maybeReset530OnSuccess } from './provider-530-tracker';
+// PR-W -- DRY helper consumed at the success-return reset pair.
+import { maybeResetBothTrackers } from './provider-530-tracker';
 import {
   isServerErrorBlacklisted,
   maybeResetServerErrorOnSuccess,
@@ -4922,10 +4924,8 @@ async function runV1ApiWithTools(
 
       // PR-F: clear the 530-blacklist counter on this provider's success.
       // Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
-      maybeReset530OnSuccess(providerName);
-      // PR-G: clear the 5xx-blacklist counter on this provider's success.
-      // Gated by ENABLE_SERVER_ERROR_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
-      maybeResetServerErrorOnSuccess(providerName);
+      // PR-W -- single-call both-trackers reset (replaces the manual pair).
+      maybeResetBothTrackers(providerName);
       return {
         success: true,
         response: finalResponse,
@@ -5985,10 +5985,8 @@ async function runV1ApiCompletion(
 
 // PR-F: clear the 530-blacklist counter on this provider's success.
 // Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
-maybeReset530OnSuccess(providerName);
-// PR-G: clear the 5xx-blacklist counter on this provider's success.
-// Gated by ENABLE_SERVER_ERROR_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
-maybeResetServerErrorOnSuccess(providerName);
+// PR-W -- single-call both-trackers reset (replaces the manual pair).
+maybeResetBothTrackers(providerName);
 return {
         success: true,
         response: cleanedResponse || '',

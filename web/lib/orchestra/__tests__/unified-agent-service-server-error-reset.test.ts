@@ -182,7 +182,9 @@ const REGION_COMPLETION = extractFunctionBody(
 // accidentally wrong local) that a looser `\w+` match would tolerate.
 // Trade-off documented; recommend an intentional update alongside
 // any identifier rename rather than weakening the anchor.
-const ANCHOR = /maybeResetServerErrorOnSuccess\s*\(\s*providerName\s*\)/;
+// PR-W -- forward-compatible anchor: accepts EITHER the manual pair (pre-W)
+// OR the new both-trackers helper (post-W).
+const ANCHOR = /maybeReset(?:ServerErrorOnSuccess|BothTrackers)\s*\(\s*providerName\s*\)/;
 
 describe('PR-G wire-up regression: maybeResetServerErrorOnSuccess call sites inside the v1-api function bodies', () => {
   it('runV1ApiWithTools body contains maybeResetServerErrorOnSuccess(providerName)', () => {

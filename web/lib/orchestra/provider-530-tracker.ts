@@ -21,6 +21,10 @@
 
 import { TUNNEL_DNS_ERROR } from '../errors/failure-classifier';
 import { createLogger } from '@/lib/utils/logger';
+// PR-W -- cross-tracker import for the symmetric both-trackers reset helper.
+// provider-server-error-tracker has no imports back to provider-530-tracker,
+// so there is no circular-import risk.
+import { maybeResetServerErrorOnSuccess } from './provider-server-error-tracker';
 
 const log = createLogger('Provider530Tracker');
 
@@ -98,6 +102,28 @@ export function maybeReset530OnSuccess(provider: string): void {
   if (ENABLE_530_RESET_ON_SUCCESS) {
     reset530Counter(provider);
   }
+}
+
+
+/**
+ * PR-W -- symmetric success-side reset helper that clears BOTH the 530 AND
+ * the 5xx-blacklist counters in a single call. Replaces the manual pairing
+ * at:
+ *   - web/lib/chat/enhanced-llm-service.ts (success-return path)
+ *   - web/lib/chat/vercel-ai-streaming.ts (lines 1050 + 1080 success paths)
+ *   - web/lib/orchestra/unified-agent-service.ts
+ *     (runV1ApiWithTools ~L4924 + runV1ApiCompletion ~L5986 success-return)
+ *
+ * Each sub-call respects its own enable-disable flag (default OFF); the
+ * helper itself is a no-op when both flags are off.
+ *
+ * Naming note: "BothTrackers" rather than "Trackers" so adding a third
+ * tracker (rate-limit, etc.) does NOT require renaming this symbol -- the
+ * helper just grows by one extra maybeResetXxx(provider) line.
+ */
+export function maybeResetBothTrackers(provider: string): void {
+  maybeReset530OnSuccess(provider);
+  maybeResetServerErrorOnSuccess(provider);
 }
 
 
