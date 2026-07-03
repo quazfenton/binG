@@ -756,12 +756,12 @@ export async function* coordinateConcurrentFallback<T>(
       // PR-C: clear the 530-blacklist counter on the loser's behalf so a
       // healthy fallback that lost this race isn't penalised across future requests.
       // PR-E: mirror enhanced-llm-service.ts:1434 — pair the 5xx success-reset
-    // alongside the 530 reset in the chunk-race loser-success arm. A
-    // healthy fallback that lost a race but produced a chunk via the
-    // primary's natural completion is the SAME shape as a primary's
-    // natural success — both tracks should be cleared.
-    maybeReset530OnSuccess(fallbackProvider);
-    maybeResetServerErrorOnSuccess(fallbackProvider);
+      // alongside the 530 reset in the chunk-race loser-success arm. A
+      // healthy fallback that lost a race but produced a chunk via the
+      // primary's natural completion is the SAME shape as a primary's
+      // natural success — both tracks should be cleared.
+      maybeReset530OnSuccess(fallbackProvider);
+      maybeResetServerErrorOnSuccess(fallbackProvider);
     }
 
     yield raceResult.value;

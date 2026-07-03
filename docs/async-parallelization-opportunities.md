@@ -162,10 +162,9 @@ A recurring pattern across multiple route handlers: `verifyAuth(req)` and `req.j
 | 57 | `enhanced-llm-service.ts` | 1635-1650 | Sequential `findOpencodeBinarySync` + `OpencodeV2Provider` import | Preload in parallel |
 | 58 | `vercel-ai-streaming.ts` | 2478-2489 | Sequential imports of `normalizeToolArgs` + `validateToolArgs` | `Promise.all` |
 | 59 | `vercel-ai-streaming.ts` | 2784-2792 | Sequential imports of `model-ranker` + `circuit-breaker` on 429 | `Promise.all` |
-| 60 | `model-ranker.ts` | 444-450 | Sequential `getModelPerformance` + `getModelToolStats` (already parallelized in sibling method) | `Promise.all` |
-| 61 | `llm-providers.ts` | 3387-3393, 3450-3463 | Sequential dynamic imports for antigravity provider + accounts DB | `Promise.all` |
-| 62 | `antigravity-provider.ts` | 230-247 | Sequential userinfo fetch + project ID fetch (both depend on token only) | `Promise.all` |
-| 63 | `antigravity-provider.ts` | 263-307 | Sequential endpoint retries (3 × 10s timeout) for `fetchProjectID` | `Promise.any` |
+| 60 | `llm-providers.ts` | 3387-3393, 3450-3463 | Sequential dynamic imports for antigravity provider + accounts DB | `Promise.all` |
+| 61 | `antigravity-provider.ts` | 230-247 | Sequential userinfo fetch + project ID fetch (both depend on token only) | `Promise.all` |
+| 62 | `antigravity-provider.ts` | 263-307 | Sequential endpoint retries (3 × 10s timeout) for `fetchProjectID` | `Promise.any` |
 | 64 | `token-refresh.ts` | 259-274 | Sequential `oauthService.getUserConnections` for 11 providers | `Promise.allSettled` |
 | 65 | `token-refresh.ts` | 286-298 | Sequential `getOrRefreshUserTokens` OAuth refreshes | `Promise.allSettled` |
 | 66 | `unified-agent-service.ts` | 1921-1929 | Sequential metric counters `incrementOrchestrationFallback` + `recordChatOrchestrationFallback` | `Promise.all` |

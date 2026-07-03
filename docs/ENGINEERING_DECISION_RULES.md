@@ -2,7 +2,7 @@
 
 **Audience:** Code reviewers flagging suppression workarounds; maintainers picking up SEV-NN / RT-NNN / ARCH-NNN tickets.
 **Status:** v1.0 (2026-06-18) — derived from the SEV-12 / SEV-13 / SEV-14 / SEV-15 sweep and the 6-round drawer.tsx vaul repair.
-**Cross-referenced from:** every SEV-NN.md and ARCH-NNN.md ticket footer should include the link `[/opt/bing/docs/ENGINEERING_DECISION_RULES.md](ENGINEERING_DECISION_RULES.md)` in its "References" section.
+**Cross-referenced from:** every SEV-NN.md and ARCH-NNN.md ticket footer should include the link `[/opt/bing/docs/ENGINEERING_DECISION_RULES.md](../docs/ENGINEERING_DECISION_RULES.md)` in its "References" section (the `../docs/` prefix is required because tickets live under `.tickets/`).
 
 This document codifies the **enforceable heuristics** that a reviewer can cite in a flag-up PR comment. Each rule ships with:
 
