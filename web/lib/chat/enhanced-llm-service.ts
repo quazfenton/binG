@@ -32,7 +32,7 @@ import { isCLIProvider } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
-import { is530Blacklisted, record530ErrorIfApplicable, maybeReset530OnSuccess } from '@/lib/orchestra/provider-530-tracker';
+import { is530Blacklisted, record530ErrorIfApplicable } from '@/lib/orchestra/provider-530-tracker';
 // PR-W -- DRY helper consumed at the success-return reset pair.
 import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
 // PR-E: success-side reset for the 5xx-blacklist tracker; parallels maybeReset530OnSuccess.
