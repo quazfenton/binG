@@ -717,10 +717,20 @@ describe('R7 Regression (PR-V eef3a89b): synthetic phaseTransitionRequestId uniq
     // to confirm the suffix portion differs (rather than re-calling the
     // helper, which would surface flakes from genuine birthday collisions
     // as test failures).
-    const suffixA = idA.split('-').pop() ?? '';
-    const suffixB = idB.split('-').pop() ?? '';
-    expect(suffixA.length).toBeGreaterThanOrEqual(8);
-    expect(suffixB.length).toBeGreaterThanOrEqual(8);
+    // Extract the full UUID portion after `${prefix}-${now}-` so the
+    // length check reflects the actual entropy footprint -- not the
+    // last hyphen-segment. UUID v4 format is exactly 36 chars
+    // (32 hex + 4 hyphens: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx).
+    const prefixNowA = idA.startsWith(`unified-phase1-${PINNED_DATE_NOW}-`)
+      ? `unified-phase1-${PINNED_DATE_NOW}-`
+      : '';
+    const prefixNowB = idB.startsWith(`unified-phase1-${PINNED_DATE_NOW}-`)
+      ? `unified-phase1-${PINNED_DATE_NOW}-`
+      : '';
+    const suffixA = idA.slice(prefixNowA.length);
+    const suffixB = idB.slice(prefixNowB.length);
+    expect(suffixA.length).toBe(36);
+    expect(suffixB.length).toBe(36);
     // Identical suffixes are the actual failure mode for the revert (the
     // prefix + `now` portion IS structurally identical by construction).
     expect(suffixA).not.toBe(suffixB);

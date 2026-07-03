@@ -458,7 +458,7 @@ export function buildSyntheticPhaseTransitionRequestId(
   const usedNow = typeof now === 'number' ? now : Date.now();
   const uuidSlice =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID().slice(0, 8)
+      ? crypto.randomUUID()
       : Math.random().toString(36).slice(2, 10);
   return `${prefix ?? 'unified-phase1'}-${usedNow}-${uuidSlice}`;
 }
