@@ -1783,13 +1783,17 @@ export async function processUnifiedAgentRequest(
   // counter bucket alongside the route.ts streaming loop's real chat id,
   // breaking the MAX_CONTINUATIONS=3 cap coordination across the two call
   // paths (worst case: 6 LLM calls per request). Refuse '000' and fall
-  // through to a fresh `unified-phase1-${Date.now()}` synthetic id.
+  // through to a process-unique synthetic id (UUID suffix prevents same-ms
+  // collisions across concurrent /api/chat bursts -- the prior
+  // `Date.now()`-only id collided across fan-out producers in the same
+  // millisecond and let unrelated requests share a counter bucket,
+  // defeating the per-request INVARIANT).
   const phaseTransitionRequestId =
     (config.conversationId && config.conversationId !== '000')
       ? config.conversationId
       : (config.sessionId && config.sessionId !== '000')
         ? config.sessionId
-        : `unified-phase1-${Date.now()}`;
+        : `unified-phase1-${Date.now()}-${crypto?.randomUUID?.()?.slice(0, 8) ?? Math.random().toString(36).slice(2, 10)}`;
   const autoDecision = decideAutoContinue({
     requestId: phaseTransitionRequestId,
     routing: roleSelection
