@@ -36,7 +36,7 @@ import { is530Blacklisted, record530ErrorIfApplicable, maybeReset530OnSuccess } 
 // PR-W -- DRY helper consumed at the success-return reset pair.
 import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
 // PR-E: success-side reset for the 5xx-blacklist tracker; parallels maybeReset530OnSuccess.
-import { maybeResetServerErrorOnSuccess } from '@/lib/orchestra/provider-server-error-tracker';
+
 // PR-E: opt-in wire-up so 5xx server errors (parallel to 530 origin-unreachable) are tracked via
 // record5xxErrorIfApplicable (5xx tracker) and record530ErrorIfApplicable
 // (530 tracker) fire in tandem — pure record-or-noop helpers that NEVER
@@ -2599,7 +2599,6 @@ declare global {
 }
 
 export const enhancedLLMService = globalThis.__enhancedLLMService__ ?? (globalThis.__enhancedLLMService__ = new EnhancedLLMService());
-
 
 /**
  * Concurrent-fallback wrapper around streamWithVercelAI.

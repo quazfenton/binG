@@ -30,14 +30,10 @@ import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // SSE emission) in a single call site change.
 import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount } from '@/lib/chat/auto-continue-helper';
 import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
-import { is530Blacklisted, record530ErrorIfApplicable, reset530Counter, maybeReset530OnSuccess } from './provider-530-tracker';
+import { is530Blacklisted, record530ErrorIfApplicable, reset530Counter } from './provider-530-tracker';
 // PR-W -- DRY helper consumed at the success-return reset pair.
 import { maybeResetBothTrackers } from './provider-530-tracker';
-import {
-  isServerErrorBlacklisted,
-  maybeResetServerErrorOnSuccess,
-  record5xxErrorIfApplicable,
-} from './provider-server-error-tracker';
+import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from './provider-server-error-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
@@ -219,7 +215,6 @@ export const PROMPT_SOURCE = {
 export const Q2_LIFT_REASON: 'SSE-payload discriminator reuse' = 'SSE-payload discriminator reuse';
 
 export type PromptSource = typeof PROMPT_SOURCE.OVERRIDE | typeof PROMPT_SOURCE.NO_OVERRIDE;
-
 
 /**
  * Option-3 audit-grade discriminator (Q3 followup closure):
@@ -454,16 +449,11 @@ function invalidateDynamicDefaultsCache(): void {
   _dynamicDefaultsTimestamp = 0;
 }
 
-
-
 /**
  * Exact-name sets from the capability map (createCapabilityToolExecutor)
  * to avoid false positives from substring matching (e.g. 'read' in 'thread.read').
  * These are used by the auto-continuation loop in runV1ApiWithTools.
  */
-
-
-
 
 /**
  * Classify a provider error into permanent vs transient vs rate-limit.
@@ -654,7 +644,6 @@ function markClientDisconnected(errorOrReason?: Error | string): void {
 function isClientDisconnected(): boolean {
   return _clientDisconnected;
 }
-
 
 export interface UnifiedAgentConfig {
   // Core
@@ -2317,7 +2306,6 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
     timeout: 300000,
   } as any;
 
-  
   const engine = createOpenCodeEngine(engineConfig);
   const result = await engine.execute(config.userMessage);
   
@@ -3181,7 +3169,6 @@ function validateToolArgs(
   return { valid: true, args: normalized };
 }
 
-
 /**
  * Redact tool arguments for logging — replaces content fields with their
  * length to avoid dumping full file contents into logs, while preserving
@@ -3708,7 +3695,6 @@ async function runV1ApiWithTools(
       }
     }
 
-
     // Skip providers that permanently failed earlier in this request (e.g. missing API key,
     // invalid auth, model not found). Retrying will never help — skip to save time.
     if (isProviderPermanentlyFailed(providerName)) {
@@ -4089,7 +4075,6 @@ async function runV1ApiWithTools(
         clearContinuationCount(requestId);
       }
 
-
       const duration = Date.now() - startTime;
       const steps = toolInvocations.map((invocation) => ({
         toolName: invocation.toolName,
@@ -4349,7 +4334,6 @@ async function runV1ApiWithTools(
       const shouldRetry = retryCount < MAX_TOOL_FAILURE_RETRIES && (
         (responseEmpty && (anyToolFailed || noToolCalls)) || responseIncomplete
       );
-        
 
       // FIX: When tools succeeded but the model produced no follow-up text, run
       // ONE server-side continuation turn that injects the ACTUAL tool results
@@ -5922,7 +5906,6 @@ async function runV1ApiCompletion(
         ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
         : [];
 
-      
       // FIX: Track response and check for healing triggers in completion path
       const responseSuccess = content.trim().length > 0;
       recordResponse(sessionId, content.length, responseSuccess);

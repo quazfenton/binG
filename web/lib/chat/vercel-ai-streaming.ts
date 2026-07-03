@@ -30,11 +30,11 @@ import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
 import { recordCall } from './llm-provider-health';
 // PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
-import { maybeReset530OnSuccess } from '../orchestra/provider-530-tracker';
+
 // PR-W -- DRY helper consumed at the success-return reset pair.
 import { maybeResetBothTrackers } from '../orchestra/provider-530-tracker';
 // PR-E: 5xx success-side reset paired at the two PR-C success-sites.
-import { maybeResetServerErrorOnSuccess } from '../orchestra/provider-server-error-tracker';
+
 // Pass-2 cross-cutting theme: record mid-stream stalls (TTFT/idle timeout)
 // so the degradation chain shows the silent failure that contributed to
 // the user reprompting. sessionId is best-effort — not always available
@@ -3793,7 +3793,6 @@ ${healingInstructions}` : healingInstructions)
       statusCode: error.statusCode,
       latencyMs: Date.now() - startTime,
     });
-
 
     error.metadata = {
       ...error.metadata,

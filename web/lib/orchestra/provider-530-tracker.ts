@@ -106,20 +106,30 @@ export function maybeReset530OnSuccess(provider: string): void {
 
 
 /**
- * PR-W -- symmetric success-side reset helper that clears BOTH the 530 AND
- * the 5xx-blacklist counters in a single call. Replaces the manual pairing
- * at:
- *   - web/lib/chat/enhanced-llm-service.ts (success-return path)
- *   - web/lib/chat/vercel-ai-streaming.ts (lines 1050 + 1080 success paths)
- *   - web/lib/orchestra/unified-agent-service.ts
- *     (runV1ApiWithTools ~L4924 + runV1ApiCompletion ~L5986 success-return)
+ * PR-W -- symmetric success-side reset helper. Clears BOTH the 530 AND the
+ * 5xx-blacklist counters for `provider` in a single call.
  *
- * Each sub-call respects its own enable-disable flag (default OFF); the
- * helper itself is a no-op when both flags are off.
+ * Per-sub-call gating (each independently controlled by an env flag; default
+ * OFF for both -- operator-conservative):
+ *
+ *   sub-call                         env flag (strict ==='1')                 resets
+ *   -------------------------------  ----------------------------------------  --------------------------------------------------------
+ *   maybeReset530OnSuccess(p)        ENABLE_530_RESET_ON_SUCCESS              provider-530-tracker counter (Cloudflare origin-unreachable)
+ *   maybeResetServerErrorOnSuccess   ENABLE_SERVER_ERROR_RESET_ON_SUCCESS     provider-server-error-tracker counter (HTTP 5xx)
+ *
+ * This helper itself has NO outer flag. Operators enable per-tracker behavior
+ * by setting the gate env var(s). On default-OFF config: the helper is a
+ * behavioral no-op (both sub-calls short-circuit before reaching their
+ * respective counter Maps).
+ *
+ * Replaces the manual pairing at 5 wire-up sites:
+ *   - web/lib/chat/enhanced-llm-service.ts            (success-return path)
+ *   - web/lib/chat/vercel-ai-streaming.ts             (~L1050 + ~L1080 success paths)
+ *   - web/lib/orchestra/unified-agent-service.ts      (~L4924 + ~L5986 success-return paths)
  *
  * Naming note: "BothTrackers" rather than "Trackers" so adding a third
- * tracker (rate-limit, etc.) does NOT require renaming this symbol -- the
- * helper just grows by one extra maybeResetXxx(provider) line.
+ * tracker (rate-limit, quota, etc.) does NOT require renaming this symbol --
+ * the helper just grows by one extra maybeResetXxx(p) line.
  */
 export function maybeResetBothTrackers(provider: string): void {
   maybeReset530OnSuccess(provider);
