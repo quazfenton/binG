@@ -1596,6 +1596,11 @@ const config: UnifiedAgentConfig = {
     // boundary: post-mcp-race log below.
     const mcpRaceStartMs = Date.now();
     let tools: Awaited<ReturnType<typeof getMCPToolsForAI_SDK>> = [];
+    // Boundary #4 outcome classifier — captured ABOVE the try so the
+    // post-catch log can read it. Holds the reject reason (err.message)
+    // when the race fails; null on success. Empty success (race resolved
+    // with []) is detected via `tools.length === 0` AFTER the try/catch.
+    let mcpRaceError: { message?: string } | null = null;
     try {
       const mcpRace: Promise<any>[] = [
         getMCPToolsForAI_SDK(authenticatedUserId, task),
@@ -1616,6 +1621,7 @@ const config: UnifiedAgentConfig = {
         error: err.message,
       });
       tools = [];
+      mcpRaceError = err;
     }
     // Chat-hang-fix #4 boundary #4 — in-between anchor for the next
     // hang report. Captures mcpRaceDurationMs (the ceiling/timeout of
@@ -1625,11 +1631,38 @@ const config: UnifiedAgentConfig = {
     // elapsedMs - mcpRaceDurationMs = (everything else). Emitted AFTER the
     // try/catch closes so the log fires whether the race resolved, timed
     // out via MCP_TOOLS_TIMEOUT_MS (5s), or rejected via request.signal.
+    // Chat-hang-fix #4 boundary #4 (rev 2) — outcome classifier combined
+    // with the in-between anchor log. `toolsOutcome` condenses the
+    // (tools.length + err.message) pair into a grep-able literal so
+    // operators don't have to regex-parse err.message to classify:
+    //   - 'success'    race resolved with >=1 tool
+    //   - 'empty'      race resolved with 0 tools (success but empty)
+    //   - 'timed_out'  race rejected by MCP_TOOLS_TIMEOUT_MS ceiling
+    //   - 'aborted'    race rejected by request.signal abort
+    //   - 'empty'      fallback for race-rejected-by-other-reason
+    let toolsOutcome: 'success' | 'timed_out' | 'aborted' | 'empty';
+    if (mcpRaceError) {
+      const msg = mcpRaceError.message || '';
+      if (/timed out after/i.test(msg)) {
+        toolsOutcome = 'timed_out';
+      } else if (/aborted/i.test(msg)) {
+        toolsOutcome = 'aborted';
+      } else {
+        // Race was rejected but not by the two well-known signals (e.g.
+        // getMCPToolsForAI_SDK threw its own error). Post-catch tools=[]
+        // still applies, so classify as 'empty' rather than introducing
+        // a 5th outcome class for a one-off.
+        toolsOutcome = 'empty';
+      }
+    } else {
+      toolsOutcome = tools.length === 0 ? 'empty' : 'success';
+    }
     chatLogger.info('[CHAT-ROUTE] boundary: post-mcp-race', {
       requestId,
       elapsedMs: Date.now() - requestStartTime,
       mcpRaceDurationMs: Date.now() - mcpRaceStartMs,
       toolsCount: tools.length,
+      toolsOutcome,
     });
     config.tools = tools.map(t => ({
       name: t.function.name,

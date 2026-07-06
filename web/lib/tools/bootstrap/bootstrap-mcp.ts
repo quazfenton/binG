@@ -176,7 +176,20 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
         // Bug #12/#13/#24/#34: emit [WARN] when MCP gateway returned 0 tools
         logToolCount(logger, { registry: 'MCP gateway', count: gatewayCount });
       } catch (error: any) {
-        logger.debug('Failed to connect to MCP gateway (optional infrastructure)', error.message);
+        // Chat-hang-fix #5: promote to warn so MCP-gateway outages are
+        // visible at the project's default log level (no need for
+        // LOG_LEVEL=debug to see infrastructure failures). The
+        // `infrastructure_degraded: true` field lets observability
+        // tooling alert on this state independent of any chat-route
+        // error counters. Retry-skip on transport-level failures
+        // (fetch failed / UND_ERR_SOCKET / ECONN* / DNS) was already
+        // wired in the prior Chat-hang-fix #4 turn via the
+        // isTransportLevelFetchError() helper.
+        logger.warn('[MCP-Bootstrap] MCP gateway unavailable — degraded mode', {
+          error: error.message,
+          infrastructure_degraded: true,
+          transport: 'sse',
+        });
       }
     }
 
