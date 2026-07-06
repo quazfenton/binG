@@ -533,19 +533,13 @@ export function shouldAutoContinue(input: {
   // have priority because their steers are more specific than a generic
   // "Continue with the plan." RT-001 sibling: see first-response-routing.ts.
   //
-  // Bug fix: when routing is null AND the LLM made no tool steps, check the
-  // response text for signs it's a complete standalone answer. A short response
-  // ending with terminal punctuation is unlikely to need continuation. This
-  // prevents false-positive auto-continue on simple prompts like "yo" or "hi".
+  // When there are no tool steps and no routing, the LLM produced plain text
+  // without any plan or tool work. There is nothing to continue from — the
+  // response is a standalone answer (e.g. "yo" → "Hey there! How can I help?").
+  // Only continue when the model actually executed steps (tool calls or reads)
+  // that warrant a follow-up turn.
   if (routing == null) {
-    const responseText_ = (input.responseText ?? '').trim();
-    if (
-      steps.length === 0 &&
-      responseText_.length > 0 &&
-      responseText_.length < 300 &&
-      /[.!?)\"}\]]\s*$/.test(responseText_) &&
-      !/\b(i'll now\b|\blet me\b|\bnext i('ll| will)\b|\bi will (start|begin|proceed|continue)\b|\bnow i('ll| will)\b|\bthen i\b|\bfirst,?\s+(let me|i('ll| will)|we|next)\b|\bafter that\b|\bfinally\b)/i.test(responseText_)
-    ) {
+    if (steps.length === 0) {
       return {
         continue: false,
         reason: 'no_continuation_needed',

@@ -586,6 +586,65 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     await handleStreamingResponse(response.body, assistantMessage, abortController);
   }, [isLoading, inputQueue, messagesRef, options, voiceService, setError, setMessages, setIsLoading, buildRequestHeaders]);
 
+  // Silent continuation — used by auto-continue/step-reprompt to send follow-up
+  // prompts WITHOUT creating new user message bubbles in the UI. The continuation
+  // prompt is sent as a user message in the API body (for server context) but is
+  // NOT appended to the visible messages array. The response streams into the
+  // EXISTING assistant message (currentMessageRef.current).
+  const continueRequest = useCallback(async (prompt: string) => {
+    if (!prompt.trim()) return;
+    const existingAssistant = currentMessageRef.current;
+    if (!existingAssistant) {
+      logger.warn('[continueRequest] No active assistant message to stream into');
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: prompt.trim(),
+    };
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    setIsLoading(true);
+
+    try {
+      const _fetchTimeoutId = setTimeout(() => {
+        if (!abortController.signal.aborted) abortController.abort(new Error('Request timed out'));
+      }, 60000);
+
+      const response = await fetch(options.api, {
+        method: 'POST',
+        headers: buildRequestHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({
+          messages: [...messagesRef.current, userMessage],
+          ...(typeof options.body === 'function' ? options.body() : options.body || {}),
+        }),
+        signal: abortController.signal,
+      });
+      clearTimeout(_fetchTimeoutId);
+
+      if (!response.ok || !response.body) {
+        setIsLoading(false);
+        return;
+      }
+
+      await handleStreamingResponse(response.body, existingAssistant, abortController);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        setIsLoading(false);
+        abortControllerRef.current = null;
+        setAgentStatus('idle');
+        return;
+      }
+      setIsLoading(false);
+      abortControllerRef.current = null;
+      setAgentStatus('error');
+    }
+  }, [messagesRef, options, buildRequestHeaders, setIsLoading, setAgentStatus]);
+
   // Process next queued prompt after current response completes
   const processQueue = useCallback(async () => {
     if (inputQueue.length === 0) {
@@ -1911,21 +1970,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     stepRepromptCount < MAX_STEP_REPROMPTS &&
                     inputQueue.length === 0
                   ) {
-                    // Defense-in-depth: only trigger step-reprompt when there's actual
-                    // plan evidence (planSteps >= 2 or estimatedSteps >= 2) or when
-                    // retrying tool failures. Without this guard, a false-positive
-                    // stepReprompt creates duplicate user message bubbles for every
-                    // auto-continue even when no multi-step plan exists.
-                    const hasPlanEvidence =
-                      (Array.isArray(routing?.planSteps) && routing!.planSteps!.length >= 2) ||
-                      (typeof routing?.estimatedSteps === 'number' && routing!.estimatedSteps! >= 2);
-                    if (!shouldRetryForToolFailure && !hasPlanEvidence) {
-                      logger.info('[StepReprompt] Skipping — no plan evidence (no planSteps/estimatedSteps)', {
-                        stepRepromptPreview: stepReprompt.slice(0, 80),
-                        primaryRole: routing?.primaryRole,
-                      });
-                      return; // skip bubble-creating re-prompt
-                    }
                     // FIX: Enhance stepReprompt with tool failure context when anyToolFailed is true
                   // This gives the LLM visibility into what went wrong, so it can retry with
                   // corrected tool calls instead of repeating the same failure.
@@ -1979,26 +2023,11 @@ ${stepReprompt}`;
                       hasToolFailureContext: shouldRetryForToolFailure,
                     });
                   
-                    // Set input and submit after state settles
-                    // Increment counter so subsequent DONE events know how many auto-continues happened
+                    // Silent auto-continue: send reprompt without creating new UI bubbles
                     stepRepromptCountRef.current++;
-                    setInput(enhancedReprompt);
                     setTimeout(() => {
                       if (!isMountedRef.current) return;
-                      // FIX: Add error handling for auto-continue request failures
-                      // If handleSubmit fails (network error, etc.), cleanup isLoading state
-                      try {
-                        handleSubmit(
-                          {
-                            preventDefault: () => {},
-                            currentTarget: { reset: () => {} },
-                          } as React.FormEvent<HTMLFormElement>
-                        );
-                      } catch (err) {
-                        logger.error('[Auto-continue] handleSubmit failed:', err);
-                        setIsLoading(false);
-                        setAgentStatus('error');
-                      }
+                      continueRequest(enhancedReprompt);
                     }, 150);
                   }
                   
@@ -3006,30 +3035,14 @@ ${stepReprompt}`;
                     fileConfidence,
                   });
 
-                  // Set the input and submit after state settles
-                  setInput(continuationPrompt);
+                  // Silent auto-continue: send continuation prompt without new UI bubbles
                   setTimeout(() => {
-                    // FIX: Re-check inputQueue right before handleSubmit to prevent
-                    // overwriting user input that may have been typed during the 100ms delay
                     if (!isMountedRef.current) return;
                     if (inputQueue.length > 0) {
                       logger.info('[Auto-continue] Skipping - user typed during delay');
                       return;
                     }
-                    // FIX: Add error handling for auto-continue request failures
-                    // If handleSubmit fails (network error, etc.), cleanup isLoading state
-                    try {
-                      handleSubmit(
-                        {
-                          preventDefault: () => {},
-                          currentTarget: { reset: () => {} },
-                        } as React.FormEvent<HTMLFormElement>
-                      );
-                    } catch (err) {
-                      logger.error('[Auto-continue] handleSubmit failed:', err);
-                      setIsLoading(false);
-                      setAgentStatus('error');
-                    }
+                    continueRequest(continuationPrompt);
                   }, 100);
                   break;
                 }
@@ -3057,15 +3070,10 @@ ${stepReprompt}`;
                     };
                   }));
 
-                  // Auto-submit with the [NEXT] content appended
-                  setInput(nextContent);
-                  setTimeout(() => { if (!isMountedRef.current) return;
-                    handleSubmit(
-                      {
-                        preventDefault: () => {},
-                        currentTarget: { reset: () => {} },
-                      } as React.FormEvent<HTMLFormElement>
-                    );
+                  // Silent auto-submit with the [NEXT] content appended
+                  setTimeout(() => {
+                    if (!isMountedRef.current) return;
+                    continueRequest(nextContent);
                   }, 100);
                   break;
                 }

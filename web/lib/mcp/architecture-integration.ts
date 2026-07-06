@@ -624,7 +624,7 @@ export async function getComposioMCPTools(
  * @param taskFilter - Optional task type to filter tools (e.g., 'code_edit', 'integration', 'computer_use')
  *                     When provided, only tools relevant to the task type are included
  */
-export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string) {
+export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string, signal?: AbortSignal) {
   const callStart = Date.now();
 
   // =============================================================================
@@ -720,15 +720,19 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
   // is preserved internally (each fn returns empty array/dict on guard-failure
   // or internal error). Promise.all rejection semantics preserved — same
   // failure behavior as the prior sequential await chain.
+  //
+  // Chat-hang-fix #4 PR-4: if a `signal` was provided by the caller
+  // (route.ts sets AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS) at 1s), wrap
+  // the whole Phase 2 in a race against the signal so the underlying fetch
+  // (notably getRemoteMCPTools → MCP HTTP transport on a dead socket like
+  // localhost:8261) aborts immediately rather than holding the route's
+  // Promise.race ceiling open. The .catch() in the race returns EMPTY for
+  // any of the 4 tool lists that didn't resolve before the signal fired,
+  // so the chat route still gets a usable (possibly-degraded) tool set.
   // =============================================================================
   type ArcadeShape = Array<{ type: 'function'; function: { name: string; description?: string; parameters: any } }>;
   const EMPTY: ArcadeShape = [];
-  const [
-    allArcadeTools,
-    allComposioTools,
-    fetchedRemoteTools,
-    mem0ToolMap,
-  ] = await Promise.all([
+  const phase2Promise = Promise.all([
     process.env.ARCADE_API_KEY ? getArcadeToolDefinitions() : Promise.resolve(EMPTY),
     (process.env.COMPOSIO_API_KEY && userId) ? getComposioMCPTools(userId) : Promise.resolve(EMPTY),
     hasRemoteMCPServers()
@@ -741,6 +745,42 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string)
       ? mem0Importer.buildMem0Tools({ userId, sessionId: userId })
       : Promise.resolve({} as Record<string, any>),
   ]);
+  const phase2Result: [
+    ArcadeShape,
+    ArcadeShape,
+    ArcadeShape,
+    Record<string, any>,
+  ] = signal
+    ? await Promise.race([
+        phase2Promise,
+        new Promise<never>((_, reject) => {
+          if (signal.aborted) {
+            reject(new Error('aborted'));
+            return;
+          }
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        }),
+      ]).catch((error: any) => {
+        // Signal fired before Phase 2 resolved — degrade gracefully to EMPTY
+        // for all 4 slots so the route still assembles whatever tools
+        // completed in time.
+        logger.warn('[MCP-Tools] Phase 2 aborted by signal, returning empty slots', {
+          error: error?.message || String(error),
+        });
+        return [EMPTY, EMPTY, EMPTY, {}] as [
+          ArcadeShape,
+          ArcadeShape,
+          ArcadeShape,
+          Record<string, any>,
+        ];
+      })
+    : await phase2Promise;
+  const [
+    allArcadeTools,
+    allComposioTools,
+    fetchedRemoteTools,
+    mem0ToolMap,
+  ] = phase2Result;
 
   let remoteTools: ArcadeShape = fetchedRemoteTools;
 

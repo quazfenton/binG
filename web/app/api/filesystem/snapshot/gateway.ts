@@ -9,6 +9,8 @@ import { getSnapshotBroadcaster, type SnapshotChangedMessage } from '@/lib/virtu
 import { createLogger } from '@/lib/utils/logger';
 import { vfsSnapshotCacheMetrics } from './cache-metrics';
 import { getDatabase } from '@/lib/database/connection-shim';
+import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
+import { getRuntimeBroker } from '@/lib/sandbox/runtime-broker';
 
 const logger = createLogger('API:VFS:Snapshot');
 
@@ -26,6 +28,22 @@ const INIT_DONE_TTL_MS = 60_000;       // mark "init done" as expired after 1 mi
 const MAX_INIT_OWNERS = 10_000;       // hard cap on per-worker tracking
 const INIT_OWNER_SWEEP_INTERVAL_MS = 30_000; // periodic GC, .unref'd
 const eagerInitCooldowns = new Map<string, number>();                // ownerId → last attempt ms
+
+/**
+ * Test-only helper: pre-populate the cooldown Map for a given ownerId so
+ * the Path A (cooldown-active 202) branch is reachable from the unit test
+ * suite without having to wait for real elapsed time. The optional
+ * timestamp argument lets tests simulate a cooldown that's already
+ * partially elapsed (e.g. pass `Date.now() - 1000` to get a currentMs of
+ * ~4000ms in the response's backoffHint). Exported with a double-underscore
+ * prefix so it's never confused with a real API surface.
+ */
+export function __setEagerInitCooldownForTest(
+  ownerId: string,
+  timestamp?: number,
+): void {
+  eagerInitCooldowns.set(ownerId, timestamp ?? Date.now());
+}
 const initDoneOwners = new Map<string, number>();                    // ownerId → set-at ms
 
 let initOwnerSweepInterval: NodeJS.Timeout | null = null;
@@ -132,7 +150,7 @@ function startPeriodicCleanup() {
     }
 
     if (deleted > 0) {
-      logger.info('[VFS SNAPSHOT] Periodic cache cleanup', { count: deleted });
+      logger.info('[VFS SNAPSHOT] Periodic cache cleanup', { count: deleted, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(), brokerDegraded: getRuntimeBroker().getInitError()?.message ?? null });
     }
 
     // Also enforce max size - remove oldest entries if over limit
@@ -156,7 +174,7 @@ function startPeriodicCleanup() {
           latestSeenVersion.delete(ownerFromKey);
         }
       }
-      logger.info('[VFS SNAPSHOT] Size limit cleanup', { count: toDelete.length });
+      logger.info('[VFS SNAPSHOT] Size limit cleanup', { count: toDelete.length, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(), brokerDegraded: getRuntimeBroker().getInitError()?.message ?? null });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
@@ -219,7 +237,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
       // write-driven invalidation in the logs, masking the "cache that
       // doesn't cache" anti-pattern. The `source` is preserved for
       // backward-compat with existing log parsers.
-      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source, reason });
+      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source, reason, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize() });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }
@@ -278,7 +296,7 @@ function startRequestTrackerCleanup() {
     }
 
     if (deleted > 0 && DEBUG) {
-      logger.info('[VFS SNAPSHOT] Request tracker cleanup', { count: deleted });
+      logger.info('[VFS SNAPSHOT] Request tracker cleanup', { count: deleted, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(), brokerDegraded: getRuntimeBroker().getInitError()?.message ?? null });
     }
   }, 120000).unref(); // Run every 2 minutes, unref to allow process exit
 }
@@ -681,6 +699,19 @@ export async function GET(req: NextRequest) {
               retryable: true,
               ownerId: owner.ownerId,
               source: owner.source,
+              // Server-issued exponential backoff hint. Tells the client
+              // to switch from fixed 1.5s polling to exponential: the
+              // first retry should be at `currentMs` (the remaining cooldown
+              // at the moment of this response), then double on each retry,
+              // capped at `maxMs`. currentMs is computed from the
+              // last-attempt timestamp so it reflects how much cooldown is
+              // actually left.
+              backoffHint: {
+                strategy: 'exponential',
+                baseMs: 1_000,
+                maxMs: 30_000,
+                currentMs: Math.max(0, EAGER_INIT_COOLDOWN_MS - (Date.now() - lastAttempt)),
+              },
             }, { status: 202 });
             return withAnonSessionCookie(cooldownResponse, owner);
           }
@@ -740,18 +771,57 @@ export async function GET(req: NextRequest) {
            }
           } // end of else (not already initialized)
          } catch (initErr: any) {
-           logWarn(`[${requestId}] Eager workspace init failed (falling back to WORKSPACE_NOT_READY): ${initErr?.message}`);
+           // Bug #2 fix (VFS polling storm): instead of falling through to a
+           // 202 WORKSPACE_NOT_READY (which made the client poll forever —
+           // see the 12 `POLLING DETECTED` warnings in run.log), return a
+           // terminal 200 with empty files + `cooldownExpired: true` so the
+           // client can stop polling. The init attempt failed AND no other
+           // init path is available AND the workspace is genuinely empty —
+           // there is nothing transient to wait for. The
+           // `cooldownExpired: true` field on the response body lets the
+           // client distinguish this terminal empty state from the 202
+           // WORKSPACE_NOT_READY response in Path A (cooldown-active above).
+           logWarn(`[${requestId}] Eager workspace init failed (returning terminal empty snapshot): ${initErr?.message}`);
          }
-        log(`[${requestId}] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized`);
-        const notReadyResponse = NextResponse.json({
-          success: false,
-          error: 'Workspace not yet initialized. Please retry shortly.',
-          errorCode: 'WORKSPACE_NOT_READY',
-          retryable: true,
-          ownerId: owner.ownerId,
-          source: owner.source,
-        }, { status: 202 });
-        return withAnonSessionCookie(notReadyResponse, owner);
+        log(`[${requestId}] Returning terminal empty snapshot for anonymous owner — no init available, no cooldown active`);
+        const fallbackEtag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+        snapshotCache.set(cacheKey, {
+          data: {
+            root: snapshot.root,
+            version: snapshot.version,
+            updatedAt: snapshot.updatedAt,
+            path: pathFilter,
+            files,
+          },
+          timestamp: now,
+          etag: fallbackEtag,
+          version: snapshot.version,
+        });
+        vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+        const terminalResponse = NextResponse.json({
+          success: true,
+          data: {
+            root: snapshot.root,
+            version: snapshot.version,
+            updatedAt: snapshot.updatedAt,
+            path: pathFilter,
+            files,
+          },
+          cached: false,
+          // Bug #2: signals "terminal empty state, stop polling" — the
+          // client can treat this the same as a successful empty snapshot
+          // (no further polling needed) but the field makes the distinction
+          // greppable for operators and trivially distinguishable from the
+          // 202 cooldown-active response in Path A (`WORKSPACE_NOT_READY`).
+          cooldownExpired: true,
+        }, {
+          headers: {
+            'cache-control': 'private, no-store',
+            'vary': 'Authorization, Cookie',
+            etag: fallbackEtag,
+          },
+        });
+        return withAnonSessionCookie(terminalResponse, owner);
       }
     } else if (files.length === 0 && snapshot.files.length > 0) {
       logWarn(`[${requestId}] PATH MISMATCH: workspace has ${snapshot.files.length} files but none match path="${pathFilter}"`);

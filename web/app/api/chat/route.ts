@@ -127,6 +127,25 @@ import {
   chatRequestSchema,
 } from './chat-helpers';
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
+import { getRuntimeBroker } from '@/lib/sandbox/runtime-broker';
+import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
+
+/**
+ * One-call snapshot of the RuntimeBroker degraded state + CAS cache size
+ * for surfacing on CHAT-ROUTE boundary logs. Both reads are O(1) and have
+ * no I/O — safe to call on every boundary log without measurable cost.
+ * `degraded` is null on a clean init, or the init error message when the
+ * broker fell back to degraded mode (see RuntimeBroker.getInitError).
+ */
+function getBrokerDiagnostics(): {
+  degraded: string | null;
+  cacheSizeBytes: number;
+} {
+  return {
+    degraded: getRuntimeBroker().getInitError()?.message ?? null,
+    cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(),
+  };
+}
 
 // Force Node.js runtime for Daytona SDK compatibility
 
@@ -744,6 +763,7 @@ export async function POST(request: NextRequest) {
     chatLogger.info('[CHAT-ROUTE] boundary: post-logRequestStart', {
       requestId,
       elapsedMs: Date.now() - requestStartTime,
+      ...getBrokerDiagnostics(),
     });
 
       // Validate provider and model with caching to avoid repeated lookups
@@ -1101,6 +1121,7 @@ export async function POST(request: NextRequest) {
       requestId,
       elapsedMs: Date.now() - requestStartTime,
       fiveWayDurationMs: Date.now() - fiveWayStartMs,
+      ...getBrokerDiagnostics(),
     });
 
     // Build memory context from mem0 results
@@ -1586,10 +1607,20 @@ const config: UnifiedAgentConfig = {
     // bootstrap-mcp.ts transport-level skip to drop the per-request stall
     // from ~33s to <1s when MCP is down, while leaving breathing room for
     // healthy-but-slow gateway cold-start handshakes.
+    // Chat-hang-fix #4 PR-4: dropped from 5000 → 1000ms so a TCP-blackhole
+    // MCP gateway (e.g. localhost:8261) fast-fails in 1s instead of stalling
+    // the first chat byte. The AbortSignal below is also piped into
+    // getMCPToolsForAI_SDK so the inner fetch aborts immediately rather than
+    // just abandoning the Promise.race ceiling (which would leave a zombie
+    // in-flight promise still holding the socket open).
     const MCP_TOOLS_TIMEOUT_MS = parseInt(
-      process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '5000',
+      process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '1000',
       10,
     );
+    // AbortSignal propagated through getMCPToolsForAI_SDK so the underlying
+    // MCP fetch (getRemoteMCPTools) aborts at the 1s mark, not just the
+    // route-level Promise.race.
+    const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
     // Boundary #4 timestamp — measured AT try-entry so duration includes
     // both the getMCPToolsForAI_SDK() call AND any timeout-noise (5s
     // ceiling or 2s bootstrap-mcp abort-mirror). Reported in the
@@ -1603,7 +1634,7 @@ const config: UnifiedAgentConfig = {
     let mcpRaceError: { message?: string } | null = null;
     try {
       const mcpRace: Promise<any>[] = [
-        getMCPToolsForAI_SDK(authenticatedUserId, task),
+        getMCPToolsForAI_SDK(authenticatedUserId, task, mcpAbortSignal),
         new Promise<never>((_, reject) => {
           setTimeout(() => reject(new Error(`MCP tools timed out after ${MCP_TOOLS_TIMEOUT_MS}ms`)), MCP_TOOLS_TIMEOUT_MS);
         }),
@@ -1663,6 +1694,8 @@ const config: UnifiedAgentConfig = {
       mcpRaceDurationMs: Date.now() - mcpRaceStartMs,
       toolsCount: tools.length,
       toolsOutcome,
+      // RuntimeBroker degraded state + CAS cache size (O(1) reads, no I/O).
+      ...getBrokerDiagnostics(),
     });
     config.tools = tools.map(t => ({
       name: t.function.name,
@@ -1901,6 +1934,7 @@ const config: UnifiedAgentConfig = {
                   requestId,
                   iteration,
                   elapsedMs: Date.now() - requestStartTime,
+                  ...getBrokerDiagnostics(),
                 });
                 result = await Promise.race([
                   processUnifiedAgentRequest(currentConfig),

@@ -134,8 +134,14 @@ export class SandboxOrchestrator {
   private readonly MIGRATION_MEMORY_THRESHOLD = 90;
 
   constructor() {
-    if ((globalThis as any).__sandboxOrchestratorInited) return;
-    (globalThis as any).__sandboxOrchestratorInited = true;
+    // Note: HMR-survival is now handled at the export site (see the
+    // `globalThis.__sandboxOrchestrator` hoisted export at the bottom of
+    // this file) so the constructor runs exactly once per process boot —
+    // the prior `__sandboxOrchestratorInited` boolean guard here was a
+    // half-measure: it prevented the warm pool from re-initing on HMR but
+    // ALSO left the freshly-constructed (empty) instance exported, so
+    // every HMR cycle silently replaced the live orchestrator with a
+    // broken empty object. The export-site check is the correct fix.
     void this.initializeWarmPool();
     this.startIdleCleanup();
     this.startAffinityCleanup();
@@ -1368,4 +1374,31 @@ export class SandboxOrchestrator {
   }
 }
 
-export const sandboxOrchestrator = new SandboxOrchestrator();
+// ============================================================================
+// HMR-safe singleton (matches the RuntimeBroker hoist pattern)
+// ============================================================================
+//
+// Without this, every Next.js dev-mode HMR cycle re-evaluates this module,
+// creating a fresh `new SandboxOrchestrator()` instance and exporting it.
+// The new instance loses the warm pool, active sessions, affinity map, and
+// cleanup timers — silently replacing the working orchestrator with a broken
+// empty object. (The prior in-constructor `__sandboxOrchestratorInited`
+// guard made this WORSE: it prevented the warm pool from re-initing but
+// still exported the empty instance.)
+//
+// Type-safe globalThis augmentation (same shape as `__runtimeBroker`) keeps
+// the property visible to TypeScript without `as any` casts at every call
+// site.
+declare global {
+  // eslint-disable-next-line no-var
+  var __sandboxOrchestrator: SandboxOrchestrator | undefined;
+}
+
+/**
+ * The process-wide SandboxOrchestrator instance. Lives on `globalThis` so
+ * it survives HMR module re-evaluation; the constructor runs exactly once
+ * per process boot.
+ */
+export const sandboxOrchestrator: SandboxOrchestrator =
+  globalThis.__sandboxOrchestrator ||
+  (globalThis.__sandboxOrchestrator = new SandboxOrchestrator());

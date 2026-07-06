@@ -338,25 +338,19 @@ describe('shouldAutoContinue', () => {
         vi.unstubAllEnvs();
       });
 
-      it('returns plan_steps_remaining when routing is undefined and env default is not "false"', () => {
-        // Default env (unset OR 'true' OR any non-'false' value) →
-        // resolveDefaultContinue() returns true → catch-all emits
-        // plan_steps_remaining.
-        //
-        // Note: steps: [] is critical — a single read step would trigger
-        // trigger 3 (single_step_read_pattern) BEFORE the catch-all (the
-        // catch-all is last-resort per the producer-order fix). With empty
-        // steps, every heuristic trigger falls through and only the
-        // catch-all can emit.
+      it('returns no_continuation_needed when routing is undefined and steps are empty (no tool work)', () => {
+        // When routing is null AND the LLM made no tool steps, there is
+        // nothing concrete to continue from — the response is pure text.
+        // The env default is irrelevant because no work was done.
         vi.stubEnv('LLM_AUTO_CONTINUE_DEFAULT', 'true');
         const decision = shouldAutoContinue({
           routing: undefined,
           steps: [],
           continuationsSoFar: 0,
         });
-        expect(decision.continue).toBe(true);
-        expect(decision.reason).toBe('plan_steps_remaining');
-        expect(decision.continuationPrompt).toBeTruthy();
+        expect(decision.continue).toBe(false);
+        expect(decision.reason).toBe('no_continuation_needed');
+        expect(decision.continuationPrompt).toBe('');
       });
 
       it('returns no_continuation_needed when routing is undefined and env default is "false"', () => {
