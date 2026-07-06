@@ -285,7 +285,7 @@ This ticket opens the **ARCH-NNN** family. Future architectural followups that d
 
 This ticket's three flags all touch the decision-rule heuristics codified in [/opt/bing/docs/ENGINEERING_DECISION_RULES.md](../docs/ENGINEERING_DECISION_RULES.md):
 
-- **Flag 1 — shape consolidation** touches **Rule A** (mode selection for orchestrator role-pick paths). The three boundary casts deleted by Flag 1 are the textbook narrow-and-cast site that Rule B 3.1 ("extract adapter for ≥3-site root-cause") references.
+- **Flag 1 — shape consolidation** touches **Rule A** (mode selection for orchestrator role-pick paths). The four boundary casts deleted by Flag 1 are the textbook narrow-and-cast site that Rule B 3.1 ("extract adapter for ≥3-site root-cause") references.
 - **Flag 2 — vaul version pin** executes **Rule B** (inline-cast vs helper-adapter) + **Rule C** (`@ts-expect-error` policy on multi-sibling JSX bodies). The Q5 hybrid VaulComponent adapter + Root inline-cast carve-out is the canonical `drawer.tsx` precedent already in place; Flag 2's pickup removes it entirely.
 - **Flag 3 — vendor-drift CI guardrail** executes **Rule C's** removal-trigger contract ("when the root cause has a CI-detectable solution"). Once the guardrail lands, SEV-NN pre-declarations in `empty-module.ts` need not be preemptive — drift surfaces as CI failure instead.
 
@@ -307,7 +307,7 @@ This ticket's three flags all touch the decision-rule heuristics codified in [/o
 Of the three flags, **which should be picked up first**? The recommended order (subject to maintainer prerogative):
 
 1. **Flag 3** (CI guardrail) — picks up "vendor API drift" as a class, not just for one package. Future sweeps (SEV-NN-1, RT-NNN-1) can use the script instead of writing audit anchors.
-2. **Flag 1** (shape consolidation) — deletes the three boundary casts added by SEV-12. Pure mechanical.
+2. **Flag 1** (shape consolidation) — deletes the four boundary casts added by SEV-12. Pure mechanical.
 3. **Flag 2** (vaul pin) — requires a coordinated SDK-bump PR + version-lock decision. Slowest cycle.
 
 Pickup-phase reviewer: please confirm or override the order at first-look. If the order is overridden, the "Out of scope / not in this commit" sections remain accurate (each flag is independently scoped).

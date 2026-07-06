@@ -20,7 +20,7 @@
     }
   },
   "dependencies": {
-    "@bing/platform": "workspace:*",
+    "@bing/platform": "file:.bing-platform",
     "jsonrepair": "^3.14.0"
   },
   "peerDependencies": {

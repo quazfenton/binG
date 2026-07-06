@@ -85,6 +85,34 @@ relations:
 ---
 # Implementation Plans
 
+## Status Audit (2026-07-03)
+
+> Snapshot of every proposed NEW file in /opt/bing. **All 7 are missing** — sections 11/12/13 still have full implementation work to do.
+
+| Section | Proposed file | Status |
+|---------|---------------|:------:|
+| 11 (Session Recovery) | `web/lib/session/checkpoint-manager.ts` | ✗ |
+| 11 | `web/lib/session/checkpoint-storage.ts` | ✗ |
+| 12 (Tool Optimization) | `web/lib/tools/tool-result-cache.ts` | ✗ |
+| 12 | `web/lib/tools/parallel-tool-executor.ts` | ✗ |
+| 12 | `web/lib/tools/benchmark.ts` | ✗ |
+| 13 (UI Enhancements) | `packages/shared/cli/preview.ts` | ✗ |
+| 13 | `packages/shared/cli/error-handler.ts` | ✗ |
+| 13 | `packages/shared/cli/help-system.ts` | ✗ |
+
+### Referenced host files
+- `web/lib/session/session-manager.ts` — ✓ exists, 1526 lines (original doc claimed line ~103 for a `lastCheckpoint` slot; current file is mid-file at that offset)
+- `web/lib/observability/metrics.ts` — ✓ exists, 359 lines
+- `web/lib/cache.ts` — **✗ path not found** under this exact name; the `Cache` class appears to live elsewhere now (likely `web/lib/providers/model-ranker.ts`). Verify before relying.
+- `packages/shared/cli/bin.ts` — ✓ exists, **5615 lines** (was 1201 in original doc — ~4.7× growth). Proposed preview/error/help mini-files would land on a much-larger surface than the doc assumed.
+
+### Bad-idea flags / coordination needed
+- **§12 Phase 2 parallel-tool-execution**: matches Tier 3 of `async-parallelization-opportunities.md`. Read side is safe — `readWithVersion` in `web/lib/vfs/transactional-vfs.ts` is a naive pass-through to `virtualFilesystem.readFile` and parallelizable with `Promise.all`. Write side (CAS): `writeWithVersion` retries up to 3 attempts with jittered backoff on version-token mismatch. **Naïve concurrent writes are unsafe** (race on the version token); **CAS-aware parallel writes are parallelizable** if the retry loop absorbs the race — coordinate with the VFS owner before claiming write-side wins.
+- **§12 Phase 3 benchmark.ts**: overlap with Tier 5 #16 (`model-ranker.refreshModelTelemetryCache` already parallelized) — reuse rather than re-implement.
+- **§13 Phase 2 error-handler.ts**: a similar shape **may already** exist at `web/lib/errors/error-handler.ts` (consumed by route.ts + use-enhanced-chat.ts). Verify before duplicating.
+
+---
+
 ## 11. Session Management & Recovery
 
 ### Current Issue

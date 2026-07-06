@@ -1,15 +1,23 @@
 # Exclude heavy folders from Vercel download
-/backend/
 desktop/
+/backend/
 docs/
 
-**/route.ts
+# (removed `**/route.ts` — Step 6 hygiene 2026-07-03)
+# Vercel's .vercelignore only excludes files from the deployment upload,
+# NOT from the Next.js build. Keeping `**/route.ts` here would have
+# excluded all 43 App Router route.ts files from the upload, breaking
+# every API endpoint at runtime. App Router bundling cannot be opted
+# out via .vercelignore; use next.config.js outputFileTracingExcludes
+# for dependency-side exclusions only.
 
 # Standard excludes
 
 node_modules/
 .git/
 *.db
+
+# Local build artifacts
 heap-snapshots/
 logs/
 .next/

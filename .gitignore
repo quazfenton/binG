@@ -85,6 +85,13 @@ desktop/src-tauri/target/*
 *.tmp
 *.temp
 
+# Cascading dev artifacts (Step 6 hygiene 2026-07-03)
+*.bak
+*.bak2
+*.bak3
+*.bak4
+__td*_tmp*
+
 # ===========================================
 # BUILD OUTPUTS
 # ===========================================

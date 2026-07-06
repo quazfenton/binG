@@ -348,7 +348,7 @@ function globMatch(name: string, pattern: string): boolean {
  */
 function collectReferences(verbose: boolean): Map<string, number> {
   const counter = new Map<string, number>();
-  const SEARCH_PATHS = ['/opt/bing/web/app', '/opt/bing/web/lib', '/opt/bing/packages'];
+  const SEARCH_PATHS = [path.join(PROJECT_ROOT, 'web/app'), path.join(PROJECT_ROOT, 'web/lib'), path.join(PROJECT_ROOT, 'packages')];
   // rg `-g` flag is INCLUSIVE-when-not-prefixed-with-!. Default mode excludes
   // __tests__ directories and *.d.ts files (typical tsc-emitted artifacts that
   // contain dead-code references). --verbose REMOVES those exclusions so the
@@ -357,7 +357,7 @@ function collectReferences(verbose: boolean): Map<string, number> {
     ? ['--type', 'ts']
     : ['--type', 'ts', '-g', '!__tests__', '-g', '!*.d.ts'];
 
-  const rgArgs = ['process\\.env\\.[A-Z_]+', ...SEARCH_PATHS, ...GLOBS, '--no-heading', '-N'];
+  const rgArgs = ['process\\.env\\.[A-Z0-9_]+', ...SEARCH_PATHS, ...GLOBS, '--no-heading', '-N'];
   const rgCmd = ['rg', ...rgArgs].map(a => (a.includes(' ') ? `"${a.replace(/"/g, '\\"')}"` : a)).join(' ');
 
   let out = '';
@@ -378,7 +378,7 @@ function collectReferences(verbose: boolean): Map<string, number> {
       : `--include='*.ts' --exclude-dir='__tests__' --exclude='*.d.ts'`;
     try {
       out = execSync(
-        `grep -rE 'process\\.env\\.[A-Z_]+' ${SEARCH_PATHS.join(' ')} ${grepExcludeArgs}`,
+        `grep -rE 'process\\.env\\.[A-Z0-9_]+' ${SEARCH_PATHS.join(' ')} ${grepExcludeArgs}`,
         { encoding: 'utf-8', maxBuffer: 256 * 1024 * 1024 }
       );
     } catch (e: any) {
@@ -387,7 +387,7 @@ function collectReferences(verbose: boolean): Map<string, number> {
   }
 
   for (const line of out.split('\n')) {
-    const m = line.match(/process\.env\.([A-Z_]+)/);
+    const m = line.match(/process\.env\.([A-Z0-9_]+)/);
     if (!m) continue;
     counter.set(m[1], (counter.get(m[1]) ?? 0) + 1);
   }
@@ -480,6 +480,8 @@ async function main(): Promise<number> {
   }
 
   let allPass = true;
+  let vendorPass = true;
+  let envPass = true;
   const runVendor = onlyCheck === null || onlyCheck === 'all' || onlyCheck === 'vendor';
   const runEnv = onlyCheck === null || onlyCheck === 'all' || onlyCheck === 'env';
 
@@ -496,7 +498,7 @@ async function main(): Promise<number> {
     console.log(bold('[vendor-drift]'));
     const result = await checkVendorDrift({ update });
     for (const line of result.details) console.log(line);
-    if (!result.pass) allPass = false;
+    if (!result.pass) { allPass = false; vendorPass = false; }
     console.log('');
   }
 
@@ -504,13 +506,13 @@ async function main(): Promise<number> {
     console.log(bold('[env-completeness]'));
     const result = await checkEnvCompleteness({ strict, verbose, topN });
     for (const line of result.details) console.log(line);
-    if (!result.pass) allPass = false;
+    if (!result.pass) { allPass = false; envPass = false; }
     console.log('');
   }
 
   console.log(bold('== summary =='));
-  console.log(`  vendor-drift:     ${runVendor ? (allPass ? green('pass') : red('fail')) : dim('skipped')}`);
-  console.log(`  env-completeness: ${runEnv ? (allPass ? green('pass') : red('fail')) : dim('skipped')}`);
+  console.log(`  vendor-drift:     ${runVendor ? (vendorPass ? green('pass') : red('fail')) : dim('skipped')}`);
+  console.log(`  env-completeness: ${runEnv ? (envPass ? green('pass') : red('fail')) : dim('skipped')}`);
   console.log(`  exit: ${allPass ? green('0') : warnOnly ? yellow('0') : red('1')}${warnOnly ? ' (--warn-only)' : ''}`);
 
   if (warnOnly) return 0;

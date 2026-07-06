@@ -2,6 +2,42 @@
 
 Comprehensive catalog of places where independent async operations run sequentially and could be parallelized. Organized by impact tier.
 
+## Status Audit (2026-07-03)
+
+> Which proposals / Co-Brief invalidations stand against the current /opt/bing tree.
+
+### Top-5 Quick Wins
+| # | Doc claim | Status | Evidence |
+|---|-----------|:------:|----------|
+| 1 | `route.ts:999` — `applyPromptModifiers` into Promise.all | ✓ applied | route.ts L920-L955 already wraps it in the 5-way Promise.all alongside `buildWorkspaceSessionContext`, `mem0Search`, `buildHybridWorkspaceContext`, `resolveFilesystemOwner`+`classifyRequest` |
+| 2 | `service.ts:1444` — `resolveDynamicDefaults` + `determineMode` Promise.all | ✗ pending | L1466-L1470 still sequential |
+| 3 | `service.ts:3774` — hoist `buildWorkspaceSnapshot` outside provider-fallback loop | ⚠ do-not-apply | Co-Brief §Invalidations explicitly warns: stale-snapshot race when a provider modifies state and fails mid-write — keep snapshot INSIDE loop |
+| 4 | `route.ts:883` — `resolveFilesystemOwner` + `classifyRequest` Promise.all | ✓ applied | route.ts L950 wraps both in Promise.all |
+| 5 | `architecture-integration.ts:630-903` — Promise.all 10 tool I/O ops | ✗ not validated here | if unchanged, the win stands |
+
+### Tier 2 #15 (provider-keys.ts L192-L216)
+✓ applied — `getStoredProviderApiKeys` now uses `Promise.allSettled` (L206-L211). The Coordination Brief win is **claimed** in production.
+
+### Meta #1 + Meta #3 invalidations
+✓ both stand. `secrets/web.ts openDB()` has zero concurrency primitives (no MAX_CONCURRENT, no semaphore); modern browsers accept unbounded concurrent readonly IDB transactions. `transactional-vfs.ts` has zero `Mutex|Lock|serialize` imports — OCC uses version tokens only. Path is `web/lib/vfs/` not `web/lib/virtual-filesystem/`.
+
+### NEW-1 (auth + body parse overlap, route.ts L370)
+✗ pending — the cited region (L350-L400) hosts the `addWrittenPath` dedup helper, **not** the `resolveRequestAuth + request.json()` Promise.all. Next-pass apply expected to save 15-40ms/request.
+
+### NEW-2..NEW-4
+- NEW-2 (mem0Search before classifyRequest) — ✗ pending
+- NEW-3 (background session-file-tracking) — ✗ pending
+- NEW-4 (FC-Gate telemetry post-yield) — ✗ pending
+
+### Action priority (next pass) — sorted by ROI
+1. **Apply Win #2** (`resolveDynamicDefaults` + `determineMode`) — ~50-100ms/request; highest not-yet-applied ROI.
+2. **Apply NEW-1** (auth + body parse overlap) — ~15-40ms/request.
+3. **Audit #5** before applying (architecture-integration 10 ops).
+4. **Skip Win #3 entirely** — Coordination Brief invalidation stands.
+5. **Apply Tier 3 read-side wins** (`transactional-vfs.ts`, `vfs-batch-operations.ts`, `smart-context.ts`, `context-pack-service.ts`, `desktop-vfs-service.ts`, `cloud-fs-manager.ts`) — naive pass-throughs to `virtualFilesystem.readFile`, no VFS-team coordination required.
+
+---
+
 **Legend:** `#` = file:line | `Est.` = estimated latency savings per invocation | `∝N` = scales with N items
 
 ---
