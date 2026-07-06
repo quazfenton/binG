@@ -11,6 +11,7 @@ Comprehensive catalog of places where independent async operations run sequentia
 |---|-----------|:------:|----------|
 | 1 | `route.ts:999` — `applyPromptModifiers` into Promise.all | ✓ applied | route.ts L920-L955 already wraps it in the 5-way Promise.all alongside `buildWorkspaceSessionContext`, `mem0Search`, `buildHybridWorkspaceContext`, `resolveFilesystemOwner`+`classifyRequest` |
 | 2 | `service.ts:1444` — `resolveDynamicDefaults` + `determineMode` Promise.all | ✓ applied | `web/lib/orchestra/unified-agent-service.ts:1512` now wraps both in `Promise.all([resolveDynamicDefaults(), determineMode(config)])`. Cite drift: the two awaits now sit at L1512 + L1523 (intervening log block) — the upstream `resolveDynamicDefaults` cache layer + ~6/2026 file growth pushed the cite down ~46 lines from the 7/3 audit snapshot. ROI ~50-100ms/request. |
+| 2b | `service.ts` — `resolveDynamicDefaults` + linked PROVIDERS dynamic import at SITE B + SITE F | ✓ applied | `web/lib/orchestra/unified-agent-service.ts` SITE B (`runV1ApiWithTools`, was L3512+L3541) and SITE F (`runV1ApiCompletion`, L5666+L5678) now both wrap `resolveDynamicDefaults()` + `import('../providers/llm-providers')` in `Promise.all`. The `getModelForProvider` / `_getProviderFirstModel` closures continue to read `PROVIDERS` from the destructure of the Promise.all tuple (`const { PROVIDERS } = _llmProvidersMod;`). ROI ~5-30ms/request (cold cache miss path) + ~5-30ms ESM import wallclock savings on warm-cache requests. Sites A (`runProgressiveBuild` L2818) / C (`runV1Orchestrated` entry L5221) / D (`runV1Orchestrated` telemetry L5434) / E (`runV1Orchestrated` catch L5615) intentionally skipped: A and C have no partner await; D's partner (`chatRequestLogger.logRequestComplete().catch(()=>{})`) is already fire-and-forget; E follows `invalidateDynamicDefaultsCache()` and the re-fetch is an intentional serialized refresh. **Note on #66**: the doc lists Tier 5 #66 as `unified-agent-service.ts:5106, 5319` "Redundant `await resolveDynamicDefaults()` — second call re-checks 30s cache" but the actual 30s `_cachedDynamicDefaults` TTL (L323-L437) returns synchronously from cache on repeat within-window calls (microsecond cost, no real waste); concurrent cache-MISS de-dup would need a separate in-flight promise pattern in `resolveDynamicDefaults` itself and is out-of-scope for the site sweep. |
 | 3 | `service.ts:3774` — hoist `buildWorkspaceSnapshot` outside provider-fallback loop | ⚠ do-not-apply | Co-Brief §Invalidations explicitly warns: stale-snapshot race when a provider modifies state and fails mid-write — keep snapshot INSIDE loop |
 | 4 | `route.ts:883` — `resolveFilesystemOwner` + `classifyRequest` Promise.all | ✓ applied | route.ts L950 wraps both in Promise.all |
 | 5 | `architecture-integration.ts:630-903` — Promise.all 10 tool I/O ops | ✗ not validated here | if unchanged, the win stands |
@@ -21,8 +22,8 @@ Comprehensive catalog of places where independent async operations run sequentia
 ### Meta #1 + Meta #3 invalidations
 ✓ both stand. `secrets/web.ts openDB()` has zero concurrency primitives (no MAX_CONCURRENT, no semaphore); modern browsers accept unbounded concurrent readonly IDB transactions. `transactional-vfs.ts` has zero `Mutex|Lock|serialize` imports — OCC uses version tokens only. Path is `web/lib/vfs/` not `web/lib/virtual-filesystem/`.
 
-### NEW-1 (auth + body parse overlap, route.ts L370)
-✗ pending — the cited region (L350-L400) hosts the `addWrittenPath` dedup helper, **not** the `resolveRequestAuth + request.json()` Promise.all. Next-pass apply expected to save 15-40ms/request.
+### NEW-1 (auth + body parse overlap — Tier 4 #47 anchor site)
+✓ applied — `web/app/api/sandbox/session/gateway.ts` POST handler now wraps `verifyAuth(req)` + `req.json()` in `Promise.all`. Cite drift: doc listed `sandbox/session/gateway.ts:18,38` (and Tier 4 #48/:32,48 + #49/antigravity/login/:16,24); the real anchor site is `/opt/bing/web/app/api/sandbox/session/gateway.ts` POST (verifyAuth at L18, req.json at L38 — apply at L17-L34 now). **Cite correction**: the path is `app/api/sandbox/session/gateway.ts`, NOT `sandbox/session/gateway.ts` (typo in old doc entry). The DELETE handler in the same file (also has verifyAuth + req.json() at L147+L157) was INTENTIONALLY LEFT UNCHANGED on this apply (scope discipline; separate next-pass). ROI 15-40ms/request on sandbox session POST critical path.
 
 ### NEW-2..NEW-4
 - NEW-2 (mem0Search before classifyRequest) — ✗ pending
@@ -30,11 +31,11 @@ Comprehensive catalog of places where independent async operations run sequentia
 - NEW-4 (FC-Gate telemetry post-yield) — ✗ pending
 
 ### Action priority (next pass) — sorted by ROI
-1. **Apply Win #2** (`resolveDynamicDefaults` + `determineMode`) — ~50-100ms/request; highest not-yet-applied ROI.
-2. **Apply NEW-1** (auth + body parse overlap) — ~15-40ms/request.
-3. **Audit #5** before applying (architecture-integration 10 ops).
-4. **Skip Win #3 entirely** — Coordination Brief invalidation stands.
-5. **Apply Tier 3 read-side wins** (`transactional-vfs.ts`, `vfs-batch-operations.ts`, `smart-context.ts`, `context-pack-service.ts`, `desktop-vfs-service.ts`, `cloud-fs-manager.ts`) — naive pass-throughs to `virtualFilesystem.readFile`, no VFS-team coordination required.
+1. **Audit #5** before applying (architecture-integration 10 ops).
+2. **Skip Win #3 entirely** — Coordination Brief invalidation stands.
+3. **Apply Tier 3 read-side wins** (`transactional-vfs.ts`, `vfs-batch-operations.ts`, `smart-context.ts`, `context-pack-service.ts`, `desktop-vfs-service.ts`, `cloud-fs-manager.ts`) — naive pass-throughs to `virtualFilesystem.readFile`, no VFS-team coordination required.
+4. **Apply NEW-1 to remaining gateway routes** — extend the pattern from `sandbox/session/gateway.ts` POST to DELETE handler in same file + to Tier 4 #48 (`sandbox/daemon/gateway.ts` POST) + Tier 4 #49 (`antigravity/login/route.ts`, where partner is `getAntigravityOAuthUrl`, not `req.json()`) + Tier 4 #50 (`antigravity/callback/route.ts`, partner `exchangeCodeForTokens`). Same per-request win compounds across hot gateway routes.
+5. **Apply NEW-2..NEW-4** — mem0Search before classifyRequest, background session-file-tracking, FC-Gate telemetry post-yield.
 
 ---
 

@@ -3509,7 +3509,16 @@ async function runV1ApiWithTools(
   // Use the shared capability-based tool executor (avoids code duplication)
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
   // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
-  const _dynamicDefaults = await resolveDynamicDefaults();
+  // Win #2b (docs/async-parallelization-opportunities.md): Promise.all the cache
+  // hit (microsecond return) with the linked PROVIDERS dynamic import. Both ops
+  // are independent — resolveDynamicDefaults reads only _cachedDynamicDefaults +
+  // env, llm-providers is a pure module load. Saves ~5-30ms on cold cache miss
+  // (when both must be awaited) and ~5-30ms on warm-cache requests (where the
+  // import was previously sequential after a near-zero cache hit).
+  const [_dynamicDefaults, _llmProvidersMod] = await Promise.all([
+    resolveDynamicDefaults(),
+    import('../providers/llm-providers'),
+  ]);
   // Bug #12 (Pass-8): Check session-scoped provider cache first. If a previous
   // request in this conversation found a working provider, prefer it over the
   // default to avoid re-hitting the 429'd primary every time.
@@ -3538,7 +3547,7 @@ async function runV1ApiWithTools(
   // the original model name may not be valid for the fallback provider.
   // Check if the model is in the provider's supported models list; if not,
   // use the provider's default instead.
-  const { PROVIDERS } = await import('../providers/llm-providers');
+  const { PROVIDERS } = _llmProvidersMod;
 
   // FIX: Normalize model name for Vercel provider by stripping 'vercel:' prefix if present
   function getModelForProvider(providerName: string): string {
@@ -5663,7 +5672,17 @@ async function runV1ApiCompletion(
 
   // Use config provider/model if specified, otherwise fall back to env defaults
   // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
-  const _completionDefaults = await resolveDynamicDefaults();
+  // Win #2b (docs/async-parallelization-opportunities.md): like SITE B,
+  // Promise.all the cache-hit resolve with the PROVIDERS dynamic import. The
+  // model-ranker import on the next try/catch stays sequential because
+  // including it in Promise.all would propagate its (possibly-thrown)
+  // rejection outside the try/catch and lose the graceful-degradation
+  // semantics (empty `_getModelForRotation` means fall back to
+  // PROVIDER_DEFAULT_MODELS first).
+  const [_completionDefaults, _llmProvidersMod] = await Promise.all([
+    resolveDynamicDefaults(),
+    import('../providers/llm-providers'),
+  ]);
   const primaryProvider = config.provider || _completionDefaults.provider;
   const primaryModel = config.model || _completionDefaults.model;
   const requestId = `unified-v1-${Date.now()}`;
@@ -5675,7 +5694,7 @@ async function runV1ApiCompletion(
 
   // FIX: Map each provider to a model that supports tool calling / function calling.
   // Also: when falling back, check if the model is valid for the target provider.
-  const { PROVIDERS } = await import('../providers/llm-providers');
+  const { PROVIDERS } = _llmProvidersMod;
   let _getModelForRotation: any = null;
   try {
     const mrMod = await import('../providers/model-ranker');
