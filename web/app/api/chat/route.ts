@@ -515,7 +515,7 @@ export async function POST(request: NextRequest) {
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
-    chatLogger.debug('[ROUTE] Raw body keys:', Object.keys(rawBody));
+    chatLogger.debug('[ROUTE] Raw body keys:', rawBody ? Object.keys(rawBody) : null);
     chatLogger.debug('[ROUTE] Parsed result:', { status: parseResult.success ? 'success' : parseResult.error?.message });
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];

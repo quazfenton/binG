@@ -324,6 +324,21 @@ let _cachedDynamicDefaults: { provider: string; model: string } | null = null;
 let _dynamicDefaultsTimestamp = 0;
 const DYNAMIC_DEFAULTS_TTL_MS = 30_000; // Re-check every 30s
 
+// #66 (docs/async-parallelization-opportunities.md, Tier 5 concurrent-miss
+// de-dup): concurrent resolveDynamicDefaults() callers share the same resolution
+// promise when the cache is stale and the cache-MISS path is executing. Combined
+// with the 30s cache hit (microsecond synchronous return) above, this covers
+// both the within-window repeat-call case AND the simultaneous-miss case that
+// the cache alone does NOT cover (e.g. when a circuit-breaker invalidation fires
+// and N concurrent callers all hit the cache-miss path within the same microtask).
+// Module-scoped so only in-process waiters share — Next.js Worker boundary still
+// acts as a natural fan-out boundary per process. The `.finally` clears the slot
+// on both fulfilled AND rejected paths so a permanently-rejected promise cannot
+// permanently block subsequent callers (next caller retries with a fresh IIFE).
+// Identity-checked in the cleanup ('if it's still ours') to avoid clobbering a
+// newer in-flight promise that may have been set by an interleaved caller.
+let _dynamicDefaultsInflight: Promise<{ provider: string; model: string }> | null = null;
+
 /**
  * Check if a provider has a non-empty API key in the environment.
  * Mirrors provider-fallback-chains.ts PROVIDER_API_KEY_ENV but also handles
@@ -356,6 +371,13 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
   if (_cachedDynamicDefaults && (now - _dynamicDefaultsTimestamp) < DYNAMIC_DEFAULTS_TTL_MS) {
     return _cachedDynamicDefaults;
   }
+  // #66 in-flight de-dup gate: if another caller in this process is already
+  // resolving the cache-MISS path, await their promise instead of starting
+  // a fresh dynamic-import chain. The `inflight` local capture + identity
+  // check in the finally block below prevents an older caller from clobbering
+  // a newer in-flight's slot if interleaved calls re-enter the gate.
+  if (_dynamicDefaultsInflight) return _dynamicDefaultsInflight;
+  const inflight = _dynamicDefaultsInflight = (async () => {
   let provider = process.env.LLM_PROVIDER || 'mistral';
   let model = process.env.DEFAULT_MODEL || 'mistral-large-latest';
   try {
@@ -438,6 +460,12 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
   _cachedDynamicDefaults = { provider, model };
   _dynamicDefaultsTimestamp = now;
   return { provider, model };
+  })();
+  try {
+    return await inflight;
+  } finally {
+    if (_dynamicDefaultsInflight === inflight) _dynamicDefaultsInflight = null;
+  }
 }
 
 /**

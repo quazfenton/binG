@@ -86,18 +86,41 @@ interface SnapshotCacheEntry {
   timestamp: number;
 }
 
-const snapshotCache = new Map<string, SnapshotCacheEntry>();
-const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
-const inFlightRequests = new Map<string, Promise<any>>();
+// P0 fix: hoist the in-memory caches onto `globalThis` so multiple React
+// trees (CodePreviewPanel, TerminalPanel, WorkspacePanel — each of which
+// calls useVirtualFilesystem()) share a SINGLE in-flight request map.
+// Previously every panel held its own module-scope Map, producing 7–8
+// concurrent snapshot requests in 4 s for the same (ownerId, path) key.
+// globalThis on the browser === window and is process-isolated, so all
+// trees in one tab see the same cache.
+declare global {
+  var __useVfsSnapshotCache__: Map<string, SnapshotCacheEntry> | undefined;
+  var __useVfsListCache__: Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }> | undefined;
+  var __useVfsInFlightRequests__: Map<string, Promise<any>> | undefined;
+  var __useVfsLastApiCallTime__: Map<string, number> | undefined;
+  var __useVfsLastGlobalVfsCall__: number | undefined;
+}
+
+const snapshotCache: Map<string, SnapshotCacheEntry> =
+  globalThis.__useVfsSnapshotCache__ ??
+  (globalThis.__useVfsSnapshotCache__ = new Map<string, SnapshotCacheEntry>());
+const listCache: Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }> =
+  globalThis.__useVfsListCache__ ??
+  (globalThis.__useVfsListCache__ = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>());
+const inFlightRequests: Map<string, Promise<any>> =
+  globalThis.__useVfsInFlightRequests__ ??
+  (globalThis.__useVfsInFlightRequests__ = new Map<string, Promise<any>>());
 const SNAPSHOT_CACHE_TTL_MS = 10000;  // 10 seconds for snapshots (was 5s) - reduced polling
 const LIST_CACHE_TTL_MS = 8000;      // 8 seconds for directory listings (was 3s) - reduced polling
 const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
-const lastApiCallTime = new Map<string, number>();
+const lastApiCallTime: Map<string, number> =
+  globalThis.__useVfsLastApiCallTime__ ??
+  (globalThis.__useVfsLastApiCallTime__ = new Map<string, number>());
 const API_CALL_DEBOUNCE_MS = 100; // Reduced for faster response - mainly for GET requests
 const REQUEST_COOLDOWN_MS = 50;  // Minimal cooldown for faster response
-let lastGlobalVfsCall = 0;
+let lastGlobalVfsCall: number = globalThis.__useVfsLastGlobalVfsCall__ ?? 0;
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -757,7 +780,7 @@ export function useVirtualFilesystem(
       log(`request: cooldown active for ${method}, waiting ${waitTime}ms`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
-    lastGlobalVfsCall = Date.now();
+    lastGlobalVfsCall = globalThis.__useVfsLastGlobalVfsCall__ = Date.now();
     
     // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
     if (method === 'GET') {

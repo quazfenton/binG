@@ -8,8 +8,21 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 import { getSnapshotBroadcaster, type SnapshotChangedMessage } from '@/lib/virtual-filesystem/snapshot-broadcaster';
 import { createLogger } from '@/lib/utils/logger';
 import { vfsSnapshotCacheMetrics } from './cache-metrics';
+import { getDatabase } from '@/lib/database/connection-shim';
 
 const logger = createLogger('API:VFS:Snapshot');
+
+// P0 fix (Bug #14 follow-up cross-worker): the eager-init cooldown and
+// initDone flags no longer live on `globalThis`. Each Turbopack compile
+// worker has its own `globalThis` isolate, so per-process gates never
+// survive across workers — every request in every new worker saw an empty
+// `__vfsInitDone__` and re-entered the WORKSPACE_NOT_READY path. Using
+// module-scope Maps collates concurrent requests correctly WITHIN one
+// worker, and the DB existence check below (`isInitDone`) is the
+// cross-worker source of truth via the shared SQLite `vfs_workspace_meta`
+// + `vfs_workspace_files` tables.
+const eagerInitCooldowns = new Map<string, number>();
+const initDoneOwners = new Set<string>();
 
 
 
@@ -523,8 +536,41 @@ export async function GET(req: NextRequest) {
           // but may be genuinely empty. This prevents the 188-occurrence
           // WORKSPACE_NOT_READY spam loop where the client polls every
           // 30s but keeps hitting the cooldown gate.
-          const initDoneKey = `__vfsInitDone__:${owner.ownerId}`;
-          if ((globalThis as any)[initDoneKey]) {
+          //
+          // P0 fix: use a module-scope Set AND a direct DB existence
+          // check (vfs_workspace_meta or any file row for this owner).
+          // The DB check is the cross-process source of truth because
+          // SQLite is the only state that's actually shared between
+          // Next.js compile workers — every per-process `globalThis.*`
+          // gate previously reset on worker spawn and triggered the
+          // cooldown loop after every Turbopack JIT compile.
+          let isInitDone = initDoneOwners.has(owner.ownerId);
+          if (!isInitDone) {
+            try {
+              const db = getDatabase();
+              const hasMeta = db
+                .prepare('SELECT 1 FROM vfs_workspace_meta WHERE owner_id = ?')
+                .get(owner.ownerId);
+              if (hasMeta) {
+                isInitDone = true;
+              } else {
+                const hasFiles = db
+                  .prepare('SELECT 1 FROM vfs_workspace_files WHERE owner_id = ? LIMIT 1')
+                  .get(owner.ownerId);
+                if (hasFiles) isInitDone = true;
+              }
+              if (isInitDone) initDoneOwners.add(owner.ownerId);
+            } catch (err: any) {
+              // Don't let a transient DB hiccup force every request
+              // down the WORKSPACE_NOT_READY path. Log once and fall
+              // through; the ensureWorkspace() call below will create
+              // the meta row when it succeeds, which the NEXT request
+              // will pick up.
+              logWarn(`[${requestId}] Failed to check DB for existing workspace: ${err?.message || err}`);
+            }
+          }
+
+          if (isInitDone) {
             // Bug #7 follow-up FIX: this branch used to only log and then
             // fall through to the `return WORKSPACE_NOT_READY` at the bottom
             // of the anonymous block — directly contradicting its own
@@ -574,9 +620,15 @@ export async function GET(req: NextRequest) {
           // 5s in-memory cooldown to prevent hammering the DB when the
           // snapshot is polled faster than the init can complete. After
           // the cooldown expires, the next request retries the init.
-          const initAttemptKey = `__vfsEagerInitAttempted__:${owner.ownerId}`;
-          const lastAttempt = (globalThis as any)[initAttemptKey] || 0;
+          //
+          // P0 fix: Use module-scope eagerInitCooldowns instead of
+          // globalThis.__vfsEagerInitAttempted__ so the cooldown is
+          // correct within a single worker. Cross-worker coordination
+          // is handled by the DB-based isInitDone check above — if
+          // another worker already initialized the workspace, the DB
+          // check will return true and we never reach this branch.
           const EAGER_INIT_COOLDOWN_MS = 5000;
+          const lastAttempt = eagerInitCooldowns.get(owner.ownerId) || 0;
           if (Date.now() - lastAttempt < EAGER_INIT_COOLDOWN_MS) {
             log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY`);
             const cooldownResponse = NextResponse.json({
@@ -589,7 +641,7 @@ export async function GET(req: NextRequest) {
             }, { status: 202 });
             return withAnonSessionCookie(cooldownResponse, owner);
           }
-          (globalThis as any)[initAttemptKey] = Date.now();
+          eagerInitCooldowns.set(owner.ownerId, Date.now());
           // `ensureWorkspace` is public on VirtualFileSystemService since
           // the Bug #14 follow-up. The typeof guard is preserved as a
           // defense-in-depth fallback in case the deployed build predates
@@ -598,8 +650,9 @@ export async function GET(req: NextRequest) {
             await (virtualFilesystem as any).ensureWorkspace(owner.ownerId);
             log(`[${requestId}] Eagerly initialized workspace for anonymous owner — breaking WORKSPACE_NOT_READY loop`);
             // Bug #7 fix: Mark this owner as initialized so future requests
-            // skip the WORKSPACE_NOT_READY path entirely.
-            (globalThis as any)[initDoneKey] = true;
+            // skip the WORKSPACE_NOT_READY path entirely. P0 fix: also
+            // persists cross-worker via the DB existence check above.
+            initDoneOwners.add(owner.ownerId);
             // Re-export the now-initialized snapshot and return success
             // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
             // file edits on the very next read.
