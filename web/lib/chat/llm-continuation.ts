@@ -532,7 +532,29 @@ export function shouldAutoContinue(input: {
   // (env-aware). This is now the LAST gate, not the first — Triggers 2 and 3
   // have priority because their steers are more specific than a generic
   // "Continue with the plan." RT-001 sibling: see first-response-routing.ts.
+  //
+  // Bug fix: when routing is null AND the LLM made no tool steps, check the
+  // response text for signs it's a complete standalone answer. A short response
+  // ending with terminal punctuation is unlikely to need continuation. This
+  // prevents false-positive auto-continue on simple prompts like "yo" or "hi".
   if (routing == null) {
+    const responseText_ = (input.responseText ?? '').trim();
+    if (
+      steps.length === 0 &&
+      responseText_.length > 0 &&
+      responseText_.length < 300 &&
+      /[.!?)\"}\]]\s*$/.test(responseText_) &&
+      !/\b(i'll now\b|\blet me\b|\bnext i('ll| will)\b|\bi will (start|begin|proceed|continue)\b|\bnow i('ll| will)\b|\bthen i\b|\bfirst,?\s+(let me|i('ll| will)|we|next)\b|\bafter that\b|\bfinally\b)/i.test(responseText_)
+    ) {
+      return {
+        continue: false,
+        reason: 'no_continuation_needed',
+        continuationPrompt: '',
+        continuationsSoFar,
+        clearedCount: continuationsSoFar,
+        finalIteration: maxContinuations,
+      };
+    }
     const shouldContinue = resolveDefaultContinue();
     return {
       continue: shouldContinue,

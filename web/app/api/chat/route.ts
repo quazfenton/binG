@@ -1582,10 +1582,19 @@ const config: UnifiedAgentConfig = {
     // servers (Node.js fetch has no default timeout). When the timeout
     // fires or the client disconnects, we log a warning and proceed with
     // an empty tool set rather than blocking the entire chat response.
+    // Chat-hang-fix #4: drop the 30s ceiling to 5s. Combines with the
+    // bootstrap-mcp.ts transport-level skip to drop the per-request stall
+    // from ~33s to <1s when MCP is down, while leaving breathing room for
+    // healthy-but-slow gateway cold-start handshakes.
     const MCP_TOOLS_TIMEOUT_MS = parseInt(
-      process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '30000',
+      process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '5000',
       10,
     );
+    // Boundary #4 timestamp — measured AT try-entry so duration includes
+    // both the getMCPToolsForAI_SDK() call AND any timeout-noise (5s
+    // ceiling or 2s bootstrap-mcp abort-mirror). Reported in the
+    // boundary: post-mcp-race log below.
+    const mcpRaceStartMs = Date.now();
     let tools: Awaited<ReturnType<typeof getMCPToolsForAI_SDK>> = [];
     try {
       const mcpRace: Promise<any>[] = [
@@ -1608,6 +1617,20 @@ const config: UnifiedAgentConfig = {
       });
       tools = [];
     }
+    // Chat-hang-fix #4 boundary #4 — in-between anchor for the next
+    // hang report. Captures mcpRaceDurationMs (the ceiling/timeout of
+    // THIS block only) + the final toolsCount so a 30s+ delta between
+    // post-5way-promise-all (boundary #2) and pre-processUnifiedAgentRequest
+    // (boundary #3) is attribute-able to MCP vs downstream by reading
+    // elapsedMs - mcpRaceDurationMs = (everything else). Emitted AFTER the
+    // try/catch closes so the log fires whether the race resolved, timed
+    // out via MCP_TOOLS_TIMEOUT_MS (5s), or rejected via request.signal.
+    chatLogger.info('[CHAT-ROUTE] boundary: post-mcp-race', {
+      requestId,
+      elapsedMs: Date.now() - requestStartTime,
+      mcpRaceDurationMs: Date.now() - mcpRaceStartMs,
+      toolsCount: tools.length,
+    });
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,

@@ -1911,6 +1911,21 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     stepRepromptCount < MAX_STEP_REPROMPTS &&
                     inputQueue.length === 0
                   ) {
+                    // Defense-in-depth: only trigger step-reprompt when there's actual
+                    // plan evidence (planSteps >= 2 or estimatedSteps >= 2) or when
+                    // retrying tool failures. Without this guard, a false-positive
+                    // stepReprompt creates duplicate user message bubbles for every
+                    // auto-continue even when no multi-step plan exists.
+                    const hasPlanEvidence =
+                      (Array.isArray(routing?.planSteps) && routing!.planSteps!.length >= 2) ||
+                      (typeof routing?.estimatedSteps === 'number' && routing!.estimatedSteps! >= 2);
+                    if (!shouldRetryForToolFailure && !hasPlanEvidence) {
+                      logger.info('[StepReprompt] Skipping — no plan evidence (no planSteps/estimatedSteps)', {
+                        stepRepromptPreview: stepReprompt.slice(0, 80),
+                        primaryRole: routing?.primaryRole,
+                      });
+                      return; // skip bubble-creating re-prompt
+                    }
                     // FIX: Enhance stepReprompt with tool failure context when anyToolFailed is true
                   // This gives the LLM visibility into what went wrong, so it can retry with
                   // corrected tool calls instead of repeating the same failure.

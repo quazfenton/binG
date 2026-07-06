@@ -288,6 +288,16 @@ export interface MCPTransportConfig {
 
   // For websocket transport
   wsUrl?: string
+
+  // For SSE / HTTP / websocket transport (Chat-hang-fix #4): optional
+  // caller-controlled AbortSignal that aborts the in-flight `fetch` /
+  // WebSocket handshake. Wire `AbortSignal.timeout(N)` at construction
+  // to fast-fail dead sockets / TCP blackholes in `N` ms instead of
+  // waiting on the kernel SYN timeout (~75s). Signal is mirrored onto
+  // the client's internal AbortController so the underlying transport
+  // observes the abort — the caller still owns the signal and can
+  // observe its own listeners firing as designed.
+  signal?: AbortSignal
 }
 
 /**
