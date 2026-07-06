@@ -558,18 +558,36 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
   //   error.code            — some SDKs encode HTTP status as "code"
   const status = error?.status || error?.statusCode || error?.status_code || error?.response?.status || error?.code || 0;
 
-  // Permanent: missing credentials, invalid auth, bad config
+  // Bug #116 fix: 401/403 were classified as 'permanent' and skipped for the
+  // entire request. But many 401s are transient (expired token, API gateway
+  // returning 403 for overuse, key rotation, etc.) and even for genuinely
+  // missing keys the fallback chain should try other providers first.
+  // Demote 401/403 to 'rate_limit' so they go through the circuit-breaker
+  // (5 failures / 5 min TTL) instead of being permanently disabled.
+  // Specific auth-related message strings (invalid key format, forbidden)
+  // still classify as 'permanent' since those indicate misconfiguration.
+  if (status === 401 || status === 403) {
+    // Keep 'permanent' only for clearly-misconfigured states.
+    if (
+      msg.includes('invalid api key') ||
+      msg.includes('invalid x-api-key') ||
+      msg.includes('authentication failed') ||
+      msg.includes('insufficient_quota') ||
+      msg.includes('billing issue')
+    ) {
+      return 'permanent';
+    }
+    // 401/403 without explicit invalid-key signal → treat as rate_limit
+    // so the circuit breaker handles back-off and auto-recovery.
+    return 'rate_limit';
+  }
+
+  // Permanent: bad config (invalid key format, model not found, etc.)
   if (
-    status === 401 || status === 403 ||
     msg.includes('api key is missing') ||
-    msg.includes('invalid api key') ||
-    msg.includes('invalid x-api-key') ||
     msg.includes('unauthorized') ||
     msg.includes('forbidden') ||
-    msg.includes('authentication failed') ||
     msg.includes('not authorized') ||
-    msg.includes('insufficient_quota') ||
-    msg.includes('billing issue') ||
     msg.includes('model not found') ||
     msg.includes('model does not exist') ||
     msg.includes('no such model') ||
@@ -4247,6 +4265,15 @@ async function runV1ApiWithTools(
       log.info(`[V1-API-WITH-TOOLS] │ responseLength: ${response.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ toolInvocations: ${toolInvocations.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ tools: ${toolInvocations.map(t => t.toolName).join(', ') || 'none'}`);
+      // Bug #117 fix: classify response shape so "tools_only" vs "empty" is distinguishable
+      const responseShape: 'text' | 'tools_only' | 'mixed' | 'empty' =
+        response.length > 0 && toolInvocations.length > 0 ? 'mixed' :
+        response.length > 0 ? 'text' :
+        toolInvocations.length > 0 ? 'tools_only' : 'empty';
+      log.info(`[V1-API-WITH-TOOLS] │ responseShape: ${responseShape}${responseShape === 'empty' ? ' (suspicious — log a WARN)' : ''}`);
+      if (responseShape === 'empty') {
+        log.warn('[V1-API-WITH-TOOLS] Empty response with no tool calls — possible stall pattern', { requestId, provider: providerName, model: modelForProvider });
+      }
       log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
       // FIX: Record success in circuit-breaker and model-ranker after stream completion
@@ -4332,6 +4359,12 @@ async function runV1ApiWithTools(
         success: inv.result?.success !== false,
       }));
 
+      // Bug #117 fix: classify response shape so "tools_only" is distinguishable from "empty"
+      const responseShape: 'text' | 'tools_only' | 'mixed' | 'empty' =
+        response.length > 0 && toolCallTelemetry.length > 0 ? 'mixed' :
+        response.length > 0 ? 'text' :
+        toolCallTelemetry.length > 0 ? 'tools_only' : 'empty';
+
       log.info('[Telemetry-v1Api] Recording completion', {
         requestId,
         provider: providerName,
@@ -4339,6 +4372,7 @@ async function runV1ApiWithTools(
         duration,
         toolCount: toolCallTelemetry.length,
         responseLength: response.length,
+        responseShape,
       });
 
       chatRequestLogger.logRequestComplete(

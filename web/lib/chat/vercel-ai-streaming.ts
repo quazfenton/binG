@@ -3534,11 +3534,13 @@ const steps = await finalResult.steps;
         }
       }
 
-      // ── PHASE 3: After ≥2 consecutive tool call failures, retry with a telemetry-derived
+      // ── PHASE 3: After ≥3 consecutive tool call failures, retry with a telemetry-derived
       // reliable tool-calling model — independent of whether Phase 2 text-mode ran.
       // This surfaces models that have demonstrated >65% tool-call success rate
       // in the rolling 30-min window (from tool-call-telemetry).
-      if (consecutiveToolFailures >= 2 && allToolCalls.length > 0 && (toolCallStreaming ?? true)) {
+      // Bug #76 fix: threshold raised from 2→3 to match the loop-guard kill
+      // threshold (shared-agent-context.ts:444) so the two mechanisms stay in sync.
+      if (consecutiveToolFailures >= 3 && allToolCalls.length > 0 && (toolCallStreaming ?? true)) {
         const capableModels = getModelsForPurpose('tool-calling', { maxModels: 3 });
         const currentModelKey = `${provider}:${modelName}`;
         const betterModel = capableModels.find(

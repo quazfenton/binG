@@ -9,6 +9,7 @@ import { getSnapshotBroadcaster, type SnapshotChangedMessage } from '@/lib/virtu
 import { createLogger } from '@/lib/utils/logger';
 import { vfsSnapshotCacheMetrics } from './cache-metrics';
 import { getDatabase } from '@/lib/database/connection-shim';
+import { isRedisEnabled } from '@/lib/redis/client';
 import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
 import { getRuntimeBroker } from '@/lib/sandbox/runtime-broker';
 
@@ -444,6 +445,41 @@ export async function GET(req: NextRequest) {
     let currentVersion = 0;
     if (typeof (virtualFilesystem as any).getCurrentVersionSync === 'function') {
       currentVersion = virtualFilesystem.getCurrentVersionSync(owner.ownerId);
+
+    // Bug #5 fix: when Redis pub/sub is unavailable, the in-memory version
+    // above is per-Node-process. Cross-worker writes (Worker A bumps to v5,
+    // Worker B's local in-memory is still v0) would cause Worker B to
+    // incorrectly report the cached snapshot as valid (304 Not Modified)
+    // and the client would permanently miss Worker A's writes. Fall back
+    // to a SQLite SELECT MAX(version) FROM vfs_workspace_meta for cross-
+    // worker cache invalidation when Redis is disabled. This is a cheap
+    // query (single row, indexed on owner_id) and only runs when Redis is
+    // down — negligible overhead in the common (Redis-backed) case.
+    if (!isRedisEnabled()) {
+      try {
+        const db = getDatabase();
+        if (db) {
+          // Bug #5 v2: scope the version query to the current owner
+          // instead of returning MAX across ALL workspaces. vfs_workspace_meta
+          // has a UNIQUE constraint on owner_id, so this is a single-row
+          // indexed lookup. The previous MAX query caused unnecessary cache
+          // invalidations in multi-tenant deployments (Worker B reading
+          // owner X's snapshot would see "owner Y bumped to v100" and
+          // invalidate its cache even though owner X's data hadn't
+          // changed). SAFE: never returns stale data, just more precise.
+          const row = db
+            .prepare('SELECT version FROM vfs_workspace_meta WHERE owner_id = ?')
+            .get(owner.ownerId) as { version: number | null } | undefined;
+          if (row?.version != null) {
+            currentVersion = Math.max(currentVersion, row.version);
+          }
+        }
+      } catch {
+        // SQLite unavailable — fall through with in-memory version only.
+        // The client will still get a fresh snapshot (no 304), just without
+        // cross-worker version awareness.
+      }
+    }
     } else {
       const nowMs = Date.now();
       if (nowMs - (globalThis.__vfsDefensiveGuardLastWarnedAt__ ?? 0) > 60_000) {

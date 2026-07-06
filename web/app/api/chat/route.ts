@@ -2559,6 +2559,7 @@ const config: UnifiedAgentConfig = {
           requestId,
           elapsedMs: Date.now() - requestStartTime,
           agentExecutionEngine: AGENT_EXECUTION_ENGINE,
+          ...getBrokerDiagnostics(),
         });
         // Chat-hang-fix #3 — non-streaming branch stall wiring.
         let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>>;

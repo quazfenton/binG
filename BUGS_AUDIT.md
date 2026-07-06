@@ -1487,7 +1487,7 @@ Fixes applied during this audit review, grouped by source file:
 
 **Files:** `bing/web/lib/virtual-filesystem/virtual-filesystem-service.ts`, `bing/web/lib/database/session-store.ts`.
 
-#### ⬜ #76 — Loop-Guard at 2 Consecutive Failures (Too Aggressive)
+#### ✅ CLOSED #76 — Loop-Guard at 2 Consecutive Failures (Too Aggressive)
 **Symptom (run.log lines 4500–6000):** `[V1-API-WITH-TOOLS] Loop detected: Agent stopped: "read_files" failed 2 times with the same arguments.` — the loop-guard is killing the agent after 2 consecutive failures, not the 3 that #21 was supposed to allow.
 
 **Root cause:** there are TWO loop-guard implementations — one in the v1-with-tools path and one in the v1-api path. The v1-with-tools guard fires at 2 failures; the v1-api guard fires at 3. The v1-with-tools guard is too aggressive.
@@ -3214,7 +3214,7 @@ finishReason: "stop", toolInvocations: 0, tools: "none"
 | 73 | Polling | 🟡 Med | POLLING DETECTED spam — no client backoff | ⬜ OPEN |
 | 74 | VFS | 🟡 Med | Eager-init cooldown blocks reads after write | ⬜ OPEN |
 | 75 | Role Select | 🟡 Med | `choose_role` not auto-suggested to LLM | ⬜ OPEN |
-| 76 | LLM Stoppage | 🟠 High | LLM stops at step 1 — no tool calls after plan | ⬜ OPEN |
+| 76 | LLM Stoppage | 🟠 High | LLM stops at step 1 — no tool calls after plan | ✅ CLOSED |
 | 77 | VFS | 🟡 Med | Progressive edit `hasDiff: false` — no diff tracking | ⬜ OPEN |
 | 78 | VFS Path | 🟡 Med | MCP tool path resolves to wrong session | ⬜ OPEN |
 | 79 | Memory | 🟡 Med | Soft throttle re-engaged, not adopted in route | ⬜ OPEN |
@@ -3266,7 +3266,7 @@ The existing `auto-continue-detector.ts` has 8 signal types covering most Pass-5
 
 ## Pass-8: Fresh Log Audit — Additional OPEN Bugs
 
-### #110: Tool result parser loses real error when `error` is an object
+### ✅ CLOSED #110: Tool result parser loses real error when `error` is an object
 
 **Category:** Tools / Error Handling  
 **Severity:** 🟠 High  
@@ -3337,7 +3337,7 @@ The existing `auto-continue-detector.ts` has 8 signal types covering most Pass-5
 
 ---
 
-### #112: VFS ownership transfer has null row during cookie fast-path
+### ✅ CLOSED #112: VFS ownership transfer has null row during cookie fast-path
 
 **Category:** VFS / Auth  
 **Severity:** 🟡 Med  
@@ -3465,7 +3465,7 @@ The VFS sync layer retains sandbox references after the sandbox has been destroy
 
 ---
 
-### #116: Provider permanent failure is too sticky after a single auth/API error
+### ✅ CLOSED #116: Provider permanent failure is too sticky after a single auth/API error
 
 **Category:** LLM Provider Health / SelfHeal  
 **Severity:** 🟠 High  
@@ -3502,7 +3502,7 @@ Provider health state is persisted aggressively. A single hard auth/API failure 
 
 ---
 
-### #117: Completion telemetry can report zero response length after successful tool activity
+### ✅ CLOSED #117: Completion telemetry can report zero response length after successful tool activity
 
 **Category:** LLM Telemetry / Streaming  
 **Severity:** 🟡 Med  
@@ -3566,7 +3566,7 @@ Provider registry calls appear to reinitialize providers instead of reusing a st
 
 ---
 
-### #119: Plain-text fallback can still return invalid JSON
+### ✅ CLOSED #119: Plain-text fallback can still return invalid JSON
 
 **Category:** LLM Provider / Fallback  
 **Severity:** 🟠 High  
@@ -3635,16 +3635,16 @@ Provider errors are not normalized into a common `rate_limited` category with re
 
 | # | Category | Severity | Title | Status |
 |---|----------|----------|-------|--------|
-| 110 | Tools | 🟠 High | Tool result parser loses real error when `error` is an object | ⬜ OPEN |
+| 110 | Tools | 🟠 High | Tool result parser loses real error when `error` is an object | ✅ CLOSED |
 | 111 | Tool Loop | 🟠 High | Loop-abort steer sometimes has empty failure history | ⬜ OPEN |
-| 112 | VFS/Auth | 🟡 Med | VFS ownership transfer has null row during cookie fast-path | ⬜ OPEN |
+| 112 | VFS/Auth | 🟡 Med | VFS ownership transfer has null row during cookie fast-path | ✅ CLOSED |
 | 113 | Tool Validation | 🟡 Med | LLM repeatedly calls tools with missing required args | ⬜ OPEN |
 | 114 | Sandbox | 🟠 High | Daytona quota cleanup is not enough for persistent exhaustion | ⬜ OPEN |
 | 115 | VFS/Sandbox | 🟡 Med | VFS sandbox sync repeatedly references deleted sandboxes | ⬜ OPEN |
-| 116 | Provider Health | 🟠 High | Provider permanent failure is too sticky after one auth/API error | ⬜ OPEN |
-| 117 | Telemetry | 🟡 Med | Completion telemetry reports zero response length after tool activity | ⬜ OPEN |
+| 116 | Provider Health | 🟠 High | Provider permanent failure is too sticky after one auth/API error | ✅ CLOSED |
+| 117 | Telemetry | 🟡 Med | Completion telemetry reports zero response length after tool activity | ✅ CLOSED |
 | 118 | Sandbox Lifecycle | 🟡 Med | Repeated sandbox provider initialization churn | ⬜ OPEN |
-| 119 | LLM Fallback | 🟠 High | Plain-text fallback can still return invalid JSON | ⬜ OPEN |
+| 119 | LLM Fallback | 🟠 High | Plain-text fallback can still return invalid JSON | ✅ CLOSED |
 | 120 | Provider Health | 🟡 Med | Rate limiting is not normalized across providers | ⬜ OPEN |
 
 ---

@@ -1086,12 +1086,34 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
           usage: fallbackResult.usage || { totalTokens: 0 },
         };
       } catch (fallbackError: any) {
+        // Bug #119 fix: when the plain-text fallback ALSO fails, we were
+        // throwing `lastError` (the ORIGINAL error, e.g. a schema error).
+        // The operator sees "schema error" but the real problem is that the
+        // provider returned invalid JSON in the fallback too.  Throw a
+        // combined error so BOTH failures are visible.
+        const fallbackIsInvalidJson = isInvalidJsonError(fallbackError);
         log.error('callLLM: plain-text fallback also failed', {
           provider,
           model,
           error: fallbackError.message,
+          fallbackIsInvalidJson,
+          originalError: lastError?.message,
         });
-        // Throw the original error — the fallback is best-effort
+        if (fallbackIsInvalidJson) {
+          // The fallback itself got invalid JSON from the provider —
+          // surface that as the error so the operator knows the provider
+          // is returning garbage in BOTH modes (structured + plain-text).
+          const combined = new Error(
+            `Plain-text fallback also failed with Invalid JSON response ` +
+            `(provider=${provider} model=${model}). ` +
+            `Original error: ${lastError?.message ?? 'unknown'}`
+          );
+          (combined as any).cause = fallbackError;
+          (combined as any).isInvalidJsonFallback = true;
+          throw combined;
+        }
+        // Non-JSON fallback failure: still throw the original error since
+        // it is the most relevant signal for the caller's fallback chain.
         throw lastError;
       }
     }

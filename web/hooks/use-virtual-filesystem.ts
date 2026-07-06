@@ -238,16 +238,74 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
 /**
  * Detect anonymous owner IDs to avoid unnecessary VFS clearing.
  * Anonymous sessions carry no persistent sensitive data.
+ *
+ * Recognized prefixes (order is for readability only — `anon:` doesn't share
+ * a prefix with any legacy variant since the colon is unique, so the order
+ * of the boolean OR has no functional effect. Listed first since it's the
+ * canonical format produced by `resolveAnonymousOwnerId`):
+ *   - `anon:`           — canonical format produced by `resolveAnonymousOwnerId`
+ *                          and the `anon$sessionNum` composite-session branch
+ *   - `anon_`           — legacy format (normalized to `anon:` on read)
+ *   - `anon-`, `anon$`  — other legacy delimiters still in circulation
+ *   - `anonymous`       — bare literal (kept for backward compat)
+ *   - `anonymous-`, `anonymous$` — other legacy delimiters
+ *
+ * Exported (not module-private) so the regression test in
+ * `__tests__/use-virtual-filesystem.test.ts` can lock in the recognition
+ * contract — a previous regression in this predicate caused anonymous
+ * owners to be misclassified as authenticated, breaking the
+ * session-switch clearing logic in the OPFS init useEffect.
  */
-function isAnonOwner(id: string): boolean {
+export function isAnonOwner(id: string): boolean {
   return (
     id === 'anonymous' ||
     id === 'anon' ||
+    id.startsWith('anon:') ||
+    id.startsWith('anon_') ||
     id.startsWith('anon-') ||
     id.startsWith('anonymous-') ||
     id.startsWith('anon$') ||
     id.startsWith('anonymous$')
   );
+}
+
+/**
+ * Resolves a stable, unique anonymous ownerId for the current browser session.
+ *
+ * SECURITY: This is the ultimate partition key for unauthenticated users.
+ * Two different browser sessions navigating to the same URL path (e.g.
+ * /chat/004) MUST get different ownerIds — otherwise they'd read/write
+ * each other's VFS files (Critical Bug #2: IDOR via getOwnerId).
+ *
+ * The returned value is always prefixed with `anon:` to match the server's
+ * `resolveFilesystemOwner` format. A stable UUID is generated on first call
+ * and persisted to localStorage so subsequent calls within the same browser
+ * return the same ownerId (stable across reloads, unique across browsers).
+ *
+ * Backward compat: existing localStorage values stored without the `anon:`
+ * prefix (raw UUIDs, or the legacy `anon_xxx` format) are normalized on read.
+ */
+export function resolveAnonymousOwnerId(
+  storage: Pick<Storage, 'getItem' | 'setItem'> = typeof localStorage !== 'undefined'
+    ? localStorage
+    : { getItem: () => null, setItem: () => {} },
+): string {
+  const STORAGE_KEY = 'anonymous_session_id';
+  const existing = storage.getItem(STORAGE_KEY);
+  if (existing) {
+    // Normalize to `anon:<value>` format regardless of how it was stored.
+    if (existing.startsWith('anon:')) return existing;
+    if (existing.startsWith('anon_')) return existing.replace(/^anon_/, 'anon:');
+    return `anon:${existing}`;
+  }
+  // Generate a new unique ID. crypto.randomUUID is available in all modern
+  // browsers and Node 19+; fall back to a random string for older runtimes.
+  const newId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  storage.setItem(STORAGE_KEY, newId);
+  return `anon:${newId}`;
 }
 
 export function useVirtualFilesystem(
@@ -360,24 +418,19 @@ export function useVirtualFilesystem(
       if (userIdPart && userIdPart !== 'anon') return userIdPart;
     }
 
-    // Priority 3: Derive from scoped path
-    const derived = deriveSessionIdFromPath(initialPath);
-    if (derived) return derived;
-
-    // Priority 4: Fall back to anonymous session ID
-    const anonSessionId = getOrCreateAnonymousSessionId();
-    
-    // CRITICAL FIX: Normalize 'anon_timestamp_random' format to 'anon:timestamp_random'
-    // to match the backend's resolveFilesystemOwner which uses 'anon:' prefix with colon.
-    // This fixes the issue where files written to 'anon:12345_abc' couldn't be read
-    // because the client was querying 'anon_12345_abc' instead.
-    if (anonSessionId.startsWith('anon_')) {
-      // 'anon_timestamp_random' -> 'anon:timestamp_random'
-      return anonSessionId.replace(/^anon_/, 'anon:');
-    }
-    
-    // Handle already normalized format or other formats
-    return anonSessionId;
+    // Priority 3: Generate a stable, unique anonymous ownerId.
+    // CRITICAL (Bug #2 fix): this MUST return an `anon:<unique>` format so
+    // that (a) the VFS database partitions anonymous users correctly,
+    // (b) two different browser sessions on the same URL path (e.g.
+    // /chat/004) get DISTINCT ownerIds and can't see each other's files,
+    // and (c) isAnonOwner() returns true (it checks for the 'anon:' prefix).
+    // The previous Priority 3 returned deriveSessionIdFromPath(initialPath)
+    // directly — a raw session number like "004" — which was the IDOR
+    // vector (two browsers on /chat/004 both got ownerId="004" and shared
+    // the same VFS partition). This also fixes the spurious IDB wipe
+    // (High Bug #3) as a side-effect: isAnonOwner() now correctly
+    // recognizes the returned ownerId as anonymous.
+    return resolveAnonymousOwnerId();
   }, [options?.userId, options?.compositeSessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(resolvedInitialPath);
