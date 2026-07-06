@@ -288,6 +288,62 @@ const _envFingerprint: Record<string, string> = {
 };
 log.info('[UnifiedAgent] env-var fingerprint (routing-affecting)', _envFingerprint);
 
+/**
+ * Bug-fix #4 (chat-hang investigation wrap): race a Promise against a
+ * hard timeout that resolves with a caller-supplied fallback value. Used
+ * as defense-in-depth around the pre-stream awaits in
+ * `processUnifiedAgentRequest`:
+ *   - `resolveDynamicDefaults()`  → 2.5s (dynamic `import('../providers/model-ranker')` +
+ *                                   `circuit-breaker` can hang during dev/Turbopack cold compile)
+ *   - `determineMode(config)`     → 2.5s (dynamic `import('./execution-engines')` for engine path)
+ *   - `formatAvailableBinariesAsync()` → 3s (37 parallel `which` calls — already 1.5s
+ *                                   per-binary ceiling inside env-probe, but defense-in-depth)
+ *
+ * Timer-leak guard: the setTimeout handle is captured in outer scope and
+ * cleared in `.finally()` chained on the race so a fast-resolving winner
+ * doesn't leave a pending timer in Node's queue (mirrors PR-A/PR-B pattern
+ * from `llm-fallback-coordinator.ts`).
+ *
+ * Relationship to other abort machinery: this helper is `Promise.race`-based,
+ * NOT `AbortController`-based. It does NOT cancel the underlying work — the
+ * original promise is still pending in the background and GCs eventually —
+ * which is acceptable trade-off: leaking one promise per hung request is
+ * strictly better than blocking the chat route indefinitely. A future
+ * enhancement could wire `AbortController` + `signal.addEventListener` to
+ * prune the hung work, but the dev-mode hang symptom is the user-visible
+ * regression and the timeout fires in time for `processUnifiedAgentRequest`
+ * to proceed via the fallback path.
+ *
+ * @param promise  — the work to race against the deadline
+ * @param ms       — hard ceiling; race resolves to `fallback` if `promise` is not settled in time
+ * @param fallback — the value returned on timeout (must be type-compatible with `promise`)
+ * @param label    — short label used in the warn log so operators can correlate
+ */
+async function withTimeoutFallback<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          log.warn('[CHAT-HANG-FIX] Pre-stream await exceeded budget; using fallback', {
+            label,
+            timeoutMs: ms,
+          });
+          resolve(fallback);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // SelfHeal carry-forward cache: stores the provider+model that succeeded
 // on the most recent attempt so SelfHeal retries can skip dead providers.
 let _selfHealProvider: string | null = null;
@@ -1492,7 +1548,17 @@ export async function processUnifiedAgentRequest(
   // the probe result in its ENOENT error message as a fallback).
   let envProbeSuffix = '';
   try {
-    envProbeSuffix = await formatAvailableBinariesAsync();
+    // Bug-fix #4: 3s hard ceiling — the per-binary `PROBE_TIMEOUT_MS` inside
+    // `probeAvailableBinaries` is 1.5s, but on a pathological PATH/kernel delay
+    // the cumulative `Promise.all` of ~37 `which` calls + child_process spawn
+    // overhead can stall. Race against a fallback so the chat route proceeds
+    // even if the env probe never settles.
+    envProbeSuffix = await withTimeoutFallback(
+      formatAvailableBinariesAsync(),
+      3_000,
+      '',
+      'formatAvailableBinariesAsync',
+    );
   } catch (err: any) {
     log.debug('Env probe skipped at entry point (non-fatal)', { error: err?.message });
   }
@@ -1544,9 +1610,41 @@ export async function processUnifiedAgentRequest(
   // (~50-100ms per request — the dominant cost is a dynamic import
   // `await import('../providers/model-ranker')` inside resolveDynamicDefaults
   // and the synchronous classifier scoring inside classifyV1Route).
+  //
+  // Bug-fix #4: race EACH Promise.all entry against a 2.5s budget. A stuck
+  // dynamic import (Turbopack cold compile / sqlite lock / circuit-breaker
+  // module dep hang) used to block the entire /api/chat route indefinitely.
+  // The fallback for `resolveDynamicDefaults` matches the in-function defaults
+  // for env-only resolution; the fallback for `determineMode` is the safest
+  // single-mode path (`v1-api`) — strictly more resilient than `v1-agent-loop`
+  // because it goes through `streamWithConcurrentFallback` / `streamWithVercelAI`
+  // which carry the route-level stall watchdog. The Promise.all context is
+  // otherwise unchanged.
+  const envProvider = process.env.LLM_PROVIDER || 'mistral';
+  const envModel = process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  // Surface `config.engine` in the warn log when the caller set it, so a
+  // timeout-induced fallback to `v1-api` doesn't silently swallow the
+  // caller's explicit engine choice (Bug-fix #4 reviewer nit #3).
+  const determineModeLabel = config.engine
+    ? `determineMode[engine=${config.engine}]`
+    : 'determineMode';
   const [dynamicDefaults, modeResult] = await Promise.all([
-    resolveDynamicDefaults(),
-    determineMode(config),
+    withTimeoutFallback(
+      resolveDynamicDefaults(),
+      2_500,
+      { provider: envProvider, model: envModel },
+      'resolveDynamicDefaults',
+    ),
+    withTimeoutFallback(
+      determineMode(config),
+      2_500,
+      // `as const` preserves the literal-union narrowing so TS treats this
+      // fallback as `{mode: 'v1-api' | 'v1-agent-loop' | ...}`-compatible
+      // rather than widening `mode` to `string`. Mirrors the existing
+      // `mode: 'v1-api' as const` pattern elsewhere in this file.
+      { mode: 'v1-api' as const },
+      determineModeLabel,
+    ),
   ]);
   const { mode } = modeResult;
 

@@ -733,10 +733,20 @@ export async function POST(request: NextRequest) {
       provider,
       model,
       processedMessages,
-      stream
+      stream,
     );
 
-    // Validate provider and model with caching to avoid repeated lookups
+    // Chat-hang-fix #2: pre-stream boundary #1 — operator diagnostic log
+    // emitted right after the request-start DB write resolves. Used to
+    // determine which boundary the chat route crosses last when a hang
+    // symptom appears. fire-and-forget INFO (chat-metrics level) so it
+    // shows up at the user's `LOG_LEVEL=info` without per-request opt-in.
+    chatLogger.info('[CHAT-ROUTE] boundary: post-logRequestStart', {
+      requestId,
+      elapsedMs: Date.now() - requestStartTime,
+    });
+
+      // Validate provider and model with caching to avoid repeated lookups
     // Cache validation results for 30 seconds to reduce overhead
     const validationCacheKey = `${provider}:${model}`;
     const cachedValidation = validationCache.get(validationCacheKey);
@@ -1039,6 +1049,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Chat-hang-fix #2: pre-stream boundary #2 — operator diagnostic log
+    // emitted right after the 5-way Promise.all (denialContext,
+    // workspaceSessionContext, mem0Result, hybridContext, v1PromptSuffix)
+    // resolves. Combined with boundary #1 above, the delta between the two
+    // narrows the hang to one of: filesystem edit denials DB read,
+    // workspace-session-context build, mem0 HTTP call, hybrid AST retrieval,
+    // or V1 prompt-modifier composition.
+    const fiveWayStartMs = Date.now();
     const [denialContext, workspaceSessionContext, mem0Result, hybridContext, v1PromptSuffix] = await Promise.all([
       // Get recent filesystem edit denials
       denialContextPromise,
@@ -1076,6 +1094,14 @@ export async function POST(request: NextRequest) {
         return '';
       })(),
     ]);
+    // Chat-hang-fix #2: companion log to boundary #2 above — reports the
+    // total wall-clock for the 5-way fan-out so a single root cause
+    // dominating the latency is visible in run.log.
+    chatLogger.info('[CHAT-ROUTE] boundary: post-5way-promise-all', {
+      requestId,
+      elapsedMs: Date.now() - requestStartTime,
+      fiveWayDurationMs: Date.now() - fiveWayStartMs,
+    });
 
     // Build memory context from mem0 results
     let memoryContext = '';
@@ -1414,6 +1440,101 @@ FORMAT RULES:
       ? AbortSignal.any([request.signal, agentTurnAbort.signal])
       : agentTurnAbort.signal;
 
+    // Chat-hang-fix #3 — HOISTED route-level stall watchdog.
+    //
+    // The watchdog was previously nested inside the streaming branch's
+    // ReadableStream.start(controller), which meant it only protected the
+    // useUnifiedAgentStream path. The non-streaming fallback
+    // (await processUnifiedAgentRequest(config)) and the v1-agent-loop
+    // branch (await createAgentLoop(...)) had NO watchdog and could hang
+    // indefinitely. After hoist, the SAME stallPromise is wired into all
+    // three awaited call sites, and the SAME absolute hard cap
+    // (ROUTE_MAX_TURN_MS) bounds any single agent turn regardless of which
+    // dispatch branch the route resolves to.
+    //
+    // Closure-captured state is intentionally module-private to POST() so
+    // a request's watchdog cannot leak across concurrent requests.
+    const stallStartTime = Date.now();
+    let lastProgressAt = stallStartTime;
+    const PROGRESS_EVENT_TYPES = new Set<unknown>([
+      SSE_EVENT_TYPES.TOKEN,
+      SSE_EVENT_TYPES.TOOL_INVOCATION,
+    ]);
+    // Rejects when the watchdog fires so the route stops awaiting any
+    // processUnifiedAgentRequest / createAgentLoop call, even if the
+    // underlying SDK/provider never settles its promise (e.g. ignores
+    // the abort signal).
+    let stallReject: ((err: Error) => void) | null = null;
+    const stallPromise = new Promise<never>((_, reject) => {
+      stallReject = reject;
+    });
+    // Avoid an unhandled-rejection warning in the normal (no-stall)
+    // path: the watchdog is cleared in every branch's finally, so this
+    // promise simply stays pending; the noop catch is defensive.
+    stallPromise.catch(() => { /* observed via Promise.race */ });
+    // No-progress idle ceiling (default 60s): fires when no token/tool
+    // output has arrived for this long. Only relevant for the streaming
+    // branch (non-streaming doesn't bump lastProgressAt because there's
+    // no client-visible SSE stream); the max-turn cap below catches
+    // those cases unconditionally.
+    const ROUTE_STALL_TIMEOUT_MS = parseInt(
+      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '60000',
+      10,
+    );
+    // Absolute hard cap (default 120s): an unconditional upper bound on
+    // a single agent turn, applied to ALL branches. This is the
+    // guaranteed backstop — including the v1-agent-loop branch whose
+    // createAgentLoop(...) call previously had no watchdog at all.
+    const ROUTE_MAX_TURN_MS = parseInt(
+      process.env.CHAT_ROUTE_MAX_TURN_MS || '120000',
+      10,
+    );
+    // SSE-bridge: the streaming branch's start(controller) overrides
+    // this with the real SSE-error emitter; non-streaming / v1-agent-loop
+    // branches leave it as a no-op so fireStall doesn't error trying to
+    // enqueue onto a non-existent stream. The no-op default is INTENTIONAL
+    // (not dead code) — it's the only safe value before start(controller)
+    // has had a chance to run.
+    let emitSseError: (message: string) => void = () => { /* not streaming */ };
+    const fireStall = (reason: string, detail: Record<string, unknown>) => {
+      if (agentTurnAbort.signal.aborted) return;
+      chatLogger.error(
+        '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+        { requestId, reason, ...detail },
+      );
+      const stallErr = new Error(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
+      try { emitSseError(stallErr.message); } catch { /* best-effort */ }
+      // Cancel the in-flight LLM HTTP call (signal is already forwarded
+      // through config.abortSignal → runV1Api / runV2Native / v2-cli).
+      try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
+      // Free the response even if the inner promise never settles.
+      stallReject?.(stallErr);
+    };
+    // When the abort signal fires, reject the stall promise immediately
+    // so all three awaited call sites unblock (instead of hanging
+    // forever waiting for a Promise.race winner that never settles).
+    const rejectOnAbort = () => {
+      if (!stallReject) return;
+      const abortErr = new Error('Chat route aborted');
+      try { emitSseError(abortErr.message); } catch { /* best-effort */ }
+      stallReject(abortErr);
+      stallReject = null;
+    };
+    // Handle abort signal that fires after listener is attached.
+    agentTurnAbort.signal.addEventListener('abort', rejectOnAbort, { once: true });
+    // Handle case where signal was ALREADY aborted before listener.
+    if (agentTurnAbort.signal.aborted) rejectOnAbort();
+    const stallWatchdog = setInterval(() => {
+      if (agentTurnAbort.signal.aborted) return;
+      const noProgressMs = Date.now() - lastProgressAt;
+      const turnMs = Date.now() - stallStartTime;
+      if (turnMs >= ROUTE_MAX_TURN_MS) {
+        fireStall('max-turn', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
+      } else if (noProgressMs >= ROUTE_STALL_TIMEOUT_MS) {
+        fireStall('no-progress', { idleMs: noProgressMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS });
+      }
+    }, Math.min(ROUTE_STALL_TIMEOUT_MS, ROUTE_MAX_TURN_MS, 15000));
+
 const config: UnifiedAgentConfig = {
       userMessage: task,  // User message only — NOT the filesystem context
       userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
@@ -1456,7 +1577,37 @@ const config: UnifiedAgentConfig = {
       })(),
     };
 
-    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
+    // Race MCP tool loading against a timeout + abort signal. Mcporter's
+    // runtime.listTools can hang indefinitely on unreachable HTTP MCP
+    // servers (Node.js fetch has no default timeout). When the timeout
+    // fires or the client disconnects, we log a warning and proceed with
+    // an empty tool set rather than blocking the entire chat response.
+    const MCP_TOOLS_TIMEOUT_MS = parseInt(
+      process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '30000',
+      10,
+    );
+    let tools: Awaited<ReturnType<typeof getMCPToolsForAI_SDK>> = [];
+    try {
+      const mcpRace: Promise<any>[] = [
+        getMCPToolsForAI_SDK(authenticatedUserId, task),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`MCP tools timed out after ${MCP_TOOLS_TIMEOUT_MS}ms`)), MCP_TOOLS_TIMEOUT_MS);
+        }),
+      ];
+      if (request.signal) {
+        mcpRace.push(new Promise<never>((_, reject) => {
+          if (request.signal!.aborted) reject(new Error('Request aborted while loading MCP tools'));
+          else request.signal!.addEventListener('abort', () => reject(new Error('Request aborted while loading MCP tools')), { once: true });
+        }));
+      }
+      tools = await Promise.race(mcpRace);
+    } catch (err: any) {
+      chatLogger.warn('[CHAT-ROUTE] MCP tools unavailable — continuing without them', {
+        requestId,
+        error: err.message,
+      });
+      tools = [];
+    }
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,
@@ -1479,91 +1630,27 @@ const config: UnifiedAgentConfig = {
       const streamBody = new ReadableStream({
           async start(controller) {
             const rawEmit = createSSEEmitter(controller);
-            // ── Stall watchdog state ────────────────────────────────────────
-            // `lastProgressAt` tracks REAL progress only — actual answer tokens
-            // and tool activity. It is deliberately NOT bumped by step / status
-            // / heartbeat / reasoning events, because a wedged turn can keep
-            // emitting those forever while the user sees NOTHING in the UI
-            // (the exact "pending indefinitely, nothing streamed" report). An
-            // idle timer keyed on *any* emit would be reset by that noise and
-            // never fire. Progress = TOKEN content or TOOL_INVOCATION events.
-            const now0 = Date.now();
-            let lastProgressAt = now0;
-            const PROGRESS_EVENT_TYPES = new Set<unknown>([
-              SSE_EVENT_TYPES.TOKEN,
-              SSE_EVENT_TYPES.TOOL_INVOCATION,
-            ]);
+
+            // Chat-hang-fix #3 — streaming branch SSE-bridge override.
+            // The hoisted watchdog state (lastProgressAt,
+            // PROGRESS_EVENT_TYPES, ROUTE_STALL_TIMEOUT_MS,
+            // ROUTE_MAX_TURN_MS, fireStall, rejectOnAbort,
+            // stallWatchdog) is owned by the OUTER try block of POST().
+            // This start(controller) callback only owns:
+            //   1) emitSseError override: wires the hoisted no-op
+            //      into the real SSE-error emitter so fireStall's
+            //      SSE emit reaches the client when watchdog fires.
+            //   2) Local `emit` wrapper: bumps the hoisted
+            //      lastProgressAt for TOKEN / TOOL_INVOCATION events
+            //   so the no-progress idle ceiling can fire correctly.
+            emitSseError = (message: string): void => {
+              try { rawEmit(SSE_EVENT_TYPES.ERROR, { message }); } catch { /* best-effort */ }
+            };
             const emit: typeof rawEmit = (eventType, payload) => {
               if (PROGRESS_EVENT_TYPES.has(eventType)) lastProgressAt = Date.now();
               return rawEmit(eventType, payload);
             };
-            // Rejects when the watchdog fires so the route stops awaiting
-            // `processUnifiedAgentRequest` even if the underlying SDK/provider
-            // never settles its promise (e.g. ignores the abort signal).
-            let stallReject: ((err: Error) => void) | null = null;
-            const stallPromise = new Promise<never>((_, reject) => {
-              stallReject = reject;
-            });
-            // Avoid an unhandled-rejection warning in the normal (no-stall)
-            // path: the watchdog is cleared in `finally`, so this promise
-            // simply stays pending; the noop catch is defensive.
-            stallPromise.catch(() => { /* observed via Promise.race */ });
-            // No-progress idle ceiling (default 120s): fires when no token/tool
-            // output has arrived for this long, regardless of step/heartbeat
-            // noise.
-            const ROUTE_STALL_TIMEOUT_MS = parseInt(
-              process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000',
-              10,
-            );
-            // Absolute hard cap (default 300s): an unconditional upper bound on
-            // a single agent turn. This is the guaranteed backstop even if some
-            // future code path bumps progress on non-content events — the turn
-            // can never outlive this deadline.
-            const ROUTE_MAX_TURN_MS = parseInt(
-              process.env.CHAT_ROUTE_MAX_TURN_MS || '300000',
-              10,
-            );
-            const fireStall = (reason: string, detail: Record<string, unknown>) => {
-              if (agentTurnAbort.signal.aborted) return;
-              chatLogger.error(
-                '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
-                { requestId, reason, ...detail },
-              );
-              const stallErr = new Error(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
-              // Emit an error SSE event so the client sees the failure.
-              try { emit(SSE_EVENT_TYPES.ERROR, { message: stallErr.message }); } catch { /* best-effort */ }
-              // Cancel the in-flight LLM HTTP call (signal is now forwarded
-              // through config.abortSignal → streamWithConcurrentFallback).
-              try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
-              // Free the response even if the inner promise never settles.
-              stallReject?.(stallErr);
-            };
-            // When the request/abort signal fires, reject the stall promise
-            // immediately so the stream terminates instead of hanging forever.
-            // This fixes the deadlock: the watchdog below exits early on abort
-            // (line 1542) without calling fireStall, leaving stallPromise
-            // unresolved and the start() function stuck indefinitely.
-            const rejectOnAbort = () => {
-              if (!stallReject) return;
-              const abortErr = new Error('Chat route aborted');
-              try { emit(SSE_EVENT_TYPES.ERROR, { message: abortErr.message }); } catch { /* best-effort */ }
-              stallReject(abortErr);
-              stallReject = null;
-            };
-            // Handle abort signal that fires after listener is attached.
-            agentTurnAbort.signal.addEventListener('abort', rejectOnAbort, { once: true });
-            // Handle case where signal was ALREADY aborted before listener.
-            if (agentTurnAbort.signal.aborted) rejectOnAbort();
-            const stallWatchdog = setInterval(() => {
-              if (agentTurnAbort.signal.aborted) return;
-              const noProgressMs = Date.now() - lastProgressAt;
-              const turnMs = Date.now() - now0;
-              if (turnMs >= ROUTE_MAX_TURN_MS) {
-                fireStall('max-turn', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
-              } else if (noProgressMs >= ROUTE_STALL_TIMEOUT_MS) {
-                fireStall('no-progress', { idleMs: noProgressMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS });
-              }
-            }, Math.min(ROUTE_STALL_TIMEOUT_MS, ROUTE_MAX_TURN_MS, 15000));
+
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
@@ -1754,6 +1841,11 @@ const config: UnifiedAgentConfig = {
 //
 // Pair: @audit-phantom-L2053 in route.ts (canonical Stage 2 band reference).
 //        @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
+                chatLogger.info('[CHAT-ROUTE] boundary: pre-processUnifiedAgentRequest (v1 streaming)', {
+                  requestId,
+                  iteration,
+                  elapsedMs: Date.now() - requestStartTime,
+                });
                 result = await Promise.race([
                   processUnifiedAgentRequest(currentConfig),
                   stallPromise,
@@ -2364,7 +2456,30 @@ const config: UnifiedAgentConfig = {
       chatLogger.debug('[ROUTE-DEBUG] About to call processUnifiedAgentRequest', { agentExecutionEngine: AGENT_EXECUTION_ENGINE });
       chatLogger.debug('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call', { enableFilesystemEdits });
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
-        const result = await processUnifiedAgentRequest(config);
+        // Chat-hang-fix #2: pre-stream boundary #3 (non-streaming/v1-fallback
+        // branch). Pair with boundary #1 (post-logRequestStart) and boundary
+        // #2 (post-5way-promise-all). Together they localize which phase
+        // crossed last in a hang report: logRequestStart DB write, the 5-way
+        // promise.all (denials / wsCtx / mem0 / hybrid / v1Prompt), or the
+        // processUnifiedAgentRequest call itself. Engine label matches the
+        // v1-streaming branch's "Calling processUnifiedAgentRequest (v1
+        // streaming)" entry so a log-search can group both pre-call entries
+        // by phase regardless of branch.
+        chatLogger.info('[CHAT-ROUTE] boundary: pre-processUnifiedAgentRequest (v1 non-streaming)', {
+          requestId,
+          elapsedMs: Date.now() - requestStartTime,
+          agentExecutionEngine: AGENT_EXECUTION_ENGINE,
+        });
+        // Chat-hang-fix #3 — non-streaming branch stall wiring.
+        let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>>;
+        try {
+          result = await Promise.race([
+            processUnifiedAgentRequest(config),
+            stallPromise,
+          ]);
+        } finally {
+          clearInterval(stallWatchdog);
+        }
         chatLogger.debug('[ROUTE-DEBUG] processUnifiedAgentRequest returned', { resultSuccess: result.success, hasResponse: !!result.response });
 
         // GUARANTEED debug field — always appears if this code path is reached
@@ -2750,11 +2865,11 @@ const config: UnifiedAgentConfig = {
             {
               sandboxId: sandboxSession?.sandboxId,
               sandboxProvider: sandboxSession?.sandboxId
-                ? sandboxBridge.inferProviderFromSandboxId(sandboxSession.sandboxId) || undefined
+                ? (sandboxBridge.inferProviderFromSandboxId(sandboxSession.sandboxId) || undefined)
                 : undefined,
               workspacePath: sandboxSession?.workspacePath || requestedScopePath,
             },
-            actualModel, // Pass user's selected model
+            actualModel, // user-selected model
           );
 
           // Check if agent supports streaming (ToolLoopAgent integration)
@@ -2783,6 +2898,13 @@ const config: UnifiedAgentConfig = {
               agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
             } finally {
               if (agentTimeoutId) clearTimeout(agentTimeoutId);
+              // Chat-hang-fix #3 polish: clear the hoisted route-level
+              // watchdog here too. The executeTask timeoutPromise is
+              // the localized ceiling for the v1-agent-loop branch;
+              // once it resolves/rejects, this is the canonical point
+              // to release the global stallWatchdog interval so it
+              // doesn't outlive the request.
+              clearInterval(stallWatchdog);
             }
 
             chatLogger.info('Agent tools execution completed', { requestId }, {
