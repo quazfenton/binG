@@ -10,7 +10,7 @@ Comprehensive catalog of places where independent async operations run sequentia
 | # | Doc claim | Status | Evidence |
 |---|-----------|:------:|----------|
 | 1 | `route.ts:999` — `applyPromptModifiers` into Promise.all | ✓ applied | route.ts L920-L955 already wraps it in the 5-way Promise.all alongside `buildWorkspaceSessionContext`, `mem0Search`, `buildHybridWorkspaceContext`, `resolveFilesystemOwner`+`classifyRequest` |
-| 2 | `service.ts:1444` — `resolveDynamicDefaults` + `determineMode` Promise.all | ✗ pending | L1466-L1470 still sequential |
+| 2 | `service.ts:1444` — `resolveDynamicDefaults` + `determineMode` Promise.all | ✓ applied | `web/lib/orchestra/unified-agent-service.ts:1512` now wraps both in `Promise.all([resolveDynamicDefaults(), determineMode(config)])`. Cite drift: the two awaits now sit at L1512 + L1523 (intervening log block) — the upstream `resolveDynamicDefaults` cache layer + ~6/2026 file growth pushed the cite down ~46 lines from the 7/3 audit snapshot. ROI ~50-100ms/request. |
 | 3 | `service.ts:3774` — hoist `buildWorkspaceSnapshot` outside provider-fallback loop | ⚠ do-not-apply | Co-Brief §Invalidations explicitly warns: stale-snapshot race when a provider modifies state and fails mid-write — keep snapshot INSIDE loop |
 | 4 | `route.ts:883` — `resolveFilesystemOwner` + `classifyRequest` Promise.all | ✓ applied | route.ts L950 wraps both in Promise.all |
 | 5 | `architecture-integration.ts:630-903` — Promise.all 10 tool I/O ops | ✗ not validated here | if unchanged, the win stands |

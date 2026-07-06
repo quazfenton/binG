@@ -1508,8 +1508,19 @@ export async function processUnifiedAgentRequest(
 
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
-  // Use shared dynamic defaults resolver instead of hardcoded mistral
-  const dynamicDefaults = await resolveDynamicDefaults();
+  // Win #2 (docs/async-parallelization-opportunities.md): Promise.all the two
+  // independent REQUEST-ENTRY setup ops. `resolveDynamicDefaults` only reads
+  // env vars + the 30s dynamic-defaults cache; `determineMode` only reads
+  // config + startupCaps + (lazily) execution-engines. Neither mutates state
+  // the other reads, so unblocking both halves the REQUEST-ENTRY latency
+  // (~50-100ms per request — the dominant cost is a dynamic import
+  // `await import('../providers/model-ranker')` inside resolveDynamicDefaults
+  // and the synchronous classifier scoring inside classifyV1Route).
+  const [dynamicDefaults, modeResult] = await Promise.all([
+    resolveDynamicDefaults(),
+    determineMode(config),
+  ]);
+  const { mode } = modeResult;
 
   log.info('[UnifiedAgent] │ provider:', config.provider || dynamicDefaults.provider);
   log.info('[UnifiedAgent] │ model:', config.model || dynamicDefaults.model);
@@ -1519,8 +1530,6 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ messageLength:', (config.userMessage || '').length);
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
-
-  const { mode } = await determineMode(config);
 
   log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
   log.info('[UnifiedAgent] │ resolvedMode:', mode);
