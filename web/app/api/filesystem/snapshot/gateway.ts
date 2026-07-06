@@ -21,8 +21,52 @@ const logger = createLogger('API:VFS:Snapshot');
 // worker, and the DB existence check below (`isInitDone`) is the
 // cross-worker source of truth via the shared SQLite `vfs_workspace_meta`
 // + `vfs_workspace_files` tables.
-const eagerInitCooldowns = new Map<string, number>();
-const initDoneOwners = new Set<string>();
+const EAGER_INIT_COOLDOWN_MS = 5000;
+const INIT_DONE_TTL_MS = 60_000;       // mark "init done" as expired after 1 min
+const MAX_INIT_OWNERS = 10_000;       // hard cap on per-worker tracking
+const INIT_OWNER_SWEEP_INTERVAL_MS = 30_000; // periodic GC, .unref'd
+const eagerInitCooldowns = new Map<string, number>();                // ownerId → last attempt ms
+const initDoneOwners = new Map<string, number>();                    // ownerId → set-at ms
+
+let initOwnerSweepInterval: NodeJS.Timeout | null = null;
+function startInitOwnerSweep(): void {
+  if (initOwnerSweepInterval) return;
+  initOwnerSweepInterval = setInterval(() => {
+    const now = Date.now();
+    // Drop expired initDone marks and stale cooldown entries so the
+    // maps cannot grow unbounded under sustained anonymous traffic.
+    for (const [ownerId, setAt] of initDoneOwners) {
+      if (now - setAt > INIT_DONE_TTL_MS) initDoneOwners.delete(ownerId);
+    }
+    for (const [ownerId, lastAttempt] of eagerInitCooldowns) {
+      if (now - lastAttempt > EAGER_INIT_COOLDOWN_MS) eagerInitCooldowns.delete(ownerId);
+    }
+    // Hard cap: if a worker is still above MAX_INIT_OWNERS after the
+    // TTL-based sweep, evict oldest entries (insertion order, since
+    // Map preserves insertion order). This is a safety net against
+    // pathological workloads; the TTL sweep handles 99% of cases.
+    const capInit = (m: Map<string, number>) => {
+      if (m.size <= MAX_INIT_OWNERS) return;
+      const overflow = m.size - MAX_INIT_OWNERS;
+      const iter = m.keys();
+      for (let i = 0; i < overflow; i++) {
+        const k = iter.next().value;
+        if (k === undefined) break;
+        m.delete(k);
+      }
+    };
+    capInit(initDoneOwners);
+    capInit(eagerInitCooldowns);
+  }, INIT_OWNER_SWEEP_INTERVAL_MS).unref(); // .unref() so the sweep interval never prevents Node exit
+}
+startInitOwnerSweep();
+
+process.on('beforeExit', () => {
+  if (initOwnerSweepInterval) {
+    clearInterval(initOwnerSweepInterval);
+    initOwnerSweepInterval = null;
+  }
+});
 
 
 
@@ -544,7 +588,7 @@ export async function GET(req: NextRequest) {
           // Next.js compile workers — every per-process `globalThis.*`
           // gate previously reset on worker spawn and triggered the
           // cooldown loop after every Turbopack JIT compile.
-          let isInitDone = initDoneOwners.has(owner.ownerId);
+          let isInitDone = initDoneOwners.has(owner.ownerId); // Map#has is identical to Set#has
           if (!isInitDone) {
             try {
               const db = getDatabase();
@@ -559,7 +603,7 @@ export async function GET(req: NextRequest) {
                   .get(owner.ownerId);
                 if (hasFiles) isInitDone = true;
               }
-              if (isInitDone) initDoneOwners.add(owner.ownerId);
+              if (isInitDone) initDoneOwners.set(owner.ownerId, Date.now());
             } catch (err: any) {
               // Don't let a transient DB hiccup force every request
               // down the WORKSPACE_NOT_READY path. Log once and fall
@@ -627,7 +671,6 @@ export async function GET(req: NextRequest) {
           // is handled by the DB-based isInitDone check above — if
           // another worker already initialized the workspace, the DB
           // check will return true and we never reach this branch.
-          const EAGER_INIT_COOLDOWN_MS = 5000;
           const lastAttempt = eagerInitCooldowns.get(owner.ownerId) || 0;
           if (Date.now() - lastAttempt < EAGER_INIT_COOLDOWN_MS) {
             log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY`);
@@ -652,7 +695,7 @@ export async function GET(req: NextRequest) {
             // Bug #7 fix: Mark this owner as initialized so future requests
             // skip the WORKSPACE_NOT_READY path entirely. P0 fix: also
             // persists cross-worker via the DB existence check above.
-            initDoneOwners.add(owner.ownerId);
+            initDoneOwners.set(owner.ownerId, Date.now());
             // Re-export the now-initialized snapshot and return success
             // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
             // file edits on the very next read.

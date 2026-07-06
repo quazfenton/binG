@@ -1371,12 +1371,10 @@ export function WorkspacePanel() {
         // workspace is still being eagerly initialized. Without this
         // branch every page load printed an error to the dev console
         // even though the gateway is correcting itself on the next
-        // request. The user-facing failure shape a few lines up still
-        // creates a default empty snapshot, so the UI never breaks.
-        if (
-          error?.message?.includes('not yet initialized') ||
-          error?.errorCode === 'WORKSPACE_NOT_READY'
-        ) {
+        // request. Match on the error message — the thrown Error from
+        // useVirtualFilesystem's request() only carries .message (the
+        // `errorCode` field lives on the API payload, not the throw).
+        if (error?.message?.includes('not yet initialized')) {
           logger.warn(
             'Failed to fetch VFS snapshot (workspace initializing; will retry on next event):',
             error?.message || error,

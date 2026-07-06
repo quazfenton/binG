@@ -1538,6 +1538,22 @@ const config: UnifiedAgentConfig = {
               // Free the response even if the inner promise never settles.
               stallReject?.(stallErr);
             };
+            // When the request/abort signal fires, reject the stall promise
+            // immediately so the stream terminates instead of hanging forever.
+            // This fixes the deadlock: the watchdog below exits early on abort
+            // (line 1542) without calling fireStall, leaving stallPromise
+            // unresolved and the start() function stuck indefinitely.
+            const rejectOnAbort = () => {
+              if (!stallReject) return;
+              const abortErr = new Error('Chat route aborted');
+              try { emit(SSE_EVENT_TYPES.ERROR, { message: abortErr.message }); } catch { /* best-effort */ }
+              stallReject(abortErr);
+              stallReject = null;
+            };
+            // Handle abort signal that fires after listener is attached.
+            agentTurnAbort.signal.addEventListener('abort', rejectOnAbort, { once: true });
+            // Handle case where signal was ALREADY aborted before listener.
+            if (agentTurnAbort.signal.aborted) rejectOnAbort();
             const stallWatchdog = setInterval(() => {
               if (agentTurnAbort.signal.aborted) return;
               const noProgressMs = Date.now() - lastProgressAt;

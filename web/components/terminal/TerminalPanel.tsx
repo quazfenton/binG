@@ -350,10 +350,7 @@ export default function TerminalPanel({
        // meta row) from console.error to console.warn so the dev console
        // stops showing a red error on every page load. Real errors
        // (DB outages, parse failures, etc.) still log as error.
-       if (
-         error?.message?.includes('not yet initialized') ||
-         error?.errorCode === 'WORKSPACE_NOT_READY'
-       ) {
+       if (error?.message?.includes('not yet initialized')) {
          console.warn('[TerminalPanel] Failed to sync VFS (workspace initializing):', error?.message || error);
        } else {
          console.error('[TerminalPanel] Failed to sync VFS:', error);
