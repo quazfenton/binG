@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     if (csrfReject) return csrfReject;
 
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
-    const authResult = await verifyAuth(req);
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Unauthorized:${COLORS.reset} No valid authentication token`);
       return NextResponse.json(
@@ -68,8 +68,6 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: rateLimitResult.headers }
       );
     }
-
-    const body = await req.json();
     
     // Validate request body with Zod
     const parseResult = sandboxExecuteRequestSchema.safeParse(body);

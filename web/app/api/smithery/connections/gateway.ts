@@ -48,26 +48,25 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
-    const authResult = await verifyAuth(request);
-    if (!authResult || !authResult.success) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+  // Verify authentication
+  const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+  if (!authResult || !authResult.success) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
 
-    const service = getSmitheryService();
+  const service = getSmitheryService();
 
-    if (!service.isConfigured()) {
-      return NextResponse.json(
-        { error: 'Smithery API not configured' },
-        { status: 503 }
-      );
-    }
+  if (!service.isConfigured()) {
+    return NextResponse.json(
+      { error: 'Smithery API not configured' },
+      { status: 503 }
+    );
+  }
 
-    const body = await request.json();
-    const { mcpUrl, metadata, connectionId } = body;
+  const { mcpUrl, metadata, connectionId } = body;
 
     if (connectionId) {
       // Update existing connection

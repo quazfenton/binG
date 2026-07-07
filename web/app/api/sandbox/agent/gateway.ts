@@ -8,7 +8,7 @@ export const maxDuration = 120;
 export async function POST(req: NextRequest) {
   try {
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
-    const authResult = await verifyAuth(req);
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -18,8 +18,6 @@ export async function POST(req: NextRequest) {
 
     // Use authenticated userId from token, ignore body userId
     const authenticatedUserId = authResult.userId;
-
-    const body = await req.json();
     const { message, history } = body;
 
     if (!message) {

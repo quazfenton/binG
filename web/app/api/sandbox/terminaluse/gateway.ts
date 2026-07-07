@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
     log(`[${requestId}] POST /api/sandbox/terminaluse/tasks`)
 
     // Authenticate user
-    const authResult = await verifyAuth(req)
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()])
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -119,9 +119,6 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: rateLimitResult.headers }
       )
     }
-
-    // Parse request body
-    const body = await req.json()
     const parseResult = createTaskSchema.safeParse(body)
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0]
@@ -261,16 +258,13 @@ async function POST_EVENT(req: NextRequest) {
     log(`[${requestId}] POST /api/sandbox/terminaluse/tasks/${taskId}/events`)
 
     // Authenticate user
-    const authResult = await verifyAuth(req)
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()])
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
-
-    // Parse request body
-    const body = await req.json()
     const parseResult = sendEventSchema.safeParse(body)
     if (!parseResult.success) {
       return NextResponse.json(
@@ -381,16 +375,13 @@ async function POST_FILESYSTEM(req: NextRequest) {
     log(`[${requestId}] POST /api/sandbox/terminaluse/filesystems`)
 
     // Authenticate user
-    const authResult = await verifyAuth(req)
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()])
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
-
-    // Parse request body
-    const body = await req.json()
     const parseResult = createFilesystemSchema.safeParse(body)
     if (!parseResult.success) {
       return NextResponse.json(

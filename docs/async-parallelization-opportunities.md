@@ -23,7 +23,135 @@ Comprehensive catalog of places where independent async operations run sequentia
 ✓ both stand. `secrets/web.ts openDB()` has zero concurrency primitives (no MAX_CONCURRENT, no semaphore); modern browsers accept unbounded concurrent readonly IDB transactions. `transactional-vfs.ts` has zero `Mutex|Lock|serialize` imports — OCC uses version tokens only. Path is `web/lib/vfs/` not `web/lib/virtual-filesystem/`.
 
 ### NEW-1 (auth + body parse overlap — Tier 4 #47 anchor site)
-✓ applied — `web/app/api/sandbox/session/gateway.ts` POST handler now wraps `verifyAuth(req)` + `req.json()` in `Promise.all`. Cite drift: doc listed `sandbox/session/gateway.ts:18,38` (and Tier 4 #48/:32,48 + #49/antigravity/login/:16,24); the real anchor site is `/opt/bing/web/app/api/sandbox/session/gateway.ts` POST (verifyAuth at L18, req.json at L38 — apply at L17-L34 now). **Cite correction**: the path is `app/api/sandbox/session/gateway.ts`, NOT `sandbox/session/gateway.ts` (typo in old doc entry). The DELETE handler in the same file (also has verifyAuth + req.json() at L147+L157) was INTENTIONALLY LEFT UNCHANGED on this apply (scope discipline; separate next-pass). ROI 15-40ms/request on sandbox session POST critical path.
+✓ applied — `web/app/api/sandbox/session/gateway.ts` POST handler now wraps `verifyAuth(req)` + `req.json()` in `Promise.all`. Cite drift: doc listed `sandbox/session/gateway.ts:18,38` (and Tier 4 #48/:32,48 + #49/antigravity/login/:16,24); the real anchor site is `/opt/bing/web/app/api/sandbox/session/gateway.ts` POST (verifyAuth at L18, req.json at L38 — apply at L17-L34 now). **Cite correction**: the path is `app/api/sandbox/session/gateway.ts`, NOT `sandbox/session/gateway.ts` (typo in old doc entry). The DELETE handler in the same file (also has verifyAuth + req.json() at L147+L157) was INTENTIONALLY LEFT UNCHANGED on this initial apply (scope discipline; separate next-pass). ROI 15-40ms/request on sandbox session POST critical path.
+
+### NEW-1 followup (2026-07-07) — Tier 4 #47-DELETE, #48, #49, #50
+Sibling passes extended the NEW-1 pattern from the POST anchor to the remaining Tier 4 routes:
+
+| Doc # | File / handler | Apply site | Status | Notes |
+|---|---|---|---|---|
+| 47-DELETE | `web/app/api/sandbox/session/gateway.ts` DELETE | L106-L137 | ✓ applied | Same shape as POST: `verifyAuth(req)` + `req.json()` in `Promise.all`. CSRF check stays BEFORE PA (sync-or-quick-cookie-check); rate-limit stays AFTER (depends on `authResult.userId`). Removed the standalone `body = await req.json()` further down. Mirror of the prior POST apply. |
+| 48 | `web/app/api/sandbox/daemon/gateway.ts` POST | L29-L48 | ✓ applied | `verifyAuth(req)` + `req.json()` in `Promise.all`. Rate-limit check stays AFTER the PA (depends on `authResult.userId`, sequential dependency); 6-line audit comment cites Tier 4 #48. ROI per the doc estimate. |
+| 49 | `web/app/api/antigravity/login/route.ts` GET | L17-L41 | ✓ applied | GET shape: partner is `getAntigravityOAuthUrl(projectId)`, not `req.json()`. The synchronous URL parse (`new URL(req.url).searchParams.get('projectId')`) stays BEFORE the PA so `projectId` is in scope at construction. No external network I/O; safe to fire for anonymous callers (a stolen oauthUrl is not a session-takeover risk; `/api/antigravity/callback` hard-rejects anonymous tokens via verifyAuth). Wallclock gain bounded by `min(T_verifyAuth, T_oauthUrlGen)` — typically 5-15ms. |
+| 50 | `web/app/api/antigravity/callback/route.ts` GET | L18-L41 (unchanged) | ⚠ deliberately deferred | **Security rationale**: `exchangeCodeForTokens(code, redirectUri)` is an external HTTP POST to `oauth2.googleapis.com/token` that **permanently consumes the single-use OAuth `code`**. Parallelizing with `verifyAuth` lets an unauthenticated caller presenting a (possibly stolen) valid code BURN the code before `verifyAuth` rejects — irrecoverable user error + Google token-endpoint quota hit. The Google token endpoint accepts and processes ANY caller presenting a valid `code` (no verifyAuth-side gate on Google's side); we have NO per-IP rate-limit on this route today, so spam hits burn our OAuth `client_id`'s quota and risk Google-side throttling of the entire integration. The 5-15ms wallclock savings does NOT justify this architectural risk. Tradeoff documented in chat history (NEW-1 application turn). Pattern can be revisited ONLY behind a per-IP rate-limit + tightened CSRF check on the callback. |
+
+**Cumulative Tier 4 ROI**: ~15-40ms/request compounding across the 4 applied sites (sandbox/session POST + DELETE + sandbox/daemon POST + antigravity/login GET). Anchor cite drift correction still stands (path typo `app/api/sandbox/session/gateway.ts` vs old `sandbox/session/gateway.ts`).
+
+### NEW-1 followup-b (2026-07-07) — Group-A Tier 4 sweep (12 files, 13 sites)
+
+The recent Tier 4 sweep across the rest of the `/api/*` surface (Command: `rg "await verifyAuth"` plus alternates `resolveRequestAuth`/`authenticateRequest`/`requireAdminApiOrForbidden`) surfaced 14 additional clean mirrors of the NEW-1 pattern (`verifyAuth + req.json → Promise.all`) across 12 files that were NOT in the original Tier 4 catalog. Twelve applied uniformly; one special case (#NEW-A9 mfa/disable) required a `let`-lift due to outer-catch scope collision. The 14th candidate (admin/callback) was skipped under the same security rationale as #50 (Google token endpoint external mutating RPC).
+
+| Doc # | File / handler | Apply site | Status | Notes |
+|---|---|---|---|---|
+| NEW-A1 | `web/app/api/antigravity/chat/route.ts` POST | L17-L34 | ✓ applied | Cleanest shape: no CSRF, no rate-limit, no Zod. Direct `Promise.all([verifyAuth(req), req.json()])` mirror. Body destructured directly: `const { model, messages, stream, thinking } = body`. |
+| NEW-A2 | `web/app/api/mastra/resume/gateway.ts` POST | L40-L57 | ✓ applied (with caveat) | Used `request.json().catch(() => null)` + `if (!body) return 400` per audit safety decision. Original `let body; try { body = await request.json(); } catch { 400 }` collapsed to single inline null-check. `requestId` preserved on both 401 and 400 paths. |
+| NEW-A3 | `web/app/api/sandbox/execute/gateway.ts` POST | L29-L48 | ✓ applied | CSRF stays BEFORE; rate-limit (depends on `authResult.userId`) stays AFTER; Zod `sandboxExecuteRequestSchema.safeParse(body)` consumes body post-PA. |
+| NEW-A4 | `web/app/api/sandbox/lifecycle/gateway.ts` POST | L21-L40 | ✓ applied | Same shape as execute: rate-limit stays AFTER; Zod `lifecycleSchema.safeParse(body)` consumes body downstream. |
+| NEW-A5 | `web/app/api/sandbox/agent/gateway.ts` POST | L11-L28 | ✓ applied | Clean mirror: no CSRF, no rate-limit, no Zod. Used by streaming agent loop. |
+| NEW-A6 | `web/app/api/sandbox/terminaluse/gateway.ts` POST (tasks) | L100-L120 | ✓ applied | Rate-limit stays AFTER. Zod `createTaskSchema.safeParse(body)` consumes body post-PA. |
+| NEW-A7 | `web/app/api/sandbox/terminaluse/gateway.ts` POST_EVENT | L262-L280 | ✓ applied | No rate-limit; Zod `sendEventSchema.safeParse(body)` consumes body. |
+| NEW-A8 | `web/app/api/sandbox/terminaluse/gateway.ts` POST_FILESYSTEM | L380-L395 | ✓ applied | No rate-limit; Zod `createFilesystemSchema.safeParse(body)` consumes body. |
+| NEW-A9 | `web/app/api/auth/mfa/disable/gateway.ts` POST | L21-L36 | ✓ applied (SPECIAL) | **Required `let`-lift to function scope** (rejected the simple `const [authResult, body] = await Promise.all(...)` shape): the existing outer `catch` block references `authResult.userId` for the audit-log call (`logMfaDisableFailure(authResult.userId, request)`), but `try`-block-scoped `const` declarations are NOT visible inside the catch's own lexical scope. ALSO added optional-chain defense `authResult?.userId` in the catch to handle the rare `Promise.all`-rejects-before-assign edge case (preserves the audit-log's silent-swap-via-inner-try behavior on the rare `verifyAuth`-throws path). |
+| NEW-A10 | `web/app/api/auth/mfa/verify/gateway.ts` POST | L23-L36 | ✓ applied | Direct mirror — different from NEW-A9 because mfa/verify's catch does NOT reference `authResult`. CSRF stays BEFORE. |
+| NEW-A11 | `web/app/api/smithery/connections/gateway.ts` POST | L46-L70 | ✓ applied | Different `verifyAuth` import path (`@/lib/auth/verify-auth` not `@/lib/auth/jwt`) → auth-result check uses `!authResult.success` (not `success && userId`). Param is `request` (not `req`), so `request.json()`. |
+| NEW-A12 | `web/app/api/user/profile/gateway.ts` PUT | L11-L25 | ✓ applied | CSRF stays BEFORE; **PUT only** (GET handler untouched — uses sync DB read, not a verifyAuth+body pattern). Uses `request.json()`. |
+| NEW-A13 | `web/app/api/agent/stateful-agent/interrupt/gateway.ts` POST | L21-L33 | ✓ applied | Different AuthResult shape: `authResult.authenticated` instead of `authResult.success` (this site uses `@/lib/auth/verify-auth` not `@/lib/auth/jwt`). |
+
+**NEW-A9 SPECIAL CASE — why the `let`-lift was necessary (remember the trick for future audits):**
+
+A `try/catch` in JavaScript has SEPARATE block scopes — the `catch` cannot see `try`-scoped `const` declarations. If you put `const [authResult, body] = await Promise.all([...])` INSIDE a try block, a catch handler that transitively references `authResult` (or `body`) cannot read it — the TypeScript compiler catches this with `TS2552: Cannot find name 'authResult'`, and at runtime the catch sees `undefined`. Two options for files where the catch transitively references either var (mfa/disable is the lone Group-A case):
+
+1. **Lift the `let` declaration OUTSIDE the try,** with destructure-assign inside the try:
+   ```ts
+   let authResult: Awaited<ReturnType<typeof verifyAuth>>;
+   let body: any;
+   try {
+     [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
+     // ... use authResult freely inside try
+   } catch (error) {
+     // ... catch can read authResult since the `let` is at function scope
+   }
+   ```
+   The `let` lives at function scope; both try and catch see it. (Used in mfa/disable.)
+2. Move the `Promise.all` OUTSIDE the try entirely (loses the parallelism benefit on the catch path — usually acceptable since catch paths are rare, but loses parallelization for the happy path's region before the try).
+
+Optionally-chained the `authResult?.userId` reference in mfa/disable's catch to defend against the `Promise.all`-rejects-before-assign edge case (i.e., if the `await` itself throws before the destructure has assigned, `authResult` is left undefined at runtime even though the TS type says non-undefined — `?.` shields the audit-log call from crashing and falling into the inner `try { logMfaDisableFailure } catch {}` silent-swap). All other 12 sites have direct `const`-mirror applies because their catches either don't reference `authResult` (mfa/verify, mastra/resume, terminaluse Sites 6-8) OR are inside the same scope as the verifyAuth line.
+
+**Cumulative NEW-1 + followup + followup-b Tier 4 ROI**: ~15-40ms × 4 originally-applied sites (the NEW-1 anchor `sandbox/session/gateway.ts` POST + 3 NEW-1 followup applies #47-DELETE, #48, #49; the 4th followup candidate #50 stays deferred under the security rationale documented above) + ~2-15ms × 13 sites in the NEW-1 followup-b Group-A sweep (all 13 applied) = **~41-235ms/request saved on hot paths when any of the 17 routes fire** (4 originally-applied + 13 Group-A). The 2-15ms × 13 = 26-195ms Group-A range composes min-max with the original 15-40ms to give 41-235ms; the doc Tier-4 typical savings band of 5-15ms × 13 = 65-195ms would give 80-235ms — both bounds valid, the 41-235 figure is the broader envelope.
+
+### NEW-1 followup-c (2026-07-07) — Group-B sync-predicate + Promise.all sweep (lib/mcp/ + lib/orchestra/)
+
+The followup-b sweep covered the `/api/*` surface. This followup-c targets the **same NEW-1 followup-b shape** (sync predicate + sibling async + Promise.all-with-Promise.resolve-no-op fold-in) in **lib/mcp/ + lib/orchestra/** — the orchestration-side mirrors of the route-side pattern. The audit command set was `rg 'cachedRemoteTools|cached.*Tools|let cached\w+|Promise\.resolve\(EMPTY|\Promise\.resolve\(\[\]|\Promise\.resolve\(null|\{\}\)'` plus `rg 'getRemoteMCPTools|getAvailableProviders|getProviderHealth|refreshMCPorterToolsCache|getBlaxelProviderInstance|getArcadeServiceInstance'`.
+
+Three NEW-C candidates identified with strong same-shape fit; one (NEW-C4 `createModelWithFallback`'s fall-through loop) is **deliberately rejected** because it is by-design first-success-wins (sequential `try { await createModel } catch { continue; }` cannot become a `Promise.all` without changing the failure-recovery contract). The sweep confirms the doc's existing Tier 1 #11 site in `architecture-integration.ts:300-318` (HTTP transport CONNECT in a for-loop) is the upstream sibling of NEW-C1; the apply here targets NEW-C1 alone and leaves the doc-cited Tier 1 #11 untouched.
+
+| Doc # | File / handler | Apply site | Status | Notes |
+|---|---|---|---|---|
+| NEW-C1 | `web/lib/mcp/http-transport.ts` `getRemoteMCPTools` (per-transport listTools fan-out) | L86-L119 | ☐ not applied (recommended) | **Largest in-scope find.** Sequential `await transport.listTools()` per connected server in a `for (const [serverName, transport] of connectedTransports)` loop. The shape mirrors Tier 1 #11 (same `architecture-integration.ts` `for` loop but for CONNECT vs LISTTOOLS). Apply: `Promise.all(Array.from(connectedTransports.entries()).map(async ([serverName, transport]) => { try { ... } catch { return []; } }))` then `.flat()`. Per-transport failure isolation is preserved (each entry's `try/catch` returns `[]` on failure; the existing `for` body's `try/catch` becomes each map callback's `catch`). ROI ∝N servers × 30-80ms/transport — typical web-mode deployment has 2-4 transports → **~60-320ms saved per call when remote MCP servers are configured**. The 60s TTL cache (L23-30 + L79-82 read-through) reduces call frequency, so the per-request win only materializes on cache miss / 60s boundary / explicit `forceRefresh=true`. |
+| NEW-C2 | `web/lib/orchestra/stateful-agent/agents/provider-fallback.ts` `getProviderHealth` (per-provider isAvailable sequential) | L412-L432 | ☐ not applied (recommended, soft win) | `for ([name, config] of Object.entries(providerConfigs)) { const available = await config.isAvailable(); ... }` — 3 providers, each `isAvailable` is a sync env-var check wrapped in async (microsecond-cheap work + JS microtask hop). Apply: `Promise.all(Object.values(providerConfigs).map(c => c.isAvailable().catch(() => false)))`. Per-provider try/catch preserves the current fallback to `{ available: false, error: ... }` shape via the existing optional `error` field. ROI: ~1-5ms per call (3 providers × microtask-hop + env-var reads; tightened from the earlier 5-15ms estimate after review — the actual wallclock cost is dominated by the JS microtask roundtrip, not by any I/O). Caveat: this function is called from the provider-fallback health-dashboard endpoint, not the per-LLM-call hot path, so the per-request win is N/A most of the time — the win is on health-dashboard refreshes, which can be hit during loopback or operator-debug traffic. Flagged "soft win" because the per-call savings are at the low end of the doc's "5-30ms" target range; recommended as a clean apply but not a priority. |
+| NEW-C3 | `web/lib/mcp/architecture-integration.ts` `getBlaxelProviderInstance` + `getArcadeServiceInstance` lazy-init cold-start fold-into-Phase-1-PA | L1018-L1029 | ☐ not applied (recommended) | The two lazy-init singletons are cached after first call (`cachedBlaxelProvider`, `cachedArcadeService`). On the **first** call: `await import('../sandbox/providers/blaxel-provider')` (or `await import('../integrations/arcade-service')`); once resolved, `new BlaxelProvider()` (or `getArcadeService()`) runs synchronously. The wallclock cost is the dynamic import; the constructor/service getter is sync. Apply: hoist both dynamic imports into the **existing Phase-1 PA at L656-L665** (`Promise.all([import('./provider-advanced-tools'), import('./vfs-mcp-tools'), import('../bash/bash-tool'), import('../powers/mem0-power'), conditional mcporter refresh])`) by adding both as slots 6 and 7 with a single-resolve-then-discard pattern: `import('../sandbox/providers/blaxel-provider').then(() => {}) ; import('../integrations/arcade-service').then(() => {})`. The constructor/getter stays sync-or-async in the existing lazy-init helpers, so the warmth just pre-resolves the module cache. ROI: **cold-start only** (~5-15ms per dynamic import resolved at Phase-1 PA time vs the current first-tool-call latency). Compounds with the existing Phase-1 PA's import wallclock — the two new slots are siblings, not replacements. |
+| ~~NEW-C4~~ | ~~`provider-fallback.ts` `createModelWithFallback` per-provider try-await fallback loop~~ | ~~L344-L365 (for-loop body of `createModelWithFallback`)~~ | ⚠ deliberately deferred — `Promise.any` is the canonical alternative | **Currently sequential by design, but `Promise.any` IS the canonical first-success-wins alternative** (returns the first fulfilled Promise, equivalent semantic). The rejection is softened from "NOT parallelizable" to "deferred with caveats":<br> 1. **Loss of preferred-first guarantee.** `Promise.any` resolves whichever Promise is fastest, not whichever provider is `preferred` per the caller's `preferredProvider` arg. If the user specifies `'anthropic'` as preferred but `'openai'` resolves first, the result is non-preferred. Acceptable trade-off if you race for fastest; potentially breaks caller intent.<br>2. **Circuit-breaker accounting timing shifts.** The current code does `circuitBreaker.recordSuccess(name)` immediately on first-success; with `Promise.any`, the sibling providers are still in-flight when we return — we can't reliably `recordFailure` on them yet (they may eventually succeed). A clean apply wraps each provider's try-await with a `.then(onSuccess, onFailure)` and uses the wrapped promise's `.finally` for the breaker update — feasible but more than a one-line fold.<br>3. **Per-provider config context** (`MODEL_MAPPING`, mappedModelId, etc.) needs to be captured per provider entry inside the `.map` callback. Straightforward but verbose.<br>**Net:** the rejection is too strong if read as "not parallelizable ever". The correct framing is "deferred because the clean `Promise.any` apply requires capturing circuit-breaker accounting in a per-resolve `.then`/`.finally` callback and accepting the loss of strict preferred-first ordering. The current sequential cost (~50-100ms per extra provider tried) is the architecturally-correct cost of single-success fallback; the `Promise.any` apply would trade that for ~max-of-N latency with weaker ordering guarantees." |
+
+**Cumulative NEW-1 + followup-b + followup-c ROI when all 3 NEW-C applies land** (composed from per-site ranges, NEW-C3 only effective on cold-start):
+
+| Scenario | Compose | Range |
+|---|---|---|
+| Cold-start first request | NEW-C1 (60-320ms) + NEW-C3 cold (5-15ms) | **~65-335ms** |
+| Subsequent request, NEW-C1 cache miss (60s boundary) | NEW-C1 (60-320ms) + NEW-C2 health-dash ≈0 (off hot path) | **~60-320ms** |
+| Subsequent request, NEW-C1 cache hit | NEW-C3 warm memoization (≈0) + NEW-C2 health-dash ≈0 | **~0ms** (steady state) |
+| Health-dashboard refresh | NEW-C2 only | **~1-5ms** |
+
+The "subsequent-request steady state" of **~60-320ms** is essentially NEW-C1's range alone (NEW-C2 is health-dash-only, NEW-C3 warms after first call). The earlier prose "46-225ms subsequent-request steady state" was a precariously-derived figure that doesn't compose traceably — replaced with the explicit scenario table above so the math is auditable. NEW-C1's per-request win is the largest single-route find in the entire audit when materialized — comparable to the Tier 1 Win #1 5-300ms `applyPromptModifiers` fold-in.
+
+**NEW-C1 recipe (concrete refactor recipe for the apply, drop-in replacement for L84-L119):**
+
+```ts
+// Before (L84-L119)
+const allTools: Array<{...}> = [];
+for (const [serverName, transport] of connectedTransports) {
+  try {
+    const result = await transport.listTools();
+    const tools = result?.tools || [];
+    for (const tool of tools) {
+      allTools.push({ type: 'function', function: { name: ..., description: ..., parameters: ... } });
+    }
+    logger.debug(`Loaded ${tools.length} tools from remote MCP server: ${serverName}`);
+  } catch (error: any) {
+    logger.warn(`Failed to get tools from remote MCP server ${serverName}:`, error.message);
+  }
+}
+cachedRemoteTools = allTools;
+lastToolFetch = now;
+return allTools;
+
+// After
+const transportResults = await Promise.all(
+  Array.from(connectedTransports).map(async ([serverName, transport]) => {
+    try {
+      const result = await transport.listTools();
+      const tools = result?.tools || [];
+      logger.debug(`Loaded ${tools.length} tools from remote MCP server: ${serverName}`);
+      return tools.map((tool: any) => ({
+        type: 'function' as const,
+        function: {
+          name: `${serverName}_${tool.name}`.replace(/[^a-zA-Z0-9_]/g, '_'),
+          description: tool.description || `Remote MCP tool: ${tool.name}`,
+          parameters: tool.inputSchema || { type: 'object', properties: {} },
+        },
+      }));
+    } catch (error: any) {
+      logger.warn(`Failed to get tools from remote MCP server ${serverName}:`, error.message);
+      return [] as Array<{ type: 'function'; function: { name: string; description?: string; parameters: any } }>;
+    }
+  })
+);
+const allTools = transportResults.flat();
+cachedRemoteTools = allTools;
+lastToolFetch = now;
+return allTools;
+```
+
+The cache-hit path (L79-L82) is preserved unchanged. Apply preserves the existing semantic-isolation contract: a single failing transport does not deny tool definitions from the healthy siblings (each `try/catch` returns `[]` independently, same as the old `for` body).
 
 ### Tier 5 #66 (concurrent-miss in-flight de-dup, resolveDynamicDefaults)
 ✓ applied — `_dynamicDefaultsInflight` module-level Promise now de-dups concurrent cache-MISS callers of `resolveDynamicDefaults()` in `web/lib/orchestra/unified-agent-service.ts`. Combined with the 30s `_cachedDynamicDefaults` TTL synchronous cache-hit return above it, the in-flight slot covers BOTH the within-window repeat-call case (microsecond return) AND the simultaneous-miss case the cache alone does NOT (e.g. a circuit-breaker invalidation fires + N callers race to the cache-miss path within the same microtask). The slot identity-checks in the finally cleanup to avoid clobbering a newer in-flight promise set by an interleaved caller. Cite: module-level var near `DYNAMIC_DEFAULTS_TTL_MS` + IIFE wrap of the cache-miss body + `try/finally` cleanup before the function's closing `}`. ROI is workload-dependent — minimal for single-caller-per-request flows; meaningful for fan-out flows where 2-3 callers/request hit `resolveDynamicDefaults()` via the Win #2b sites (runV1ApiWithTools L3518 + runV1ApiCompletion L5682 run in parallel on the same microtask with their OWN Promise.all, and the de-dup gate collapses them into a single resolution chain at the per-microtask level).
@@ -37,8 +165,9 @@ Comprehensive catalog of places where independent async operations run sequentia
 1. **Audit #5** before applying (architecture-integration 10 ops).
 2. **Skip Win #3 entirely** — Coordination Brief invalidation stands.
 3. **Apply Tier 3 read-side wins** (`transactional-vfs.ts`, `vfs-batch-operations.ts`, `smart-context.ts`, `context-pack-service.ts`, `desktop-vfs-service.ts`, `cloud-fs-manager.ts`) — naive pass-throughs to `virtualFilesystem.readFile`, no VFS-team coordination required.
-4. **Apply NEW-1 to remaining gateway routes** — extend the pattern from `sandbox/session/gateway.ts` POST to DELETE handler in same file + to Tier 4 #48 (`sandbox/daemon/gateway.ts` POST) + Tier 4 #49 (`antigravity/login/route.ts`, where partner is `getAntigravityOAuthUrl`, not `req.json()`) + Tier 4 #50 (`antigravity/callback/route.ts`, partner `exchangeCodeForTokens`). Same per-request win compounds across hot gateway routes.
+4. ~~**Apply NEW-1 to remaining gateway routes**~~ — **COMPLETED 2026-07-07 (both phases)**: Phase 1 = NEW-1 followup covered Tier 4 #47-DELETE, #48, #49 applied (the NEW-1 anchor `sandbox/session/gateway.ts` POST is the 4th originally-applied site); #50 deliberately deferred (security rationale in followup section). Phase 2 = NEW-1 followup-b covered the Group-A Tier 4 sweep across 12 additional files / 13 sites that mirror the same NEW-1 pattern but were not in the original Tier 4 catalog (see "NEW-1 followup-b (2026-07-07)" section). Compound **~41-235ms/request** win across the **17 applied routes** (4 originally-applied + 13 Group-A), on top of the original POST anchor. Special case: NEW-A9 mfa/disable required a `let`-lift for the outer-catch scope — see followup-b section for the trick.
 5. **Apply NEW-2..NEW-4** — mem0Search before classifyRequest, background session-file-tracking, FC-Gate telemetry post-yield.
+6. **Apply NEW-1 followup-c (3 sites in lib/mcp/ + lib/orchestra/)** — NEW-C1 (`http-transport.ts` per-transport listTools fan-out, ∝N transports × 30-80ms each) is the largest single-route win in the entire audit; NEW-C2 (`provider-fallback.ts` `getProviderHealth` per-provider isAvailable sequential) is health-dashboard-only but cheap; NEW-C3 (`architecture-integration.ts` `getBlaxelProviderInstance`/`getArcadeServiceInstance` lazy-init cold-start fold-into-Phase-1-PA) compounds with the existing Phase-1 PA siblings. NEW-C4 (`createModelWithFallback`) deliberately rejected (by-design first-success-wins). See "NEW-1 followup-c (2026-07-07) — Group-B sync-predicate + Promise.all sweep (lib/mcp/ + lib/orchestra/)" section above.
 
 ---
 
@@ -179,13 +308,13 @@ These are the highest-ROI changes: they run on every user request and save meani
 
 A recurring pattern across multiple route handlers: `verifyAuth(req)` and `req.json()` are independent but run sequentially.
 
-| # | File | Lines | Independent Ops | Est. |
-|---|------|-------|-----------------|------|
-| 46 | `tts/route.ts` | 13, 16 | `voiceServerManager.startKittenServer()` + `auth0.getSession()` | Server start time |
-| 47 | `sandbox/session/gateway.ts` | 18, 38 | `verifyAuth(req)` + `req.json()` | Body parse time |
-| 48 | `sandbox/daemon/gateway.ts` | 32, 48 | `verifyAuth(req)` + `req.json()` | Body parse time |
-| 49 | `antigravity/login/route.ts` | 16, 24 | `verifyAuth(req)` + `getAntigravityOAuthUrl(...)` | OAuth URL time |
-| 50 | `antigravity/callback/route.ts` | 18, 37 | `verifyAuth(req)` + `exchangeCodeForTokens(code, redirectUri)` | Token exchange time |
+| # | File | Lines | Independent Ops | Est. | Status |
+|---|------|-------|-----------------|------|--------|
+| 46 | `tts/route.ts` | 13, 16 | `voiceServerManager.startKittenServer()` + `auth0.getSession()` | Server start time | ✗ different shape — `voiceServerManager` + `auth0.getSession` is server-start + auth0, NOT a verifyAuth-then-async-overlap pattern; not in NEW-1 / NEW-1 followup scope, unvalidated for the verifyAuth pattern |
+| 47 | `web/app/api/sandbox/session/gateway.ts` | 18, 38 (POST); 147, 157 (DELETE) | `verifyAuth(req)` + `req.json()` | Body parse time | ✓ applied — POST anchor (NEW-1) + DELETE sibling (NEW-1 followup 2026-07-07). Path corrected from `sandbox/session/gateway.ts` (catalog typo) to `app/api/sandbox/session/gateway.ts` per Status Audit cite-correction. |
+| 48 | `web/app/api/sandbox/daemon/gateway.ts` | 32, 48 | `verifyAuth(req)` + `req.json()` | Body parse time | ✓ applied — NEW-1 followup (2026-07-07) |
+| 49 | `web/app/api/antigravity/login/route.ts` | 16, 24 | `verifyAuth(req)` + `getAntigravityOAuthUrl(...)` | OAuth URL time | ✓ applied — NEW-1 followup (2026-07-07); see followup table for partner-shape note (URL is `getAntigravityOAuthUrl`, not `req.json()`) |
+| 50 | `web/app/api/antigravity/callback/route.ts` | 18, 37 | `verifyAuth(req)` + `exchangeCodeForTokens(code, redirectUri)` | Token exchange time | ⚠ deliberately deferred — external mutating RPC burns single-use OAuth `code`; security rationale in NEW-1 followup (2026-07-07) |
 
 ---
 

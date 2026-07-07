@@ -11,13 +11,13 @@ export async function PUT(request: NextRequest) {
     const csrfReject = csrfCheckOrReject(request);
     if (csrfReject) return csrfReject;
 
-    const authResult = await verifyAuth(request);
-    
+    const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+
     if (!authResult.success) {
       return NextResponse.json({ error: authResult.error }, { status: 401 });
     }
 
-    const { currentPassword, newPassword } = await request.json();
+    const { currentPassword, newPassword } = body;
 
     if (!currentPassword || !newPassword) {
       return NextResponse.json({ error: 'Current password and new password are required' }, { status: 400 });

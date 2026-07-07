@@ -37,19 +37,17 @@ export async function POST(request: NextRequest) {
 
   try {
     // SECURITY: Authenticate the caller using JWT
-    const authResult = await verifyAuth(request);
+    const [authResult, body] = await Promise.all([
+      verifyAuth(request),
+      request.json().catch(() => null),
+    ]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Authentication required', requestId },
         { status: 401 }
       );
     }
-
-    // Parse and validate request body
-    let body;
-    try {
-      body = await request.json();
-    } catch (parseError) {
+    if (!body) {
       return NextResponse.json(
         { error: 'Invalid JSON in request body', requestId },
         { status: 400 }

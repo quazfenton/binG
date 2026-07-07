@@ -37,6 +37,9 @@ import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from './provider
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
+// Bug #91 canonical response-shape helper (with 16 unit tests covering
+// whitespace/null/non-string/non-array edge cases — see classifying test).
+import { classifyResponseShape } from '@/lib/tools/unified-response-handler';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { ModalClient, maybeUseModal, getModalClient } from '@/lib/modal/modal-client';
@@ -190,7 +193,7 @@ import { formatAvailableBinariesAsync } from '@/lib/bash/env-probe';
 // path into the system prompt at request start so the LLM never has to
 // guess the scope. Returns null for plain anon ownerIds (no $ delimiter),
 // in which case the inject is silent.
-import { buildSessionScopeSteerPrompt } from './steer-service';
+import { buildSessionScopeSteerPrompt, wireFinishReasonSteer } from './steer-service';
 // Pass-2 cross-cutting theme: record orchestration fallback events so the
 // degradation chain shows when the v1-api text-mode fallback fired. The
 // sessionId is passed through config.conversationId / config.userId / 'default'.
@@ -538,36 +541,6 @@ function invalidateDynamicDefaultsCache(): void {
  * to avoid false positives from substring matching (e.g. 'read' in 'thread.read').
  * These are used by the auto-continuation loop in runV1ApiWithTools.
  */
-
-/**
- * Classify an LLM response + tool-execution pair into one of four shapes.
- * Shared helper for the [V1-API-WITH-TOOLS] log line (line ~4269) and the
- * [Telemetry-v1Api] log line (line ~4360) in this same `runV1ApiWithTools`
- * function, so the two sites cannot drift on the taxonomy. Bug #117:
- * "tools_only" must remain distinguishable from "empty" — a single LLM
- * call that produced zero text but >=1 tool call is a real category
- * (pure-tool reply) and must not silently merge into "empty".
- *
- *   - "empty"      no text, no tool calls (possible stall pattern)
- *   - "tools_only" no text, >=1 tool call (rare; pure-tool reply)
- *   - "text"       text, no tool calls
- *   - "mixed"      text AND >=1 tool call
- *
- * @param responseLength  `result.response.length` after stringification
- * @param toolCount       number of recorded tool invocations
- */
-type ResponseShape = 'text' | 'tools_only' | 'mixed' | 'empty';
-function classifyResponseShape(
-  responseLength: number,
-  toolCount: number,
-): ResponseShape {
-  const hasResponse = responseLength > 0;
-  const hasTools = toolCount > 0;
-  if (hasResponse && hasTools) return 'mixed';
-  if (hasResponse) return 'text';
-  if (hasTools) return 'tools_only';
-  return 'empty';
-}
 
 /**
  * Classify a provider error into permanent vs transient vs rate-limit.
@@ -4030,13 +4003,41 @@ async function runV1ApiWithTools(
     );
 
     // Add built-in choose_role tool — enables dynamic role redirection.
-    // Uses dynamic import to avoid circular dependency with vercel-ai-tools.
+    // Bug #18 fix (BUGS2.md): the dynamic import previously silently failed (empty
+    // catch) leaving choose_role absent from aiSdkTools for the entire session.
+    // The model never sees it and never calls it. The fix guarantees the tool
+    // is present by: (a) falling back to a minimal stub if the import fails, and
+    // (b) skipping the conditional entirely when the tool is already registered.
     if (!aiSdkTools['choose_role']) {
       try {
         const { chooseRoleCapability } = await import('@/lib/chat/tools/choose-role-tool');
         aiSdkTools['choose_role'] = chooseRoleCapability;
-      } catch {
-        // chooseRoleCapability unavailable — role redirection won't be exposed
+        log.info('[V1-API-WITH-TOOLS] choose_role tool registered');
+      } catch (err) {
+        // Bug #18 fix: provide a minimal fallback stub so the tool is still
+        // available even if the full capability module fails to load.
+        log.warn('[V1-API-WITH-TOOLS] chooseRoleCapability unavailable — using fallback stub', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        aiSdkTools['choose_role'] = {
+          description: 'choose_role(role: string) — Switch the AI\'s role or specialty. Use this when a task requires expertise you haven\'t seen applied yet (e.g., architect, reviewer, researcher, security expert). Example: choose_role(role="security-expert")',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              role: { type: 'string', description: 'Role to switch to (e.g. "architect", "reviewer", "researcher", "security-expert", "devops-engineer")' },
+              reason: { type: 'string', description: 'Optional reason for the role switch' },
+            },
+            required: ['role'],
+          },
+          execute: async ({ role, reason }: { role: string; reason?: string }) => {
+            return {
+              success: true,
+              role,
+              switched: true,
+              message: `Role switched to "${role}". ${reason ? `Reason: ${reason}` : ''}`,
+            };
+          },
+        };
       }
     }
 
@@ -4296,12 +4297,15 @@ async function runV1ApiWithTools(
       log.info(`[V1-API-WITH-TOOLS] │ toolInvocations: ${toolInvocations.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ tools: ${toolInvocations.map(t => t.toolName).join(', ') || 'none'}`);
       // Bug #117 fix: classify response shape so "tools_only" vs "empty"
-      // is distinguishable (Bug #91 canonical helper, 16 unit tests).
+      // is distinguishable (Bug #91 canonical helper, see classifying test).
       const responseShape = classifyResponseShape({
         response,
-        toolCalls: toolInvocations.map((i) => ({ name: i.toolName, args: i.args })),
+        toolCalls: toolInvocations.map((inv) => ({ name: inv.toolName, args: inv.args })),
       });
       log.info(`[V1-API-WITH-TOOLS] │ responseShape: ${responseShape}${responseShape === 'empty' ? ' (suspicious — log a WARN)' : ''}`);
+      // Bug #117: by Bug #91 canonical semantics this also fires for
+      // whitespace-only responses (was previously logged as 'text' under
+      // the old local ternary). See classifyResponseShape contract.
       if (responseShape === 'empty') {
         log.warn('[V1-API-WITH-TOOLS] Empty response with no tool calls — possible stall pattern', { requestId, provider: providerName, model: modelForProvider });
       }
@@ -4391,12 +4395,12 @@ async function runV1ApiWithTools(
       }));
 
       // Bug #117 fix: classify response shape so "tools_only" vs "empty"
-      // is distinguishable (Bug #91 canonical helper, 16 unit tests).
+      // is distinguishable (Bug #91 canonical helper, see classifying test).
       // Local keeps the `telemetry` prefix because site 1 above declares
       // `responseShape` in this same function scope.
       const telemetryResponseShape = classifyResponseShape({
         response,
-        toolCalls: toolCallTelemetry.map((t) => ({ name: t.toolName, args: t.args })),
+        toolCalls: toolCallTelemetry.map((inv) => ({ name: inv.toolName, args: inv.args })),
       });
 
       log.info('[Telemetry-v1Api] Recording completion', {

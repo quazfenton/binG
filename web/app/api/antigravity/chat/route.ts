@@ -19,12 +19,11 @@ import { verifyAuth } from '@/lib/auth/jwt';
 
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await verifyAuth(req);
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await req.json();
     const { model, messages, stream, thinking } = body;
 
     if (!model || !messages) {

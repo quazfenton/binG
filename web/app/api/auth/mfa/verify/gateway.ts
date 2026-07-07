@@ -18,14 +18,11 @@ export async function POST(request: NextRequest) {
   const csrfReject = csrfCheckOrReject(request);
   if (csrfReject) return csrfReject;
 
-  // Require authentication
-  const authResult = await verifyAuth(request);
-  if (!authResult.success || !authResult.userId) {
-    return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
-  }
-
   try {
-    const body = await request.json();
+    const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
+    }
     const { code } = body;
 
     if (!code || typeof code !== 'string') {

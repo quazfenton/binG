@@ -15,17 +15,16 @@ const logger = createLogger('API:Agent:Interrupt');
  */
 export async function POST(request: NextRequest) {
   try {
-    // Verify authentication
-    const authResult = await verifyAuth(request);
-    if (!authResult || !authResult.authenticated) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+  // Verify authentication
+  const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+  if (!authResult || !authResult.authenticated) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
 
-    const body = await request.json();
-    const { action, target, reason, diff, interrupt_id, command } = body;
+  const { action, target, reason, diff, interrupt_id, command } = body;
 
     if (command === 'approve' || command === 'reject') {
       if (!interrupt_id) {

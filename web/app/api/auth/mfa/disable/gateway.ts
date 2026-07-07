@@ -17,14 +17,17 @@ export async function POST(request: NextRequest) {
   const csrfReject = csrfCheckOrReject(request);
   if (csrfReject) return csrfReject;
 
-  // Require authentication
-  const authResult = await verifyAuth(request);
-  if (!authResult.success || !authResult.userId) {
-    return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
-  }
-
+  // NEW-1 pattern: parallelize verifyAuth + req.json. authResult/body are
+  // lifted to function scope so the outer catch's audit-log call can
+  // still reference them — try-block-scoped consts are not visible
+  // from the catch.
+  let authResult: Awaited<ReturnType<typeof verifyAuth>>;
+  let body: any;
   try {
-    const body = await request.json();
+    [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
+    }
     const { code, backupCode } = body;
 
     if (!code && !backupCode) {
@@ -110,10 +113,11 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[MFA Disable] Error:', error);
 
-    // MED-5 fix: Log MFA disable failure (exception)
+    // MED-5 fix: Log MFA disable failure (exception).
+    // Optional-chain defends against the Promise.all-rejects-before-assign edge case.
     try {
       const { logMfaDisableFailure } = await import('@/lib/auth/auth-audit-logger');
-      logMfaDisableFailure(authResult.userId, request);
+      logMfaDisableFailure(authResult?.userId, request);
     } catch (auditError) {
       console.warn('[MFA Disable] Audit log failed:', auditError);
     }

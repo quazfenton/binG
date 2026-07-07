@@ -32,7 +32,7 @@ const lifecycleSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await verifyAuth(req);
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized' },
@@ -47,8 +47,6 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: rateLimitResult.headers }
       );
     }
-
-    const body = await req.json();
     const parseResult = lifecycleSchema.safeParse(body);
     if (!parseResult.success) {
       return NextResponse.json(

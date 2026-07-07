@@ -98,8 +98,15 @@ export async function DELETE(req: NextRequest) {
     const csrfReject = csrfCheckOrReject(req);
     if (csrfReject) return csrfReject;
 
-    // CRITICAL: Authenticate user from JWT token
-    const authResult = await verifyAuth(req);
+    // NEW-1 (docs/async-parallelization-opportunities.md, sibling of POST in
+    // this file): Promise.all the verifyAuth (cookie/header JWT parse) and
+    // req.json() (body stream read). Both ops are independent reads of separate
+    // parts of the same NextRequest; the auth-result check still gates
+    // downstream flow regardless of which settles first.
+    const [authResult, body] = await Promise.all([
+      verifyAuth(req),
+      req.json(),
+    ]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -110,7 +117,6 @@ export async function DELETE(req: NextRequest) {
     // Use authenticated userId from token
     const authenticatedUserId = authResult.userId;
 
-    const body = await req.json();
     const { sessionId, sandboxId } = body;
 
     if (!sessionId || !sandboxId) {

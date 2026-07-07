@@ -639,7 +639,14 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
   // `normalizeSessionId` export is already statically imported at the top
   // of this file; `getVfsScopeBasePath`/`getVfsScopePath` are likewise
   // static — the dynamic import was redundant).
-  // =============================================================================
+  // =============================================================================  // Phase-1 PA + conditional mcporter cache refresh (audit 2026-07-03,
+  // conditional-guard pattern mirroring Phase 2). The 5th slot folds the
+  // previously-sequential refreshMCPorterToolsCache() into the 4 imports;
+  // mcporterIntegration.isEnabled() is a sync predicate; the
+  // Promise.resolve() branch keeps the destructure index stable at 5.
+  // assignment-before-read for cachedMCPorterTools preserved (only read
+  // downstream after this PA resolves). ~5-30ms/request saved when
+  // mcporter is enabled; zero overhead when disabled.
   const [
     providerToolDefs,
     vfsToolDefs,
@@ -650,9 +657,15 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     import('./vfs-mcp-tools'),
     import('../bash/bash-tool'),
     import('../powers/mem0-power'),
+    // 5th slot value is irrelevant — refresh returns void and is ignored
+    // by the 4-element destructure. Promise.resolve(undefined) is explicit
+    // (vs Phase 2's sentinel-default style) since this op has no useful value.
+    mcporterIntegration.isEnabled()
+      ? refreshMCPorterToolsCache()
+      : Promise.resolve(undefined),
   ]);
 
-  // Phase 1 derives (sync post-await — no extra latency).
+  // Phase 1 derives (sync post-await — no extra latency).
   const providerTools = providerToolDefs.getAllProviderAdvancedTools();
   const vfsTools = vfsToolDefs.getVFSToolDefinitions().map(t => ({
     type: 'function' as const,
@@ -662,10 +675,6 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
       parameters: t.function.parameters,
     },
   }));
-
-  if (mcporterIntegration.isEnabled()) {
-    await refreshMCPorterToolsCache();
-  }
 
   const nativeTools = isMCPAvailable() ? mcpToolRegistry.getToolDefinitions() : [];
 

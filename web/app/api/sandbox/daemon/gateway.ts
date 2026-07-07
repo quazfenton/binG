@@ -29,7 +29,19 @@ const stopDaemonSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await verifyAuth(req);
+    // NEW-1 (docs/async-parallelization-opportunities.md, Tier 4 #48):
+    // Promise.all the verifyAuth (cookie/header JWT parse) and req.json() (body
+    // stream read). Both ops are independent reads of separate parts of the
+    // same NextRequest, and neither result constrains the other. The
+    // auth-result check still gates downstream flow (authResult is the FIRST
+    // destructured element so the 401 short-circuit is identical in shape to
+    // the sequential version). The rate-limit check stays AFTER the Promise.all
+    // because it depends on authResult.userId (a sequential dependency on the
+    // auth result).
+    const [authResult, body] = await Promise.all([
+      verifyAuth(req),
+      req.json(),
+    ]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -45,7 +57,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json();
     const parseResult = startDaemonSchema.safeParse(body);
     if (!parseResult.success) {
       return NextResponse.json(
