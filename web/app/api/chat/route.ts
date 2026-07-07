@@ -954,37 +954,75 @@ export async function POST(request: NextRequest) {
     // Sanitize to prevent path traversal attacks (e.g., ".." or "/" in cookie value)
     // Use resolveFilesystemOwner for consistent anonymous session handling
     //
-    // Tier 1 #2 (audit 2026-06-20, Top 5 Quick Win, ~5-20ms/request): fire
-    // `resolveFilesystemOwner(request)` concurrently with `classifyRequest(...)`
-    // so the auth-derived setup chain (~5-20ms) overlaps with the ML-bound
-    // classifier (~50-150ms). Saves the smaller of the two (typically the
-    // owner-resolution time) per request.
+    // NEW-2 (audit 2026-07-07, doc/async-parallelization-opportunities.md
+    // §NEW-2, latency mask; ~30-50ms/request typical, ~50-150ms/request on
+    // cache-miss / cold-cache paths): pre-fire `denialContextPromise` +
+    // `mem0ResultPromise` HERE, BEFORE the owner + classify await resolves.
+    // Their DB I/O now overlaps with classifyRequest's ML wallclock
+    // (~50-150ms) — typical savings is min(T_denied_DB_read, T_mem0_HTTP_round_trip),
+    // whichever of the two partners finishes first while classify is still running.
     //
-    // Trade-off vs NEW-2: previously, `denialContextPromise` +
-    // `mem0ResultPromise` were eagerly fired BEFORE the classifyRequest
-    // await, so the DB-bound I/O overlapped with the classifier. Those two
-    // promises MUST capture `filesystemOwnerId` at Promise construction time
-    // (the denials getRecentDenials() binds `${filesystemOwnerId}$${resolvedConversationId}`;
-    // mem0Search binds `userId: filesystemOwnerId`), so we cannot fire them
-    // before the owner resolves. Net effect: the small NEW-2 overlap with
-    // classifyRequest is replaced by a smaller Tier 1 #2 overlap with
-    // resolveFilesystemOwner. The deny + mem0 promises still overlap with
-    // the 5-way Promise.all (workspaceSessionContext / hybrid / v1PromptSuffix)
-    // that follows — so their latency is masked by wsCtx / hybrid / v1Prompt
-    // building rather than by the ML classifier. Wallclock delta ≈ T(resolveFilesystemOwner).
+    // Pre-audit, deny + mem0 Promises were assigned AFTER the await, so they
+    // could not begin their work until `filesystemOwnerId` was extracted from
+    // `ownerResolution` — closing the door on a tighter overlap with the
+    // classifier. The dependency is preserved here by chaining on
+    // `ownerPromise`: each partner Promise doesn't actually START its DB / HTTP
+    // call until ownerPromise settles, but the Promise object IS created here
+    // so V8 dispatches the .then callback the moment ownerPromise resolves
+    // (typically 5-20ms after the start) — overlapping with the rest of
+    // classifyRequest's ML work.
     //
-    // Safe per dependency analysis: classifyRequest is a pure function (no
-    // shared state with resolveFilesystemOwner). anonSessionIdToSet capture
-    // is local-scope so no race. The downstream reader sees the same
-    // {ownerId, classification} shape irrespective of eager vs. late await.
-    const [ownerResolution, classification] = await Promise.all([
-      resolveFilesystemOwner(request),
-      classifyRequest(messages, attachedFilesystemFiles),
-    ]);
-    const filesystemOwnerId = ownerResolution.ownerId;
-    anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
+    // Safe per dependency analysis: getRecentDenials is a DB read that
+    // accepts (conversationId: string, limit: number) — pure I/O with no
+    // synchronous pre-flight on userId. mem0Search is a remote HTTP call to
+    // `https://api.mem0.ai/v1/memories/search/` that accepts
+    // {userId: string, query: string, ...} — same shape, no sync pre-flight.
+    // Both functions tolerate userId being bound late (via .then closure on
+    // ownerResolution). The existing prevention proxies are preserved:
+    //   - mem0 .catch → graceful fallback to {success:false, results:[]}
+    //   - mem0 30s in-memory TTL cache (cache hit ~0ms; cold cache pays
+    //     the full TLS-conncect cost the first time)
+    //   - mem0 circuit breaker (OPEN ⇒ isMem0Configured()=false ⇒ the .then
+    //     branch is gated off; mem0 wallclock cost is then ~0)
+    //   - deny DB→in-memory fallback via `denialHistoryByConversation` Map
+    //   - anonSessionIdToSet still captured after the await
+    //   - filesystemOwnerId still extracted from ownerResolution.ownerId
+    const ownerPromise = resolveFilesystemOwner(request);
+    const classificationPromise = classifyRequest(messages, attachedFilesystemFiles);
+    const denialContextPromise = ownerPromise.then((o) =>
+      filesystemEditSessionService.getRecentDenials(
+        `${o.ownerId}$${resolvedConversationId}`,
+        4,
+      ),
+    );
+    // NEW-2 closure-narrowing fix (tsc): capture the typeof-narrowed query
+    // string BEFORE the .then so the `string` type survives across the
+    // closure boundary. TypeScript's control-flow narrowing on the
+    // surrounding ternary does NOT propagate into the .then callback —
+    // inside the closure, `lastUserMessage.content` reverts to the full
+    // `string | ContentPart[]` union, which fails the `query: string`
+    // contract of `mem0Search`. Hoisting the narrowing into a const
+    // preserves it for the lifetime of the closure.
+    const mem0QueryText = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
+    const mem0ResultPromise = isMem0Configured() && mem0QueryText
+      ? ownerPromise.then((o) =>
+          mem0Search({
+            query: mem0QueryText,
+            userId: o.ownerId,
+            limit: 5,
+            // Tighter threshold + filter for chat hot path; keeps noise out
+            threshold: 0.4,
+          }).catch((memError: any) => {
+            chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
+            return { success: false, results: [] };
+          }),
+        )
+      : Promise.resolve({ success: false, results: [] });
 
-    // Calculate these BEFORE parallel execution since they're dependencies
+    // Calculate these BEFORE the await — they're dependencies for the
+    // downstream 5-way Promise.all branches (buildWorkspaceSessionContext +
+    // buildHybridWorkspaceContext both bind shouldUseContextPackFinal
+    // at construction time).
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
       processedMessages,
       attachedFilesystemFiles,
@@ -996,36 +1034,27 @@ export async function POST(request: NextRequest) {
       applyFileEditsFlag: filesystemContext?.applyFileEdits,
     });
     const useContextPack = shouldUseContextPack(messages);
-    // Use multi-factor task classifier instead of regex-based detection
-    // IMPORTANT: classify on original messages (user's actual input), not processedMessages
-    // which has system prompts, workspace context, memory, etc. prepended
+
+    // Tier 1 #2 (audit 2026-06-20, Top 5 Quick Win, ~5-20ms/request): fire
+    // `resolveFilesystemOwner(request)` concurrently with `classifyRequest(...)`
+    // so the auth-derived setup chain (~5-20ms) overlaps with the ML-bound
+    // classifier (~50-150ms). Saves the smaller of the two (typically the
+    // owner-resolution time) per request.
     //
-    // NEW-2 (latency mask; ~30-50ms/request): denialContextPromise + mem0ResultPromise
-    // fire here, AFTER the Tier 1 #2 parallel await so filesystemOwnerId is
-    // available. Their latency still overlaps with the 5-way Promise.all
-    // (buildWorkspaceSessionContext / buildHybridWorkspaceContext / v1Prompt)
-    // that consumes them, masking the DB I/O behind those ML / composition
-    // calls. mem0Search .catch → graceful fallback to {success:false,
-    // results:[]} is preserved verbatim. buildWorkspaceSessionContext +
-    // buildHybridWorkspaceContext still capture shouldUseContextPackFinal
-    // (= useContextPack || (enableFilesystemEdits && isCodeRequest)) into
-    // their arg list at Promise.all construction time — invariant preserved.
-    const denialContextPromise = filesystemEditSessionService.getRecentDenials(
-      `${filesystemOwnerId}$${resolvedConversationId}`,
-      4,
-    );
-    const mem0ResultPromise = isMem0Configured() && typeof lastUserMessage?.content === 'string'
-      ? mem0Search({
-          query: lastUserMessage.content,
-          userId: filesystemOwnerId,
-          limit: 5,
-          // Tighter threshold + filter for chat hot path; keeps noise out
-          threshold: 0.4,
-        }).catch((memError: any) => {
-          chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
-          return { success: false, results: [] };
-        })
-      : Promise.resolve({ success: false, results: [] });
+    // Combined with NEW-2 above, the four independent async ops (owner,
+    // classify, deny, mem0) are now ALL scheduled at construction time and
+    // PA-resolved together via the bottom Promise.all. The deny + mem0
+    // chains effectively become a fan-out extension of the owner resolve
+    // — T_deny and T_mem0 overlap with T_classify (and with each other).
+    // anonymousSessionIdToSet still captured after this await; the downstream
+    // 5-way Promise.all consumes the same denialContextPromise / mem0ResultPromise
+    // objects — no consumer-side shape change.
+    const [ownerResolution, classification] = await Promise.all([
+      ownerPromise,
+      classificationPromise,
+    ]);
+    const filesystemOwnerId = ownerResolution.ownerId;
+    anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
 
     const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;

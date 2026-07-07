@@ -7,7 +7,12 @@ export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
-    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. No CSRF / no rate-limit / no Zod on this route — direct apply. Used
+    // by the streaming agent loop on every chat request. ~2-5ms saved per request
+    // on the auth+body overlap window. CRITICAL: Authenticate user from JWT token
+    // - do NOT trust userId from request body
     const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(

@@ -81,36 +81,32 @@ export async function getRemoteMCPTools(forceRefresh = false): Promise<Array<{
     return cachedRemoteTools;
   }
 
-  const allTools: Array<{
-    type: 'function'
-    function: {
-      name: string
-      description?: string
-      parameters: any
-    }
-  }> = [];
-
-  for (const [serverName, transport] of connectedTransports) {
-    try {
-      const result = await transport.listTools();
-      const tools = result?.tools || [];
-      
-      for (const tool of tools) {
-        allTools.push({
-          type: 'function',
+  // NEW-C1 (doc/async-parallelization-opportunities.md §NEW-1 followup-c):
+  // each transport's listTools() in PA so the wallclock is max-of-N rather
+  // than sum-of-N. Per-transport try/catch isolates failures: a single
+  // failing transport returns [] without denying tool definitions from
+  // healthy siblings. 60s TTL cache at L79-L82 unchanged.
+  const transportResults = await Promise.all(
+    Array.from(connectedTransports).map(async ([serverName, transport]) => {
+      try {
+        const result = await transport.listTools();
+        const tools = result?.tools || [];
+        logger.debug(`Loaded ${tools.length} tools from remote MCP server: ${serverName}`);
+        return tools.map((tool: any) => ({
+          type: 'function' as const,
           function: {
             name: `${serverName}_${tool.name}`.replace(/[^a-zA-Z0-9_]/g, '_'),
             description: tool.description || `Remote MCP tool: ${tool.name}`,
             parameters: tool.inputSchema || { type: 'object', properties: {} },
           },
-        });
+        }));
+      } catch (error: any) {
+        logger.warn(`Failed to get tools from remote MCP server ${serverName}:`, error.message);
+        return [] as Array<{ type: 'function'; function: { name: string; description?: string; parameters: any } }>;
       }
-      
-      logger.debug(`Loaded ${tools.length} tools from remote MCP server: ${serverName}`);
-    } catch (error: any) {
-      logger.warn(`Failed to get tools from remote MCP server ${serverName}:`, error.message);
-    }
-  }
+    })
+  );
+  const allTools = transportResults.flat();
 
   // Update cache
   cachedRemoteTools = allTools;

@@ -36,6 +36,13 @@ export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
 
   try {
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(request) + request.json() pair to
+    // mask wallclock. The trailing .catch(() => null) on request.json() protects
+    // against a malformed-JSON race (verifyAuth may resolve first while request.json()
+    // rejects); the next-line `if (!body)` (further down) returns a 400 preserving the
+    // prior try/catch's 400-with-requestId shape. ~2-5ms saved per request on the typical
+    // happy path where both calls succeed.
     // SECURITY: Authenticate the caller using JWT
     const [authResult, body] = await Promise.all([
       verifyAuth(request),

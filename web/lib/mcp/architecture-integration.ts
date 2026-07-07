@@ -663,6 +663,28 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     mcporterIntegration.isEnabled()
       ? refreshMCPorterToolsCache()
       : Promise.resolve(undefined),
+    // NEW-C3 (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-c NEW-C3): pre-flight module-cache warming for the 2
+    // lazy-init singletons hoisted from getBlaxelProviderInstance (L1018) +
+    // getArcadeServiceInstance (L1026). The .then(() => {}) discard pattern
+    // returns Promise<void> so the 4-element destructure above is unaffected
+    // (slots 6+7 are wallclock-only side-effects, not consumption points —
+    // the resolved module namespace is discarded after the cache is warm).
+    // Net wallclock saving: ~5-15ms cold-cache (single-process, first-time-
+    // only); the warmth fires at the Phase-1 PA boundary so the first tool-
+    // creation call hits a warm module cache and skips the dynamic-import
+    // cost. Effective only when ARCADE_API_KEY (for arcade-service) or
+    // BLAXEL_API_KEY (for blaxel-provider) trigger the lazy-init on this
+    // request — both paths used by Tier 1 Win #5 tool-source fetches.
+    // Caveat on Arcade: getArcadeService() returns a singleton whose class
+    // body (ArcadeService.initialize()) does an ADDITIONAL inner
+    // await import('@arcadeai/arcadejs') — that nested lazy-import is NOT
+    // warmed by this fold (only the outer arcade-service.ts module is).
+    // Blaxel's fold is the full win because blaxel-provider.ts is the
+    // singleton+constructor and its module cache is the only cache hit
+    // needed; the constructor itself runs sync post-import.
+    import('../sandbox/providers/blaxel-provider').then(() => {}),
+    import('../integrations/arcade-service').then(() => {}),
   ]);
 
   // Phase 1 derives (sync post-await — no extra latency).

@@ -227,24 +227,55 @@ export async function exchangeCodeForTokens(
     throw new Error('Missing refresh token in response');
   }
 
-  // Fetch user email
-  const userInfoResponse = await fetch(
+  // #61 NEW-1 followup-d (2026-07-07, ~50-150ms/antigravity flow): parallel
+  // userinfo + projectID fetches. Both depend ONLY on `tokenData.access_token`
+  // (the OAuth access_token from the response above) — sibling results are
+  // not consumed, downstream returns flow through SEPARATE fields
+  // (`userInfo.email` + `effectiveProjectId`), and neither call writes to
+  // module-level mutable state. Endpoints are independent
+  // (googleapis.com/oauth2/v1/userinfo vs. Antigravity /v1internal:loadCodeAssist),
+  // so the wallclock win is `min(T_userinfo, T_projectID)` instead of `sum`.
+  //
+  // STRUCTURAL SAFETY VERIFICATION (auth/Platform team approves):
+  //   (a) Token-only input dependency — no input coupling between the two calls
+  //       (each reads only `tokenData.access_token` from outer scope).
+  //   (b) No cross-mutation — `userInfo` is bound to a function-local `let`,
+  //       `fetchProjectID` returns a `Promise<string>` and writes nothing.
+  //   (c) No shared module state writes — `this.*` and module-level mutable
+  //       bindings (ANTIGRAVITY_DEFAULT_PROJECT_ID etc.) are effectively const.
+  //   (d) No JSON-shape coupling — the two return fields are independent keys
+  //       in the final `return { accessToken, refreshToken, email, projectId }`.
+  //
+  // DELIBERATELY UNCHANGED:
+  //   - The 3-endpoint priority-fallback chain INSIDE `fetchProjectID`
+  //     (PROD → DAILY → AUTOPUSH) is the [DEFER #62] candidate — moving its
+  //     sequencing to `Promise.any` would violate the priority semantics
+  //     by racing latency against priority. We only parallelize the OUTER
+  //     wallclock between userinfo and projectID; we do NOT touch the
+  //     inner fallback ordering inside `fetchProjectID`.
+  //   - The outer-if guard "skip fetchProjectID if `projectId` already
+  //     provided" is preserved by gating `projectIdPromise` to a
+  //     short-circuit `Promise.resolve(projectId)` value — the destructure
+  //     into `effectiveProjectId` retains identical semantics
+  //     (`projectId || await fetchProjectID(...)`).
+  const userInfoPromise = fetch(
     'https://www.googleapis.com/oauth2/v1/userinfo?alt=json',
     {
       headers: {
         Authorization: `Bearer ${tokenData.access_token}`,
         'User-Agent': 'google-api-nodejs-client/9.15.1',
       },
-    }
-  );
+    },
+  ).then(async (r) => (r.ok ? await r.json() : {}));
 
-  const userInfo = userInfoResponse.ok ? await userInfoResponse.json() : {};
+  const projectIdPromise = projectId
+    ? Promise.resolve(projectId)
+    : fetchProjectID(tokenData.access_token);
 
-  // Try to resolve workspace ID if not provided
-  let effectiveProjectId = projectId;
-  if (!effectiveProjectId) {
-    effectiveProjectId = await fetchProjectID(tokenData.access_token);
-  }
+  const [userInfo, effectiveProjectId] = await Promise.all([
+    userInfoPromise,
+    projectIdPromise,
+  ]);
 
   // Store refresh token in format: refreshToken|projectId
   const storedRefresh = `${tokenData.refresh_token}|${effectiveProjectId || ''}`;

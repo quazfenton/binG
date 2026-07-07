@@ -32,6 +32,11 @@ const lifecycleSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. Rate-limit calls above stay AFTER this PA because they read
+    // authResult.userId; Zod lifecycleSchema.safeParse(body) downstream. ~2-5ms
+    // saved per request on the auth+body overlap window.
     const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(

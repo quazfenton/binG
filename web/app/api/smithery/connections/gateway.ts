@@ -47,9 +47,14 @@ export async function GET(request: NextRequest) {
  * Create or update a Smithery connection. Requires authentication.
  */
 export async function POST(request: NextRequest) {
-  try {
-  // Verify authentication
-  const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+  try {    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(request) + request.json() pair to
+    // mask wallclock. The auth library used here is @/lib/auth/verify-auth (different
+    // from @/lib/auth/jwt) — authResult.success check (no .userId attr). Body comes
+    // from request.json() since this site uses `request`-named param (not `req`).
+    // ~2-5ms saved per request on the auth+body overlap window.
+    // Verify authentication
+    const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
   if (!authResult || !authResult.success) {
     return NextResponse.json(
       { error: 'Authentication required' },

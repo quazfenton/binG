@@ -10,6 +10,16 @@ export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   
   try {
+    // Sequence check: verify auth BEFORE request.formData(). This route has NO
+    // CSRF protection, NO per-IP rate-limit at the gateway (no /api/storage/* entry
+    // in vercel.json), and accepts an attacker-controllable request body. The
+    // audit-clean NEW-1 followup-b mirror would Promise.all([verifyAuth(request),
+    // request.formData()]) — but that fires formData() BEFORE auth-check completes,
+    // amplifying every failed-auth request into a full multipart parse+discard.
+    // That's a body-consumption DoS vector on an unprotected route. Sequential
+    // auth-then-parse is the correct ordering for THIS SPECIFIC route. Documented
+    // exception in /opt/bing/docs/async-parallelization-opportunities.md §NEW-1
+    // followup-b (Group B).
     // Verify authentication
     const authResult = await verifyAuth(request);
     if (!authResult.success) {

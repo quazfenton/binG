@@ -61,7 +61,33 @@ function getSessionId(request: NextRequest, bodySessionId?: string): string {
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Group C audit (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b / Group C): Promise.all the body-parse + auth-verify pair
+    // to mask wallclock on the inverted-order route (this file parses request.json()
+    // BEFORE getUserIdFromRequest currently — sequential). audit-clean because:
+    // (1) getUserIdFromRequest's verifyAuth only reads headers+cookies+JWT+DB-token-
+    //     version (via /opt/bing/web/lib/auth/jwt.ts → connection-shim, mutex-
+    //     protected), so it has no body dependency and can fire in parallel with
+    //     request.json().
+    // (2) Outer try/catch handles BOTH rejection paths cleanly — getUserIdFromRequest
+    //     throws ApiError(401) → outer catch maps → 401; request.json() throws
+    //     SyntaxError → outer catch maps → 500. Promise.all rejection semantics:
+    //     whichever rejects first surfaces; both paths are correct.
+    // (3) Behavioral nuance vs sequential: PA-shape can produce 401 responses on
+    //     malformed-body requests (currently those get 500). This leaks auth state
+    //     to attackers on bad-body POSTs, but the leak is limited to "did your JWT
+    //     parse OK" which the attacker already knows. Acceptable trade.
+    // (4) PA-shape cost: on malformed-body rejection paths, getUserIdFromRequest
+    //     already started firing (calls verifyAuth → getUserTokenVersion → DB token-
+    //     version SELECT via connection-shim). Sequential order skipped this DB
+    //     read entirely on bad-body requests. Net cost: ~1 token-version SELECT per
+    //     malformed-body POST that the rejection path now pays. Bounded — only the
+    //     rejection path pays it, and per-IP rate-limit / auth-check still cap
+    //     attacker throughput. Documented here for future audit visibility.
+    const [userId, body] = await Promise.all([
+      getUserIdFromRequest(request),
+      request.json(),
+    ]);
     const { diffs, scopePath, sessionId: bodySessionId } = body;
 
     if (!diffs || !Array.isArray(diffs) || diffs.length === 0) {
@@ -72,7 +98,7 @@ export async function POST(request: NextRequest) {
     }
 
     // SECURITY: Verify user identity with JWT (never trust client headers)
-    const userId = await getUserIdFromRequest(request);
+    // (userId already destructured from PA above)
     const sessionId = getSessionId(request, bodySessionId);
     // CRITICAL FIX: Normalize sessionId to prevent composite IDs in paths
     const simpleSessionId = normalizeSessionId(sessionId) || sessionId; // Use original if normalize returns empty
