@@ -540,6 +540,36 @@ function invalidateDynamicDefaultsCache(): void {
  */
 
 /**
+ * Classify an LLM response + tool-execution pair into one of four shapes.
+ * Shared helper for the [V1-API-WITH-TOOLS] log line (line ~4269) and the
+ * [Telemetry-v1Api] log line (line ~4360) in this same `runV1ApiWithTools`
+ * function, so the two sites cannot drift on the taxonomy. Bug #117:
+ * "tools_only" must remain distinguishable from "empty" — a single LLM
+ * call that produced zero text but >=1 tool call is a real category
+ * (pure-tool reply) and must not silently merge into "empty".
+ *
+ *   - "empty"      no text, no tool calls (possible stall pattern)
+ *   - "tools_only" no text, >=1 tool call (rare; pure-tool reply)
+ *   - "text"       text, no tool calls
+ *   - "mixed"      text AND >=1 tool call
+ *
+ * @param responseLength  `result.response.length` after stringification
+ * @param toolCount       number of recorded tool invocations
+ */
+type ResponseShape = 'text' | 'tools_only' | 'mixed' | 'empty';
+function classifyResponseShape(
+  responseLength: number,
+  toolCount: number,
+): ResponseShape {
+  const hasResponse = responseLength > 0;
+  const hasTools = toolCount > 0;
+  if (hasResponse && hasTools) return 'mixed';
+  if (hasResponse) return 'text';
+  if (hasTools) return 'tools_only';
+  return 'empty';
+}
+
+/**
  * Classify a provider error into permanent vs transient vs rate-limit.
  * Permanent errors (missing API key, invalid auth, model not found) should
  * skip the provider immediately and derank it heavily — retrying will never
@@ -4265,11 +4295,12 @@ async function runV1ApiWithTools(
       log.info(`[V1-API-WITH-TOOLS] │ responseLength: ${response.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ toolInvocations: ${toolInvocations.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ tools: ${toolInvocations.map(t => t.toolName).join(', ') || 'none'}`);
-      // Bug #117 fix: classify response shape so "tools_only" vs "empty" is distinguishable
-      const responseShape: 'text' | 'tools_only' | 'mixed' | 'empty' =
-        response.length > 0 && toolInvocations.length > 0 ? 'mixed' :
-        response.length > 0 ? 'text' :
-        toolInvocations.length > 0 ? 'tools_only' : 'empty';
+      // Bug #117 fix: classify response shape so "tools_only" vs "empty"
+      // is distinguishable (Bug #91 canonical helper, 16 unit tests).
+      const responseShape = classifyResponseShape({
+        response,
+        toolCalls: toolInvocations.map((i) => ({ name: i.toolName, args: i.args })),
+      });
       log.info(`[V1-API-WITH-TOOLS] │ responseShape: ${responseShape}${responseShape === 'empty' ? ' (suspicious — log a WARN)' : ''}`);
       if (responseShape === 'empty') {
         log.warn('[V1-API-WITH-TOOLS] Empty response with no tool calls — possible stall pattern', { requestId, provider: providerName, model: modelForProvider });
@@ -4359,11 +4390,14 @@ async function runV1ApiWithTools(
         success: inv.result?.success !== false,
       }));
 
-      // Bug #117 fix: classify response shape so "tools_only" is distinguishable from "empty"
-      const responseShape: 'text' | 'tools_only' | 'mixed' | 'empty' =
-        response.length > 0 && toolCallTelemetry.length > 0 ? 'mixed' :
-        response.length > 0 ? 'text' :
-        toolCallTelemetry.length > 0 ? 'tools_only' : 'empty';
+      // Bug #117 fix: classify response shape so "tools_only" vs "empty"
+      // is distinguishable (Bug #91 canonical helper, 16 unit tests).
+      // Local keeps the `telemetry` prefix because site 1 above declares
+      // `responseShape` in this same function scope.
+      const telemetryResponseShape = classifyResponseShape({
+        response,
+        toolCalls: toolCallTelemetry.map((t) => ({ name: t.toolName, args: t.args })),
+      });
 
       log.info('[Telemetry-v1Api] Recording completion', {
         requestId,
@@ -4372,7 +4406,7 @@ async function runV1ApiWithTools(
         duration,
         toolCount: toolCallTelemetry.length,
         responseLength: response.length,
-        responseShape,
+        responseShape: telemetryResponseShape,
       });
 
       chatRequestLogger.logRequestComplete(

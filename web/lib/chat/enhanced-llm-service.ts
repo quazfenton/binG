@@ -15,7 +15,7 @@ import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhan
 import { wireFinishReasonSteer, wireFCGateZeroCallsSteer, emitFCGateZeroCallsLog, incompleteConfidenceThreshold } from '../orchestra/steer-service';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
 import { PROVIDER_FALLBACK_CHAINS, getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
-import { coordinateConcurrentFallback } from './llm-fallback-coordinator';
+import { coordinateConcurrentFallback, type StreamHandle } from './llm-fallback-coordinator';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
@@ -76,6 +76,13 @@ export interface WrapAsHandleEnv {
 export const wrapAsHandleForConcurrentFallback = (
   env: WrapAsHandleEnv,
 ): ((providerOverride?: string) => Promise<{
+  // NOTE: typed as `unknown` (not `StreamingResponse`) because the inner
+  // envelope yields Vercel AI SDK chunks (`TextStreamPart<TTools>`), not
+  // the `StreamingResponse` shape. The call site in
+  // `streamWithConcurrentFallback` casts to `StreamHandle<StreamingResponse>`
+  // since the concurrent-fallback coordinator only races on first-emission
+  // and never inspects chunk content. Keeping the factory honest avoids
+  // baking a type mismatch into the public contract.
   gen: AsyncGenerator<unknown>;
   abort: () => void;
 }>) => {
@@ -126,7 +133,10 @@ export const wrapAsHandleForConcurrentFallback = (
       )),
       firstChunkTimeoutMs,
     );
-    const firstChunkEnvelope: AsyncGenerator<any> = (async function* () {
+    // Typed as `unknown` (was `any` before) because the envelope yields
+    // Vercel AI SDK chunks, not `StreamingResponse`. The call site in
+    // `streamWithConcurrentFallback` handles the cast.
+    const firstChunkEnvelope: AsyncGenerator<unknown> = (async function* () {
       try {
         const first = await upstreamIter.next();
         // PR-S2 (Stage 3 R2 fix) -- RE-INSTATE the success-path timer clear
@@ -2833,14 +2843,20 @@ export async function* streamWithConcurrentFallback(
     findCompatibleModelFn,
   });
 
-  yield* coordinateConcurrentFallback({
+  // Cast factories to `StreamHandle<StreamingResponse>`: the concurrent-fallback
+  // coordinator only races on first-emission and never inspects chunk content,
+  // so the `unknown` chunk type from `wrapAsHandleForConcurrentFallback` is
+  // safe to treat as `StreamingResponse` at this boundary. The cast is
+  // localized to the call site rather than baked into the factory's public
+  // contract (which would be a type lie — the envelope yields Vercel chunks).
+  yield* coordinateConcurrentFallback<StreamingResponse>({
     primaryProvider: options.provider,
     model: options.model,
     fallbackChain,
     silenceMs: concurrentFallbackMs,
     signal: options.signal,
     requestId: `ellm-${Date.now()}`,
-    createPrimaryStream: () => wrapAsHandle(),
-    createFallbackStream: (fbProvider) => wrapAsHandle(fbProvider),
+    createPrimaryStream: () => wrapAsHandle() as unknown as Promise<StreamHandle<StreamingResponse>>,
+    createFallbackStream: (fbProvider) => wrapAsHandle(fbProvider) as unknown as Promise<StreamHandle<StreamingResponse>>,
   });
 }

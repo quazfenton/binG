@@ -329,15 +329,13 @@ describe('OPFSAdapter persistence (real static methods)', () => {
       await vi.runAllTimersAsync();
 
       // The IDB writeFile fired with the right payload. We use
-      // `toHaveBeenCalled()` + `toHaveBeenNthCalledWith(1, ...)` (not
-      // `toHaveBeenCalledTimes(1)`) because `flushWriteQueue` also
-      // calls `schedulePersist` at the end (to persist the trimmed
-      // queue + the updated `fileVersions` map), so
-      // `vi.runAllTimersAsync()` may fire a 2nd debounce. Both calls
-      // are valid production behavior. We verify the FIRST call has
-      // the queued write to lock in the contract that the user's edit
-      // is in the persisted state.
-      expect(mockIDB.writeFile).toHaveBeenCalled();
+      // `toHaveBeenNthCalledWith(1, ...)` (not `toHaveBeenCalledTimes(1)`)
+      // because `flushWriteQueue` also calls `schedulePersist` at the end
+      // (to persist the trimmed queue + the updated `fileVersions` map),
+      // so `vi.runAllTimersAsync()` may fire a 2nd debounce. Both calls
+      // are valid production behavior. We verify the FIRST call has the
+      // queued write to lock in the contract that the user's edit is in
+      // the persisted state.
       expect(mockIDB.writeFile).toHaveBeenNthCalledWith(
         1, 'anon:test', '.vfs-adapter-state.json', expect.any(String),
       );
