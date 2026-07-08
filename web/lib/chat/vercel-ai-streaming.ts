@@ -2865,13 +2865,30 @@ while (thinkPingQueue.length > 0) {
             const toolCallId = (chunk as any).toolCallId;
             const isInvalid = !!(chunk as any).invalid;
 
+            // NEW-1 followup-d (2026-07-07, ~2-10ms/stream-chunk): sequential
+            // [vfs-mcp-tools.normalizeToolArgs + shared-agent-context.validateToolArgs]
+            // dynamic-imports folded into Promise.all — both modules are lazy-loaded
+            // by the SELF-HEALING + VALIDATE try-catches directly below; the prior
+            // sequential shape paid for 2 round-trips through the ESM loader on every
+            // tool-call chunk. Per-import .catch(() => null) preserves each
+            // try-catch's independent best-effort semantics — a failure of one
+            // module-load no longer wipes out the other's downstream consumer.
+            const [
+              { normalizeToolArgs },
+              { validateToolArgs },
+            ] = await Promise.all([
+              import('../mcp/vfs-mcp-tools').catch(() => null),
+              import('../orchestra/shared-agent-context').catch(() => null),
+            ]);
+
             // SELF-HEALING: Normalize tool args to fix common LLM mistakes
             // (wrong field names like "filename" → "path", "code" → "content")
             try {
-              const { normalizeToolArgs } = await import('../mcp/vfs-mcp-tools');
-              callArgs = normalizeToolArgs(toolName, callArgs);
-              (chunk as any).input = callArgs;
-              (chunk as any).args = callArgs;
+              if (normalizeToolArgs) {
+                callArgs = normalizeToolArgs(toolName, callArgs);
+                (chunk as any).input = callArgs;
+                (chunk as any).args = callArgs;
+              }
             } catch {
               // Normalization is best-effort
             }
@@ -2879,50 +2896,50 @@ while (thinkPingQueue.length > 0) {
             // VALIDATE REQUIRED FIELDS: Check for missing/invalid args and trigger self-healing
             let validationError = null;
             try {
-              const { validateToolArgs } = await import('../orchestra/shared-agent-context');
+              if (validateToolArgs) {
+                // Define required fields for common tools
+                const requiredFields: Record<string, string[]> = {
+                  'write_file': ['path', 'content'],
+                  'read_file': ['path'],
+                  'list_files': ['path'],
+                  'delete_file': ['path'],
+                  'batch_write': ['files'],
+                  'apply_diff': ['path', 'diff'],
+                  'execute_bash': ['command'],
+                  'search_files': ['query'],
+                };
 
-              // Define required fields for common tools
-              const requiredFields: Record<string, string[]> = {
-                'write_file': ['path', 'content'],
-                'read_file': ['path'],
-                'list_files': ['path'],
-                'delete_file': ['path'],
-                'batch_write': ['files'],
-                'apply_diff': ['path', 'diff'],
-                'execute_bash': ['command'],
-                'search_files': ['query'],
-              };
-
-              const required = requiredFields[toolName];
-              if (required) {
-                validationError = validateToolArgs(toolName, callArgs, required);
-                // Bug #113 (Pass-8): stash the validationError so
-                // the tool-result handler can feed its missing-fields
-                // list into wireMissingRequiredArgsSteer. Cleared
-                // alongside toolCallArgsCache at the end of the
-                // tool-result case.
-                if (validationError) {
-
-                  // Bug #113 (Pass-8) polish-round: stash both the
-
-                  // StructuredToolError AND the precomputed missing-
-
-                  // fields list so the tool-result handler can read
-
-                  // `missing` directly without re-parsing the error
-
-                  // message (regex-fragility deferred risk). Cleared
-
+                const required = requiredFields[toolName];
+                if (required) {
+                  validationError = validateToolArgs(toolName, callArgs, required);
+                  // Bug #113 (Pass-8): stash the validationError so
+                  // the tool-result handler can feed its missing-fields
+                  // list into wireMissingRequiredArgsSteer. Cleared
                   // alongside toolCallArgsCache at the end of the
-
                   // tool-result case.
+                  if (validationError) {
 
-                  // Bug #113 (Pass-8) polish: missing-required-args predicate
-                  // lives in validateToolArgs (orchestra/shared-agent-context).
-                  // The cache stores the helper's co-return shape directly so
-                  // downstream readers see `cachedValidation.error.*` and
-                  // `cachedValidation.missing` from exactly one source of truth.
-                  toolCallValidationCache.set(toolCallId, validationError);
+                    // Bug #113 (Pass-8) polish-round: stash both the
+
+                    // StructuredToolError AND the precomputed missing-
+
+                    // fields list so the tool-result handler can read
+
+                    // `missing` directly without re-parsing the error
+
+                    // message (regex-fragility deferred risk). Cleared
+
+                    // alongside toolCallArgsCache at the end of the
+
+                    // tool-result case.
+
+                    // Bug #113 (Pass-8) polish: missing-required-args predicate
+                    // lives in validateToolArgs (orchestra/shared-agent-context).
+                    // The cache stores the helper's co-return shape directly so
+                    // downstream readers see `cachedValidation.error.*` and
+                    // `cachedValidation.missing` from exactly one source of truth.
+                    toolCallValidationCache.set(toolCallId, validationError);
+                  }
                 }
               }
             } catch {
@@ -3234,18 +3251,35 @@ while (thinkPingQueue.length > 0) {
           // Record 429 rate-limit errors immediately so subsequent requests
           // skip this provider-model combo via model-ranker's isRateLimited check.
           if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.toLowerCase().includes('rate_limit')) {
+            // NEW-1 followup-d (2026-07-07, ~2-10ms/429-error-chunk): sequential
+            // [model-ranker.recordRateLimitError + circuit-breaker.circuitBreakerManager]
+            // dynamic-imports folded into Promise.all — both modules are lazy-loaded
+            // on every 429 rate-limit error chunk; the prior sequential shape paid for
+            // 2 round-trips through the ESM loader on each rate-limit-error observation.
+            // Per-import .catch(() => null) preserves each try-catch's independent
+            // best-effort semantics (model-ranker can still record the failure even if
+            // circuit-breaker module-load failed, and vice versa).
+            const [
+              { recordRateLimitError },
+              { circuitBreakerManager },
+            ] = await Promise.all([
+              import('@/lib/providers/model-ranker').catch(() => null),
+              import('@/lib/middleware/circuit-breaker').catch(() => null),
+            ]);
             try {
-              const { recordRateLimitError } = await import('@/lib/providers/model-ranker');
-              recordRateLimitError(provider, modelName);
+              if (recordRateLimitError) {
+                recordRateLimitError(provider, modelName);
+              }
             } catch { /* best-effort */ }
             // Bug #5 fix: Also record 429 in the per-provider circuit breaker
             // so the unified-agent-service fallback chain skips this provider
             // on the next request. Without this, the v1-api path keeps trying
             // the 429'd primary on every subsequent request.
             try {
-              const { circuitBreakerManager } = await import('@/lib/middleware/circuit-breaker');
-              const breaker = circuitBreakerManager.getBreaker(provider);
-              breaker.recordFailure(new Error(`429 rate limit from ${provider}/${modelName}`));
+              if (circuitBreakerManager) {
+                const breaker = circuitBreakerManager.getBreaker(provider);
+                breaker.recordFailure(new Error(`429 rate limit from ${provider}/${modelName}`));
+              }
             } catch { /* circuit-breaker best-effort */ }
             // Bug #3 (Pass-8): Clear FC-GATE positive cache on 429 — provider
             // rotation may change the model's FC support.

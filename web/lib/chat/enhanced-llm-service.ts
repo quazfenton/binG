@@ -580,14 +580,30 @@ export class EnhancedLLMService {
     let contextPackBundle = '';
     if (contextPack && userId && conversationId) {
       try {
-        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+        // #54 NEW-1 followup-d (2026-07-07, ~3-12ms/chat-call): sequential
+        // dynamic-imports collapsed into `Promise.all([import(a),
+        // import(b).catch(() => null)])`. Both ESM imports fire in
+        // parallel; `session-file-tracker` falls back to null so the
+        // original graceful-degradation path (`recentFiles = []`) is
+        // preserved on module-load failure. Downstream `getSessionFiles`
+        // is a sync call wrapped in optional-chaining + nullish-coalesce
+        // to skip the lookup entirely when the module is unavailable,
+        // then caught by the same `chatLogger.debug` fallback as the
+        // prior sequential code. Full structural-safety rationale +
+        // apply-cite: docs/async-parallelization-opportunities.md#54.
+        const [
+          { generateSmartContext },
+          sessionFileTrackerMod,
+        ] = await Promise.all([
+          import('@/lib/virtual-filesystem/smart-context'),
+          import('@/lib/virtual-filesystem/session-file-tracker').catch(() => null),
+        ]);
         const rootPath = normalizeSessionId(conversationId) || '/';
-        
+
         // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
         let recentFiles: string[] = [];
         try {
-          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-          recentFiles = getSessionFiles(conversationId, 10); // O(1) lookup
+          recentFiles = sessionFileTrackerMod?.getSessionFiles(conversationId, 10) ?? [];
         } catch (error: any) {
           chatLogger.debug('Session file lookup failed', { error: error.message });
         }
@@ -972,14 +988,28 @@ export class EnhancedLLMService {
     let contextPackBundle = '';
     if (contextPack && request.userId && request.conversationId) {
       try {
-        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+        // #55 NEW-1 followup-d (2026-07-07, ~3-12ms/stream-call): sequential
+        // dynamic-imports collapsed into `Promise.all([import(a),
+        // import(b).catch(() => null)])`. Twin of #54 chat-side refactor
+        // with the streaming identifiers (`request.conversationId || ''`,
+        // `chatLogger.debug('... failed (streaming)', ...)`). Same
+        // `.catch` + optional-chaining pattern preserves the graceful-
+        // degradation path on module-load failure. Full structural-
+        // safety rationale + apply-cite:
+        // docs/async-parallelization-opportunities.md#55.
+        const [
+          { generateSmartContext },
+          sessionFileTrackerMod,
+        ] = await Promise.all([
+          import('@/lib/virtual-filesystem/smart-context'),
+          import('@/lib/virtual-filesystem/session-file-tracker').catch(() => null),
+        ]);
         const rootPath = normalizeSessionId(request.conversationId) || '/';
-        
+
         // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
         let recentFiles: string[] = [];
         try {
-          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-          recentFiles = getSessionFiles(request.conversationId || '', 10); // O(1) lookup
+          recentFiles = sessionFileTrackerMod?.getSessionFiles(request.conversationId || '', 10) ?? [];
         } catch (error: any) {
           chatLogger.debug('Session file lookup failed (streaming)', { error: error.message });
         }
@@ -1813,10 +1843,31 @@ export class EnhancedLLMService {
       let toolsCount = 0;
 
       if (provider === 'opencode-cli') {
-        // Check if opencode binary is available
-        const { findOpencodeBinarySync } = await import('../drivers/opencode/find-opencode-binary');
+        // #57 NEW-1 followup-d (2026-07-07, ~2-15ms/cold-start win on
+        // opencode-CLI provider): sequential dynamic-imports collapsed
+        // into `Promise.all([import(find-opencode-binary),
+        // import(opencode-cli).catch(() => null)])`. Both ESM imports
+        // fan-out concurrently; the provider-module import falls back
+        // to null via `.catch()` to PRESERVE the original "skip 2nd
+        // provider-import when binary missing" semantics for users who
+        // never installed the binary (no regression in the no-binary
+        // path). Early-return guard extended to also bail when
+        // `opencodeCliMod` is null (module-load failure). Helper
+        // async-ness: `findOpencodeBinarySync` = sync,
+        // `OpencodeV2Provider` = class ctor (sync). Full structural-
+        // safety rationale + apply-cite:
+        // docs/async-parallelization-opportunities.md#57.
+        const [
+          { findOpencodeBinarySync },
+          opencodeCliMod,
+        ] = await Promise.all([
+          import('../drivers/opencode/find-opencode-binary'),
+          import('../sandbox/spawn/opencode-cli').catch(() => null),
+        ]);
+
+        // Check if opencode binary + provider module are available
         const binaryPath = findOpencodeBinarySync();
-        if (!binaryPath) {
+        if (!binaryPath || !opencodeCliMod) {
           chatLogger.error('[CLI-PROVIDER] opencode binary not found', { requestId });
           yield {
             content: 'OpenCode CLI binary not found. Please install it with: npm install -g opencode-ai',
@@ -1827,9 +1878,12 @@ export class EnhancedLLMService {
           };
           return;
         }
-
-        // Import and use OpencodeV2Provider
-        const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
+        // Re-extract OpencodeV2Provider from the consumed module slot
+        // (the Promise.all destructure upstream gives us `opencodeCliMod`,
+        // not a bare-named `{ OpencodeV2Provider }`; this re-extract is
+        // type-safe because the early-return guard above narrowed
+        // `opencodeCliMod` to non-null).
+        const { OpencodeV2Provider } = opencodeCliMod;
         const providerInstance = new OpencodeV2Provider({
           session: {
             userId,
@@ -1946,10 +2000,31 @@ export class EnhancedLLMService {
           });
         } else if (provider === 'pi') {
 
-        // Check if pi binary is available
-        const { findPiBinarySync } = await import('../drivers/agent-bins/find-pi-binary');
+        // #56 NEW-1 followup-d (2026-07-07, ~2-15ms/cold-start win on
+        // pi CLI provider): sequential dynamic-imports collapsed into
+        // `Promise.all([import(find-pi-binary),
+        // import(pi-cli-session).catch(() => null)])`. Both ESM imports
+        // fan-out concurrently; the provider-module import falls back
+        // to null via `.catch()` to PRESERVE the original "skip 2nd
+        // provider-import when binary missing" semantics for users who
+        // never installed the pi binary (no regression in the no-binary
+        // path). Early-return guard extended to also bail when
+        // `piCliMod` is null (module-load failure). Helper async-ness:
+        // `findPiBinarySync` = sync, `createCliPiSession` = async
+        // (export async function; called AFTER the early-return guard).
+        // Full structural-safety rationale + apply-cite:
+        // docs/async-parallelization-opportunities.md#56.
+        const [
+          { findPiBinarySync },
+          piCliMod,
+        ] = await Promise.all([
+          import('../drivers/agent-bins/find-pi-binary'),
+          import('../drivers/pi/pi-cli-session').catch(() => null),
+        ]);
+
+        // Check if pi binary + provider module are available
         const binaryPath = findPiBinarySync();
-        if (!binaryPath) {
+        if (!binaryPath || !piCliMod) {
           chatLogger.error('[CLI-PROVIDER] pi binary not found', { requestId });
           yield {
             content: 'Pi CLI binary not found. Please install it.',
@@ -1963,15 +2038,19 @@ export class EnhancedLLMService {
 
         // Use the actual LLM provider from request.model, or default to 'anthropic'
         // The 'pi' provider is a CLI wrapper that delegates to an actual LLM provider
-        const actualLlmProvider = request.model && request.model !== 'local' 
+        const actualLlmProvider = request.model && request.model !== 'local'
           ? request.model.split('/')[0]  // Extract provider from model like 'anthropic/claude-3.5'
           : 'anthropic';  // Default to anthropic if no model specified
-        
-        const { createCliPiSession } = await import('../drivers/pi/pi-cli-session');
         
         // Wrap createCliPiSession in try-catch to handle initialization failures
         let session: any;
         try {
+          // Re-extract createCliPiSession from the consumed module slot
+          // (the Promise.all destructure upstream gives us `piCliMod`,
+          // not a bare-named `{ createCliPiSession }`; this re-extract is
+          // type-safe because the early-return guard above narrowed
+          // `piCliMod` to non-null).
+          const { createCliPiSession } = piCliMod;
           session = await createCliPiSession({
             cwd: request.scopePath || process.cwd(),
             mode: 'local',

@@ -3385,13 +3385,26 @@ class LLMService {
     maxTokens: number,
     requestId?: string
   ): Promise<LLMResponse> {
-    const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/providers/antigravity-provider');
+    // Guard server-only import to prevent webpack from bundling
+    // better-sqlite3 into client components.
+    if (typeof window !== 'undefined') {
+      throw new Error('Antigravity provider is server-only');
+    }
 
-    // FIX: Prevent webpack/turbopack from bundling better-sqlite3 into client.
-    // The import path is constructed dynamically so the bundler cannot statically
-    // analyze the dependency chain (antigravity-accounts → connection → better-sqlite3).
-    const dbModulePath = '@/lib' + '/database/antigravity-accounts';
-    const { getAntigravityAccounts } = await import(dbModulePath);
+    // NEW-1 followup-d (2026-07-07, ~5-30ms/cold-cache): sequential
+    // [antigravity-provider.sendAntigravityChat/ANTIGRAVITY_MODELS +
+    //  antigravity-accounts.getAntigravityAccounts] dynamic-imports folded
+    // into Promise.all — both modules load in parallel on the antigravity
+    // critical path. Bundler-defeat semantics preserved (dynamic path-string
+    // concat retained on the antigravity-accounts DB import so webpack/
+    // turbopack can't statically analyze the better-sqlite3 native-dep chain).
+    const [
+      { sendAntigravityChat, ANTIGRAVITY_MODELS },
+      { getAntigravityAccounts },
+    ] = await Promise.all([
+      import('@/lib/providers/antigravity-provider'),
+      import('@/lib' + '/database/antigravity-accounts'),
+    ]);
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {
@@ -3448,20 +3461,25 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/providers/antigravity-provider');
-
-    // FIX: Guard server-only import to prevent webpack from bundling
+    // Guard server-only import to prevent webpack from bundling
     // better-sqlite3 into client components.
     if (typeof window !== 'undefined') {
       throw new Error('Antigravity provider is server-only');
     }
 
-    // Dynamic import with webpack ignore — prevents webpack from statically
-    // analyzing the dependency chain (antigravity-accounts → connection → better-sqlite3)
-     
-    const { getAntigravityAccounts } = await import(
-      /* webpackIgnore: true */ '@/lib/database/antigravity-accounts'
-    );
+    // NEW-1 followup-d (2026-07-07, ~5-30ms/cold-cache): sequential
+    // [antigravity-provider.sendAntigravityChat/ANTIGRAVITY_MODELS +
+    //  antigravity-accounts.getAntigravityAccounts] dynamic-imports folded
+    // into Promise.all — both modules load in parallel on the antigravity
+    // streaming critical path. Bundler-defeat semantics preserved via
+    // /* webpackIgnore: true */ on the antigravity-accounts DB import.
+    const [
+      { sendAntigravityChat, ANTIGRAVITY_MODELS },
+      { getAntigravityAccounts },
+    ] = await Promise.all([
+      import('@/lib/providers/antigravity-provider'),
+      import(/* webpackIgnore: true */ '@/lib/database/antigravity-accounts'),
+    ]);
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {

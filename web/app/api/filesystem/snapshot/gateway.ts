@@ -727,28 +727,62 @@ export async function GET(req: NextRequest) {
           // check will return true and we never reach this branch.
           const lastAttempt = eagerInitCooldowns.get(owner.ownerId) || 0;
           if (Date.now() - lastAttempt < EAGER_INIT_COOLDOWN_MS) {
-            log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY`);
-            const cooldownResponse = NextResponse.json({
-              success: false,
-              error: 'Workspace not yet initialized. Please retry shortly.',
-              errorCode: 'WORKSPACE_NOT_READY',
-              retryable: true,
-              ownerId: owner.ownerId,
-              source: owner.source,
-              // Server-issued exponential backoff hint. Tells the client
-              // to switch from fixed 1.5s polling to exponential: the
-              // first retry should be at `currentMs` (the remaining cooldown
-              // at the moment of this response), then double on each retry,
-              // capped at `maxMs`. currentMs is computed from the
-              // last-attempt timestamp so it reflects how much cooldown is
-              // actually left.
-              backoffHint: {
-                strategy: 'exponential',
-                baseMs: 1_000,
-                maxMs: 30_000,
-                currentMs: Math.max(0, EAGER_INIT_COOLDOWN_MS - (Date.now() - lastAttempt)),
+            // Bug #2/#7 follow-up FIX: this was the LAST remaining exit that
+            // still returned `202 WORKSPACE_NOT_READY`. On app load the
+            // client fires several snapshot polls at once (e.g. paths
+            // "sessions", "sessions/000", "workspace"). The FIRST enters the
+            // eager-init path and sets the cooldown timestamp; the others,
+            // arriving milliseconds later, hit this cooldown branch and got a
+            // 202. The client's retries also landed inside the same 5s
+            // cooldown, exhausted, then `throw`, surfacing as
+            //   `[useVFS ERROR] request: failed - Workspace not yet
+            //    initialized` + repeated `unhandledRejection`s — even though
+            // the filesystem is simply empty.
+            //
+            // The workspace was ALREADY ensured/loaded by `exportWorkspace()`
+            // above (it calls `ensureWorkspace()` internally), so `snapshot`
+            // and `files` here are a valid, fully-initialized empty result.
+            // There is nothing transient to wait for — the cooldown only
+            // exists to avoid re-running init, not to signal "not ready".
+            // Return the already-computed empty snapshot as SUCCESS (matching
+            // every other exit of this block) so the client caches it and
+            // stops polling instead of throwing.
+            log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning empty snapshot (success) instead of WORKSPACE_NOT_READY`);
+            const cooldownEtag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+            snapshotCache.set(cacheKey, {
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
               },
-            }, { status: 202 });
+              timestamp: now,
+              etag: cooldownEtag,
+              version: snapshot.version,
+            });
+            vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+            const cooldownResponse = NextResponse.json({
+              success: true,
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              cached: false,
+              // Same "terminal empty state, stop polling" signal used by the
+              // init-failed fallback below, so operators can grep it and the
+              // client can distinguish it from a real snapshot with content.
+              cooldownExpired: true,
+            }, {
+              headers: {
+                'cache-control': 'private, no-store',
+                'vary': 'Authorization, Cookie',
+                etag: cooldownEtag,
+              },
+            });
             return withAnonSessionCookie(cooldownResponse, owner);
           }
           eagerInitCooldowns.set(owner.ownerId, Date.now());
