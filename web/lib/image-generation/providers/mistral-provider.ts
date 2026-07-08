@@ -51,6 +51,8 @@ export class MistralImageProvider implements ImageGenerationProvider {
     supportsImg2Img: false,
     supportsSeed: false,
     supportsBatchGeneration: false,
+    supportsSamplers: false,
+    maxBatchSize: 1,
   };
 
   constructor(config?: ProviderConfig) {
@@ -67,6 +69,28 @@ export class MistralImageProvider implements ImageGenerationProvider {
         apiKey: this.apiKey,
         ...(this.baseURL ? { serverURL: this.baseURL } : {}),
       });
+    }
+  }
+
+  initialize(config: ProviderConfig): void {
+    if (config.apiKey) {
+      this.apiKey = config.apiKey;
+      this.client = new Mistral({ apiKey: this.apiKey });
+    }
+    if (config.baseURL) {
+      this.baseURL = config.baseURL;
+    }
+  }
+
+  async isAvailable(): Promise<boolean> {
+    if (!this.client || !this.apiKey) {
+      return false;
+    }
+    try {
+      await this.client.models.list();
+      return true;
+    } catch {
+      return false;
     }
   }
 
@@ -271,7 +295,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
   private async extractImages(response: any): Promise<GeneratedImage[]> {
     const images: GeneratedImage[] = [];
 
-    logger.info('Extracting images from response with', response.outputs?.length || 0, 'outputs');
+    logger.info('Extracting images from response with ' + (response.outputs?.length || 0) + ' outputs');
 
     if (!response?.outputs || response.outputs.length === 0) {
       return images;
@@ -282,7 +306,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
       logger.info('Processing output type:', output.type);
       
       if (output.type === 'message.output' && output.content) {
-        logger.info('Found message.output with', output.content.length, 'content items');
+        logger.info('Found message.output with ' + output.content.length + ' content items');
         
         for (const chunk of output.content) {
           logger.info('Processing content type:', chunk.type);
@@ -364,7 +388,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
               let imageUrl: string;
               let mimeType = 'image/png';
 
-              logger.info('File response type:', typeof fileResponse, fileResponse?.constructor?.name);
+              logger.info('File response type: ' + typeof fileResponse + ' ' + (fileResponse?.constructor?.name || 'unknown'));
 
               // Handle different response types
               if (typeof fileResponse === 'string') {
@@ -479,7 +503,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
               });
               
               logger.info('Successfully extracted image from file:', chunk.fileId);
-              logger.info('Image URL length:', imageUrl.length, 'characters');
+              logger.info('Image URL length: ' + imageUrl.length + ' characters');
             } catch (error) {
               logger.error('Failed to process file:', chunk.fileId, error);
               // Continue to next chunk instead of failing entirely
@@ -489,7 +513,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
       }
     }
 
-    logger.info('Extracted', images.length, 'images');
+    logger.info('Extracted ' + images.length + ' images');
     return images;
   }
 

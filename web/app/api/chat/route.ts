@@ -54,6 +54,10 @@ import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
 import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, type AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
+// StallWatchdogError typed discriminator — fired by `fireStall` (route.ts:L1623
+// in this file) and propagated through the chain-walk's abort cascade. The
+// outer catch at L2796 uses `instanceof` to map it to HTTP 524 (vs 500).
+import { StallWatchdogError } from '@/lib/chat/llm-fallback-coordinator';
 // Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
 // contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
 // already coerces via stringifyMessageContent; this import is the route's
@@ -534,7 +538,7 @@ export async function POST(request: NextRequest) {
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
-    chatLogger.debug('[ROUTE] Raw body keys:', rawBody ? Object.keys(rawBody) : null);
+    chatLogger.debug('[ROUTE] Raw body keys:', rawBody ? { keys: Object.keys(rawBody) } : undefined);
     chatLogger.debug('[ROUTE] Parsed result:', { status: parseResult.success ? 'success' : parseResult.error?.message });
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
@@ -996,7 +1000,7 @@ export async function POST(request: NextRequest) {
       ),
     ).catch(() => {
       chatLogger.debug('Failed to fetch denial context (non-critical)', { requestId });
-      return [] as Array<{ pattern: string; reason: string }>;
+      return [] as Array<{ reason: string; paths: string[]; timestamp: string }>;
     });
     // NEW-2 closure-narrowing fix (tsc): capture the typeof-narrowed query
     // string BEFORE the .then so the `string` type survives across the
@@ -1568,10 +1572,41 @@ FORMAT RULES:
     // a single agent turn, applied to ALL branches. This is the
     // guaranteed backstop — including the v1-agent-loop branch whose
     // createAgentLoop(...) call previously had no watchdog at all.
-    const ROUTE_MAX_TURN_MS = parseInt(
+    // Bug #Y — chain.length-conditioned max-turn: the route watchdog must
+    // not fire BEFORE the chain-walk in `coordinateConcurrentFallback`
+    // completes. Worst-case walk time = `MAX_CHAIN_FALLBACKS * silenceMs +
+    // transition overhead`. We treat MAX_CHAIN_FALLBACKS=7 as the upper
+    // bound across all configured chains (see
+    // `bing/web/lib/providers/provider-fallback-chains.ts`); the 1.5×
+    // safety factor absorbs Promise.race transition overhead + slow first
+    // token; the 30s buffer absorbs slow tool calls.
+    //
+    //   ninerouter-class: 7 * 5_000 * 1.5 + 30_000 = 82.5s     (well under envVar floor)
+    //   non-ninerouter:   7 * 20_000 * 1.5 + 30_000 = 240_000ms (extends envVar floor)
+    //
+    // The env var acts as a FLOOR: ops can still raise ROUTE_MAX_TURN_MS
+    // past 240s for known-slow chains; we never shrink it below the
+    // chain-walk + buffer formula.
+    const ROUTE_MAX_TURN_MS_ENV = parseInt(
       process.env.CHAT_ROUTE_MAX_TURN_MS || '120000',
       10,
     );
+    const ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS = 7;
+    const isNinerouterClassProvider = ['ninerouter', 'ollama', 'kiro'].includes(provider);
+    const effectiveSilenceMs = isNinerouterClassProvider ? 5000 : 20000;
+    const ROUTE_MAX_TURN_MS = Math.max(
+      ROUTE_MAX_TURN_MS_ENV,
+      Math.ceil(ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS * effectiveSilenceMs * 1.5) + 30000,
+    );
+    chatLogger.debug('[CHAT-ROUTE] computed max-turn from chain.length + silenceMs', {
+      requestId,
+      provider,
+      isNinerouterClassProvider,
+      effectiveSilenceMs,
+      ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS,
+      ROUTE_MAX_TURN_MS,
+      ROUTE_MAX_TURN_MS_ENV,
+    });
     // SSE-bridge: the streaming branch's start(controller) overrides
     // this with the real SSE-error emitter; non-streaming / v1-agent-loop
     // branches leave it as a no-op so fireStall doesn't error trying to
@@ -1589,7 +1624,7 @@ FORMAT RULES:
         '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
         { requestId, reason, ...detail },
       );
-      const stallErr = new Error(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
+      const stallErr = new StallWatchdogError(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
       try { emitSseError(stallErr.message); } catch { /* best-effort */ }
       // Cancel the in-flight LLM HTTP call (signal is already forwarded
       // through config.abortSignal → runV1Api / runV2Native / v2-cli).
@@ -2761,16 +2796,30 @@ const config: UnifiedAgentConfig = {
             // 524 from the client cancel path would be misleading
             // (clients expect the normal stop-button semantics).
             //
-            // Detection rule: error.message starts with
-            // `'Chat route stall watchdog'` (the fireStall factory's
-            // exact emit format). User-initiated aborts return the
-            // literal `'Chat route aborted'` and fall through to
-            // throw.
+            // Detection rule (refactored — typed discriminator as PRIMARY):
+            // 1. PRIMARY (native SDK path only): raceErr instanceof
+            //    StallWatchdogError. The typed class fired by fireStall
+            //    at L1617-L1626 is threaded through agentTurnAbort.signal
+            //    .reason; native SDK abort paths preserve the original
+            //    instance and surface it as the throw value. NOTE:
+            //    SDKs that wrap the abort throw (Vercel AI SDK creates
+            //    a new wrapper) BREAK the instanceof check — that is
+            //    why the substring fallback (#2) below is mandatory.
+            // 2. FALLBACK (defense-in-depth): error.message starts with
+            //    `'Chat route stall watchdog'` (the fireStall factory's
+            //    exact emit format) — survives even if a future refactor
+            //    accidentally drops the typed instance on the abort signal.
+            // 3. OR-arm: raceErr.message === `'Chat route aborted'` AND
+            //    stallDidFire === true — catches the race where rejectOnAbort
+            //    (L1642-L1647) wins the rejection before fireStall's.
+            //    User-initiated aborts (no preceding stall) fall through to
+            //    throw — clients expect normal stop-button semantics, not 524.
             const msgRaw =
               raceErr instanceof Error ? raceErr.message : String(raceErr);
             const isServerStall =
               typeof msgRaw === 'string' &&
-              (msgRaw.startsWith('Chat route stall watchdog') ||
+              (raceErr instanceof StallWatchdogError ||
+                msgRaw.startsWith('Chat route stall watchdog') ||
                 // `fireStall` sets `stallDidFire = true` BEFORE calling
                 // `agentTurnAbort.abort(stallErr)`, so an abort that fires
                 // while already in a watchdog state is ALSO a watchdog

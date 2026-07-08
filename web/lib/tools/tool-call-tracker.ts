@@ -350,16 +350,39 @@ class ToolCallTracker {
    * Get per-model tool stats for the last N minutes.
    * Returns stats sorted by tool success rate (best first).
    * Uses SQLite if available, falls back to in-memory records.
+   *
+   * SEV-10 (2026-07-08 fix): the prior version's `if (this.db)` short-circuit
+   * caused the read pipeline to return [] whenever `recordToolCall`'s SQLite
+   * INSERT silently threw (schema drift, db lock, missing `tool_calls` table
+   * despite defensive CREATE TABLE IF NOT EXISTS, SEV-9 follow-on). The catch
+   * block on the write path fell through to `memoryRecords.push(record)` — so
+   * writes succeeded IN MEMORY only — but the read path queried SQLite only
+   * and missed those records. Net: `refreshModelTelemetryCache()` (every 5 min
+   * via `setInterval` in model-ranker.ts) returned empty `toolStats` on every
+   * refresh even after successful tool calls. The fix merges SQLite rows
+   * AND memoryRecords at the (provider, model, tool_name) granularity, with
+   * sums, before `aggregateToolStats` collapses to provider:model groups.
+   * Idempotent for the happy case (memoryRecords empty when SQLite writes
+   * succeed) and self-healing for the disconnect case (memoryRecords catches
+   * the rows SQLite missed).
    */
   async getModelToolStats(minutesBack: number = 30): Promise<ModelToolStats[]> {
     await this.initialize();
+    const cutoffTime = Date.now() - minutesBack * 60 * 1000;
 
-    let records: ToolCallRecord[] = [];
-
+    // 1) Read SQLite if available (best-effort). Empty array if db missing
+    //    OR if the SELECT threw (logged below) — either way, the merge in
+    //    step 3 still runs against memoryRecords.
+    let sqliteRows: Array<{
+      provider: string;
+      model: string;
+      tool_name: string;
+      totalCalls: number;
+      successes: number;
+      failures: number;
+    }> = [];
     if (this.db) {
       try {
-        const cutoffTime = Date.now() - minutesBack * 60 * 1000;
-
         const stmt = this.db.prepare(`
           SELECT
             provider,
@@ -372,48 +395,67 @@ class ToolCallTracker {
           WHERE timestamp >= ?
           GROUP BY provider, model, tool_name
         `);
+        sqliteRows = stmt.all(cutoffTime) as typeof sqliteRows;
+      } catch (error) {
+        logger.warn('SQLite query failed, falling back to memory merge', error);
+        sqliteRows = [];
+      }
+    }
 
-        const results = stmt.all(cutoffTime) as Array<{
-          provider: string;
-          model: string;
-          tool_name: string;
-          totalCalls: number;
-          successes: number;
-          failures: number;
-        }>;
-
-        return this.aggregateToolStats(results.map(r => ({
+    // 2) Always pull memoryRecords for the same window. This is the SEV-10
+    //    disconnect patch: when writes fall through to memoryRecords (because
+    //    SQLite INSERT threw), the next periodic read MUST consult this list
+    //    or return empty even though the writes "succeeded".
+    const memGrouped = new Map<string, { provider: string; model: string; tool_name: string; totalCalls: number; successes: number; failures: number }>();
+    for (const r of this.memoryRecords) {
+      if (r.timestamp < cutoffTime) continue;
+      const k = `${r.provider}:${r.model}:${r.toolName}`;
+      const existing = memGrouped.get(k);
+      if (existing) {
+        existing.totalCalls += 1;
+        if (r.success) existing.successes += 1;
+        else existing.failures += 1;
+      } else {
+        memGrouped.set(k, {
           provider: r.provider,
           model: r.model,
-          toolName: r.tool_name,
-          totalCalls: r.totalCalls,
-          successes: r.successes,
-          failures: r.failures,
-        })));
-      } catch (error) {
-        logger.warn('SQLite query failed, using memory fallback', error);
+          tool_name: r.toolName,
+          totalCalls: 1,
+          successes: r.success ? 1 : 0,
+          failures: r.success ? 0 : 1,
+        });
       }
     }
 
-    // In-memory fallback
-    const cutoffTime = Date.now() - minutesBack * 60 * 1000;
-    const recentRecords = this.memoryRecords.filter(r => r.timestamp >= cutoffTime);
-
-    // Group by provider:model:toolName
-    const grouped = new Map<string, { provider: string; model: string; toolName: string; totalCalls: number; successes: number; failures: number }>();
-
-    for (const record of recentRecords) {
-      const key = `${record.provider}:${record.model}:${record.toolName}`;
-      if (!grouped.has(key)) {
-        grouped.set(key, { provider: record.provider, model: record.model, toolName: record.toolName, totalCalls: 0, successes: 0, failures: 0 });
+    // 3) Sum-merge at (provider, model, tool_name) granularity. Both sources
+    //    are pre-grouped by SQLite's GROUP BY and the loop above, so this is
+    //    a straight sum (no double-counting when a record happens to live in
+    //    both — which the current write path doesn't do, but defence-in-depth
+    //    against a future refactor that double-pushes on the success path).
+    const combined = new Map<string, { provider: string; model: string; tool_name: string; totalCalls: number; successes: number; failures: number }>();
+    for (const r of sqliteRows) {
+      combined.set(`${r.provider}:${r.model}:${r.tool_name}`, r);
+    }
+    for (const r of memGrouped.values()) {
+      const k = `${r.provider}:${r.model}:${r.tool_name}`;
+      const existing = combined.get(k);
+      if (existing) {
+        existing.totalCalls += r.totalCalls;
+        existing.successes += r.successes;
+        existing.failures += r.failures;
+      } else {
+        combined.set(k, r);
       }
-      const entry = grouped.get(key)!;
-      entry.totalCalls++;
-      if (record.success) entry.successes++;
-      else entry.failures++;
     }
 
-    return this.aggregateToolStats(Array.from(grouped.values()));
+    return this.aggregateToolStats(Array.from(combined.values()).map(r => ({
+      provider: r.provider,
+      model: r.model,
+      toolName: r.tool_name,
+      totalCalls: r.totalCalls,
+      successes: r.successes,
+      failures: r.failures,
+    })));
   }
 
   /** Aggregate raw tool stats records into ModelToolStats array */

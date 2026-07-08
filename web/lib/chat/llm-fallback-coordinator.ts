@@ -221,7 +221,16 @@ export async function* coordinateConcurrentFallback<T>(
     createPrimaryStream,
     createFallbackStream,
     signal,
-    silenceMs = DEFAULT_SILENCE_MS,
+    // Bug #Y — silenceMs default: ninerouter-class providers (in-cluster
+    // edge-GPU routes through ninerouter / ollama / kiro) have a stuck-tool
+    // hang pattern where the first-token (TTFT) arrival is a reliable
+    // health signal. Default silenceMs to 5s for these so the coordinator
+    // walks the fallback chain faster when TTFT stalls; keep the 20s default
+    // for cross-provider AND quality-of-service-sensitive providers so we
+    // don't prematurely steal a working-but-slow primary's first token.
+    silenceMs = ['ninerouter', 'ollama', 'kiro'].includes(primaryProvider)
+      ? 5000
+      : DEFAULT_SILENCE_MS,
     hardDeadlineMs = DEFAULT_HARD_DEADLINE_MS,
     idleTimeoutPerChunkMs,
     requestId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -246,6 +255,7 @@ export async function* coordinateConcurrentFallback<T>(
     } catch (err) {
       if (isAbortError(err, signal)) {
         logger.debug('Concurrent fallback: primary setup aborted (silenceMs disabled)', { primaryProvider, model, requestId });
+        rethrowIfStallReason(signal);
         return;
       }
       throw err;
@@ -273,6 +283,7 @@ export async function* coordinateConcurrentFallback<T>(
     } catch (err) {
       if (isAbortError(err, signal)) {
         logger.debug('Concurrent fallback: primary setup aborted by user (no fallbacks)', { primaryProvider, model, requestId });
+        rethrowIfStallReason(signal);
         return;
       }
       throw err;
@@ -350,10 +361,12 @@ export async function* coordinateConcurrentFallback<T>(
     // User aborted during the silence race — primary is still running but
     // the caller doesn't want the result. Abort primary and return.
     primaryHandle.abort();
+    rethrowIfStallReason(signal);
     return;
   }
 
   // first.kind === 'timeout' — primary was silent for `silenceMs`. Walk
+  // the configured fallback chain.
   // the configured fallback chain, racing each entry against the
   // still-in-flight primary with a per-fallback hard deadline. If the
   // fallback stalls past `hardDeadlineMs` (or errors, or fails to set up),
@@ -398,13 +411,14 @@ export async function* coordinateConcurrentFallback<T>(
   let pendingPrimary: Promise<IteratorResult<T>> | null = primaryPromiseAtStart;
 
   for (let fallbackIndex = 0; fallbackIndex < chain.length; fallbackIndex++) {
-    // Defense-in-depth: re-check user signal between iterations.
-    if (signal?.aborted) {
-      primaryHandle.abort();
-      return;
-    }
+  // Defense-in-depth: re-check user signal between iterations.
+  if (signal?.aborted) {
+    primaryHandle.abort();
+    rethrowIfStallReason(signal);
+    return;
+  }
 
-    const fallbackProvider = chain[fallbackIndex];
+  const fallbackProvider = chain[fallbackIndex];
     const raceStartTime = Date.now();
     let fallbackHandle: StreamHandle<T>;
     try {
@@ -429,6 +443,7 @@ export async function* coordinateConcurrentFallback<T>(
           requestId,
         });
         primaryHandle.abort();
+        rethrowIfStallReason(signal);
         return;
       }
       logger.warn(
@@ -452,6 +467,7 @@ export async function* coordinateConcurrentFallback<T>(
     if (signal?.aborted) {
       fallbackHandle.abort();
       primaryHandle.abort();
+      rethrowIfStallReason(signal);
       return;
     }
     const fallbackIt = fallbackHandle.gen[Symbol.asyncIterator]();
@@ -618,12 +634,14 @@ export async function* coordinateConcurrentFallback<T>(
     if (signal?.aborted) {
       primaryHandle.abort();
       fallbackHandle.abort();
+      rethrowIfStallReason(signal);
       return;
     }
 
     if (raceResult.kind === 'aborted') {
       primaryHandle.abort();
       fallbackHandle.abort();
+      rethrowIfStallReason(signal);
       return;
     }
 
@@ -837,6 +855,30 @@ export class IdleTimeoutError extends Error {
   }
 }
 
+/**
+ * Typed discriminator for the route-level stall watchdog.
+ *
+ * The chat route's `fireStall` (in `app/api/chat/route.ts`) creates THIS
+ * error class (instead of a plain `Error`) when the no-progress or
+ * max-turn watchdog fires. The abort cascade flows through
+ * `agentTurnSignal` (a combined `AbortSignal.any([request.signal,
+ * agentTurnAbort.signal])`) to the chain-walk's `signal` parameter, with
+ * the StallWatchdogError carried as `signal.reason`. The chain-walk
+ * re-throws on abort ONLY when the reason is a StallWatchdogError, so
+ * user-initiated aborts keep their silent-return semantics. The route's
+ * outer catch at L2796 sees `err instanceof StallWatchdogError` and
+ * returns HTTP 524 instead of 500.
+ *
+ * Defined next to `IdleTimeoutError` so the chain-walk's typed-error
+ * vocabulary lives in one place.
+ */
+export class StallWatchdogError extends Error {
+  name = 'StallWatchdogError' as const;
+  constructor(message: string) {
+    super(message);
+  }
+}
+
 async function* drainIterator<T>(
   it: AsyncIterator<T>,
   signal?: AbortSignal,
@@ -935,4 +977,25 @@ function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
   if (!signal) return false;
   const e = err as { name?: string; code?: string } | null | undefined;
   return Boolean(e && (e.name === 'AbortError' || e.code === 'ABORT_ERR'));
+}
+
+/**
+ * Helper: if `signal?.reason` is a `StallWatchdogError`, throw it.
+ * No-op for non-stall aborts (incl. user-initiated AbortError).
+ *
+ * Called at every silent-return-on-abort site in
+ * `coordinateConcurrentFallback` so the typed discriminator survives
+ * the chain-walk's mid-iteration abort and surfaces in the route's
+ * outer catch (which then maps to HTTP 524). MUST be invoked BEFORE
+ * the `return;` because `return` in an `AsyncGenerator` does NOT
+ * propagate any error to the downstream `for await` consumer.
+ *
+ * Defensive: only throws when `signal.reason instanceof StallWatchdogError`.
+ * User aborts typically have reason = AbortError (or undefined in older
+ * Node), so those fall through and stay silent.
+ */
+function rethrowIfStallReason(signal: AbortSignal | undefined): void {
+  if (signal?.reason instanceof StallWatchdogError) {
+    throw signal.reason;
+  }
 }

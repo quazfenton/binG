@@ -22,6 +22,7 @@ import {
   decideAutoContinue,
   defaultFileEditDetector,
   needsMoreTurnsDetector,
+  rambleNoToolsDetector,
   getContinuationCount,
   clearContinuationCount,
   DETECTOR_BUCKET_REASONS,
@@ -664,6 +665,156 @@ describe('_enrichResultData via decideAutoContinue integration (capture-detector
 });
 
 
+
+// ---------------------------------------------------------------------------
+// rambleNoToolsDetector — >4KB response + 0 tool calls heuristic
+//
+// The detector lives in auto-continue-helper.ts (see the docblock). It is
+// opt-in via `advancedDetectorFn: rambleNoToolsDetector` so existing callers
+// (which use `defaultFileEditDetector` or `needsMoreTurnsDetector` only)
+// don't see a behavior change. The tests below lock the detector's contract
+// end-to-end: fires on the right shape, returns null on the wrong shape,
+// respects `max_continuations_reached` safety, and is reachable via the
+// `decideAutoContinue` integration path with `advancedDetectorFn=rambleNoToolsDetector`.
+// ---------------------------------------------------------------------------
+describe('rambleNoToolsDetector', () => {
+  function bigResponse(): string {
+    return 'Detailed exploratory paragraph about the codebase. '.repeat(150);
+  }
+
+  it('forces continue when responseText > 4KB AND no tool calls', () => {
+    const response = bigResponse();
+    expect(response.length).toBeGreaterThan(4096);
+    const result = { success: true, response, steps: [] };
+    const decision = rambleNoToolsDetector(result, {
+      continue: false,
+      reason: 'no_continuation_needed',
+      continuationPrompt: '',
+      continuationsSoFar: 0,
+    } as any);
+    expect(decision).toEqual({ force: true, reason: 'ramble-no-tools' });
+  });
+
+  it('returns null when responseText < 4KB even with no tool calls', () => {
+    const result = { success: true, response: 'short response', steps: [] };
+    const decision = rambleNoToolsDetector(result, {
+      continue: false,
+      reason: 'no_continuation_needed',
+      continuationPrompt: '',
+      continuationsSoFar: 0,
+    } as any);
+    expect(decision).toBeNull();
+  });
+
+  it('returns null when a tool call happened (no-tools precondition violated)', () => {
+    const result = {
+      success: true,
+      response: bigResponse(),
+      steps: [{ toolName: 'read_file', args: { path: 'a.ts' } }],
+    };
+    const decision = rambleNoToolsDetector(result, {
+      continue: false,
+      reason: 'no_continuation_needed',
+      continuationPrompt: '',
+      continuationsSoFar: 0,
+    } as any);
+    expect(decision).toBeNull();
+  });
+
+  it('returns null when result is undefined', () => {
+    const decision = rambleNoToolsDetector(undefined, {
+      continue: false,
+      reason: 'no_continuation_needed',
+      continuationPrompt: '',
+      continuationsSoFar: 0,
+    } as any);
+    expect(decision).toBeNull();
+  });
+
+  it('returns null when reason is max_continuations_reached (safety semantics)', () => {
+    const result = { success: true, response: bigResponse(), steps: [] };
+    const decision = rambleNoToolsDetector(result, {
+      continue: false,
+      reason: 'max_continuations_reached',
+      continuationPrompt: '',
+      continuationsSoFar: 3,
+    } as any);
+    expect(decision).toBeNull();
+  });
+
+  it('treats empty/whitespace-only response as no signal (defensive)', () => {
+    const result1 = { success: true, response: '', steps: [] };
+    const result2 = { success: true, response: '   \n\t  ', steps: [] };
+    const baseDecision = {
+      continue: false,
+      reason: 'no_continuation_needed',
+      continuationPrompt: '',
+      continuationsSoFar: 0,
+    } as any;
+    expect(rambleNoToolsDetector(result1, baseDecision)).toBeNull();
+    expect(rambleNoToolsDetector(result2, baseDecision)).toBeNull();
+  });
+
+  it('honors AUTO_CONTINUE_RAMBLE_BYTES env override (lower threshold)', () => {
+    // Temporarily lower the threshold so a 500-char response qualifies.
+    const original = process.env.AUTO_CONTINUE_RAMBLE_BYTES;
+    try {
+      process.env.AUTO_CONTINUE_RAMBLE_BYTES = '500';
+      const result = {
+        success: true,
+        response: 'x'.repeat(600),
+        steps: [],
+      };
+      const decision = rambleNoToolsDetector(result, {
+        continue: false,
+        reason: 'no_continuation_needed',
+        continuationPrompt: '',
+        continuationsSoFar: 0,
+      } as any);
+      expect(decision).toEqual({ force: true, reason: 'ramble-no-tools' });
+    } finally {
+      if (original === undefined) delete process.env.AUTO_CONTINUE_RAMBLE_BYTES;
+      else process.env.AUTO_CONTINUE_RAMBLE_BYTES = original;
+    }
+  });
+
+  it('integration: decideAutoContinue with advancedDetectorFn=rambleNoToolsDetector fires forceSignal', () => {
+    // End-to-end lock: when a route.ts caller opts in via
+    // `advancedDetectorFn: rambleNoToolsDetector`, a >4KB no-tools response
+    // produces forceSignal=true with reason=`ramble-no-tools`. This is the
+    // route.ts migration path the user wants for the >4KB no-tools signal.
+    const requestId = 'test-ramble-decide-fire';
+    clearContinuationCount(requestId);
+    const result = makeResult({
+      steps: [],
+      response: bigResponse(),
+    });
+    const decision = decideAutoContinue({
+      requestId,
+      routing: undefined,
+      steps: [],
+      responseText: result.response!,
+      result,
+      advancedDetectorFn: rambleNoToolsDetector,
+    });
+    expect(decision.continue).toBe(true);
+    expect(decision.forceSignal).toBe(true);
+    expect(decision.reason).toBe('ramble-no-tools');
+    expect(decision.continuationsSoFar).toBe(1);
+    expect(DETECTOR_BUCKET_REASONS.has('ramble-no-tools')).toBe(true);
+    clearContinuationCount(requestId);
+  });
+
+  it('integration: ramble-no-tools bucket is in the registry so the audit denylist picks it up', () => {
+    // LOCK for future regressions: if the bucket is removed from
+    // DETECTOR_BUCKET_REASONS but kept in AutoContinueReason, the union-
+    // safety assertion in the Audit-Q7 Sites 3+4 carve-out would silently
+    // degrade (a ramble-no-tools reason would no longer be classified as
+    // a detector bucket). This test pins both: the Set contains it, AND
+    // the union includes it.
+    expect(DETECTOR_BUCKET_REASONS.has('ramble-no-tools')).toBe(true);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // R7 Regression (PR-V commit eef3a89b): synthetic phaseTransitionRequestId

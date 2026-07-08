@@ -130,7 +130,7 @@ export class VercelImageProvider implements ImageGenerationProvider {
         signal,
       });
 
-      logger.info('Got response with', response.data?.length || 0, 'images');
+      logger.info('Got response with ' + (response.data?.length || 0) + ' images');
 
       if (!response.data || response.data.length === 0) {
         throw new ImageGenerationError(

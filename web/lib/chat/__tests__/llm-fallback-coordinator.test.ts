@@ -745,6 +745,128 @@ describe('coordinateConcurrentFallback', () => {
     }
   });
 
+  it('defaults silenceMs to 5000ms for ninerouter-class providers when not explicitly set', async () => {
+    // Bug #Y — silenceMs heuristic: in-cluster edge-GPU providers
+    // (ninerouter, ollama, kiro) drop the default silenceMs from 20s to 5s
+    // so the fallback chain walks faster on TTFT stalls. Verified by
+    // advancing fake-time to 5s + ε and asserting the fallback factory
+    // was called — would NOT be called if the default were still 20s.
+    // Drive the fallback to produce AFTER the assertion so the chain
+    // race resolves + the generator exits cleanly (no stale-generator
+    // leak into sibling tests under vi.useFakeTimers).
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const fallback = makeControllable<number>();
+      const onFallbackFactory = vi.fn(() => Promise.resolve(fallback));
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'ninerouter',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: onFallbackFactory,
+        // Bypass the file-level vi.mock of getConfiguredFallbackChain (which
+        // returns [] for non-'primary' providers) by passing an explicit chain.
+        fallbackChain: ['fallbackA'],
+        // silenceMs undefined → heuristic defaults to 5000ms for ninerouter
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+
+      // Advance past 5000ms silenceMs + ε → factory called once, with 'fallbackA'.
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(onFallbackFactory).toHaveBeenCalledTimes(1);
+      expect(onFallbackFactory).toHaveBeenCalledWith('fallbackA');
+
+      // Drive the chunk race to completion so the generator exits cleanly.
+      fallback.push(42);
+      fallback.end();
+      const first = await firstP;
+      expect(first.value).toBe(42);
+      for await (const _ of iter) { /* drain */ }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps silenceMs at 20000ms for non-ninerouter providers when not explicitly set', async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const fallback = makeControllable<number>();
+      const onFallbackFactory = vi.fn(() => Promise.resolve(fallback));
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'mistral',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: onFallbackFactory,
+        // Bypass the file-level vi.mock of getConfiguredFallbackChain (which
+        // returns [] for non-'primary' providers) by passing an explicit chain.
+        fallbackChain: ['fallbackA'],
+        // silenceMs undefined → default stays at DEFAULT_SILENCE_MS (20000)
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+
+      // 5001ms — should NOT fire (default for non-ninerouter is 20s).
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(onFallbackFactory).not.toHaveBeenCalled();
+      // Advance to 20000ms → factory fires once with 'fallbackA'.
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(onFallbackFactory).toHaveBeenCalledTimes(1);
+      expect(onFallbackFactory).toHaveBeenCalledWith('fallbackA');
+
+      // Drive the chunk race to completion so the generator exits cleanly.
+      fallback.push(42);
+      fallback.end();
+      const first = await firstP;
+      expect(first.value).toBe(42);
+      for await (const _ of iter) { /* drain */ }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('honors explicit silenceMs override even for ninerouter', async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = makeControllable<number>(); // never produces
+      const fallback = makeControllable<number>();
+      const onFallbackFactory = vi.fn(() => Promise.resolve(fallback));
+
+      const gen = coordinateConcurrentFallback({
+        primaryProvider: 'ninerouter',
+        model: 'm',
+        createPrimaryStream: () => primary,
+        createFallbackStream: onFallbackFactory,
+        // Bypass the file-level vi.mock of getConfiguredFallbackChain (which
+        // returns [] for non-'primary' providers) by passing an explicit chain.
+        fallbackChain: ['fallbackA'],
+        silenceMs: 50, /* explicit override beats the ninerouter default of 5s */
+      });
+
+      const iter = gen[Symbol.asyncIterator]();
+      const firstP = iter.next();
+
+      // 51ms → explicit 50ms override fires (would have been 5000ms by default).
+      await vi.advanceTimersByTimeAsync(51);
+      expect(onFallbackFactory).toHaveBeenCalledTimes(1);
+      expect(onFallbackFactory).toHaveBeenCalledWith('fallbackA');
+
+      // Drive the chunk race to completion so the generator exits cleanly.
+      fallback.push(42);
+      fallback.end();
+      const first = await firstP;
+      expect(first.value).toBe(42);
+      for await (const _ of iter) { /* drain */ }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ── Chain walk tests (per-fallback hardDeadlineMs) ──────────────────
   // Bug #86 regression: the secondary Promise.race (primary vs. fallback #1)
   // had no timeout arm, so when fallback #1 ALSO stalled past silenceMs —

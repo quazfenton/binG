@@ -225,7 +225,6 @@ export class ToolAuthorizationManager {
         success: false,
         provider,
         authUrl: '',
-        provider,
         message: `Failed to initiate connection: ${error.message}`,
       };
     }

@@ -255,6 +255,24 @@ export function detectNeedsMoreTurns(result: DetectableResult): TurnDetectionRes
   }
 
   // ── Assemble result ───────────────────────────────────────────
+
+  // Cross-ref: the ramble-no-tools heuristic (responseLen > 4096 AND no
+  // tool calls) is NOT folded into Factor 4 here because a single source
+  // of truth between `_enrichResultData`'s pre-compute and this
+  // 4-factor pipeline would create dead code (no consumer reads
+  // `result.incompleteSignals` to surface that signal). Callers who want
+  // the ramble-no-tools signal opt in via the dedicated
+  // `rambleNoToolsDetector` exported from `auto-continue-helper.ts`:
+  //
+  //   decideAutoContinue({
+  //     ...,
+  //     advancedDetectorFn: rambleNoToolsDetector,
+  //   })
+  //
+  // Mirrors the existing 'unclosed-code-block' / 'empty-after-tools'
+  // single-source-of-truth discipline: each Factor 4 signal has exactly
+  // one definition site.
+
   const needsMoreTurns = signals.length > 0;
 
   // Build contextual reprompt when detection fires.
