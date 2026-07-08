@@ -845,7 +845,7 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
     // For now we assert the load-bearing chain engagement. Tracking:
     //   Pinned in: bing/.tickets/STALL-524-OUTERCATCH-GAP.md
     const bodyStatus = res.status;
-    expect([200, 524, 500]).toContain(bodyStatus);
+    expect(bodyStatus).toBe(524);
   }, 5000);
 
   it('keeps 200 status on streaming branch + adds x-stall-fired header when watchdog fires mid-stream', async () => {
@@ -933,6 +933,6 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
     //      524 means the inner catch fired successfully. 500 means
     //      the OUTERCATCH-GAP ticket is still open (acceptable, tracked).
     const bodyStatus = res.status;
-    expect([200, 524, 500]).toContain(bodyStatus);
+    expect(bodyStatus).toBe(524);
   }, 5000);
 });

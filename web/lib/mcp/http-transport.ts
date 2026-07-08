@@ -65,8 +65,17 @@ export function getAllHTTPTransports(): Map<string, HTTPTransport> {
  * Get tool definitions from all registered HTTP transports
  * Returns tools in AI SDK format for use in getMCPToolsForAI_SDK
  * Uses caching to avoid fetching on every call
+ *
+ * @param options.signal Optional external AbortSignal. When provided, each
+ *   transport's listTools() inherits it, so a hung tool-discovery fetch is
+ *   aborted within microseconds of the signal flipping. The whole Promise.all
+ *   is then bounded by `min(internalBackendTimeout, externalSignal)` rather
+ *   than `internalBackendTimeout × transportCount`.
  */
-export async function getRemoteMCPTools(forceRefresh = false): Promise<Array<{
+export async function getRemoteMCPTools(
+  forceRefresh = false,
+  options?: { signal?: AbortSignal },
+): Promise<Array<{
   type: 'function'
   function: {
     name: string
@@ -75,9 +84,18 @@ export async function getRemoteMCPTools(forceRefresh = false): Promise<Array<{
   }
 }>> {
   const now = Date.now();
-  
+
+  logger.debug('getRemoteMCPTools called', {
+    forceRefresh,
+    hasCached: !!cachedRemoteTools,
+    cacheAge: cachedRemoteTools ? now - lastToolFetch : null,
+    transportCount: connectedTransports.size,
+    transportNames: Array.from(connectedTransports.keys())
+  });
+
   // Return cached tools if still valid
   if (!forceRefresh && cachedRemoteTools && (now - lastToolFetch) < TOOL_CACHE_TTL) {
+    logger.debug('Returning cached remote tools', { count: cachedRemoteTools.length });
     return cachedRemoteTools;
   }
 
@@ -86,10 +104,13 @@ export async function getRemoteMCPTools(forceRefresh = false): Promise<Array<{
   // than sum-of-N. Per-transport try/catch isolates failures: a single
   // failing transport returns [] without denying tool definitions from
   // healthy siblings. 60s TTL cache at L79-L82 unchanged.
+  // Chat-hang-fix Step B: thread options.signal into each transport.listTools()
+  // so the chat route's watchdog AbortSignal bounded the tool-discovery
+  // wallclock instead of leaving it to the per-transport 30s timeout.
   const transportResults = await Promise.all(
     Array.from(connectedTransports).map(async ([serverName, transport]) => {
       try {
-        const result = await transport.listTools();
+        const result = await transport.listTools({ signal: options?.signal });
         const tools = result?.tools || [];
         logger.debug(`Loaded ${tools.length} tools from remote MCP server: ${serverName}`);
         return tools.map((tool: any) => ({
@@ -124,12 +145,37 @@ export function clearRemoteToolsCache(): void {
 }
 
 /**
+ * Unregister all HTTP transports. Useful for hot-reload (dev) and as a
+ * test-isolation helper — production code does not generally call this.
+ */
+export function clearAllHTTPTransports(): void {
+  connectedTransports.clear();
+}
+
+/**
+ * Per-server ceiling for the initializeMCPForArchitecture1 probe loop.
+ * Each HTTP transport's listTools() probe gets an AbortSignal.timeout(INIT_PROBE_TIMEOUT_MS)
+ * so a single dead server no longer holds init open for the full
+ * transport.timeout (30000ms). Was unbounded per-server before; with N
+ * dead servers in a sequential loop the cumulative worst case was
+ * N × 30s = 270s+ for N=9. With this constant + parallel probes, the
+ * worst case is INIT_PROBE_TIMEOUT_MS regardless of N.
+ */
+export const INIT_PROBE_TIMEOUT_MS = 5000;
+
+/**
  * Call a remote MCP tool by name
  * Name format: serverName_toolName (e.g., myserver_readFile)
+ *
+ * @param options.signal Optional external AbortSignal (default: timeout-only).
+ *   When provided, aborts the underlying HTTP fetch within ≤100ms of an
+ *   external abort (e.g. chat route's `agentTurnSignal` watchdog). Additive:
+ *   when omitted, behavior matches the pre-fix implementation exactly.
  */
 export async function callRemoteMCPTool(
   toolName: string,
-  args: Record<string, any>
+  args: Record<string, any>,
+  options?: { signal?: AbortSignal }
 ): Promise<{ success: boolean; output: string; error?: string }> {
   // Extract server name and tool name from toolName
   const underscoreIndex = toolName.indexOf('_');
@@ -154,7 +200,7 @@ export async function callRemoteMCPTool(
   }
 
   try {
-    const result = await transport.callTool(remoteToolName, args);
+    const result = await transport.callTool(remoteToolName, args, { signal: options?.signal });
     
     // Handle MCP tool result format
     const content = result?.content;
@@ -191,7 +237,13 @@ export async function callRemoteMCPTool(
  * Check if there are any connected HTTP transports
  */
 export function hasRemoteMCPServers(): boolean {
-  return connectedTransports.size > 0;
+  const hasServers = connectedTransports.size > 0;
+  logger.debug('hasRemoteMCPServers check', { 
+    size: connectedTransports.size, 
+    hasServers,
+    serverNames: Array.from(connectedTransports.keys())
+  });
+  return hasServers;
 }
 
 /**
@@ -244,15 +296,35 @@ export class HTTPTransport {
   }
 
   /**
-   * Make JSON-RPC request to MCP server
+   * Make JSON-RPC request to MCP server.
+   *
+   * @param options.signal Optional external AbortSignal. When provided, the
+   *   combined signal (timeout + external) flips on EITHER source, the
+   *   in-flight fetch aborts within ≤100ms, AND the retry loop is broken
+   *   out of immediately on external-abort (no internal-retry swallow).
+   *   Additive: when omitted, behavior matches the pre-fix implementation
+   *   exactly (timeout-driven aborts, retry-on-transient-error).
    */
-  async request(method: string, params?: any): Promise<any> {
+  async request(method: string, params?: any, options?: { signal?: AbortSignal }): Promise<any> {
     const { url, timeout, maxRetries } = this.config;
-    
+    const externalSignal = options?.signal;
+
     for (let attempt = 0; attempt < (maxRetries || 1); attempt++) {
+      // Pre-attempt bailout: the watchdog (agentTurnSignal) may have fired
+      // before we got here — never even start the fetch (T1).
+      if (externalSignal?.aborted) {
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      }
+
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
+        // Combine internal timeout abort with external watchdog signal so
+        // fetch rejects on either source (T2). AbortSignal.any is the
+        // canonical ES2022 / Node 18+ combiner.
+        const combinedSignal = externalSignal
+          ? AbortSignal.any([controller.signal, externalSignal])
+          : controller.signal;
 
         const response = await fetch(url, {
           method: 'POST',
@@ -263,7 +335,7 @@ export class HTTPTransport {
             method,
             params: params || {},
           }),
-          signal: controller.signal,
+          signal: combinedSignal,
         });
 
         clearTimeout(timeoutId);
@@ -273,21 +345,28 @@ export class HTTPTransport {
         }
 
         const contentType = response.headers.get('content-type') || '';
-        
+
         if (contentType.includes('text/event-stream')) {
           // SSE response - return stream handler
           return this.handleSSEStream(response.body);
         }
 
         const data = await response.json();
-        
+
         if (data.error) {
           throw new Error(data.error.message || 'MCP error');
         }
-        
+
         return data.result;
       } catch (error: any) {
         logger.debug('HTTP transport request attempt', { attempt, error: error.message });
+        // Mid-retry-cycle bailout (T3): if the watchdog fired during this
+        // attempt, propagate immediately rather than swallowing through
+        // retries. Preserves the original `maxRetries` exhausted rethrow
+        // path when no external signal is provided (T6 regression).
+        if (externalSignal?.aborted) {
+          throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        }
         if (attempt === (maxRetries || 1) - 1) {
           throw error;
         }
@@ -332,15 +411,15 @@ export class HTTPTransport {
   /**
    * List available tools
    */
-  async listTools(): Promise<any> {
-    return this.request('tools/list');
+  async listTools(options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request('tools/list', undefined, options);
   }
 
   /**
    * Call a specific tool
    */
-  async callTool(name: string, args: any): Promise<any> {
-    return this.request('tools/call', { name, arguments: args });
+  async callTool(name: string, args: any, options?: { signal?: AbortSignal }): Promise<any> {
+    return this.request('tools/call', { name, arguments: args }, options);
   }
 
   /**

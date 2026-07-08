@@ -10,7 +10,7 @@
 import { mcpToolRegistry } from './registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
-import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
+import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers, INIT_PROBE_TIMEOUT_MS } from './http-transport'
 import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger';
 import { redactArgsForLogging } from '@/lib/errors/logging-utils';
@@ -322,6 +322,54 @@ async function refreshMCPorterToolsCache(): Promise<void> {
  * Call this during app initialization to make MCP tools available
  * to the main LLM call implementation
  */
+/**
+ * Connect to all configured HTTP MCP servers in parallel, each bounded
+ * by INIT_PROBE_TIMEOUT_MS (5s). Replaces the prior sequential for-loop
+ * (Step C of the chat-hang-fix full plan).
+ *
+ * Failure semantics: a single dead transport reduces to one warn line;
+ * healthy siblings still register. Partial MCP availability is preferred
+ * over a hard-fail that kills all of initializeMCPForArchitecture1.
+ */
+export async function probeAndRegisterRemoteMCPServers(
+  httpServers: Array<{
+    name: string
+    url: string
+    apiKey?: string
+    bearerToken?: string
+    headers?: Record<string, string>
+  }>,
+): Promise<void> {
+  if (httpServers.length === 0) {
+    logger.info('No HTTP MCP servers configured — remote MCP tools will be unavailable');
+    return;
+  }
+  logger.debug('HTTP servers detected', { count: httpServers.length, servers: httpServers.map(s => s.name) });
+  logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP... (parallel probe, ${INIT_PROBE_TIMEOUT_MS}ms/server ceiling)`);
+
+  await Promise.allSettled(
+    httpServers.map(async (server) => {
+      try {
+        const transport = createHTTPTransport({
+          url: server.url,
+          apiKey: server.apiKey,
+          bearerToken: server.bearerToken,
+          headers: server.headers,
+          transportType: 'streamable-http',
+        });
+        // Per-server probe ceiling. AbortSignal.timeout creates a one-shot
+        // signal that flips at +INIT_PROBE_TIMEOUT_MS; combined with the
+        // transport's internal 30s timeout via Step A's AbortSignal.any.
+        await transport.listTools({ signal: AbortSignal.timeout(INIT_PROBE_TIMEOUT_MS) });
+        registerHTTPTransport(server.name, transport);
+        logger.info(`Connected to remote MCP server: ${server.name}`);
+      } catch (error: any) {
+        logger.warn(`Failed to connect to remote MCP server ${server.name}:`, error.message);
+      }
+    })
+  );
+}
+
 export async function initializeMCPForArchitecture1(): Promise<void> {
   try {
     // Guard: Don't reinitialize if already done (prevents mcporter restart on every connect click)
@@ -393,28 +441,11 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
       logger.info('Web mode — local stdio MCP servers skipped (use remote HTTP servers instead)')
     }
 
-    // Connect to remote HTTP servers (both desktop and web mode)
-    if (httpServers.length > 0) {
-      logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP...`)
-      for (const server of httpServers) {
-        try {
-          const transport = createHTTPTransport({
-            url: server.url,
-            apiKey: server.apiKey,
-            bearerToken: server.bearerToken,
-            headers: server.headers,
-            transportType: 'streamable-http',
-          })
-          // Test connection by listing tools
-          await transport.listTools()
-          // Register the transport for tool discovery and execution
-          registerHTTPTransport(server.name, transport)
-          logger.info(`Connected to remote MCP server: ${server.name}`)
-        } catch (error: any) {
-          logger.warn(`Failed to connect to remote MCP server ${server.name}:`, error.message)
-        }
-      }
-    }
+    // Connect to remote HTTP servers (both desktop and web mode) via
+    // probeAndRegisterRemoteMCPServers — parallel probe bounded by
+    // INIT_PROBE_TIMEOUT_MS = 5000ms per server. Was sequential before;
+    // with N dead servers the worst-case was N × 30s (the transport default).
+    await probeAndRegisterRemoteMCPServers(httpServers);
 
     await refreshMCPorterToolsCache()
 
@@ -1268,6 +1299,7 @@ export async function callMCPToolFromAI_SDK(
   userId: string,  // Required for Arcade tools
   scopePath?: string,  // VFS scope path for session-scoped file operations
   recentFailures?: string[],  // Recent tool execution errors (≥2 biases toward debugger in role_selection)
+  options?: { signal?: AbortSignal },  // External watchdog plumbing (chat-hang-fix). Forwarded to remote MCP HTTP transport only.
 ): Promise<{ success: boolean; output: string; error?: string; __aiSdkOnly?: boolean }> {
   try {
     // Bug #37 (regression): canonicalize LLM-invented tool names (e.g.
@@ -1393,7 +1425,7 @@ export async function callMCPToolFromAI_SDK(
       const remoteServerNames = (await import('./http-transport')).getHTTPTransportNames();
       for (const serverName of remoteServerNames) {
         if (toolName.startsWith(`${serverName}_`)) {
-          return callRemoteMCPTool(toolName, args);
+          return callRemoteMCPTool(toolName, args, { signal: options?.signal });
         }
       }
     }

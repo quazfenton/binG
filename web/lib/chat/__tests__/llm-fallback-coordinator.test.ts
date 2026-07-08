@@ -745,50 +745,57 @@ describe('coordinateConcurrentFallback', () => {
     }
   });
 
-  it('defaults silenceMs to 5000ms for ninerouter-class providers when not explicitly set', async () => {
-    // Bug #Y — silenceMs heuristic: in-cluster edge-GPU providers
-    // (ninerouter, ollama, kiro) drop the default silenceMs from 20s to 5s
-    // so the fallback chain walks faster on TTFT stalls. Verified by
-    // advancing fake-time to 5s + ε and asserting the fallback factory
-    // was called — would NOT be called if the default were still 20s.
-    // Drive the fallback to produce AFTER the assertion so the chain
-    // race resolves + the generator exits cleanly (no stale-generator
-    // leak into sibling tests under vi.useFakeTimers).
-    vi.useFakeTimers();
-    try {
-      const primary = makeControllable<number>(); // never produces
-      const fallback = makeControllable<number>();
-      const onFallbackFactory = vi.fn(() => Promise.resolve(fallback));
+  // Bug #Y — silenceMs heuristic: in-cluster edge-GPU providers (ninerouter,
+  // ollama, kiro) drop the default silenceMs from 20s to 5s so the fallback
+  // chain walks faster on TTFT stalls. Each ninerouter-class provider gets
+  // its own row in it.each so the heuristic discrimination is tested across
+  // all 3 providers; the mistral negative-control + explicit-override tests
+  // remain standalone (different code paths). Verified by advancing fake-
+  // time past 5s + ε and asserting the fallback factory was called — would
+  // NOT be called if the default were still 20s. After the assertion we
+  // drive the fallback to produce so the chain race resolves + the
+  // generator exits cleanly (no stale-generator leak into sibling tests
+  // under vi.useFakeTimers).
+  it.each(['ninerouter', 'ollama', 'kiro'] as const)(
+    '%s (ninerouter-class) defaults silenceMs to 5000ms when not explicitly set',
+    async (ninerouterClassProvider) => {
+      vi.useFakeTimers();
+      try {
+        const primary = makeControllable<number>(); // never produces
+        const fallback = makeControllable<number>();
+        const onFallbackFactory = vi.fn(() => Promise.resolve(fallback));
 
-      const gen = coordinateConcurrentFallback({
-        primaryProvider: 'ninerouter',
-        model: 'm',
-        createPrimaryStream: () => primary,
-        createFallbackStream: onFallbackFactory,
-        // Bypass the file-level vi.mock of getConfiguredFallbackChain (which
-        // returns [] for non-'primary' providers) by passing an explicit chain.
-        fallbackChain: ['fallbackA'],
-        // silenceMs undefined → heuristic defaults to 5000ms for ninerouter
-      });
+        const gen = coordinateConcurrentFallback({
+          primaryProvider: ninerouterClassProvider,
+          model: 'm',
+          createPrimaryStream: () => primary,
+          createFallbackStream: onFallbackFactory,
+          // Bypass the file-level vi.mock of getConfiguredFallbackChain
+          // (which returns [] for non-'primary' providers) by passing an
+          // explicit chain.
+          fallbackChain: ['fallbackA'],
+          // silenceMs undefined → heuristic defaults to 5000ms for this ninerouter-class provider.
+        });
 
-      const iter = gen[Symbol.asyncIterator]();
-      const firstP = iter.next();
+        const iter = gen[Symbol.asyncIterator]();
+        const firstP = iter.next();
 
-      // Advance past 5000ms silenceMs + ε → factory called once, with 'fallbackA'.
-      await vi.advanceTimersByTimeAsync(5001);
-      expect(onFallbackFactory).toHaveBeenCalledTimes(1);
-      expect(onFallbackFactory).toHaveBeenCalledWith('fallbackA');
+        // Advance past 5000ms silenceMs + ε → factory called once, with 'fallbackA'.
+        await vi.advanceTimersByTimeAsync(5001);
+        expect(onFallbackFactory).toHaveBeenCalledTimes(1);
+        expect(onFallbackFactory).toHaveBeenCalledWith('fallbackA');
 
-      // Drive the chunk race to completion so the generator exits cleanly.
-      fallback.push(42);
-      fallback.end();
-      const first = await firstP;
-      expect(first.value).toBe(42);
-      for await (const _ of iter) { /* drain */ }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        // Drive the chunk race to completion so the generator exits cleanly.
+        fallback.push(42);
+        fallback.end();
+        const first = await firstP;
+        expect(first.value).toBe(42);
+        for await (const _ of iter) { /* drain */ }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('keeps silenceMs at 20000ms for non-ninerouter providers when not explicitly set', async () => {
     vi.useFakeTimers();

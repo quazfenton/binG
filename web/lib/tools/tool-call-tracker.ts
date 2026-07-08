@@ -101,6 +101,14 @@ class ToolCallTracker {
   private memoryInvocations: any[] = [];
   /** Deduplication set: tracks seen toolCallIds to prevent double-counting */
   private seenToolCallIds = new Set<string>();
+  /**
+   * Counter incremented in recordToolCall + recordToolCalls (batch) catch
+   * blocks when SQLite INSERT silently throws. Exposed via
+   * `getDisconnectCountForTests()` so production monitors can alert on
+   * repeated silent demotions (records fall through to memoryRecords
+   * without ever reaching the durable store).
+   */
+  private disconnectCount = 0;
 
   /**
    * Initialize the SQLite database (shared with chat-request-logger)
@@ -276,6 +284,7 @@ class ToolCallTracker {
         return;
       } catch (error) {
         logger.warn('SQLite insert failed, falling back to memory', { tool: record.toolName, error });
+        this.disconnectCount++;  // ship-ready metric: read via getDisconnectCountForTests()
       }
     }
 
@@ -339,6 +348,7 @@ class ToolCallTracker {
         return;
       } catch (error) {
         logger.warn('SQLite batch insert failed, falling back to memory', error);
+        this.disconnectCount++;  // ship-ready metric
       }
     }
 
@@ -654,6 +664,104 @@ class ToolCallTracker {
    */
   clearDedupCache(): void {
     this.seenToolCallIds.clear();
+  }
+
+  /**
+   * Reset in-memory records + the disconnect counter + the SQLite
+   * `tool_calls` table (test-only helper). All three track the same
+   * SQLite-failure fallthrough surface — disconnect tests want a clean
+   * slate between runs so the writes under test are the ONLY signals
+   * visible to subsequent assertions. Without the SQLite reset, the
+   * happy-path write from test 1 leaks into test 2's disconnect-proof
+   * assertion (the SQLite `EXISTS(...)` finds the leftover row, making
+   * the disconnect-proof assertion pass for the wrong reason).
+   */
+  __resetMemoryRecordsForTests(): void {
+    this.memoryRecords.length = 0;
+    this.disconnectCount = 0;
+    if (this.db) {
+      try {
+        this.db.prepare('DELETE FROM tool_calls').run();
+      } catch {
+        // Best-effort: helper is for vitest; if the table is drifted /
+        // unavailable, the next test's reset will catch up. Don't
+        // throw — callers expect a silent cleanup.
+      }
+    }
+  }
+
+  /**
+   * Reset redacted invocation payloads (test-only helper).
+   * Separate from memoryRecords because `recordInvocationPayload` has its
+   * own fallthrough path (memoryInvocations) that some tests inspect
+   * independently.
+   */
+  __resetInvocationsForTests(): void {
+    this.memoryInvocations.length = 0;
+  }
+
+  /**
+   * Integration helper: returns true if any tool calls have been recorded
+   * (either in SQLite OR in the in-memory fallback). The audit's behavioral
+   * rec #3 called for an integration test that "runs and asserts nonzero" —
+   * this method is the lightweight boolean surface that lets that test
+   * exist without inspecting the read API for shape.
+   *
+   * SEV-10 disconnect patch (2026-07-08): the read pipeline used to miss
+   * records that fell through to memoryRecords because of a SQLite INSERT
+   * failure. `getModelToolStats` was patched to merge both sources; this
+   * method is the boolean alternative for callers that only need an
+   * existence check ("do we have ANY tool-call telemetry?").
+   *
+   * Async-by-design: mirrors the rest of the public read surface
+   * (getModelToolStats, getRecentInvocations, getRawRecords) so consumers
+   * who already await can drop this in directly.
+   *
+   * Scope note: this is a *lifetime existence* check, NOT a *freshness*
+   * check. A row written 7 days ago (before `cleanupOldRecords(7)`
+   * evicted it) still satisfies the predicate. For time-windowed checks
+   * (matching `refreshModelTelemetryCache()`'s 10-min window), wrap with
+   * a TIME-filtered `getModelToolStats(10).then(arr => arr.length > 0)`.
+   * Adding a `minutesBack?: number` param would be a future API surface
+   * extension — call out if needed for a health-check endpoint.
+   */
+  async hasRecordedTools(): Promise<boolean> {
+    await this.initialize();
+    // Fast path: memoryRecords has entries — true, regardless of SQLite state.
+    // This is the SEV-10 proof path: even if the SQLite INSERT fell through
+    // to memoryRecords because of a schema-drift / lock / missing-table
+    // failure, `hasRecordedTools()` still reports `true` because the writes
+    // are durably tracked in the in-memory fallback.
+    if (this.memoryRecords.length > 0) return true;
+    // Slow path: query SQLite with the canonical EXISTS subquery (idiomatic
+    // SQLite shape for boolean existence checks; returns 0/1 without a row
+    // payload). Empty result → false.
+    if (this.db) {
+      try {
+        const stmt = this.db.prepare(
+          'SELECT EXISTS(SELECT 1 FROM tool_calls) AS has_records',
+        );
+        const row = stmt.get() as { has_records: number } | undefined;
+        return row?.has_records === 1;
+      } catch (error) {
+        // SQLite unavailable (schema drift, lock). Caller cannot
+        // confirm any record exists. Return false honestly.
+        logger.warn('SQLite EXISTS failed in hasRecordedTools', error);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Read the current disconnect count (test-only counter).
+   * Counts recordToolCall + recordToolCalls (batch) SQLite-failure
+   * fallthroughs since the last reset. Useful for asserting that the
+   * monkey-patched SQLite-prepare-throws test paths actually do fall
+   * through to memoryRecords.
+   */
+  getDisconnectCountForTests(): number {
+    return this.disconnectCount;
   }
 }
 

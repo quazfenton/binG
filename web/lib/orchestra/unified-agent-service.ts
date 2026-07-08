@@ -1461,7 +1461,27 @@ export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
  */
 function auditResponseShape(
   result: UnifiedAgentResult,
-  meta: { provider?: string; model?: string; mode?: string },
+  // Finding #5 — REQUIRED outcome discriminator. The audit's response shape
+  // pair (responseType + responseShapeKey + responseLen) was overloaded as
+  // "returned" for both success and failure paths, which made the
+  // ALL_FALLBACKS_EXHAUSTED → processUnifiedAgentRequest returned conflation
+  // ambiguous. The previous (optional) design let a missed call site silently
+  // default to 'success', masking failures as healthy returns. The union is
+  // exhaustive of the 5 emit sites; if you add a new resolve path, add its
+  // outcome label here too AND wire it through every emit site — tsc prevents
+  // silent omission.
+  meta: {
+    provider?: string;
+    model?: string;
+    mode?: string;
+    outcome:
+      | 'success'
+      | 'exhausted'
+      | 'error'
+      | 'degraded'
+      | 'phase2-fallback'
+      | 'modal-success';
+  },
 ): void {
   // Use the file-local `log` (from createLogger('UnifiedAgentService')) —
   // `agentLog` is also imported but not used for INFO calls anywhere else
@@ -1474,6 +1494,7 @@ function auditResponseShape(
     responseType: typeof result.response,
     responseShapeKey: shapeKeyOf(result.response),
     responseLen: serializableTextLength(result.response),
+    outcome: meta.outcome,
   });
 }
 
@@ -1808,7 +1829,7 @@ export async function processUnifiedAgentRequest(
             modalEndpoint: 'executeAgent',
           },
         };
-        auditResponseShape(modalReturn, { provider: 'modal', model: modalResult.model, mode: 'v1-api' });
+        auditResponseShape(modalReturn, { provider: 'modal', model: modalResult.model, mode: 'v1-api', outcome: 'modal-success' });
         return modalReturn;
       } else {
         log.warn('[UnifiedAgent] ⚠️ Modal returned failure, falling back', {
@@ -2058,12 +2079,12 @@ export async function processUnifiedAgentRequest(
             originalMode: mode,
           }
         };
-        auditResponseShape(auditedFallback, { provider: config.provider, model: config.model, mode });
+        auditResponseShape(auditedFallback, { provider: config.provider, model: config.model, mode, outcome: 'phase2-fallback' });
         return auditedFallback;
       }
     }
 
-    auditResponseShape(result, { provider: config.provider, model: config.model, mode });
+    auditResponseShape(result, { provider: config.provider, model: config.model, mode, outcome: 'success' });
     return result;
   } catch (error) {
     log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
@@ -2104,7 +2125,7 @@ export async function processUnifiedAgentRequest(
           ? `${config.filesystemOwnerId}$${config.conversationId || 'default'}`
           : (config.conversationId || config.userId || 'default'),
       });
-      auditResponseShape(degradedResult, { provider: config.provider, model: config.model, mode });
+      auditResponseShape(degradedResult, {provider: config.provider, model: config.model, mode, outcome: 'degraded'});
       return degradedResult;
     }
 
@@ -2123,7 +2144,7 @@ export async function processUnifiedAgentRequest(
         allProvidersFailed: true,
       },
     };
-    auditResponseShape(allFailedResult, { provider: config.provider, model: config.model, mode });
+    auditResponseShape(allFailedResult, {provider: config.provider, model: config.model, mode, outcome: 'error'});
     return allFailedResult;
   }
 }
@@ -6429,7 +6450,7 @@ async function attemptFallback(
   // Don't allow fallback to v2 modes unless engine is explicitly unset.
   const forceV1Auto = engine === 'auto' || forceV1;
 
-  log.info('[Fallback] ┌─ FALLBACK CHAIN BUILD ─────────────────');
+  log.info('[Fallback] ┌─ FALLBACK CHAIN BUILD ── caps are intents, not gates ──');
   log.info('[Fallback] │ v2Disabled:', v2Disabled);
   log.info('[Fallback] │ engine:', engine);
   log.info('[Fallback] │ forceV1:', forceV1);
@@ -6439,7 +6460,10 @@ async function attemptFallback(
   log.info('[Fallback] │ caps.v2Containerized:', caps.v2Containerized);
   log.info('[Fallback] │ caps.v2Local:', caps.v2Local);
   log.info('[Fallback] │ caps.v1Api:', caps.v1Api);
-  log.info('[Fallback] └───────────────────────────────────────────');
+  log.info('[Fallback] │ note: false caps fall through to override paths; chain-resolved mode follows this block.');
+log.info('[Fallback] │ note: false caps fall through to override paths; chain-resolved mode follows this block.');
+log.info('[Fallback] └───────────────────────────────────────────');
+log.info('[Fallback] └───────────────────────────────────────────');
 
   // Try fallback chain based on what failed, excluding already tried modes
   // Only include modes that were available at startup

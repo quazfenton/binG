@@ -1613,7 +1613,14 @@ FORMAT RULES:
     // enqueue onto a non-existent stream. The no-op default is INTENTIONAL
     // (not dead code) — it's the only safe value before start(controller)
     // has had a chance to run.
-    let emitSseError: (message: string) => void = () => { /* not streaming */ };
+    // SSE-stall discriminator — second arg (isStall?: boolean) lets fireStall
+    // mark the SSE error payload as a server-side stall so the client
+    // (use-enhanced-chat.ts case 'error') can render an unambiguous non-
+    // retryable UX. Without this discriminator, mid-stream stalls (which are
+    // structurally forced to HTTP 200 because headers were already flushed
+    // during streaming) get conflated with transient network errors, leaving
+    // the operator uncertain.
+    let emitSseError: (message: string, isStall?: boolean) => void = () => { /* not streaming */ };
     const fireStall = (reason: string, detail: Record<string, unknown>) => {
       if (agentTurnAbort.signal.aborted) return;
       // Mark the stall PRIOR to any logging/abort so downstream checks
@@ -1625,7 +1632,8 @@ FORMAT RULES:
         { requestId, reason, ...detail },
       );
       const stallErr = new StallWatchdogError(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
-      try { emitSseError(stallErr.message); } catch { /* best-effort */ }
+      // isStall=true: mark as Rec #2 watchdog-fired mid-stream stall so client renders "Server timed out" UX.
+      try { emitSseError(stallErr.message, true); } catch { /* best-effort */ }
       // Cancel the in-flight LLM HTTP call (signal is already forwarded
       // through config.abortSignal → runV1Api / runV2Native / v2-cli).
       try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
@@ -1824,7 +1832,17 @@ const config: UnifiedAgentConfig = {
       parameters: t.function.parameters,
     }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId ?? '', requestedScopePath ?? '');
+      // chat-hang-fix (Step A): thread agentTurnSignal into the MCP HTTP
+      // transport chain so the watchdog aborts a hung remote fetch in
+      // ≤100ms instead of waiting `maxRetries × timeout = 3 × 30s = 90s`.
+      const result = await callMCPToolFromAI_SDK(
+        name,
+        args,
+        authenticatedUserId ?? '',
+        requestedScopePath ?? '',
+        undefined,                     // recentFailures (unchanged)
+        { signal: agentTurnSignal },   // ADDITIVE: chat-hang-fix Step A
+      );
       return {
         success: result.success,
         output: result.output,
@@ -1888,8 +1906,8 @@ const config: UnifiedAgentConfig = {
             //   2) Local `emit` wrapper: bumps the hoisted
             //      lastProgressAt for TOKEN / TOOL_INVOCATION events
             //   so the no-progress idle ceiling can fire correctly.
-            emitSseError = (message: string): void => {
-              try { rawEmit(SSE_EVENT_TYPES.ERROR, { message }); } catch { /* best-effort */ }
+            emitSseError = (message: string, isStall?: boolean): void => {
+              try { rawEmit(SSE_EVENT_TYPES.ERROR, { message, isStall }); } catch { /* best-effort */ }
             };
             const emit: typeof rawEmit = (eventType, payload) => {
               if (PROGRESS_EVENT_TYPES.has(eventType)) lastProgressAt = Date.now();
@@ -2831,7 +2849,7 @@ const config: UnifiedAgentConfig = {
                 // the rejection. Without this OR-arm, the watchdog stall
                 // falls through to the generic re-throw path and the
                 // caller sees a 500, not the contract's 524.
-                (msgRaw === 'Chat route aborted' && stallDidFire === true));
+                (msgRaw === 'Chat route aborted' && stallDidFire));
             if (isServerStall) {
               clearInterval(stallWatchdog);
               const reason = stallDidFireReason ?? 'race-winner-stall';
@@ -5389,6 +5407,36 @@ const config: UnifiedAgentConfig = {
     }
 
     // Process error with enhanced error handler for logging
+    // STALL-524 OUTERCATCH gap fix: route a StallWatchdogError class instance
+    // to status 524 BEFORE the generic errorHandler fallback below converts to 500.
+    // This branch is the additive counterpart to the inner-catch `isServerStall`
+    // check at L2790-L2835. When the chain-walk's abort cascade escapes the
+    // inner catch (e.g. addAnonSessionCookie throws on undefined
+    // anonSessionIdToSet, or the inner catch is bypassed for one of the
+    // other dispatch branches), the typed-discriminator here ensures the
+    // response status is still 524, never 500. Companion ticket:
+    // bing/.tickets/STALL-524-OUTERCATCH-GAP.md.
+    if (error instanceof StallWatchdogError) {
+      return addAnonSessionCookie(
+        NextResponse.json(
+          {
+            error: error.message,
+            reason: 'stall-watchdog',
+            requestId,
+            stitchedFromWatchDog: true,
+          },
+          {
+            status: 524,
+            headers: {
+              'content-type': 'application/json',
+              'x-stall-fired': 'true',
+              'x-stall-reason': 'stall-watchdog',
+            },
+          },
+        ),
+      );
+    }
+
     const processedError = errorHandler.processError(
       error instanceof Error ? error : new Error(String(error)),
       {

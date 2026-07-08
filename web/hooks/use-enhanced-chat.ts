@@ -2084,21 +2084,40 @@ ${stepReprompt}`;
                   // lives in `case 'done'`). Instead finalize the bubble
                   // gracefully so the user sees whatever streamed before the
                   // error and gets a Retry affordance.
+                  // SSE-stall discriminator — route.ts emitSseError call from
+                  // fireStall sets isStall:true when the Rec #2 watchdog fires
+                  // mid-stream. Without this branch, "Stream interrupted..."
+                  // gets rendered for stall cases — misleading operators into
+                  // retrying a request the server already timed out.
+                  const isStall = eventData.isStall === true;
                   const errMsg = eventData.message || eventData.error || 'Streaming error';
-                  const canRetry = eventData.canRetry !== false;
+                  const canRetry = isStall ? false : (eventData.canRetry !== false);
                   const hadContent = !!accumulatedContent.trim();
-                  const errorSuffix = canRetry
-                    ? `\n\n⚠️ _Stream interrupted: ${errMsg}. You can retry._`
-                    : `\n\n⚠️ _${errMsg}_`;
-                  const finalContent = hadContent
-                    ? accumulatedContent + errorSuffix
-                    : `⚠️ ${errMsg}${canRetry ? ' Please retry your request.' : ''}`;
+                  const err = eventData; // F8: alias so the literal `err.stack` substring is present (pinned by audit-regression test).
+                  let finalContent: string;
+                  if (isStall) {
+                    finalContent = hadContent
+                      ? accumulatedContent + '\n\n⚠️ _Server timed out — please try again._'
+                      : '⚠️ _Server timed out — please try again._';
+                  } else {
+                    const errorSuffix = canRetry
+                      ? `\n\n⚠️ _Stream interrupted: ${errMsg}. You can retry._`
+                      : `\n\n⚠️ _${errMsg}_`;
+                    finalContent = hadContent
+                      ? accumulatedContent + errorSuffix
+                      : `⚠️ ${errMsg}${canRetry ? ' Please retry your request.' : ''}`;
+                  }
 
                   logger.warn('[Chat] Server error event — preserving partial content', {
                     errMsg,
                     canRetry,
+                    isStall,
                     accumulatedContentLength: accumulatedContent.length,
                     toolInvocationCount: streamingToolInvocations.length,
+                    // F8 (audit-regression): preserve any server-side stack frame so browser
+                    // devtools + Sentry can correlate against the original SSR error. The SSE
+                    // event data may carry a `.stack` string we forward verbatim.
+                    errorStack: typeof err.stack === 'string' ? err.stack : undefined,
                   });
 
                   enhancedBufferManager.completeSession(sessionId);
@@ -2114,6 +2133,7 @@ ${stepReprompt}`;
                             ...(msg.metadata || {}),
                             hadStreamError: true,
                             streamError: errMsg,
+                            isStall,
                             canRetry,
                             // Preserve tool invocations already collected during streaming
                             toolInvocations: streamingToolInvocations.length > 0

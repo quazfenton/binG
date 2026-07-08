@@ -778,7 +778,15 @@ class TaskRouter {
       onStreamChunk: request.onStreamChunk,
       onToolExecution: request.onToolExecution,
       executeTool: async (name, args) => {
-        const toolResult = await callMCPToolFromAI_SDK(name, args, request.userId, session.id);
+        // chat-hang-fix back-port: 60s defensive ceiling matching route.ts:1499 agentTurnSignal.
+        const toolResult = await callMCPToolFromAI_SDK(
+          name,
+          args,
+          request.userId,
+          session.id,
+          undefined,
+          { signal: AbortSignal.timeout(60_000) },
+        );
         return { success: toolResult.success, output: toolResult.output, exitCode: toolResult.success ? 0 : 1 };
       },
     });

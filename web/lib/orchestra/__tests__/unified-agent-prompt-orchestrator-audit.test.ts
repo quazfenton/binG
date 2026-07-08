@@ -81,10 +81,13 @@ describe('Unified Agent → Prompt-Orchestrator audit trail (Tier 8 step 8 first
     );
     expect(callIdx).toBeGreaterThan(0);
 
-    // HARD-LOCK the line number to L1512. If the file gains or loses
+    // HARD-LOCK the line number to L1533. If the file gains or loses
     // preceding lines, this assertion breaks — which is exactly the
-    // audit-trail intent.
-    expect(callIdx + 1).toBe(1512);
+    // audit-trail intent. Cite drift note: previously L1512 until the
+    // upstream `resolveDynamicDefaults` cache + ~6/2026 file growth
+    // pushed the cite down ~21 lines (see Tier 2 row #2b in
+    // docs/async-parallelization-opportunities.md for the timing).
+    expect(callIdx + 1).toBe(1533);
 
     // 3 positional args: (target, script, source). Each is matched
     // separately so refactors that modify ONE arg don't silently satisfy
@@ -119,10 +122,12 @@ describe('Unified Agent → Prompt-Orchestrator audit trail (Tier 8 step 8 first
   });
 
   /**
-   * Test 2 — Cross-file contract lock (the consolidation move).
+   * Test 2 — Cross-file contract lock (split into 3 nested sub-`it`s for
+   * clearer regression attribution).
    *
    * The audit shape moved from inline-in-caller to default-scripts.ts
-   * (with facade re-export). This test locks the 3-file chain:
+   * (with facade re-export). The 3-file chain is locked across 3 separate
+   * `it()` legs so a regression failure points at the SPECIFIC LEG:
    *
    *   (a) Caller file: imports PO_UNIFIED_AGENT_SCRIPT at module-scope
    *       (no leading whitespace). Precedence constraint: import must
@@ -135,43 +140,50 @@ describe('Unified Agent → Prompt-Orchestrator audit trail (Tier 8 step 8 first
    *       value is EXACTLY [] — a future refactor that adds even one
    *       step must also update the test name to remove the
    *       "empty-steps no-op" clause.
+   *
+   * Split rationale: the original Test 2 collapsed all 3 legs into a
+   * single `it()`, so a failure surfaced as
+   *   `expected -1 to be greater than 0`
+   * with no hint about which leg regressed. Splitting gives
+   *   `FAILED  a — caller file imports PO_UNIFIED_AGENT_SCRIPT ...`
+   * direct from `vitest --reporter=verbose` output, mapping failure to
+   * file + leg in one read.
    */
-  it('PO_UNIFIED_AGENT_SCRIPT is imported at module-scope + re-exported from default-scripts.ts + has the empty-steps audit shape — cross-file contract', () => {
-    // (a) Caller file imports PO_UNIFIED_AGENT_SCRIPT from the facade at
-    //     module-scope. The import line must start with `import` (no
-    //     leading whitespace = module-scope, not function-scope).
-    const importIdx = serviceLines.findIndex((line) =>
-      /^import\s+\{[^}]*PO_UNIFIED_AGENT_SCRIPT[^}]*\}\s+from\s+['"]@\/lib\/orchestra\/prompt-orchestrator['"]/.test(line),
-    );
-    expect(importIdx).toBeGreaterThan(0);
+  describe('PO_UNIFIED_AGENT_SCRIPT cross-file contract (3 legs)', () => {
+    /** Leg (a): caller-file module-scope import + precedence. */
+    it('a — caller file imports PO_UNIFIED_AGENT_SCRIPT at module-scope from @/lib/orchestra/prompt-orchestrator (precedes processUnifiedAgentRequest)', () => {
+      const importIdx = serviceLines.findIndex((line) =>
+        /^import\s+\{[^}]*PO_UNIFIED_AGENT_SCRIPT[^}]*\}\s+from\s+['"]@\/lib\/orchestra\/prompt-orchestrator['"]/.test(line),
+      );
+      expect(importIdx).toBeGreaterThan(0);
 
-    // Precedence: import precedes the consumer function.
-    const consumerIdx = serviceLines.findIndex((line) =>
-      /^export\s+async\s+function\s+processUnifiedAgentRequest/.test(line),
-    );
-    expect(consumerIdx).toBeGreaterThan(0);
-    expect(importIdx).toBeLessThan(consumerIdx);
+      // Precedence: import precedes the consumer function.
+      const consumerIdx = serviceLines.findIndex((line) =>
+        /^export\s+async\s+function\s+processUnifiedAgentRequest/.test(line),
+      );
+      expect(consumerIdx).toBeGreaterThan(0);
+      expect(importIdx).toBeLessThan(consumerIdx);
+    });
 
-    // (b) Facade re-exports PO_UNIFIED_AGENT_SCRIPT from
-    //     `./default-scripts`. The regex is permissive about surrounding
-    //     other symbols in the same export block.
-    const facadeReExportIdx = facadeLines.findIndex((line) =>
-      /^\s*export\s*\{[^}]*\bPO_UNIFIED_AGENT_SCRIPT\b[^}]*\}\s*from\s+['"]\.\/default-scripts['"]/.test(line),
-    );
-    expect(facadeReExportIdx).toBeGreaterThan(0);
+    /** Leg (b): facade re-export existence (regression guard). */
+    it('b — facade re-exports PO_UNIFIED_AGENT_SCRIPT from ./default-scripts', () => {
+      const facadeReExportIdx = facadeLines.findIndex((line) =>
+        /^\s*export\s*\{[^}]*\bPO_UNIFIED_AGENT_SCRIPT\b[^}]*\}\s*from\s+['"]\.\/default-scripts['"]/.test(line),
+      );
+      expect(facadeReExportIdx).toBeGreaterThan(0);
+    });
 
-    // (c) default-scripts.ts defines PO_UNIFIED_AGENT_SCRIPT with the
-    //     expected shape. Same shape contract as the previous inline
-    //     const — but now at the canonical source.
-    const defaultsIdx = defaultsLines.findIndex((line) =>
-      /^export\s+const\s+PO_UNIFIED_AGENT_SCRIPT\s*:\s*PromptScript\s*=/.test(line),
-    );
-    expect(defaultsIdx).toBeGreaterThan(0);
-    const defaultsBlock = defaultsLines.slice(defaultsIdx, defaultsIdx + 8).join('\n');
-    expect(defaultsBlock).toMatch(/promptId:\s*['"]unified-agent-entry['"]/);
-    expect(defaultsBlock).toMatch(/steps:\s*\[\s*\]/);
+    /** Leg (c): default-scripts.ts shape lock (promptId, empty steps). */
+    it('c — default-scripts.ts defines PO_UNIFIED_AGENT_SCRIPT with empty-steps audit shape (promptId=unified-agent-entry, steps=[])', () => {
+      const defaultsIdx = defaultsLines.findIndex((line) =>
+        /^export\s+const\s+PO_UNIFIED_AGENT_SCRIPT\s*:\s*PromptScript\s*=/.test(line),
+      );
+      expect(defaultsIdx).toBeGreaterThan(0);
+      const defaultsBlock = defaultsLines.slice(defaultsIdx, defaultsIdx + 8).join('\n');
+      expect(defaultsBlock).toMatch(/promptId:\s*['"]unified-agent-entry['"]/);
+      expect(defaultsBlock).toMatch(/steps:\s*\[\s*\]/);
+    });
   });
-
   /**
    * Test 3 — try/catch lock (unchanged from pre-consolidation).
    *

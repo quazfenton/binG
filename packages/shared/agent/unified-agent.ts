@@ -665,7 +665,16 @@ export class UnifiedAgent {
 
     log.debug(`Calling MCP tool: ${toolName}`)
     const userId = this.config.userId || 'anonymous-agent'
-    return callMCPToolFromAI_SDK(toolName, args, userId, this.session?.sessionId);
+    // chat-hang-fix back-port: 60s defensive ceiling matching route.ts:1499 agentTurnSignal.
+    // Engages the Step A signal plumbing even though there's no upstream signal here.
+    return callMCPToolFromAI_SDK(
+      toolName,
+      args,
+      userId,
+      this.session?.sessionId,
+      undefined,
+      { signal: AbortSignal.timeout(60_000) },
+    );
   }
 
   /**
