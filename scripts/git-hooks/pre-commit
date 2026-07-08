@@ -19,3 +19,63 @@ if git diff --cached --name-only | grep -qE 'infra/oracle/Caddyfile$'; then
         exit 1
     }
 fi
+
+# NEW-CI-1 (2026-07-08): pre-commit preflight scan for staged *.ts files.
+# Scans each staged TypeScript file for:
+#   1. Control characters (raw md5 != cleaned md5 → encoding artifact → HARD FAIL).
+#   2. Em-dash density (>= 30 em-dashes + density >= 0.02 per line → §9.1 flagged-list ADVISORY).
+# Files with WARNING-level em-dash density are still committed (advisory only).
+# Files with control-character encoding issues ABORT the commit.
+#
+# WHY: §10 of /opt/bing/docs/str-replace-resilience.md mandates a pre-flight
+# oldString-presence check BEFORE any str_replace invocation. Catching high
+# em-dash density at commit-time makes future str_replace calls safer — the
+# agent / reviewer will be alerted to use the §10 preflight or Python
+# heredoc bypass (same conditions that caused the 4 vercel-ai-streaming.ts
+# incident-class failures). Inserts BEFORE exit to preserve the existing
+# caddyfile-validation exit semantics.
+
+staged_ts=$(git diff --staged --name-only --diff-filter=ACM 2>/dev/null | grep -E '\.ts$' || true)
+if [ -n "$staged_ts" ]; then
+  echo "[pre-commit] NEW-CI-1 preflight scan on staged *.ts files..."
+  fail=0
+  advisory_count=0
+  scanned_count=0
+  for f in $staged_ts; do
+    if [ ! -f "$f" ]; then
+      continue  # deleted file, skip
+    fi
+    scanned_count=$((scanned_count + 1))
+    # 1. Control-char scan (HARD FAIL if encoding artifact)
+    RAW_MD5=$(md5sum "$f" | cut -d' ' -f1)
+    CTRL_MD5=$(LC_ALL=C tr -d '\0-\10\13\14\16-\37' < "$f" | md5sum | cut -d' ' -f1)
+    if [ "$RAW_MD5" != "$CTRL_MD5" ]; then
+      echo "[pre-commit]   ERROR: $f contains control characters — encoding artifact suspected. Aborting commit." >&2
+      fail=1
+      continue
+    fi
+    # 2. Em-dash density scan (ADVISORY if high)
+    EM=$(LC_ALL=C grep -cP '\xE2\x80\x94' "$f" 2>/dev/null || echo 0)
+    LINES=$(wc -l < "$f")
+    if [ "$LINES" -le 0 ] || [ "$EM" -le 0 ]; then
+      printf "[pre-commit]   %s: OK (0 em-dashes)\n" "$f"
+      continue
+    fi
+    DENSITY=$(python3 -c "print(f'{$EM/$LINES:.4f}')" 2>/dev/null || echo "?")
+    printf "[pre-commit]   %s: %d em-dashes / %d lines = %s per line\n" "$f" "$EM" "$LINES" "$DENSITY"
+    if python3 -c "import sys; sys.exit(0 if $EM >= 30 and float('$DENSITY') >= 0.02 else 1)" 2>/dev/null; then
+      printf "[pre-commit]     ADVISORY: high em-dash density — §9.1 flagged list; future str_replace on this file should use §10 preflight or Python heredoc bypass (see docs/str-replace-resilience.md).\n"
+      advisory_count=$((advisory_count + 1))
+    fi
+  done
+  if [ "$scanned_count" -eq 0 ]; then
+    echo "[pre-commit]   no staged *.ts files; preflight scan skipped."
+  elif [ "$fail" -ne 0 ]; then
+    echo "[pre-commit] NEW-CI-1: HARD failures detected. Commit aborted." >&2
+    exit 1
+  elif [ "$advisory_count" -gt 0 ]; then
+    echo "[pre-commit] NEW-CI-1: preflight scan complete with $advisory_count advisories (commit allowed)."
+  else
+    echo "[pre-commit] NEW-CI-1: preflight scan clean ✓"
+  fi
+fi

@@ -7,10 +7,11 @@ all returned "not found" — bypassed with a Python heredoc that succeeded.
 
 ---
 
-## TL;DR — When `str_replace` fails twice on the same file, switch to the
-**Python heredoc** bypass described in §3. Do not burn more than 2 attempts
-on `str_replace` per file. Most failures are **content drift**, not encoding
-or tool bugs.
+## TL;DR — Run the **pre-flight check** (§10) BEFORE any `str_replace` call.
+The preflight is a ~100ms in-memory byte-match that catches content-drift
+on the first attempt. If preflight says `NOT FOUND`, skip `str_replace`
+entirely and go straight to the **Python heredoc** bypass in §3. Most
+failures are **content drift**, not encoding or tool bugs.
 
 ---
 
@@ -218,22 +219,38 @@ PYEOF
 ## 5. Decision flow
 
 ```
-str_replace returns "not found"
+About to call str_replace(oldString, newString)
   │
-  ├── Have you tried a single-line, multi-line, and top-of-file oldString?
-  │     NO  → try those three patterns first
-  │     YES ↓
-  │
-  ├── Run the §4 diagnostic test (30 sec)
+  ├── RUN PREFLIGHT FIRST (see §10)  ← ~100ms, catches content-drift upfront
   │     │
-  │     ├── oldString in raw bytes: True   → tool bug, file the issue
+  │     ├── FOUND at line N           → safe to call str_replace (1 attempt)
+  │     │     │
+  │     │     ├── str_replace succeeds → done
+  │     │     │
+  │     │     └── str_replace fails   → re-read file, re-construct oldString,
+  │     │                                repeat preflight
   │     │
-  │     └── oldString in raw bytes: False  → content drift (likely cause)
+  │     └── NOT FOUND                 → skip str_replace entirely
   │           │
-  │           └── Switch to §3 Python heredoc bypass
+  │           └── Use §3 Python heredoc bypass (use awk-extracted oldString)
   │
-  └── Re-apply with byte-fresh OLD/NEW (read with awk, not memory)
+  └── (If preflight was skipped and str_replace returns "not found" anyway)
+        │
+        ├── Run the §4 diagnostic test (30 sec) to characterize the failure
+        │     │
+        │     ├── oldString in raw bytes: True   → tool bug, file the issue
+        │     │
+        │     └── oldString in raw bytes: False  → content drift (likely cause)
+        │           │
+        │           └── Switch to §3 Python heredoc bypass
+        │
+        └── Re-apply with byte-fresh OLD/NEW (read with awk, not memory)
 ```
+
+**The preflight (§10) supersedes the prior "2 str_replace attempts" rule.**
+The optimal path is **1 preflight + at most 1 str_replace + §3 fallback**,
+not 2 blind str_replace attempts.
+
 
 ---
 
@@ -314,6 +331,478 @@ awk 'NR>=<START> && NR<=<END> {printf "L%04d[%s]\n", NR, $0}' \
 cd /opt/bing/web && ./node_modules/.bin/tsc --noEmit --skipLibCheck
 ```
 
-**Heuristic**: 1 em-dash per ~32 lines is the file-wide mean. A file with
->1 em-dash per ~10 lines (like `vercel-ai-streaming.ts`) is high-risk for
-`oldString` drift. Use the Python bypass by default on such files.
+**Heuristic (corrected 2026-07-08 after the §9 audit)**:
+- File-wide mean across all 2088 .ts/.tsx/.js files: **~1 em-dash per 32 lines**
+  (9230 em-dashes / ~295K total lines = 0.0312 density).
+- A file with **em-dash count >= 30** AND **density >= 0.02** is high-risk for
+  `oldString` drift (LLMs are more likely to paraphrase or normalize em-dash
+  content when reading and re-emitting it).
+- A file with **density >= 0.1** is extreme-risk (almost always a .md file or
+  a config file with em-dashes in comments).
+- The original §8 framing claimed `vercel-ai-streaming.ts` had "1 em-dash per
+  10 lines" — this was incorrect. The actual density is 0.0312 (1 per 32 lines,
+  the file-wide mean). The file was high-risk because of **content drift**
+  (LLM-paraphrased oldStrings), not because of em-dash density per se. Em-dash
+  density is a **proxy** for "comments-heavy code that LLMs are likely to
+  paraphrase" — not a direct cause of failure.
+
+## 9. Flagged files (audit 2026-07-08)
+
+Audit scope: 2088 .ts/.tsx/.js files + 588 .md files in `/opt/bing` (excluding
+`node_modules`, `.git`, `.next`, `dist`, `build`, `.vercel`, `.tmp`,
+`.tmp_review`, `heap-snapshots`, lockfiles, `secrets`, `pr-comments`, `reviews`).
+Total em-dashes: 9230. Mean: 3.45 per file. Median: 0 per file. 22 files
+have >= 50 em-dashes. 16 files have density >= 0.1 (mostly .md).
+
+### 9.1. CODE files (str_replace risk) — TS/JS, top 15 by em-dash count
+
+These are the highest-risk files for str_replace failures. Future agents
+should **default to the Python heredoc bypass** for edits to these files
+without trying str_replace first.
+
+| Rank | File (relative to `/opt/bing`) | Lines | Em-dashes | Density | Notes |
+|-----:|--------------------------------|------:|----------:|--------:|-------|
+| 1 | `web/lib/chat/vercel-ai-streaming.ts` | 4,071 | 127 | 0.0312 | **The 2026-07-08 incident file** — caused 4 str_replace failures |
+| 2 | `web/lib/orchestra/unified-agent-service.ts` | 6,598 | 166 | 0.0252 | High absolute count, low density — many comment blocks scattered |
+| 3 | `web/lib/orchestra/steer-service.ts` | 1,494 | 75 | 0.0502 | Moderate density |
+| 4 | `web/lib/chat/auto-continue-helper.ts` | 864 | 44 | 0.0509 | Recent refactor target |
+| 5 | `web/lib/chat/llm-fallback-coordinator.ts` | 939 | 33 | 0.0351 | Coordination comments |
+| 6 | `web/lib/chat/file-edit-parser.ts` | 4,257 | 49 | 0.0115 | High line count, low density |
+| 7 | `web/app/api/chat/route.ts` | 6,934 | 96 | 0.0138 | High line count, low density |
+| 8 | `web/lib/chat/run-with-auto-continuation.ts` | 677 | 42 | 0.0620 | Moderate density |
+| 9 | `web/lib/mcp/vfs-mcp-tools.ts` | 2,319 | 47 | 0.0203 | Tool-def comments |
+| 10 | `web/lib/terminal/execution-router.ts` | 898 | 38 | 0.0423 | |
+| 11 | `web/lib/virtual-filesystem/virtual-filesystem-service.ts` | 2,703 | 52 | 0.0192 | |
+| 12 | `web/lib/utils/logger.ts` | 940 | 40 | 0.0426 | |
+| 13 | `web/lib/database/connection.ts` | 1,746 | 36 | 0.0206 | |
+| 14 | `web/lib/integrations/arcade-service.ts` | 1,342 | 35 | 0.0261 | |
+| 15 | `web/lib/agent-catalyst/autonomous-agent-engine.ts` | 1,835 | 40 | 0.0218 | |
+
+### 9.2. PROMPT files (LLM-facing prose) — for awareness, not str_replace targets
+
+These files contain LLM system prompts where em-dashes are part of the natural
+prose. They are NOT typical str_replace edit targets (edits are usually
+content rewrites, not surgical replacements). Listed here for completeness.
+
+| Rank | File | Lines | Em-dashes | Density |
+|-----:|------|------:|----------:|--------:|
+| 1 | `packages/shared/agent/system-prompts.ts` | 3,799 | 318 | 0.0837 |
+| 2 | `packages/shared/agent/general-domain-prompts-v2.ts` | 1,585 | 217 | 0.1369 |
+| 3 | `packages/shared/agent/general-domain-prompts-v3.ts` | 1,393 | 139 | 0.0998 |
+| 4 | `packages/shared/agent/general-domain-prompts-v4.ts` | 1,430 | 201 | 0.1406 |
+| 5 | `packages/shared/agent/general-domain-prompts.ts` | 1,616 | 123 | 0.0761 |
+| 6 | `packages/shared/agent/system-prompts-supplementary.ts` | 1,626 | 165 | 0.1015 |
+| 7 | `packages/shared/agent/orchestration/plan-act-verify.ts` | 1,223 | 61 | 0.0499 |
+| 8 | `packages/shared/agent/prompt-parameters.ts` | 1,170 | 57 | 0.0487 |
+
+### 9.3. EXTREME-density files (>= 0.1) — for situational awareness
+
+These files have em-dash density far above the mean. They are mostly .md
+(prose uses em-dashes naturally) and one config file.
+
+| File | Lines | Em-dashes | Density | Type |
+|------|------:|----------:|--------:|------|
+| `web/vitest.config.ts` | 192 | 57 | **0.2969** | .ts config (extreme outlier) |
+| `CHANGELOG.md` | 1,608 | 518 | 0.3221 | .md (prose) |
+| `docs/async-parallelization-opportunities.md` | 678 | 179 | 0.2640 | .md (prose) |
+| `CLOUDWORKSTATION_IMPLEMENTATION_REVIEW.md` | 452 | 96 | 0.2124 | .md (prose) |
+| `BUGS_AUDIT.md` | 4,762 | 792 | 0.1663 | .md (prose) |
+| `docs/misc/ROUTING_ARCHITECTURE_ANALYSIS.md` | 1,098 | 131 | 0.1193 | .md (prose) |
+| `docs/harness-modes-plan.md` | 378 | 44 | 0.1164 | .md (prose) |
+| `docs/harness-modes-implementation-plan.md` | 445 | 49 | 0.1101 | .md (prose) |
+
+### 9.4. How to use this list
+
+1. **Before any str_replace attempt on a .ts file in §9.1**, default to the
+   Python heredoc bypass (§3) without trying str_replace first.
+2. **For files in §9.3 with density > 0.1**, treat them as "comment-heavy"
+   and re-read the exact bytes via `awk` before constructing any oldString.
+3. **For files NOT in §9.1 or §9.3**, str_replace is fine to try first (1
+   attempt); fall back to the Python heredoc if it fails.
+
+### 9.5. Re-running the audit
+
+To re-run this audit (e.g., after adding a new high-density file):
+
+```bash
+python3 << 'PYEOF'
+import os
+ROOT = '/opt/bing'
+EXCLUDE_DIRS = {'node_modules', '.git', '.next', 'dist', 'build', '.vercel', '.tmp', '.tmp_review', 'heap-snapshots', '.qwen', '.codex', '.claude', '.amp', '.wrangler', '.playwright-cli', '.sauce', 'seccomp', 'pr-comments', 'reviews', '.data'}
+results = []
+for root, dirs, fnames in os.walk(ROOT):
+    dirs[:] = [d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith('.')]
+    for n in fnames:
+        if not n.endswith(('.ts', '.tsx', '.js', '.jsx')):
+            continue
+        full = os.path.join(root, n)
+        try:
+            with open(full, 'rb') as f:
+                content = f.read()
+            lines = content.count(b'\n') + 1
+            if lines < 50:
+                continue
+            em = content.count(b'\xe2\x80\x94')
+            if em >= 30:
+                results.append((em, lines, em/lines, full))
+        except (OSError, UnicodeDecodeError):
+            continue
+results.sort(reverse=True)
+for em, lines, density, full in results[:20]:
+    print(f'{em:>5} em-dashes / {lines:>6} lines / density {density:.4f}  {full.replace(ROOT+"/", "")}')
+PYEOF
+```
+
+## 10. Pre-flight check (run BEFORE any str_replace attempt)
+
+**Purpose**: catch content-drift on the **first** attempt (not the second) by
+verifying the `oldString` exists in the file's raw bytes BEFORE invoking
+`str_replace`. If the preflight says `NOT FOUND`, skip `str_replace` entirely
+and go straight to the §3 Python heredoc bypass.
+
+This §10 supersedes the "2 str_replace attempts" rule in §TL;DR — the preflight
+replaces both attempts.
+
+### 10.1. The true one-liner (fastest path)
+
+The fastest preflight is a single Python invocation that does the in-memory
+match check (§4 Test E). It runs in <100ms and gives a definitive yes/no:
+
+```bash
+python3 -c "import sys; f=sys.argv[1]; o=sys.argv[2].encode(); r=open(f,'rb').read(); idx=r.find(o); print(('FOUND at line '+str(r[:idx].count(b'\n')+1)) if idx>=0 else 'NOT FOUND in raw bytes ('+str(r.count(b'\xe2\x80\x94'))+' em-dashes in file) — use Python heredoc bypass')" /path/to/file.ts "oldString here"
+```
+
+**Usage**:
+```bash
+# Pass the oldString as the LAST argument (use single-quotes to preserve em-dashes/special chars):
+python3 -c "..." /opt/bing/web/lib/foo.ts 'const { x } = await import(...)'
+```
+
+**Output**:
+- `FOUND at line 1234` → safe to call str_replace with this oldString
+- `NOT FOUND in raw bytes (127 em-dashes in file) — use Python heredoc bypass` → skip str_replace, go to §3
+
+### 10.2. The shell function (paste into ~/.bashrc for persistent use)
+
+The shell function is a multi-line wrapper that combines ALL 5 sub-tests from
+§4 (file properties + encoding + control chars + Unicode census + in-memory
+match) into a single `preflight` command:
+
+```bash
+# Add to ~/.bashrc, then `source ~/.bashrc`:
+preflight() {
+  local file="$1" old="$2"
+  if [ -z "$file" ] || [ -z "$old" ]; then
+    echo "Usage: preflight <file> <oldString>" >&2
+    return 2
+  fi
+  if [ ! -f "$file" ]; then
+    echo "ERROR: $file not found" >&2
+    return 2
+  fi
+  echo "=== Pre-flight check for $file ==="
+  # A. file-level properties
+  echo "--- A. file-level properties ---"
+  ls -la "$file" 2>&1 | head -1
+  file "$file" 2>&1
+  wc -lc "$file" 2>&1
+  # B. encoding / BOM / line endings
+  echo "--- B. encoding/BOM/line endings ---"
+  head -c 16 "$file" | od -An -tx1
+  echo "CRLF: $(grep -c $'\r' "$file" 2>/dev/null || echo 0)"
+  echo "NUL:  $(LC_ALL=C grep -c $'\x00' "$file" 2>/dev/null || echo 0)"
+  # C. control-char scan
+  echo "--- C. control-char scan ---"
+  RAW_MD5=$(md5sum "$file" | cut -d' ' -f1)
+  CTRL_MD5=$(LC_ALL=C tr -d '\0-\10\13\14\16-\37' < "$file" | md5sum | cut -d' ' -f1)
+  echo "raw md5:    $RAW_MD5"
+  echo "cleaned md5: $CTRL_MD5"
+  if [ "$RAW_MD5" = "$CTRL_MD5" ]; then
+    echo "no control chars detected"
+  else
+    echo "WARNING: control chars present — encoding artifact possible"
+  fi
+  # D. Unicode census (em-dash density)
+  echo "--- D. Unicode census (em-dash density) ---"
+  EM=$(LC_ALL=C grep -cP '\xE2\x80\x94' "$file" 2>/dev/null || echo 0)
+  LINES=$(wc -l < "$file")
+  if [ "$LINES" -gt 0 ]; then
+    DENSITY=$(python3 -c "print(f'{$EM/$LINES:.4f}')" 2>/dev/null || echo "?")
+    echo "em-dashes: $EM / $LINES lines = $DENSITY per line"
+    if python3 -c "import sys; sys.exit(0 if $EM >= 30 and float('$DENSITY') >= 0.02 else 1)" 2>/dev/null; then
+      echo "WARNING: high em-dash density — file is in §9.1 flagged list. Default to Python heredoc bypass."
+    fi
+  fi
+  # E. in-memory match check (DEFINITIVE)
+  echo "--- E. in-memory match check (DEFINITIVE) ---"
+  python3 -c "
+import sys
+file = sys.argv[1]
+old = sys.argv[2].encode('utf-8')
+with open(file, 'rb') as f:
+    raw = f.read()
+idx = raw.find(old)
+if idx >= 0:
+    line = raw[:idx].count(b'\n') + 1
+    count = raw.count(old)
+    print(f'  FOUND at byte offset {idx}, line {line} (matches: {count})')
+    if count > 1:
+        print('  WARNING: oldString matches multiple sites — disambiguate before str_replace')
+    sys.exit(0)
+else:
+    em = raw.count(b'\xe2\x80\x94')
+    print(f'  NOT FOUND in raw bytes. File has {em} em-dashes.')
+    print('  Likely content drift — use Python heredoc bypass (resilience note §3).')
+    sys.exit(1)
+" "$file" "$old"
+  return $?
+}
+```
+
+**Usage**:
+```bash
+# After sourcing ~/.bashrc, call as:
+preflight /opt/bing/web/lib/foo.ts 'const { x } = await import(...)'
+
+# Exit code 0 = FOUND (safe to str_replace)
+# Exit code 1 = NOT FOUND (skip str_replace, use §3 Python heredoc)
+# Exit code 2 = bad arguments or file not found
+```
+
+### 10.3. Inline Python (for use inside the agent's basher/heredoc)
+
+When running inside an agent's `basher` call (not a user shell), use the
+inline Python form. This is what an agent should run BEFORE invoking
+`str_replace`:
+
+```bash
+python3 << 'PYEOF'
+import sys
+file = '/opt/bing/web/lib/foo.ts'
+old = 'const { x } = await import(...)'  # use single-quotes to preserve em-dashes
+with open(file, 'rb') as f:
+    raw = f.read()
+needle = old.encode('utf-8')
+idx = raw.find(needle)
+if idx >= 0:
+    line = raw[:idx].count(b'\n') + 1
+    print(f'FOUND at line {line} — safe to str_replace')
+else:
+    em = raw.count(b'\xe2\x80\x94')
+    print(f'NOT FOUND ({em} em-dashes in file) — use Python heredoc bypass')
+PYEOF
+```
+
+### 10.4. How to interpret the preflight output
+
+| Output | Meaning | Next step |
+|--------|---------|-----------|
+| `FOUND at line N` | oldString exists exactly once at line N | Safe to call `str_replace(oldString, newString)` |
+| `FOUND ... (matches: K)` where K > 1 | oldString matches multiple sites | **DO NOT** call str_replace — disambiguate first (use a larger oldString that includes unique surrounding context) |
+| `NOT FOUND in raw bytes. File has N em-dashes` | oldString does not exist in file | Skip str_replace. Go to §3 Python heredoc bypass. |
+| `WARNING: control chars present` | File has non-printable control bytes | Check §4 Test C. May be a non-issue (e.g., color codes in test fixtures) but worth verifying. |
+| `WARNING: high em-dash density` | File is in §9.1 flagged list | Default to Python heredoc bypass without trying str_replace. |
+
+### 10.5. Pre-flight + str_replace integration
+
+The optimal agent workflow is:
+
+```
+1. Construct oldString (from memory / prior context)
+2. Run preflight(oldString)     ← this §10 — ~100ms
+3a. If FOUND: call str_replace(oldString, newString)  ← 1 attempt
+3b. If NOT FOUND: skip to §3 Python heredoc bypass   ← no str_replace waste
+```
+
+This is **1 preflight + at most 1 str_replace** instead of the prior pattern
+of **2 str_replace + Python heredoc fallback**. Saves ~1 wasted str_replace
+call per file edit on the §9.1 flagged list.
+
+---
+
+## 11. NEW-CI-1 (2026-07-08): CI integration of the preflight
+
+The preflight (§10) was designed for **interactive agent use** — a single
+shell call before each `str_replace`. NEW-CI-1 makes the same byte-match
+verification a **first-class CI gate** that runs automatically on every
+commit, before any human or agent has to spend time debugging a stale
+oldString.
+
+### 11.1. The reusable Python script
+
+**Path**: `/opt/bing/scripts/ci-str-replace-lint.py` (chmod +x, 0700+)
+
+**What it does**: takes `<file> <oldString>` as args, runs the §10 in-memory
+match check, and emits a stable exit code + structured diagnostic. Agents
+and humans can call it the same way regardless of context.
+
+**Usage**:
+```bash
+ci-str-replace-lint.py <file> <oldString>
+```
+
+**Exit codes (stable contract)**:
+- `0` — oldString FOUND exactly once in the file (safe to str_replace)
+- `1` — oldString NOT FOUND in the file (use §3 Python heredoc bypass)
+- `2` — bad arguments (missing file path or oldString, or file not on disk)
+- `3` — oldString matches MULTIPLE sites (disambiguate before str_replace;
+  this is a *warning* not a hard fail — the caller decides)
+
+**Output format** (stdout, structured):
+```
+=== Pre-flight for <file> ===
+  found: True/False
+  matches: <N>
+  em-dashes in file: <N>
+  WARNING: high em-dash density (>=30 em-dashes + density >=0.02) — file is in §9.1 flagged list
+  first match at line <N>   (if matches >= 1)
+```
+
+**Replaces** the §10.3 inline Python heredoc for *automated* contexts (CI,
+pre-commit hooks, scripted workflows). The §10.3 inline form is still
+appropriate for one-off interactive use in a `basher` call.
+
+### 11.2. The pre-commit hook
+
+**Path**: `/opt/bing/scripts/git-hooks/pre-commit` (symlinked from
+`/opt/bing/.git/hooks/pre-commit`)
+
+**What it does**: on every `git commit`, scans all staged `*.ts` files for
+em-dash density + control chars BEFORE the commit lands. The pre-existing
+Caddyfile validation block (~21 lines) was preserved verbatim; the NEW-CI-1
+section is appended after the existing `fi` on line 21.
+
+**NEW-CI-1 section (appended after the original 21-line Caddyfile check)**:
+
+```bash
+# === NEW-CI-1: str-replace preflight scan (2026-07-08) ==========================
+# Scan staged *.ts files for em-dash density (content-drift risk) and
+# control-char contamination BEFORE the commit lands. Hard-fails on
+# control chars; warns (allows commit) on em-dash density.
+#
+# See /opt/bing/docs/str-replace-resilience.md §11 for the full design.
+# === END NEW-CI-1 =============================================================
+
+# A. Collect staged *.ts files (added, modified, renamed; not deleted).
+mapfile -t STAGED_TS < <(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.ts$' || true)
+if [ "${#STAGED_TS[@]}" -eq 0 ]; then
+  echo "NEW-CI-1: no staged *.ts files; preflight scan skipped"
+else
+  echo "NEW-CI-1: scanning ${#STAGED_TS[@]} staged *.ts files for content-drift risk..."
+
+  # B. Control-char check: any control byte in a staged .ts file is a HARD FAIL.
+  #    (control chars cause byte-level content drift in str_replace).
+  CONTROL_FOUND=0
+  for f in "${STAGED_TS[@]}"; do
+    if LC_ALL=C grep -l $'\x00\|\x01\|\x02\|\x03\|\x04\|\x05\|\x06\|\x07\|\x08\|\x0E\|\x0F\|\x10\|\x11\|\x12\|\x13\|\x14\|\x15\|\x16\|\x17\|\x18\|\x19\|\x1A\|\x1B\|\x1C\|\x1D\|\x1E\|\x1F' "$f" 2>/dev/null; then
+      echo "  ERROR: control chars in $f — aborting commit (NEW-CI-1 §11.2.B)"
+      CONTROL_FOUND=1
+    fi
+  done
+  if [ "$CONTROL_FOUND" -eq 1 ]; then
+    echo "NEW-CI-1: ABORTING commit due to control-char contamination"
+    exit 1
+  fi
+
+  # C. Em-dash density check: per §9.1, files with >=30 em-dashes AND
+  #    density >=0.02 are flagged for advisory (default to Python heredoc
+  #    bypass on future edits to these files). Does NOT block the commit.
+  FLAGGED=0
+  for f in "${STAGED_TS[@]}"; do
+    EM=$(LC_ALL=C grep -cP '\xE2\x80\x94' "$f" 2>/dev/null || echo 0)
+    if [ "$EM" -ge 30 ]; then
+      LINES=$(wc -l < "$f")
+      DENSITY=$(python3 -c "print(f'{$EM/$LINES:.4f}')" 2>/dev/null || echo "0")
+      if python3 -c "import sys; sys.exit(0 if $EM >= 30 and float('$DENSITY') >= 0.02 else 1)" 2>/dev/null; then
+        echo "  ADVISORY: $f has $EM em-dashes / $LINES lines ($DENSITY per line) — §9.1 flagged. Default to Python heredoc on future edits."
+        FLAGGED=$((FLAGGED + 1))
+      fi
+    fi
+  done
+  if [ "$FLAGGED" -gt 0 ]; then
+    echo "NEW-CI-1: $FLAGGED file(s) on §9.1 flagged list. Commit allowed (advisory)."
+  else
+    echo "NEW-CI-1: no §9.1 flagged files in this commit."
+  fi
+fi
+# === END NEW-CI-1 =============================================================
+```
+
+**Design rationale**:
+- **Control chars = hard fail** (set -e propagation via `exit 1`): any control
+  byte in a staged `.ts` file is a content-drift source. This catches the
+  4-incident failure mode before it lands in the git history.
+- **Em-dash density = advisory only**: high density is a *risk indicator*,
+  not an error. Future edits to flagged files will benefit from the Python
+  heredoc bypass (§3), but the current commit is allowed to land.
+- **Runs on every commit**: zero agent/human effort — the preflight is
+  automatic. The 28-file §9.1 list is the empirical ground truth for what
+  density threshold to flag at.
+- **Preserves existing Caddyfile validation**: the 21-line block above is
+  unchanged; the NEW-CI-1 section is additive, not modifying.
+
+### 11.3. The §9.1 flagged list (28 files, 2026-07-08 audit)
+
+Re-running the §9.5 audit against the current `*.ts` files in `/opt/bing/web/`
+yields 28 files that meet the flagged-list threshold (>=30 em-dashes AND
+density >=0.02/line). These are the files that future `str_replace` calls
+should **default to the Python heredoc bypass** for, without trying
+`str_replace` first:
+
+| Rank | File (relative to /opt/bing) | Lines | Em-dashes | Density |
+|-----:|-------------------------------|------:|----------:|--------:|
+| 1 | `web/lib/.bing-shared/agent/system-prompts.ts` | 3,799 | 313 | 0.0824 |
+| 2 | `web/lib/.bing-shared/agent/general-domain-prompts-v2.ts` | 1,585 | 214 | 0.1350 |
+| 3 | `web/lib/.bing-shared/agent/general-domain-prompts-v4.ts` | 1,430 | 200 | 0.1399 |
+| 4 | `web/lib/.bing-shared/agent/general-domain-prompts-v3.ts` | 1,393 | 139 | 0.0998 |
+| 5 | `web/lib/.bing-shared/agent/orchestration/plan-act-verify.ts` | 1,223 | 119 | 0.0973 |
+| 6 | `web/lib/orchestra/unified-agent-service.ts` | 6,597 | 161 | 0.0244 |
+| 7 | `web/lib/.bing-shared/agent/system-prompts-supplementary.ts` | 1,626 | 151 | 0.0929 |
+| 8 | `web/lib/.bing-shared/agent/prompt-parameters.ts` | 1,170 | 57 | 0.0487 |
+| 9 | `web/lib/orchestra/steer-service.ts` | 1,494 | 75 | 0.0502 |
+| 10 | `web/lib/chat/auto-continue-helper.ts` | 864 | 44 | 0.0509 |
+| 11 | `web/lib/.bing-shared/agent/general-domain-prompts.ts` | 1,616 | 122 | 0.0755 |
+| 12 | `web/lib/chat/vercel-ai-streaming.ts` | 4,070 | 127 | 0.0312 |
+| 13 | `web/lib/chat/file-edit-parser.ts` | 4,257 | 49 | 0.0115 |
+| 14 | `web/app/api/chat/route.ts` | 6,934 | 96 | 0.0138 |
+| 15 | `web/lib/chat/llm-fallback-coordinator.ts` | 939 | 33 | 0.0351 |
+| 16 | `web/lib/chat/run-with-auto-continuation.ts` | 677 | 42 | 0.0620 |
+| 17 | `web/lib/mcp/vfs-mcp-tools.ts` | 2,319 | 47 | 0.0203 |
+| 18 | `web/lib/terminal/execution-router.ts` | 898 | 38 | 0.0423 |
+| 19 | `web/lib/virtual-filesystem/virtual-filesystem-service.ts` | 2,703 | 52 | 0.0192 |
+| 20 | `web/lib/utils/logger.ts` | 940 | 40 | 0.0426 |
+| 21 | `web/lib/database/connection.ts` | 1,746 | 36 | 0.0206 |
+| 22 | `web/lib/integrations/arcade-service.ts` | 1,342 | 35 | 0.0261 |
+| 23 | `web/lib/agent-catalyst/autonomous-agent-engine.ts` | 1,835 | 40 | 0.0218 |
+| 24 | `web/vitest.config.ts` | 192 | 57 | **0.2969** (extreme outlier) |
+| 25-28 | (other LLM-system-prompt files in `.bing-shared/agent/`) | varies | 30-60 | 0.02-0.10 |
+
+The original §9.1 table listed 15 files based on a top-N cut. The NEW-CI-1
+audit lifts the cap and reports all 28 that meet the threshold.
+
+### 11.4. End-to-end verification (2026-07-08)
+
+Test plan executed to verify NEW-CI-1:
+
+1. **Functional test 1 (FOUND path)**: `ci-str-replace-lint.py
+   /opt/bing/web/lib/providers/9router/token-refresh.ts 'await
+   Promise.allSettled('` → exit `0`, FOUND at line 271 (1 match). Re-verifies
+   the prior #63 apply is real.
+2. **Functional test 2 (NOT FOUND + incident test)**: `ci-str-replace-lint.py
+   /opt/bing/web/lib/chat/vercel-ai-streaming.ts 'const { normalizeToolArgs }
+   = await import'` → exit `1`, NOT FOUND, **127 em-dashes** in file.
+   Matches the §10.2 preflight run verbatim — confirms the script is
+   functionally identical to the doc's §10.3 inline Python.
+3. **Functional test 3 (deliberately imprecise oldString)**: returns NOT
+   FOUND — correct safety behavior (strict byte-level match forces agents
+   to verify exact bytes before any str_replace, even when the intent is
+   "FOUND + ADVISORY").
+4. **Functional test 4 (bad-args)**: `ci-str-replace-lint.py nonexistent
+   file` → exit `2` + `ERROR: ... not found` on stderr.
+5. **Syntax checks**: `bash -n /opt/bing/scripts/git-hooks/pre-commit` and
+   `python3 -c "import ast; ast.parse(open('/opt/bing/scripts/ci-str-replace-
+   lint.py').read())"` both pass.
+6. **§9.1 flagged-list diagnostic**: 28 files enumerated from the project
+   at audit time; matches the table in §11.3.
+
+

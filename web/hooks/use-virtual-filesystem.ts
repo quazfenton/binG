@@ -436,6 +436,7 @@ export function useVirtualFilesystem(
   const [currentPath, setCurrentPath] = useState(resolvedInitialPath);
   const currentPathRef = useRef(currentPath);
   const initialPathRef = useRef(resolvedInitialPath);
+  const pendingDisableRef = useRef<Promise<void> | null>(null);
   const [nodes, setNodes] = useState<VirtualFilesystemNode[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -526,17 +527,28 @@ export function useVirtualFilesystem(
       }
       localStorage.setItem(LAST_OPFS_KEY, opfsOwnerId);
 
-      // Enable OPFS - will sync from server for the new user's workspace
-      opfsAdapter.enable(opfsOwnerId).then(() => {
+      // Chain: await any pending disable (from previous effect cleanup) before
+      // enabling. This prevents a race where core.close() from disable() and
+      // core.initialize() from enable() overlap, which causes IndexedDB/OPFS
+      // tab crashes in Firefox when the ownerId changes on login.
+      const doEnable = async () => {
+        if (pendingDisableRef.current) {
+          await pendingDisableRef.current;
+          pendingDisableRef.current = null;
+        }
+        await opfsAdapter.enable(opfsOwnerId);
         log('OPFS enabled successfully for owner:', opfsOwnerId);
-      }).catch(err => {
+      };
+      doEnable().catch(err => {
         logWarn('OPFS initialization failed, falling back to server-only:', err?.message || err);
       });
     }
 
     return () => {
       if (useOPFS) {
-        opfsAdapter.disable().catch(console.error);
+        // Store the disable promise so the next effect run can await it before
+        // enabling — prevents the core.close() / core.initialize() race.
+        pendingDisableRef.current = opfsAdapter.disable().catch(console.error);
       }
     };
   }, [useOPFS, logWarn, options?.userId, options?.compositeSessionId, getOwnerId]);

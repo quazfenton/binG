@@ -141,11 +141,19 @@ class ContextPackService {
       root: rootPath,
     });
 
-    // Get directory tree
-    const tree = await this.buildDirectoryTree(ownerId, rootPath, opts);
-
-    // Get all files recursively
-    const files = await this.collectFiles(ownerId, rootPath, opts, warnings);
+    // NEW-1 followup-d at `lib/virtual-filesystem/context-pack-service.ts` (generateContextPack, L145-L158);
+    // Tier 3 #36 — parallelize buildDirectoryTree + collectFiles via Promise.all. Both calls
+    // read independent VFS state (buildDirectoryTree produces a tree, collectFiles produces a
+    // sorted file list + mutates warnings); no cross-mutation, no shared intermediate state.
+    // Both internally walk the VFS so parallelizing saves wallclock on per-workspace-traversal
+    // cost. Rejection semantics: if either rejects, Promise.all rejects with the first rejection
+    // (matching the original sequential failure mode); no partial-result handling needed since
+    // generateContextPack's caller wraps the call in try/catch. ∝N files per call — typical
+    // workspace has 10-200 files. No new dependencies.
+    const [tree, files] = await Promise.all([
+      this.buildDirectoryTree(ownerId, rootPath, opts),
+      this.collectFiles(ownerId, rootPath, opts, warnings),
+    ]);
 
     // Index new/changed files into workspace's vector store (contentHash avoids re-embedding)
     // DEFERRED: Run async in background so slow embedding doesn't block context generation
@@ -330,66 +338,78 @@ class ContextPackService {
       
       // Filter entries
       const filtered = this.filterEntries(entries, currentPath, options);
-      
-      for (const entry of filtered) {
-        const fullPath = currentPath === '/' 
-          ? `/${entry.name}` 
-          : `${currentPath}/${entry.name}`;
-        
-        if (entry.type === 'directory') {
-          // Recurse into directory
-          await this.collectFilesRecursive(ownerId, fullPath, options, files, warnings);
-        } else if (entry.type === 'file') {
-          // Check if file should be included
-          if (!this.matchesPatterns(fullPath, options.includePatterns) && options.includePatterns.length > 0) {
-            continue;
+
+      // NEW-1 followup-d at `lib/virtual-filesystem/context-pack-service.ts` (collectFilesRecursive, L334-L413);
+      // Tier 3 #37 — parallelize the per-entry processing via Promise.all. Each entry is
+      // independent (separate fullPath, separate readFile for files, separate recursive call
+      // for directories). The files array is sorted by path at collectFiles L314-L315 so push
+      // order doesn't matter (matches the existing deterministic-output contract). warnings
+      // are human-readable diagnostics whose order is non-deterministic across runs (each run
+      // traverses the VFS with different I/O races); parallelizing only makes it more so.
+      // Subdirectory recursion becomes "all subdirectories in parallel" instead of depth-first
+      // — the consumer's outer sort at L314-L315 makes this order-agnostic. ∝N entries per
+      // directory — typical workspace has 10-50 entries per directory. No new dependencies.
+      await Promise.all(
+        filtered.map(async (entry) => {
+          const fullPath = currentPath === '/'
+            ? `/${entry.name}`
+            : `${currentPath}/${entry.name}`;
+
+          if (entry.type === 'directory') {
+            // Recurse into directory (now parallel — siblings resolve in parallel)
+            await this.collectFilesRecursive(ownerId, fullPath, options, files, warnings);
+          } else if (entry.type === 'file') {
+            // Check if file should be included
+            if (!this.matchesPatterns(fullPath, options.includePatterns) && options.includePatterns.length > 0) {
+              return;
+            }
+
+            // Read file content
+            try {
+              const file = await virtualFilesystem.readFile(ownerId, fullPath);
+              let content = file.content;
+              let truncated = false;
+
+              // Check file size
+              const size = new TextEncoder().encode(content).length;
+              if (size > options.maxFileSize) {
+                content = content.slice(0, options.maxFileSize);
+                truncated = true;
+                warnings.push(`File truncated: ${fullPath} (${size} bytes > ${options.maxFileSize} bytes limit)`);
+              }
+
+              // Count lines
+              const lines = content.split('\n').length;
+              if (options.maxLinesPerFile && lines > options.maxLinesPerFile) {
+                content = content.split('\n').slice(0, options.maxLinesPerFile).join('\n');
+                truncated = true;
+                warnings.push(`File truncated: ${fullPath} (${lines} lines > ${options.maxLinesPerFile} lines limit)`);
+              }
+
+              // Add line numbers if requested
+              if (options.lineNumbers && content) {
+                const lines = content.split('\n');
+                content = lines.map((line, i) => `${(i + 1).toString().padStart(4)}: ${line}`).join('\n');
+              }
+
+              files.push({
+                path: fullPath,
+                size: new TextEncoder().encode(content).length,
+                lines: content.split('\n').length,
+                content: options.includeContents ? content : undefined,
+                truncated,
+              });
+            } catch (error) {
+              files.push({
+                path: fullPath,
+                size: 0,
+                lines: 0,
+                error: error instanceof Error ? error.message : 'Failed to read file',
+              });
+            }
           }
-          
-          // Read file content
-          try {
-            const file = await virtualFilesystem.readFile(ownerId, fullPath);
-            let content = file.content;
-            let truncated = false;
-            
-            // Check file size
-            const size = new TextEncoder().encode(content).length;
-            if (size > options.maxFileSize) {
-              content = content.slice(0, options.maxFileSize);
-              truncated = true;
-              warnings.push(`File truncated: ${fullPath} (${size} bytes > ${options.maxFileSize} bytes limit)`);
-            }
-            
-            // Count lines
-            const lines = content.split('\n').length;
-            if (options.maxLinesPerFile && lines > options.maxLinesPerFile) {
-              content = content.split('\n').slice(0, options.maxLinesPerFile).join('\n');
-              truncated = true;
-              warnings.push(`File truncated: ${fullPath} (${lines} lines > ${options.maxLinesPerFile} lines limit)`);
-            }
-            
-            // Add line numbers if requested
-            if (options.lineNumbers && content) {
-              const lines = content.split('\n');
-              content = lines.map((line, i) => `${(i + 1).toString().padStart(4)}: ${line}`).join('\n');
-            }
-            
-            files.push({
-              path: fullPath,
-              size: new TextEncoder().encode(content).length,
-              lines: content.split('\n').length,
-              content: options.includeContents ? content : undefined,
-              truncated,
-            });
-          } catch (error) {
-            files.push({
-              path: fullPath,
-              size: 0,
-              lines: 0,
-              error: error instanceof Error ? error.message : 'Failed to read file',
-            });
-          }
-        }
-      }
+        }),
+      );
     } catch (error) {
       // Directory might not exist
     }

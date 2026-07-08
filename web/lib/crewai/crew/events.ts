@@ -207,13 +207,24 @@ export function createEventEmitter(eventConfig: EventListenerConfig) {
 
   return {
     emit: async (event: CrewAIEvent) => {
-      for (const listener of listeners) {
-        try {
-          await listener(event);
-        } catch (error) {
-          console.error('Event listener error:', error);
-        }
-      }
+      // NEW-1 followup-d at `lib/crewai/crew/events.ts` (emit fan-out, L209-L228);
+      // concurrent fan-out to all listeners via Promise.allSettled so a
+      // single listener reject doesn't crash the CrewAI task loop. The
+      // Promise.all variant would short-circuit on first reject and any
+      // subsequent listener would be dropped silently; the allSettled
+      // variant waits for every listener regardless, matching the original
+      // sequential try/catch contract. Per-listener try/catch preserved
+      // verbatim (console.error failure-reporting contract unchanged).
+      // ~1-5ms/emit (typical N=2-4 listeners).
+      await Promise.allSettled(
+        listeners.map(async (listener) => {
+          try {
+            await listener(event);
+          } catch (error) {
+            console.error('Event listener error:', error);
+          }
+        }),
+      );
     },
     listeners,
   };

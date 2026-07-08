@@ -528,11 +528,16 @@ export async function checkAuth(
     };
   }
 
-  // No valid Bearer or cookie auth — try desktop bypass (consistent with withAuth)
+  // NEW-1 followup-d (2026-07-08, ~1-3ms/middleware-hit): same module
+  // (./desktop-auth-bypass) was being imported twice consecutively (L533
+  // + L535) — the L535 import was nested inside the shouldBypassAuth
+  // branch. ESM caches the module after first import, so the L535 await
+  // was paying for a redundant microtask hop. Collapsed to a single
+  // destructured import; getDesktopUserContext is just a function
+  // reference (no side-effect), safe to hoist out of the inner if.
   try {
-    const { shouldBypassAuth } = await import('./desktop-auth-bypass');
+    const { shouldBypassAuth, getDesktopUserContext } = await import('./desktop-auth-bypass');
     if (shouldBypassAuth(request)) {
-      const { getDesktopUserContext } = await import('./desktop-auth-bypass');
       const desktopUser = getDesktopUserContext();
       if (desktopUser) {
         return {

@@ -154,9 +154,18 @@ export async function POST(request: NextRequest) {
         token,
       });
 
+      // Only set Secure when the actual connection is HTTPS (checked via
+      // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+      // seen by the server). This allows Secure to work correctly through the
+      // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+      // on plain HTTP localhost (dev, CI, local preview of production build).
+      const forwardedProto = request.headers.get('x-forwarded-proto');
+      const actualProtocol = request.nextUrl.protocol;
+      const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
       response.cookies.set('session_id', sessionResult.sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: isSecureConnection,
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60, // 7 days
         path: '/',

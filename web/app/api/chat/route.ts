@@ -994,7 +994,10 @@ export async function POST(request: NextRequest) {
         `${o.ownerId}$${resolvedConversationId}`,
         4,
       ),
-    );
+    ).catch(() => {
+      chatLogger.debug('Failed to fetch denial context (non-critical)', { requestId });
+      return [] as Array<{ pattern: string; reason: string }>;
+    });
     // NEW-2 closure-narrowing fix (tsc): capture the typeof-narrowed query
     // string BEFORE the .then so the `string` type survives across the
     // closure boundary. TypeScript's control-flow narrowing on the
@@ -1016,7 +1019,10 @@ export async function POST(request: NextRequest) {
             chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
             return { success: false, results: [] };
           }),
-        )
+        ).catch(() => {
+          chatLogger.debug('Mem0 search skipped (owner resolution failed)', { requestId });
+          return { success: false, results: [] };
+        })
       : Promise.resolve({ success: false, results: [] });
 
     // Calculate these BEFORE the await — they're dependencies for the
@@ -1632,23 +1638,28 @@ const config: UnifiedAgentConfig = {
     // servers (Node.js fetch has no default timeout). When the timeout
     // fires or the client disconnects, we log a warning and proceed with
     // an empty tool set rather than blocking the entire chat response.
-    // Chat-hang-fix #4: drop the 30s ceiling to 5s. Combines with the
-    // bootstrap-mcp.ts transport-level skip to drop the per-request stall
-    // from ~33s to <1s when MCP is down, while leaving breathing room for
-    // healthy-but-slow gateway cold-start handshakes.
-    // Chat-hang-fix #4 PR-4: dropped from 5000 → 1000ms so a TCP-blackhole
-    // MCP gateway (e.g. localhost:8261) fast-fails in 1s instead of stalling
-    // the first chat byte. The AbortSignal below is also piped into
-    // getMCPToolsForAI_SDK so the inner fetch aborts immediately rather than
-    // just abandoning the Promise.race ceiling (which would leave a zombie
-    // in-flight promise still holding the socket open).
+    // MCP tools timeout: Two-tier decoupled ceiling.
+    //
+    // Tier 1 — AbortSignal (MCP_TOOLS_TIMEOUT_MS, default 1000ms):
+    //   Passed into getMCPToolsForAI_SDK so Phase 2 ops (getRemoteMCPTools,
+    //   getArcadeToolDefinitions, getComposioMCPTools, buildMem0Tools) abort
+    //   their in-flight work and degrade to empty slots. This is the fast
+    //   path — a dead TCP socket gets killed at ~1s instead of the 15-30s
+    //   connect timeout.
+    //
+    // Tier 2 — route-level Promise.race ceiling (MCP_TOOLS_TIMEOUT_MS + 3000ms):
+    //   Safety net in case the abort-signal unwinding itself races the route
+    //   boundary. Gives Phase 2 time to catch the abort, return empty slots,
+    //   and let getMCPToolsForAI_SDK return whatever Phase 1 tools (VFS,
+    //   provider, bash, etc.) it already assembled. Without this padding,
+    //   both timers fire at the same wallclock time and the route's setTimeout
+    //   always wins — discarding Phase 1 tools that completed in ~50ms.
     const MCP_TOOLS_TIMEOUT_MS = parseInt(
       process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '1000',
       10,
     );
-    // AbortSignal propagated through getMCPToolsForAI_SDK so the underlying
-    // MCP fetch (getRemoteMCPTools) aborts at the 1s mark, not just the
-    // route-level Promise.race.
+    const MCP_TOOLS_ROUTE_TIMEOUT_MS = MCP_TOOLS_TIMEOUT_MS + 3000;
+    // Tier 1: abort signal for Phase 2 internal degradation.
     const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
     // Boundary #4 timestamp — measured AT try-entry so duration includes
     // both the getMCPToolsForAI_SDK() call AND any timeout-noise (5s
@@ -1664,8 +1675,14 @@ const config: UnifiedAgentConfig = {
     try {
       const mcpRace: Promise<any>[] = [
         getMCPToolsForAI_SDK(authenticatedUserId, task, mcpAbortSignal),
+        // Tier 2: safety-net ceiling — padded so the Tier-1 abort signal
+        // fires first, Phase 2 degrades, and getMCPToolsForAI_SDK returns
+        // Phase 1 tools before this timer rejects the race.
         new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error(`MCP tools timed out after ${MCP_TOOLS_TIMEOUT_MS}ms`)), MCP_TOOLS_TIMEOUT_MS);
+          setTimeout(
+            () => reject(new Error(`MCP tools route timeout after ${MCP_TOOLS_ROUTE_TIMEOUT_MS}ms (abort signal ${MCP_TOOLS_TIMEOUT_MS}ms)`)),
+            MCP_TOOLS_ROUTE_TIMEOUT_MS,
+          );
         }),
       ];
       if (request.signal) {

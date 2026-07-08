@@ -23,6 +23,7 @@ import { POST as registerPOST } from '../register/gateway';
 import { POST as resetPasswordPOST } from '../reset-password/gateway';
 import { POST as sendVerificationPOST } from '../send-verification/gateway';
 import { GET as sessionGET } from '../session/gateway';
+import { POST as transferVFSOnLoginPOST } from '../transfer-vfs-on-login/gateway';
 import { GET as validateGET, POST as validatePOST } from '../validate/gateway';
 import { GET as verifyEmailGET } from '../verify-email/gateway';
 
@@ -93,6 +94,7 @@ export async function POST(request: NextRequest) {
       case 'confirm-reset': return await confirmResetPOST(request);
       case 'reset-password': return await resetPasswordPOST(request);
       case 'send-verification': return await sendVerificationPOST(request);
+      case 'transfer-vfs-on-login': return await transferVFSOnLoginPOST(request);
       case 'validate': return await validatePOST(request);
       case 'mfa-challenge': return await mfaChallengePOST(request);
       case 'mfa-disable': return await mfaDisablePOST(request);

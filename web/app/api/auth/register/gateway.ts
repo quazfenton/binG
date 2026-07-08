@@ -106,6 +106,15 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     // Transfer anonymous VFS data to the newly created authenticated user
     await transferVFSFromAnonymous(request, result.user);
 
+    // Only set Secure when the actual connection is HTTPS (checked via
+    // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+    // seen by the server). This allows Secure to work correctly through the
+    // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+    // on plain HTTP localhost (dev, CI, local preview of production build).
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const actualProtocol = request.nextUrl.protocol;
+    const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
     // Set session cookie
     // SECURITY: Do NOT expose sessionId in response body - it's available via httpOnly cookie
     const response = NextResponse.json({
@@ -117,7 +126,7 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
     if (result.sessionId) {
       response.cookies.set('session_id', result.sessionId, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: isSecureConnection,
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60, // 7 days
       });
@@ -125,7 +134,7 @@ export const POST = validateRequest(registerSchema)(async (request, { validatedB
       // fall back to their old anonymous workspace identity
       response.cookies.set('anon-session-id', '', {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: isSecureConnection,
         sameSite: 'lax',
         maxAge: 0,
         path: '/',

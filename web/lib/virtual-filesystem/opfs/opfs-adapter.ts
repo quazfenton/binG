@@ -176,8 +176,18 @@ export class OPFSAdapter {
    * @param workspaceId - Workspace identifier (defaults to ownerId)
    */
   private pendingEnablePromise: Promise<void> | null = null;
+  private pendingDisablePromise: Promise<void> | null = null;
 
   async enable(ownerId: string, workspaceId?: string): Promise<void> {
+    // Wait for any pending disable to finish before enabling (prevents race
+    // between core.close() from performDisable and core.initialize() here,
+    // which causes IndexedDB/OPFS tab crashes in Firefox).
+    if (this.pendingDisablePromise) {
+      const disablePromise = this.pendingDisablePromise;
+      this.pendingDisablePromise = null;
+      await disablePromise;
+    }
+
     const wsId = workspaceId || ownerId;
 
     // If already enabled for the same workspace, just increment reference count
@@ -659,11 +669,19 @@ export class OPFSAdapter {
       this.visibilityHandler = null;
     }
 
-    // Close OPFS core (non-blocking)
-    this.core.close().catch(err => {
+    // Close OPFS core — store the promise so enable() can await it before
+    // calling core.initialize(), preventing IndexedDB/OPFS tab crashes in
+    // Firefox when the ownerId changes (anon → authenticated on login).
+    const closePromise = this.core.close().catch(err => {
       logger.warn('[OPFS] Failed to close core:', err);
     });
-    
+    this.pendingDisablePromise = closePromise;
+    closePromise.finally(() => {
+      if (this.pendingDisablePromise === closePromise) {
+        this.pendingDisablePromise = null;
+      }
+    });
+
     logger.info('[OPFS] Disabled');
   }
 

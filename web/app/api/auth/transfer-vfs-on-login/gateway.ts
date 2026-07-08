@@ -105,6 +105,15 @@ export async function POST(request: NextRequest) {
       transferredFiles: result.transferredFiles,
     });
 
+    // Only set Secure when the actual connection is HTTPS (checked via
+    // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+    // seen by the server). This allows Secure to work correctly through the
+    // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+    // on plain HTTP localhost (dev, CI, local preview of production build).
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const actualProtocol = request.nextUrl.protocol;
+    const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
     const response = NextResponse.json({
       success: true,
       transferredFiles: result.transferredFiles,
@@ -115,7 +124,7 @@ export async function POST(request: NextRequest) {
     // /api/auth/register/gateway.ts for the non-fallback transfer path.
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isSecureConnection,
       sameSite: 'lax',
       maxAge: 0,
       path: '/',

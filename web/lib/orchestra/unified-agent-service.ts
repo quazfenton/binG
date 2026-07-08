@@ -21,6 +21,23 @@ import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
+// NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (first production caller of the prompt-orchestrator foundation);
+// adds the applyScript integration at L1491 below + the PO_DEFAULT_SCRIPT module-level const after the imports.
+// The first non-test production caller of step 1's API; unlocks Tier 8 step 4 (round-trip writes) + step 8 (observability)
+// on real production data. Idempotent (re-runs are deterministic no-ops via the (promptId, step, sha) tuple).
+import { observeApplyScript, type PromptScript } from '@/lib/orchestra/prompt-orchestrator';
+
+// NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (PO_DEFAULT_SCRIPT, module-level);
+// hardcoded PromptScript for the first production caller. Empty steps = zero behavior change
+// in the happy path (applyScript is a no-op for empty scripts beyond the scanMarkers scan).
+// Future: replace with a loadScript('~/.prompt-orchestrator/scripts/unified-init.json') call
+// when the disk-format scripts are stable. The const lives at module scope (not inside the
+// request handler) to avoid per-request allocation. promptId chosen to match the entry-point
+// name so the marker-in-history scan (step 7b) can find these markers in agent history.
+const PO_DEFAULT_SCRIPT: PromptScript = {
+  promptId: 'unified-agent-entry',
+  steps: [],
+};
 
 // Bug #1 follow-up: route the v1-api-with-tools auto-continue decision
 // through the shared helper so per-requestId counters, env-tunable
@@ -1488,7 +1505,16 @@ export async function processUnifiedAgentRequest(
   let autoInjectContext = '';
   try {
     const { appendAutoInjectPowers, buildAutoInjectUserMessage } = await import('@/lib/powers');
-    const userMsg = config.userMessage || '';
+    // NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (auto-inject site, L1493);
+    // first production caller of the prompt-orchestrator foundation. applyScript wraps
+    // userMsg before it fans out to BOTH the V1-API path (appendAutoInjectPowers) AND
+    // non-history modes (buildAutoInjectUserMessage for OpenCodeEngine / StatefulAgent / Mastra).
+    // Structural first-caller: empty PO_DEFAULT_SCRIPT.steps means the inject path doesn't
+    // fire (only scan + idempotency run). To unlock Tier 8 step 4 (round-trip writes) +
+    // step 8 (observability) on real production data, a follow-up apply must add a step
+    // to PO_DEFAULT_SCRIPT (or switch to loadScript for a disk-stored script). Inside the
+    // existing try/catch — a prompt-orchestrator throw fails the same way as a powers throw.
+    const userMsg = observeApplyScript(config.userMessage || '', PO_DEFAULT_SCRIPT, 'unified-agent');
 
     // Always ensure conversationHistory exists so V1-API paths get injection
     if (!config.conversationHistory) {
@@ -1499,7 +1525,7 @@ export async function processUnifiedAgentRequest(
     // Also build the raw text for modes that don't use conversationHistory
     autoInjectContext = buildAutoInjectUserMessage(userMsg) || '';
   } catch (err: any) {
-    log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
+    log.debug('Auto-inject powers / prompt script skipped at entry point', { error: err?.message });
   }
 
   // Bug #67 (Pass-5 audit) — qd/lite pre-validation. The audit observed
