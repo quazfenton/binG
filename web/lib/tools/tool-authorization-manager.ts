@@ -10,6 +10,9 @@ import {
   getToolServiceForPlatform,
   getAuthorizationUrlForPlatform,
 } from '../oauth/provider-map';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('ToolAuth');
 
 export interface ToolAuthorizationContext {
   userId: string;
@@ -62,7 +65,7 @@ export class ToolAuthorizationManager {
     const provider = TOOL_PROVIDER_MAP[toolName];
     if (!provider) {
       // Unknown tool - fail closed and log warning
-      console.warn(`[ToolAuth] Unknown tool requested: ${toolName} by user ${userId}. Denying access.`);
+      logger.warn(`Unknown tool requested: ${toolName} by user ${userId}. Denying access.`);
       return false;
     }
 
@@ -135,7 +138,7 @@ export class ToolAuthorizationManager {
             return { token: decrypted.accessToken, source };
           }
         } catch (error) {
-          console.warn(`[ToolAuth] Failed to decrypt token for ${toolName}:`, error);
+          logger.warn(`Failed to decrypt token for ${toolName}:`, error);
         }
       }
     }
@@ -148,7 +151,7 @@ export class ToolAuthorizationManager {
           return { token, source: 'auth0' };
         }
       } catch (error) {
-        console.warn(`[ToolAuth] Auth0 token fetch failed for ${toolName}:`, error);
+        logger.warn(`Auth0 token fetch failed for ${toolName}:`, error);
       }
     }
 
@@ -217,9 +220,10 @@ export class ToolAuthorizationManager {
         message: `Authorization initiated for ${provider}`,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] initiateConnection failed:', error);
+      logger.error('initiateConnection failed:', error);
       return {
         success: false,
+        provider,
         authUrl: '',
         provider,
         message: `Failed to initiate connection: ${error.message}`,
@@ -271,7 +275,7 @@ export class ToolAuthorizationManager {
         providers,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] listConnections failed:', error);
+      logger.error('listConnections failed:', error);
       return {
         success: false,
         connections: [],
@@ -340,7 +344,7 @@ export class ToolAuthorizationManager {
         };
       }
 
-      console.log(`[ToolAuth] Revoked ${revokedCount} connection(s) for user ${userId}, provider ${provider}`);
+      logger.info(`Revoked ${revokedCount} connection(s) for user ${userId}, provider ${provider}`);
 
       return {
         success: true,
@@ -349,7 +353,7 @@ export class ToolAuthorizationManager {
         message: `Revoked ${revokedCount} connection(s) for ${provider}.`,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] revokeConnection failed:', error);
+      logger.error('revokeConnection failed:', error);
       return {
         success: false,
         provider,
@@ -410,7 +414,7 @@ export class ToolAuthorizationManager {
         error: `Unknown provider: ${provider}`,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] executeTool failed:', error);
+      logger.error('executeTool failed:', error);
       return {
         success: false,
         error: error.message,
@@ -495,7 +499,7 @@ export class ToolAuthorizationManager {
         output: result.output?.value,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] executeArcadeTool failed:', error);
+      logger.error('executeArcadeTool failed:', error);
       return {
         success: false,
         error: error.message,
@@ -555,7 +559,7 @@ export class ToolAuthorizationManager {
         output: response.data,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] executeNangoTool failed:', error);
+      logger.error('executeNangoTool failed:', error);
       return {
         success: false,
         error: error.message,
@@ -589,7 +593,7 @@ export class ToolAuthorizationManager {
         output: result,
       };
     } catch (error: any) {
-      console.error('[ToolAuth] executeComposioTool failed:', error);
+      logger.error('executeComposioTool failed:', error);
       return {
         success: false,
         error: error.message,

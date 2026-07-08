@@ -29,6 +29,7 @@
 
     "check:vendor-drift": "tsx scripts/check-vendor-api-drift.ts",
     "check:vendor-drift:update": "tsx scripts/check-vendor-api-drift.ts --check=vendor --update",
+    "check:mirror-drift": "tsx scripts/check-mirror-drift.ts",
     "preflight": "scripts/preflight.sh"
   },
   "devDependencies": {

@@ -17,6 +17,9 @@ import {
   ImageGenerationError,
   ImageGenerationErrorType as ErrorType,
 } from '../types';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('GoogleImageProvider');
 
 export class GoogleImageProvider implements ImageGenerationProvider {
   readonly id = 'google';
@@ -99,7 +102,7 @@ export class GoogleImageProvider implements ImageGenerationProvider {
       );
     }
 
-    console.log('[GoogleImageProvider] Starting image generation with prompt:', params.prompt.substring(0, 100));
+    logger.info('Starting image generation with prompt:', params.prompt.substring(0, 100));
 
     const startTime = Date.now();
     const controller = new AbortController();
@@ -122,12 +125,12 @@ export class GoogleImageProvider implements ImageGenerationProvider {
       // Check if this is the free tier model
       const isFreeTier = model === 'gemini-2.5-flash-image-preview';
       if (isFreeTier) {
-        console.log('[GoogleImageProvider] Using free tier model (500 images/day limit)');
+        logger.info('Using free tier model (500 images/day limit)');
       } else {
-        console.log('[GoogleImageProvider] Using paid model:', model);
+        logger.info('Using paid model:', model);
       }
 
-      console.log('[GoogleImageProvider] Generating image with model:', model);
+      logger.info('Generating image with model:', model);
 
       const response = await this.client.models.generateImages({
         model,
@@ -138,7 +141,7 @@ export class GoogleImageProvider implements ImageGenerationProvider {
         },
       });
 
-      console.log('[GoogleImageProvider] Got response with', response.generatedImages?.length || 0, 'images');
+      logger.info('Got response with ' + (response.generatedImages?.length || 0) + ' images');
 
       if (!response.generatedImages || response.generatedImages.length === 0) {
         throw new ImageGenerationError(
@@ -172,7 +175,7 @@ export class GoogleImageProvider implements ImageGenerationProvider {
       };
 
       const duration = Date.now() - startTime;
-      console.log(`[GoogleImageProvider] Successfully generated image in ${duration}ms`);
+      logger.info(`Successfully generated image in ${duration}ms`);
 
       return {
         success: true,
@@ -185,7 +188,7 @@ export class GoogleImageProvider implements ImageGenerationProvider {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[GoogleImageProvider] Error after ${duration}ms:`, error);
+      logger.error(`Error after ${duration}ms:`, error);
 
       if (error instanceof ImageGenerationError) {
         throw error;

@@ -236,7 +236,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
           reconnectAttemptsRef.current++;
           const delay = reconnectDelay * reconnectAttemptsRef.current;
           if (process.env.NODE_ENV === 'development') {
-            logger.info('Reconnecting in', delay, 'ms', {
+            logger.info('Reconnecting in ' + delay + 'ms', {
               attempt: reconnectAttemptsRef.current,
               max: maxReconnectAttempts,
             });

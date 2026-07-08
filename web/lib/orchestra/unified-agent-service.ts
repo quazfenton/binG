@@ -22,22 +22,17 @@ import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (first production caller of the prompt-orchestrator foundation);
-// adds the applyScript integration at L1491 below + the PO_DEFAULT_SCRIPT module-level const after the imports.
-// The first non-test production caller of step 1's API; unlocks Tier 8 step 4 (round-trip writes) + step 8 (observability)
-// on real production data. Idempotent (re-runs are deterministic no-ops via the (promptId, step, sha) tuple).
-import { observeApplyScript, type PromptScript } from '@/lib/orchestra/prompt-orchestrator';
-
-// NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (PO_DEFAULT_SCRIPT, module-level);
-// hardcoded PromptScript for the first production caller. Empty steps = zero behavior change
-// in the happy path (applyScript is a no-op for empty scripts beyond the scanMarkers scan).
-// Future: replace with a loadScript('~/.prompt-orchestrator/scripts/unified-init.json') call
-// when the disk-format scripts are stable. The const lives at module scope (not inside the
-// request handler) to avoid per-request allocation. promptId chosen to match the entry-point
-// name so the marker-in-history scan (step 7b) can find these markers in agent history.
-const PO_DEFAULT_SCRIPT: PromptScript = {
-  promptId: 'unified-agent-entry',
-  steps: [],
-};
+// adds the applyScript integration at L1491 below. The first non-test production caller of step 1's API;
+// unlocks Tier 8 step 4 (round-trip writes) + step 8 (observability) on real production data.
+// Idempotent (re-runs are deterministic no-ops via the (promptId, step, sha) tuple).
+//
+// PO_UNIFIED_AGENT_SCRIPT comes from the shared `default-scripts.ts` module (was previously
+// declared inline here + duplicated in marker-scanner.ts). The shared module is the source of
+// truth so a 3rd caller can't silently drift. Empty `steps: []` makes the applyScript call
+// structural (input userMsg passes through unchanged end-to-end). Tier 8 step 4 / step 8
+// un-defer unblockers: add a step here OR switch to `loadScript('~/.prompt-orchestrator/
+// scripts/unified-init.json')` for a disk-stored script.
+import { observeApplyScript, PO_UNIFIED_AGENT_SCRIPT } from '@/lib/orchestra/prompt-orchestrator';
 
 // Bug #1 follow-up: route the v1-api-with-tools auto-continue decision
 // through the shared helper so per-requestId counters, env-tunable
@@ -1514,7 +1509,7 @@ export async function processUnifiedAgentRequest(
     // step 8 (observability) on real production data, a follow-up apply must add a step
     // to PO_DEFAULT_SCRIPT (or switch to loadScript for a disk-stored script). Inside the
     // existing try/catch — a prompt-orchestrator throw fails the same way as a powers throw.
-    const userMsg = observeApplyScript(config.userMessage || '', PO_DEFAULT_SCRIPT, 'unified-agent');
+    const userMsg = observeApplyScript(config.userMessage || '', PO_UNIFIED_AGENT_SCRIPT, 'unified-agent');
 
     // Always ensure conversationHistory exists so V1-API paths get injection
     if (!config.conversationHistory) {

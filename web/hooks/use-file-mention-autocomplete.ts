@@ -30,6 +30,9 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils/utils';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('FileMention');
 
 export interface FileMentionOption {
   path: string;
@@ -161,7 +164,7 @@ export function useFileMentionAutocomplete(
 
       hasFetchedFiles.current = true; // Mark as completed
     } catch (error) {
-      console.error('[FileMention] Failed to fetch files:', error);
+      logger.error('Failed to fetch files:', error);
       fetchPromiseRef.current = null; // Allow retry on next @ trigger
     } finally {
       // Always clear the guard when fetch completes (success or failure)

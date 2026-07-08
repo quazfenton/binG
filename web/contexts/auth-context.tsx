@@ -170,7 +170,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         logger.info('No Auth0 session found');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        logger.warn('checkAuth0Session returned:', response.status, errorData.error || '');
+        logger.warn('checkAuth0Session returned: ' + response.status + ' ' + (errorData.error || ''));
       }
       return null;
     } catch (error) {
@@ -227,7 +227,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       if (validatedUser) {
-        logger.info('Setting user:', validatedUser.email, 'verified:', validatedUser.emailVerified);
+        logger.info('Setting user: ' + validatedUser.email + ' verified: ' + validatedUser.emailVerified);
         setUser(validatedUser);
       } else {
         // Session is invalid, clean up any stored tokens AND clear user state

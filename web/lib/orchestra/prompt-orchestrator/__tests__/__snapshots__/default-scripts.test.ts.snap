@@ -1,0 +1,15 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`default-scripts.ts canonical shape (Tier 8 step 8 audit-trail) > 'PO_MARKER_TAIL_SCRIPT' — shape locked: promptId="'marker-tail-poll'", steps=[] 1`] = `
+{
+  "promptId": "marker-tail-poll",
+  "steps": [],
+}
+`;
+
+exports[`default-scripts.ts canonical shape (Tier 8 step 8 audit-trail) > 'PO_UNIFIED_AGENT_SCRIPT' — shape locked: promptId="'unified-agent-entry'", steps=[] 1`] = `
+{
+  "promptId": "unified-agent-entry",
+  "steps": [],
+}
+`;

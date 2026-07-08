@@ -4,6 +4,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase, DatabaseOperations } from '@/lib/database/connection-shim';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { checkRateLimit } from '@/lib/middleware/rate-limit';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('ChatHistory');
 
 // Check if server-side chat storage is enabled
 const SERVER_CHAT_STORAGE_ENABLED = process.env.ENABLE_SERVER_CHAT_STORAGE === 'true';
@@ -104,7 +107,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ chats: chatHistory });
 
   } catch (error) {
-    console.error('Error retrieving chat history:', error);
+    logger.error('Error retrieving chat history:', error);
     return NextResponse.json(
       { error: 'Failed to retrieve chat history' },
       { status: 500 }
@@ -184,7 +187,7 @@ export async function POST(request: NextRequest) {
     
     // Database not initialized yet - return error
     if (!db) {
-      console.error('[Chat History] Database not initialized');
+      logger.error('Database not initialized');
       return NextResponse.json(
         { error: 'Database not ready. Please try again in a moment.' },
         { status: 503 }
@@ -259,7 +262,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, chatId: id });
 
   } catch (error: any) {
-    console.error('Error saving chat history:', error);
+    logger.error('Error saving chat history:', error);
     
     // Handle access denied (conversation belongs to another user)
     if (error.code === 'ACCESS_DENIED') {
@@ -353,7 +356,7 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: true });
 
   } catch (error) {
-    console.error('Error deleting chat history:', error);
+    logger.error('Error deleting chat history:', error);
     return NextResponse.json(
       { error: 'Failed to delete chat history' },
       { status: 500 }

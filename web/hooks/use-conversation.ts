@@ -3,6 +3,9 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { v4 as uuidv4 } from 'uuid';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Conversation');
 
 export interface Message {
   id: string;
@@ -54,16 +57,16 @@ export function useConversation() {
         setSettings(JSON.parse(savedSettings));
       }
     } catch (err) {
-      console.error('Failed to load settings:', err);
+      logger.error('Failed to load settings:', err);
     }
   }, []);
-  
+
   // Save settings to localStorage when they change
   useEffect(() => {
     try {
       localStorage.setItem('conversationSettings', JSON.stringify(settings));
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      logger.error('Failed to save settings:', err);
     }
   }, [settings]);
   
@@ -186,7 +189,7 @@ export function useConversation() {
               }
             }
           } catch (e) {
-            console.error('Error parsing chunk:', e);
+            logger.error('Error parsing chunk:', e);
           }
         }
 
@@ -195,7 +198,7 @@ export function useConversation() {
     } catch (error) {
       // On stream read error, retry by re-fetching (not reusing consumed stream)
       if (retryCount < MAX_RETRIES && requestParams) {
-        console.warn(`Stream read error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
+        logger.warn(`Stream read error, retrying (${retryCount + 1}/${MAX_RETRIES})...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY * (retryCount + 1)));
         
         // Re-fetch with stored request params

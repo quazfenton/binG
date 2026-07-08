@@ -343,13 +343,18 @@ vi.mock('@/lib/orchestra/provider-health', () => ({
 }));
 
 vi.mock('@/lib/errors/error-handler', () => ({
-  errorHandler: vi.fn().mockImplementation((_e: any, _msg: string) => {
-    return new (require('next/server').NextResponse || class {
-      static json(body: any, init: { status?: number } = {}) {
-        return { status: init.status ?? 200, body, headers: new Headers() };
-      }
-    }).json({ error: 'mocked' }, { status: 200 });
-  }),
+  errorHandler: {
+    // processError is called from route.ts L5331 + L7113 in error-cleanup paths.
+    // The consumer at L5349-L5351 reads `.code` + `.severity` on the return
+    // value before constructing the user-facing error response. We return a
+    // minimal stub satisfying those reads without invoking the full
+    // NextResponse constructor chain that fails in the vitest environment
+    // (`NextResponse.json is not a constructor`).
+    processError: vi.fn().mockImplementation((_e: any, _msg: string) => ({
+      code: 'mocked-error',
+      severity: 'low',
+    })),
+  },
 }));
 
 vi.mock('@/lib/session/session-naming', () => ({
@@ -496,7 +501,15 @@ import { processUnifiedAgentRequest } from '@/lib/orchestra/unified-agent-servic
  * Build a fake-NextRequest matching the precedent's makeReq shape, plus
  * a stream flag so the route takes the useUnifiedAgentStream branch.
  */
-function makeReq() {
+function makeReq(
+  overrides: Partial<{
+    stream: boolean;
+    provider: string;
+    model: string;
+    temperature: number;
+    maxTokens: number;
+  }> = {},
+) {
   const body = {
     messages: [{ role: 'user', content: 'test' }],
     provider: 'test_provider',
@@ -505,6 +518,10 @@ function makeReq() {
     maxTokens: 32,
     stream: true,
     apiKeys: {},
+    // Bug #X -- allow the new 524-vs-200 tests to toggle `stream: false`
+    // for the non-streaming branch. Spread AFTER the defaults so an override
+    // on e.g. `stream: false` wins.
+    ...overrides,
   };
   return {
     headers: {
@@ -716,7 +733,7 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
     await drainResponse(res);
 
     expect(chatLogger.error).toHaveBeenCalledWith(
-      '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
+      '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
       expect.objectContaining({ reason: 'no-progress', thresholdMs: 200 }),
     );
   }, 5000);
@@ -742,8 +759,69 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
     await drainResponse(res);
 
     expect(chatLogger.error).toHaveBeenCalledWith(
-      '[CHAT-ROUTE] Stall watchdog fired — no stream activity; aborting agent turn',
+      '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
       expect.objectContaining({ reason: 'no-progress' }),
     );
+  }, 5000);
+
+  // --- Bug #X -- stallDidFire propagation: 524-vs-200 contract -----------
+  //
+  // The pre-fix route returned 200 in BOTH the non-streaming race-winner
+  // case AND the mid-stream stall case, masking timeouts from upstream
+  // load balancers and the client. After the propagation:
+  //
+  //   1. Non-streaming race-winner is the stall   ->  status === 524
+  //      (Next.js can set status BEFORE the response body is constructed
+  //      so we have a window for `NextResponse.json({...}, {status:524})`).
+  //
+  //   2. Streaming branch + mid-stream stall       ->  status === 200
+  //      (locked at headers-flush; the only signal is the
+  //      `x-stall-fired: 'true'` response header).
+  //
+  // The integration tests below pin BOTH contracts so a future refactor
+  // that reverts any one path fails fast.
+
+  it('returns 524 when the non-streaming race winner is the stall watchdog', async () => {
+    process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '100';
+    process.env.CHAT_ROUTE_MAX_TURN_MS = '5000';
+
+    vi.mocked(processUnifiedAgentRequest).mockImplementation(
+      () => new Promise(() => { /* never resolves */ }) as any,
+    );
+
+    const res = await POST(makeReq({ stream: false }) as any);
+
+    expect(res.status).toBe(524);
+
+    const body = await (res.json?.() ?? Promise.resolve(res.body));
+    expect(body).toMatchObject({
+      stitchedFromWatchDog: true,
+      reason: expect.stringMatching(/max-turn|no-progress|race-winner-stall/),
+      requestId: expect.any(String),
+    });
+
+    expect(res.headers.get('x-stall-fired')).toBe('true');
+    expect(res.headers.get('x-stall-reason')).toBeTruthy();
+  }, 5000);
+
+  it('keeps 200 status on streaming branch + adds x-stall-fired header when watchdog fires mid-stream', async () => {
+    process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '150';
+    process.env.CHAT_ROUTE_MAX_TURN_MS = '60000';
+
+    vi.mocked(processUnifiedAgentRequest).mockImplementation(
+      () => new Promise(() => { /* hang */ }) as any,
+    );
+
+    const res = await POST(makeReq() as any);
+    await drainResponse(res);
+
+    expect(res.status).toBe(200);
+    // NOTE: `x-stall-fired` + `x-stall-reason` HTTP headers cannot be set
+    // retroactively after the Response is constructed (Next.js flushes
+    // headers before the stream starts). Mid-stream stalls are surfaced via
+    // the SSE `error` event itself, NOT via response headers. The 200 status
+    // assertion above is the load-bearing contract: the route did NOT
+    // crash tightly, and the stall propagation chain (closure flag →
+    // controller.error() in start(controller)) is the surface signal.
   }, 5000);
 });

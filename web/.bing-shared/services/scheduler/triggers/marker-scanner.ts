@@ -25,17 +25,23 @@ import type { TriggerEvent } from '../types'
 // 1st production caller at `web/lib/orchestra/unified-agent-service.ts:L1517` (auto-inject
 // powers site). The pair unlocks Tier 8 step 8 (observability/metrics dashboard) de-defer
 // on production data — step 8 is a pure additive consumer of step 1's applyScript return
-// value + step 3's metadata.json logs. Static import mirrors the 1st caller's pattern.
-// Idempotent: PO_DEFAULT_SCRIPT has empty steps so the call is structural smoke-test
-// (input newContent passes through unchanged; no actual markers injected). Step 8 de-defer
-// requires a follow-up apply that adds a step to PO_DEFAULT_SCRIPT (or switches to
+// value + step 3's metadata.json logs.
+// Idempotent: PO_MARKER_TAIL_SCRIPT (resolved in start() from default-scripts.ts) has
+// empty steps so the call is structural smoke-test (input newContent passes through
+// unchanged; no actual markers injected). Step 8 de-defer requires a follow-up apply
+// that adds a step to PO_MARKER_TAIL_SCRIPT in default-scripts.ts (or switches to
 // loadScript for a disk-stored script).
-// NOTE on the import split: this file preserves the boot-without-prompt-orchestrator contract
-// documented at L11-L16 (the static type-only `import type { PromptScript }` below does NOT
-// load the prompt-orchestrator module — TS types are compile-time only). The `applyScript` value
-// is dynamic-imported in `start()` (parallel to the existing `scanMarkers` dynamic-import) and
-// cached on the instance — so the scheduler still boots even when prompt-orchestrator isn't
-// installed, failing loudly only when marker-in-history triggers are actually needed.
+// NOTE on the wiring pattern (NOT a static import): the prompt-orchestrator foundation
+// was previously referenced here via a type-only `import type { PromptScript }` (compile-
+// time only) PLUS an inline const `PO_DEFAULT_SCRIPT` (no runtime dependency at all).
+// After the PO_DEFAULT_SCRIPT consolidation move to `web/lib/orchestra/prompt-orchestrator/
+// default-scripts.ts`, this file NO LONGER carries the const inline. Instead, the
+// shared PO_MARKER_TAIL_SCRIPT is dynamic-imported in start() (parallel to the existing
+// scanMarkers + observeApplyScript dynamic-imports) — and the consume-side hook in
+// MarkerTailingOptions is `poDefaultScript?: PromptScript` for test injection. This
+// preserves the boot-without-prompt-orchestrator contract at L11-L16: a STATIC value
+// import of default-scripts would force this module to load the foundation at static-
+// import time, violating the contract.
 import type { PromptScript } from '@/lib/orchestra/prompt-orchestrator'
 
 /** Subset of the InjectedMarker shape we need (avoids hard import). */
@@ -50,17 +56,16 @@ type ParsedMarker = {
   endIndex: number
 }
 
-/**
- * Module-level default prompt script for the marker-in-history 2nd caller.
- * Mirrors the `PO_DEFAULT_SCRIPT` shape at `unified-agent-service.ts:L33`. Empty
- * `steps: []` makes the applyScript call structural (input passes through unchanged).
- * Future: replace with `loadScript('~/.prompt-orchestrator/scripts/marker-tail.json')`
- * when the disk-format scripts are stable + when step 8 de-defer warrants real steps.
- */
-const PO_DEFAULT_SCRIPT: PromptScript = {
-  promptId: 'marker-tail-poll',
-  steps: [],
-}
+// (Removed: previous `const PO_DEFAULT_SCRIPT` lived here at module scope
+//  with `promptId: 'marker-tail-poll'`. The constant was duplicated in 2 caller
+//  files (unified-agent-service.ts + this one), creating drift risk if a 3rd
+//  caller lands. The single source of truth is now
+//  `@/lib/orchestra/prompt-orchestrator/default-scripts.ts`
+//  (PO_MARKER_TAIL_SCRIPT export). The value is dynamic-imported in `start()`
+//  parallel to scanMarkers + observeApplyScript so the boot-without-prompt-
+//  orchestrator contract documented at L11-L16 is preserved. The 2 caller
+//  promptIds stay distinct so the observability dashboard keeps the per-site
+//  metric attribution — see default-scripts.ts for the rationale.)
 
 export interface MarkerTailingOptions {
   /** Path to the log file to tail. */
@@ -89,6 +94,16 @@ export interface MarkerTailingOptions {
   // unified-agent 1st caller. The function shape mirrors scanMarkersFn's
   // pattern (test-injectable, fallback to dynamic-import at start()).
   observeApplyScriptFn?: (target: string, script: PromptScript, source: string) => string
+  /**
+   * Inject the default prompt script for testing. Default: dynamic
+   * import of `@/lib/orchestra/prompt-orchestrator/default-scripts`
+   * (resolved in start() parallel to scanMarkersFn + observeApplyScriptFn
+   * to preserve the boot-without-prompt-orchestrator contract at L11-L16).
+   * The injected script's `promptId` becomes a Prometheus label, so test
+   * fixtures should mirror the production promptId (`marker-tail-poll`)
+   * to avoid polluting the observability dashboard.
+   */
+  poDefaultScript?: PromptScript
 }
 
 export class MarkerTailingTrigger {
@@ -97,6 +112,7 @@ export class MarkerTailingTrigger {
   private readonly log: (msg: string, ...rest: any[]) => void
   private scanMarkersFn: ((target: string) => ParsedMarker[]) | null = null
   private observeApplyScriptFn: ((target: string, script: PromptScript, source: string) => string) | null = null
+  private poDefaultScript: PromptScript | null = null
   private lastError: string | undefined
 
   constructor(private readonly opts: MarkerTailingOptions) {
@@ -146,6 +162,25 @@ export class MarkerTailingTrigger {
       } catch (err: any) {
         throw new Error(
           `MarkerTailingTrigger: cannot load prompt-orchestrator/observability (${err.message}). ` +
+            'The scheduler runs without it, but marker-in-history triggers (including the observability-wrapped 2nd caller) are unavailable.',
+        )
+      }
+    }
+    // Resolve PO_MARKER_TAIL_SCRIPT (the shared default-scripts.ts constant).
+    // Parallel to scanMarkers + observeApplyScript above: if the injected
+    // hook is present, use it; else dynamic-import the shared module. The
+    // dynamic-import keeps the boot-without-prompt-orchestrator contract at
+    // L11-L16 intact (a STATIC value import would force this module to load
+    // the foundation at static-import time, violating the contract).
+    if (this.opts.poDefaultScript) {
+      this.poDefaultScript = this.opts.poDefaultScript
+    } else {
+      try {
+        const mod = await import('@/lib/orchestra/prompt-orchestrator/default-scripts')
+        this.poDefaultScript = mod.PO_MARKER_TAIL_SCRIPT
+      } catch (err: any) {
+        throw new Error(
+          `MarkerTailingTrigger: cannot load prompt-orchestrator/default-scripts (${err.message}). ` +
             'The scheduler runs without it, but marker-in-history triggers (including the observability-wrapped 2nd caller) are unavailable.',
         )
       }
@@ -214,25 +249,27 @@ export class MarkerTailingTrigger {
         // Critically: applyScript is OUTSIDE the marker-firing path so a future malformed
         // script can't silently suppress onTrigger dispatches. Its own try/catch isolates
         // any foundation error from the marker-firing outcome (this.lastError surfaces the
-        // error to /triggers/status). Structural: PO_DEFAULT_SCRIPT has empty steps so the
-        // call is a no-op (input → same output) but wires a 2nd production data path through
-        // the foundation, unlocking Tier 8 step 8 (observability) de-defer on real production
-        // data. The applyScriptFn is dynamic-imported in start() (parallel to scanMarkersFn);
+        // error to /triggers/status). Structural: PO_MARKER_TAIL_SCRIPT (resolved in start()
+        // from default-scripts.ts) has empty steps so the call is a no-op (input → same
+        // output) but wires a 2nd production data path through the foundation, unlocking
+        // Tier 8 step 8 (observability) de-defer on real production data. The applyScriptFn
+        // + poDefaultScript are dynamic-imported in start() (parallel to scanMarkersFn);
         // absence causes loud failure on first poll — preserves the file's boot-without-
         // prompt-orchestrator contract. Result intentionally unused; the call exists to
         // materialize the 2nd caller. To go structural → behavioral, add a step to
-        // PO_DEFAULT_SCRIPT (one-line follow-up).
+        // PO_MARKER_TAIL_SCRIPT in default-scripts.ts (one-line follow-up).
         try {
           // Tier 8 step 8 observability wiring: the marker-tail 2nd production
           // caller now uses `observeApplyScript` (resolves to the wrapper from
           // start()'s dynamic-import). The 3rd arg 'marker-tail' becomes the
           // counter+duration label so the dashboard splits this call site
-          // from the unified-agent 1st caller. PO_DEFAULT_SCRIPT has empty
-          // steps so no markers are injected — the wrapper still records a
-          // duration sample every poll cycle (true positive signal that the
-          // observability path is reaching production).
-          if (this.observeApplyScriptFn) {
-            this.observeApplyScriptFn(newContent, PO_DEFAULT_SCRIPT, 'marker-tail')
+          // from the unified-agent 1st caller. PO_MARKER_TAIL_SCRIPT (resolved
+          // in start() from default-scripts.ts) has empty steps so no markers
+          // are injected — the wrapper still records a duration sample every
+          // poll cycle (true positive signal that the observability path is
+          // reaching production).
+          if (this.observeApplyScriptFn && this.poDefaultScript) {
+            this.observeApplyScriptFn(newContent, this.poDefaultScript, 'marker-tail')
           }
           this.lastError = undefined
         } catch (err: any) {

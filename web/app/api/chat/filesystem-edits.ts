@@ -744,7 +744,7 @@ export async function applyFilesystemEditsFromResponse(input: {
           result.commitId = commitResult.commitId;
         }
       } catch (commitError) {
-        console.error('[Chat] Auto-commit failed:', commitError);
+        chatLogger.error('Auto-commit failed:', { error: commitError });
       }
     }
   }

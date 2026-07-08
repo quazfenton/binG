@@ -28,7 +28,7 @@
 - `web/app/api/orchestra/prompt-orchestrator/metrics/route.ts` `— GET endpoint, text/plain; version=0.0.4
 - `web/lib/orchestra/prompt-orchestrator/__tests__/observability.test.ts` `— 5 vitest cases (new-gen, idempotency, exposition, per-step attribution, sha-aware pre-classification)
 
-**Call sites wired:** `web/lib/orchestra/unified-agent-service.ts` L1517 (1st caller, source=`unified-agent`) + `web/.bing-shared/services/scheduler/triggers/marker-scanner.ts` poll loop (2nd caller, source=`marker-tail`). The marker-tail caller dynamic-imports `observability.ts` in `start()` in parallel to its existing scanMarkers dynamic-import — the boot-without-prompt-orchestrator contract is preserved.
+**Call sites wired:** `web/lib/orchestra/unified-agent-service.ts` L1512 (1st caller, source=`unified-agent`; was L1517 pre-consolidation, shifted after the `PO_DEFAULT_SCRIPT` → `PO_UNIFIED_AGENT_SCRIPT` move to `default-scripts.ts`) + `web/.bing-shared/services/scheduler/triggers/marker-scanner.ts` poll loop (2nd caller, source=`marker-tail`). The marker-tail caller dynamic-imports `observability.ts` in `start()` in parallel to its existing scanMarkers dynamic-import — the boot-without-prompt-orchestrator contract is preserved.
 
 **Cardinality discipline:** labels are `(source, promptId, mode)` for injection + `(source, promptId, step)` for idempotency-skip + `(source, promptId)` for duration. `sha` is intentionally NOT a label — SHA-256 hex is 64 chars and every payload edit creates a fresh value, which would explode label cardinality past Prometheus’s 10K combinations/metric ceiling.
 

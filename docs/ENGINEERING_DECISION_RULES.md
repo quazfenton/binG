@@ -199,4 +199,4 @@ When reviewing a PR that adds or modifies a cast / suppression / mode parameter,
 
 ## See also
 
-- [Monorepo Layout](MONOREPO_LAYOUT.md) — the `.bing-shared/*` vs `packages/shared/*` tsconfig resolution priority. Any contributor adding files under `packages/*`, `packages/platform/*`, or `infra/*` MUST read this first; a new file at a relative path that already exists under `web/.bing-*` will silently shadow the mirror copy. See the "What to do when adding a new file" section for the decision tree and PR-description template.
+- [Monorepo Layout](MONOREPO_LAYOUT.md) — the `.bing-shared/*` vs `packages/shared/*` tsconfig resolution priority. Any contributor adding files under `packages/*`, `packages/platform/*`, or `infra/*` should READ THIS BEFORE doing so; a new file at a relative path that already exists under `web/.bing-*` will silently shadow the mirror copy. See the "What to do when adding a new file" section for the decision tree and PR-description template.

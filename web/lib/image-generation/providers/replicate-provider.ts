@@ -17,6 +17,9 @@ import type {
   AspectRatio,
 } from '../types';
 import { ASPECT_RATIO_DIMENSIONS, QUALITY_PRESETS, ImageGenerationErrorType as ErrorType } from '../types';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('ReplicateProvider');
 
 export interface ReplicateProviderConfig extends ProviderConfig {
   defaultModel?: string;
@@ -98,7 +101,7 @@ export class ReplicateImageProvider implements ImageGenerationProvider {
       await this.client.models.list();
       return true;
     } catch (error) {
-      console.warn('[ReplicateProvider] Health check failed:', error instanceof Error ? error.message : error);
+      logger.warn('Health check failed:', error instanceof Error ? error.message : error);
       return false;
     }
   }

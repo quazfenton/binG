@@ -14,6 +14,9 @@ import {
   ImageGenerationError,
   ImageGenerationErrorType as ErrorType,
 } from '../types';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('VercelProvider');
 
 export class VercelImageProvider implements ImageGenerationProvider {
   readonly id = 'vercel';
@@ -99,7 +102,7 @@ export class VercelImageProvider implements ImageGenerationProvider {
       );
     }
 
-    console.log('[VercelProvider] Starting image generation with prompt:', params.prompt.substring(0, 100));
+    logger.info('Starting image generation with prompt:', params.prompt.substring(0, 100));
 
     const startTime = Date.now();
 
@@ -110,7 +113,7 @@ export class VercelImageProvider implements ImageGenerationProvider {
       const size = this.getSizeForQuality(quality) as any; // Cast to bypass strict OpenAI sizes if needed
       const numImages = Math.min(params.numImages || 1, this.capabilities.maxBatchSize);
 
-      console.log('[VercelProvider] Generating', numImages, 'image(s) with model:', model, 'size:', size);
+      logger.info('Generating ' + numImages + ' image(s) with model: ' + model + ' size: ' + size);
 
       const response = await this.client.images.generate({
         model,
@@ -127,7 +130,7 @@ export class VercelImageProvider implements ImageGenerationProvider {
         signal,
       });
 
-      console.log('[VercelProvider] Got response with', response.data?.length || 0, 'images');
+      logger.info('Got response with', response.data?.length || 0, 'images');
 
       if (!response.data || response.data.length === 0) {
         throw new ImageGenerationError(
@@ -153,7 +156,7 @@ export class VercelImageProvider implements ImageGenerationProvider {
       }));
 
       const duration = Date.now() - startTime;
-      console.log(`[VercelProvider] Successfully generated ${images.length} image(s) in ${duration}ms`);
+      logger.info(`Successfully generated ${images.length} image(s) in ${duration}ms`);
 
       return {
         success: true,
@@ -166,7 +169,7 @@ export class VercelImageProvider implements ImageGenerationProvider {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[VercelProvider] Error after ${duration}ms:`, error);
+      logger.error(`Error after ${duration}ms:`, error);
 
       if (error instanceof ImageGenerationError) {
         throw error;

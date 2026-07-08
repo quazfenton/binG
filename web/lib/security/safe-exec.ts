@@ -26,7 +26,8 @@
 
 import { execFile, spawn, ExecFileOptions, SpawnOptions, ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import { logger } from '@/lib/utils/logger';
+import { createLogger } from '@/lib/utils/logger';
+const logger = createLogger('SafeExec');
 const execFilePromise = promisify(execFile);
 
 // ============================================================================
@@ -265,23 +266,20 @@ export async function safeExec(
   // 1. Validate command and arguments
   const validation = validateCommand(command, args);
   if (!validation.valid) {
-    logger.error({ command, args, reason: validation.reason }, 'command blocked');
+    logger.error('command blocked', { command, args, reason: validation.reason });
     throw new Error(validation.reason);
   }
 
   // 2. Audit log (start)
   if (verbose || auditContext) {
-    logger.info(
-      {
-        command,
-        args,
-        userId: auditContext?.userId,
-        action: auditContext?.action,
-        sandboxId: auditContext?.sandboxId,
-        conversationId: auditContext?.conversationId,
-      },
-      'executing command'
-    );
+    logger.info('executing command', {
+      command,
+      args,
+      userId: auditContext?.userId,
+      action: auditContext?.action,
+      sandboxId: auditContext?.sandboxId,
+      conversationId: auditContext?.conversationId,
+    });
   }
 
   try {
@@ -296,17 +294,14 @@ export async function safeExec(
 
     // 4. Audit log (success)
     if (verbose || auditContext) {
-      logger.info(
-        {
-          command,
-          args,
-          exitCode: 0,
-          duration,
-          outputSize: result.stdout.length,
-          userId: auditContext?.userId,
-        },
-        'command completed'
-      );
+      logger.info('command completed', {
+        command,
+        args,
+        exitCode: 0,
+        duration,
+        outputSize: result.stdout.length,
+        userId: auditContext?.userId,
+      });
     }
 
     return {
@@ -319,17 +314,7 @@ export async function safeExec(
     const duration = Date.now() - startTime;
 
     // 5. Audit log (failure)
-    logger.error(
-      {
-        command,
-        args,
-        error: error.message,
-        exitCode: error.code,
-        duration,
-        userId: auditContext?.userId,
-      },
-      'command failed'
-    );
+    logger.error('command failed: ' + error.message + ', exitCode=' + error.code + ', duration=' + duration + ', userId=' + (auditContext?.userId || 'none'));
 
     return {
       stdout: error.stdout || '',
@@ -375,22 +360,19 @@ export function safeSpawn(
   // 1. Validate command and arguments
   const validation = validateCommand(command, args);
   if (!validation.valid) {
-    logger.error({ command, args, reason: validation.reason }, 'command blocked');
+    logger.error('command blocked', { command, args, reason: validation.reason });
     throw new Error(validation.reason);
   }
 
   // 2. Audit log
   if (verbose || auditContext) {
-    logger.info(
-      {
-        command,
-        args,
-        userId: auditContext?.userId,
-        action: auditContext?.action,
-        sandboxId: auditContext?.sandboxId,
-      },
-      'spawning command'
-    );
+    logger.info('spawning command', {
+      command,
+      args,
+      userId: auditContext?.userId,
+      action: auditContext?.action,
+      sandboxId: auditContext?.sandboxId,
+    });
   }
 
   // 3. Spawn with shell:false (always)
@@ -401,12 +383,12 @@ export function safeSpawn(
 
   // 4. Log process events
   proc.on('error', (error: Error) => {
-    logger.error({ command, args, error: error.message }, 'spawn error');
+    logger.error('spawn error', { command, args, error: error.message });
   });
 
   proc.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
     if (verbose || auditContext) {
-      logger.info({ command, args, exitCode: code, signal }, 'process exited');
+      logger.info('process exited', { command, args, exitCode: code, signal });
     }
   });
 
@@ -466,19 +448,17 @@ export async function safeExecWithRetry(
 
       // Retry
       if (attempt < maxRetries) {
-        logger.warn(
-          { command, args, exitCode: result.exitCode, attempt, maxRetries },
-          'retrying command'
-        );
+        logger.warn('retrying command', {
+          command, args, exitCode: result.exitCode, attempt, maxRetries,
+        });
         await new Promise(resolve => setTimeout(resolve, retryDelay * attempt)); // Exponential backoff
       }
     } catch (error: any) {
       lastError = error;
       if (attempt < maxRetries) {
-        logger.warn(
-          { command, args, error: error.message, attempt, maxRetries },
-          'retrying after error'
-        );
+        logger.warn('retrying after error', {
+          command, args, error: error.message, attempt, maxRetries,
+        });
         await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
       }
     }

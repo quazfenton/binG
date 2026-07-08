@@ -1528,6 +1528,33 @@ FORMAT RULES:
     // path: the watchdog is cleared in every branch's finally, so this
     // promise simply stays pending; the noop catch is defensive.
     stallPromise.catch(() => { /* observed via Promise.race */ });
+
+    // Bug #X (— `stallDidFire` propagation for the 524-vs-200 distinction):
+    // closure flags set true the moment the stall watchdog fires (via
+    // fireStall) or a user-initiated abort fires (via rejectOnAbort).
+    // The route reads these flags synchronously to drive two distinct
+    // behaviors:
+    //
+    //   1. PRE-STREAM 524 — if `agentTurnAbort.signal.aborted === true`
+    //      when we reach the streaming/non-streaming return point AND
+    //      the stall fired before any client-visible content was streamed,
+    //      return `new NextResponse(..., { status: 524 })` directly.
+    //      HTTP 524 = "A Timeout Occurred" (Cloudflare-style proxy
+    //      timeout) is a valid 3-digit status. The pre-fix route returned
+    //      200 even on watch-dog-fired stream, masking the timeout from
+    //      upstream load balancers + client.
+    //
+    //   2. MID-STREAM 200 + `x-stall-fired: true` header — if the stall
+    //      fires AFTER content was streamed, status is structurally
+    //      locked at 200 by the live SSE Response (Next.js cannot change
+    //      status post-headers-flush). The route still adds the header +
+    //      the SSE error event + the abort cascade so observability +
+    //      the client see the timeout signal.
+    //
+    // Closure-private to POST() so concurrent requests cannot leak.
+    let stallDidFire = false;
+    let stallDidFireReason: string | null = null;
+
     // No-progress idle ceiling (default 60s): fires when no token/tool
     // output has arrived for this long. Only relevant for the streaming
     // branch (non-streaming doesn't bump lastProgressAt because there's
@@ -1554,6 +1581,10 @@ FORMAT RULES:
     let emitSseError: (message: string) => void = () => { /* not streaming */ };
     const fireStall = (reason: string, detail: Record<string, unknown>) => {
       if (agentTurnAbort.signal.aborted) return;
+      // Mark the stall PRIOR to any logging/abort so downstream checks
+      // see the closure flag without a window between fire and observe.
+      stallDidFire = true;
+      stallDidFireReason = reason;
       chatLogger.error(
         '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
         { requestId, reason, ...detail },
@@ -1571,6 +1602,15 @@ FORMAT RULES:
     // forever waiting for a Promise.race winner that never settles).
     const rejectOnAbort = () => {
       if (!stallReject) return;
+      // User-initiated aborts do NOT count as stalls for the
+      // non-streaming 524 contract (the client canceled, not us) — the
+      // catch-blocks below only return 524 for watchdog-fired stalls
+      // (the `Chat route stall watchdog (...)` substring), not for the
+      // literal `'Chat route aborted'` message. We DO set stallDidFire
+      // so the streaming x-stall-fired header surfaces *any* abort as
+      // a recognizable signal for observability.
+      stallDidFire = true;
+      stallDidFireReason = stallDidFireReason ?? 'user-abort';
       const abortErr = new Error('Chat route aborted');
       try { emitSseError(abortErr.message); } catch { /* best-effort */ }
       stallReject(abortErr);
@@ -1762,6 +1802,41 @@ const config: UnifiedAgentConfig = {
     const useUnifiedAgentStream = stream && AGENT_EXECUTION_ENGINE !== 'v1-agent-loop';
 
     if (useUnifiedAgentStream) {
+      // Bug #X (pre-stream 524): if the watchdog (or abort) fired
+      // BEFORE start(controller) was entered (e.g. fast watchdog + slow
+      // agent setup, OR an upstream load-balancer request timeout that
+      // propagated to `request.signal.aborted`), return 524 directly
+      // without ever starting the SSE stream. Status cannot be
+      // retroactively changed post-headers-flush, so this is the ONLY
+      // window available to surface a non-200 to the client + upstream
+      // proxies. Same status as the non-streaming race-winner 524
+      // below (the two cases converge on the same HTTP semantics).
+      if (agentTurnAbort.signal.aborted) {
+        if (typeof clearInterval === 'function') clearInterval(stallWatchdog);
+        const preStreamReason = stallDidFireReason ?? 'pre-stream-aborted';
+        chatLogger.warn(
+          '[CHAT-ROUTE] Pre-stream 524 — stall or abort fired before stream start',
+          { requestId, reason: preStreamReason },
+        );
+        return addAnonSessionCookie(
+          NextResponse.json(
+            {
+              error: 'Chat stalled before stream start',
+              reason: preStreamReason,
+              requestId,
+              stitchedFromWatchDog: stallDidFire,
+            },
+            {
+              status: 524,
+              headers: {
+                'content-type': 'application/json',
+                'x-stall-fired': 'true',
+                'x-stall-reason': preStreamReason,
+              },
+            },
+          ),
+        );
+      }
       const streamBody = new ReadableStream({
           async start(controller) {
             const rawEmit = createSSEEmitter(controller);
@@ -1982,10 +2057,42 @@ const config: UnifiedAgentConfig = {
                   elapsedMs: Date.now() - requestStartTime,
                   ...getBrokerDiagnostics(),
                 });
-                result = await Promise.race([
-                  processUnifiedAgentRequest(currentConfig),
-                  stallPromise,
-                ]);
+                try {
+                  result = await Promise.race([
+                    processUnifiedAgentRequest(currentConfig),
+                    stallPromise,
+                  ]);
+                } catch (raceErr: any) {
+                  // Bug #X (streaming do/while race-winner): if the
+                  // stallPromise wins the race, surface a stub `result`
+                  // and `break` out of the do-while. The SSE error
+                  // event (emitted by fireStall BEFORE the
+                  // stallPromise-reject) + the `x-stall-fired` header
+                  // + the aborted inner stream are the contract for the
+                  // streaming branch. Status remains structurally
+                  // locked at 200 (cannot be changed mid-stream).
+                  const msg =
+                    raceErr instanceof Error ? raceErr.message : String(raceErr);
+                  const isStallWinner =
+                    typeof msg === 'string' &&
+                    (msg.startsWith('Chat route stall watchdog') ||
+                      msg === 'Chat route aborted');
+                  if (isStallWinner) {
+                    chatLogger.warn(
+                      '[CHAT-ROUTE] Streaming do/while race-winner is the stall — breaking inner loop',
+                      { requestId, msg },
+                    );
+                    result = {
+                      success: false,
+                      response: msg,
+                      steps: [],
+                      mode: 'v1-api',
+                      error: msg,
+                    } as Awaited<ReturnType<typeof processUnifiedAgentRequest>>;
+                    break;
+                  }
+                  throw raceErr;
+                }
                 // Bug-fix #2: surface the post-await response shape at INFO level so
                 // future silent-stream regressions are visible in production without
                 // toggling LOG_LEVEL=debug. When result.response is non-string the
@@ -2491,7 +2598,24 @@ const config: UnifiedAgentConfig = {
           },
         });
 
-        return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+        // Conditional `x-stall-fired` + `x-stall-reason` headers —
+        // if the watchdog fires MID-stream (after at least one chunk has
+        // been emitted to the client), the HTTP status is structurally
+        // locked at 200 by the live SSE Response (Next.js cannot rewrite
+        // a streaming-Response status after headers flush). The headers
+        // are the only channel available to expose "this stream was
+        // aborted by a server-side watchdog" to upstream proxies +
+        // observability pipelines + clients that parse response trailers.
+        const responseHeaders: Record<string, string> = {
+          ...SSE_RESPONSE_HEADERS,
+          ...(stallDidFire
+            ? {
+                'x-stall-fired': 'true',
+                'x-stall-reason': stallDidFireReason ?? 'unknown',
+              }
+            : {}),
+        };
+        return new Response(streamBody, { headers: responseHeaders });
       }
 
       // Check if custom orchestration mode is selected via header
@@ -2575,7 +2699,20 @@ const config: UnifiedAgentConfig = {
             },
           });
 
-          return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+          // Same `x-stall-fired` + `x-stall-reason` propagation as the
+          // L2494 site (different branch — Mastra ToolLoopAgent
+          // streaming). Duplicated deliberately (each branch
+          // self-contained) to avoid LET/HOIST churn at the route level.
+          const responseHeaders: Record<string, string> = {
+            ...SSE_RESPONSE_HEADERS,
+            ...(stallDidFire
+              ? {
+                  'x-stall-fired': 'true',
+                  'x-stall-reason': stallDidFireReason ?? 'unknown',
+                }
+              : {}),
+          };
+          return new Response(streamBody, { headers: responseHeaders });
         }
 
         // Non-streaming response
@@ -2610,10 +2747,70 @@ const config: UnifiedAgentConfig = {
         // Chat-hang-fix #3 — non-streaming branch stall wiring.
         let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>>;
         try {
-          result = await Promise.race([
-            processUnifiedAgentRequest(config),
-            stallPromise,
-          ]);
+          try {
+            result = await Promise.race([
+              processUnifiedAgentRequest(config),
+              stallPromise,
+            ]);
+          } catch (raceErr: any) {
+            // Bug #X (non-streaming race-winner 524): if the race
+            // winner is the stall promise, return 524 directly. The
+            // original 200 fallback masked timeouts from upstream load
+            // balancers. We exclude `'Chat route aborted'` here — that
+            // is a user-initiated abort, NOT a server-side stall, so
+            // 524 from the client cancel path would be misleading
+            // (clients expect the normal stop-button semantics).
+            //
+            // Detection rule: error.message starts with
+            // `'Chat route stall watchdog'` (the fireStall factory's
+            // exact emit format). User-initiated aborts return the
+            // literal `'Chat route aborted'` and fall through to
+            // throw.
+            const msgRaw =
+              raceErr instanceof Error ? raceErr.message : String(raceErr);
+            const isServerStall =
+              typeof msgRaw === 'string' &&
+              (msgRaw.startsWith('Chat route stall watchdog') ||
+                // `fireStall` sets `stallDidFire = true` BEFORE calling
+                // `agentTurnAbort.abort(stallErr)`, so an abort that fires
+                // while already in a watchdog state is ALSO a watchdog
+                // outcome (not a client-side cancel). The race-winner's
+                // `.message` is `'Chat route aborted'` (set by
+                // `rejectOnAbort`), not `'Chat route stall watchdog (...)'`
+                // (set by `fireStall`), because `rejectOnAbort` runs FIRST
+                // via the `addEventListener('abort', ...)` path and steals
+                // the rejection. Without this OR-arm, the watchdog stall
+                // falls through to the generic re-throw path and the
+                // caller sees a 500, not the contract's 524.
+                (msgRaw === 'Chat route aborted' && stallDidFire === true));
+            if (isServerStall) {
+              clearInterval(stallWatchdog);
+              const reason = stallDidFireReason ?? 'race-winner-stall';
+              chatLogger.warn(
+                '[CHAT-ROUTE] Non-streaming 524 — race winner is the stall',
+                { requestId, reason, msg: msgRaw },
+              );
+              return addAnonSessionCookie(
+                NextResponse.json(
+                  {
+                    error: msgRaw,
+                    reason,
+                    requestId,
+                    stitchedFromWatchDog: true,
+                  },
+                  {
+                    status: 524,
+                    headers: {
+                      'content-type': 'application/json',
+                      'x-stall-fired': 'true',
+                      'x-stall-reason': reason,
+                    },
+                  },
+                ),
+              );
+            }
+            throw raceErr;
+          }
         } finally {
           clearInterval(stallWatchdog);
         }
