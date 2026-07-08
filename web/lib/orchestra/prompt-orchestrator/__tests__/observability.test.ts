@@ -23,6 +23,12 @@
  *      re-applied payload. applyScript classifies this as INJECTION (different
  *      idempotency key); the wrapper reports the same INJECTION (matches
  *      applyScript's actual behavior).
+ *
+ *   6. Soft cap (REGRESSION for unbounded Map growth memory leak) — drive
+ *      `_injectionCounts` and `_idempotencySkipCounts` to MAX_KEYS_PER_MAP
+ *      unique keys; the (10_001)th insertion must FIFO-evict the oldest key
+ *      and the existing-key increment path must still work without spurious
+ *      eviction. Locks in the cardinality-cap contract added 2026-07-08.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
@@ -30,6 +36,8 @@ import {
   observeApplyScript,
   serializeMetrics,
   resetMetrics,
+  recordInjection,
+  recordIdempotencySkip,
   getInjectionCount,
   getIdempotencySkipCount,
   getMarkerCount,
@@ -175,5 +183,37 @@ describe('observability (Tier 8 step 8)', () => {
     // Sanity: the new payload IS present in the output (applyScript returned it).
     const out = applyScript(targetWithA, editedScript);
     expect(out).toContain('NEW PAYLOAD');
+  });
+
+  it('6. soft cap: FIFO eviction at MAX_KEYS_PER_MAP (REGRESSION for unbounded Map growth memory leak)', () => {
+    // Insert exactly MAX_KEYS_PER_MAP (10_000) unique keys via the @internal
+    // recordInjection seam — no eviction should fire (we're AT the cap, not
+    // exceeding it). This proves the boundary: Map holds 10k keys, all present.
+    for (let i = 0; i < 10_000; i++) {
+      recordInjection(`s${i}`, `p${i}`, 'append');
+    }
+    expect(getInjectionCount('s0', 'p0', 'append')).toBe(1);
+    expect(getInjectionCount('s9999', 'p9999', 'append')).toBe(1);
+
+    // Insert one MORE — the (10_001)th unique key. The cap-exceeding
+    // branch evicts the OLDEST key (s0) before inserting.
+    recordInjection('s10000', 'p10000', 'append');
+    expect(getInjectionCount('s0', 'p0', 'append')).toBe(0); // evicted
+    expect(getInjectionCount('s10000', 'p10000', 'append')).toBe(1); // newest
+
+    // Existing-key increment must still work — the cap check is on NEW keys
+    // only (`!_injectionCounts.has(k)`), so an increment to a key already in
+    // the Map must NOT trigger eviction.
+    recordInjection('s10000', 'p10000', 'append');
+    expect(getInjectionCount('s10000', 'p10000', 'append')).toBe(2);
+
+    // Same shape for `_idempotencySkipCounts` (twin contract on the other Map).
+    for (let i = 0; i < 10_000; i++) {
+      recordIdempotencySkip(`skip-s${i}`, `skip-p${i}`, 'step-x');
+    }
+    expect(getIdempotencySkipCount('skip-s0', 'skip-p0', 'step-x')).toBe(1);
+    recordIdempotencySkip('skip-s10000', 'skip-p10000', 'step-x');
+    expect(getIdempotencySkipCount('skip-s0', 'skip-p0', 'step-x')).toBe(0); // evicted
+    expect(getIdempotencySkipCount('skip-s10000', 'skip-p10000', 'step-x')).toBe(1);
   });
 });

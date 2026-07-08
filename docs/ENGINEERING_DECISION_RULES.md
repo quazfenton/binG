@@ -196,3 +196,7 @@ When reviewing a PR that adds or modifies a cast / suppression / mode parameter,
 ## Changelog
 
 - **v1.0 — 2026-06-18.** Initial codification. Source data: SEV-12 / SEV-13 / SEV-14 / SEV-15 sweep; 6-round drawer.tsx vaul repair; unified-role-selector audit-comment block.
+
+## See also
+
+- [Monorepo Layout](MONOREPO_LAYOUT.md) — the `.bing-shared/*` vs `packages/shared/*` tsconfig resolution priority. Any contributor adding files under `packages/*`, `packages/platform/*`, or `infra/*` MUST read this first; a new file at a relative path that already exists under `web/.bing-*` will silently shadow the mirror copy. See the "What to do when adding a new file" section for the decision tree and PR-description template.

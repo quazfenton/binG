@@ -72,6 +72,20 @@ type InjectionKey = `${string}|${string}|${string}`; // source|promptId|mode
 type IdempotencyKey = `${string}|${string}|${string}`; // source|promptId|step
 type DurationKey = `${string}|${string}`; // source|promptId
 
+/**
+ * Cardinality caps (long-running process memory bound):
+ *   - MAX_KEYS_PER_MAP caps the per-counter Map size. When the cap is hit
+ *     and a NEW key is being inserted, the OLDEST key (FIFO via Map
+ *     insertion order) is evicted first. This bounds memory in the face of
+ *     unbounded `(source, promptId, mode|step)` label combinations. With
+ *     ~2-3 sources + ~10-30 promptIds + 3 modes / ~5 steps typical, the
+ *     maps hold <500 keys in practice; 10k is a generous safety ceiling
+ *     for label-explosion scenarios. Promote to LRU + per-process metrics
+ *     if SRE alerting needs different eviction semantics.
+ *   - MAX_SAMPLES_PER_KEY caps the per-(source,promptId) duration window.
+ *     When the cap is hit, the OLDEST sample is shifted out (FIFO).
+ */
+const MAX_KEYS_PER_MAP = 10_000;
 const _injectionCounts = new Map<InjectionKey, number>();
 const _idempotencySkipCounts = new Map<IdempotencyKey, number>();
 /**
@@ -98,12 +112,23 @@ const _kDuration = (source: string, promptId: string): DurationKey =>
 /** @internal — testing seam + future direct callers. */
 export function recordInjection(source: string, promptId: string, mode: string): void {
   const k = _kInjection(source, promptId, mode);
+  // FIFO eviction: if the Map is at the cardinality cap AND this is a new
+  // key, drop the oldest entry before inserting. Existing-key increments
+  // (the common hot-path case) are unaffected.
+  if (!_injectionCounts.has(k) && _injectionCounts.size >= MAX_KEYS_PER_MAP) {
+    const oldest = _injectionCounts.keys().next().value;
+    if (oldest !== undefined) _injectionCounts.delete(oldest);
+  }
   _injectionCounts.set(k, (_injectionCounts.get(k) ?? 0) + 1);
 }
 
 /** @internal — testing seam + future direct callers. */
 export function recordIdempotencySkip(source: string, promptId: string, step: string): void {
   const k = _kIdempotency(source, promptId, step);
+  if (!_idempotencySkipCounts.has(k) && _idempotencySkipCounts.size >= MAX_KEYS_PER_MAP) {
+    const oldest = _idempotencySkipCounts.keys().next().value;
+    if (oldest !== undefined) _idempotencySkipCounts.delete(oldest);
+  }
   _idempotencySkipCounts.set(k, (_idempotencySkipCounts.get(k) ?? 0) + 1);
 }
 

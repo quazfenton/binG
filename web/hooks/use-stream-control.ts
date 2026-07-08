@@ -24,6 +24,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('StreamControl');
 
 export type StreamControlState = 'idle' | 'streaming' | 'paused' | 'complete' | 'error';
 
@@ -78,17 +81,17 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
 
   const send = useCallback((message: Record<string, unknown>) => {
     if (!streamId) {
-      console.warn('[StreamControl] Cannot send: streamId not set');
+      logger.warn('Cannot send: streamId not set');
       return;
     }
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       try {
         wsRef.current.send(JSON.stringify(message));
       } catch (e: any) {
-        console.error('[StreamControl] Failed to send message:', e.message);
+        logger.error('Failed to send message:', e.message);
       }
     } else {
-      console.warn('[StreamControl] Cannot send: WebSocket not open', {
+      logger.warn('Cannot send: WebSocket not open', {
         readyState: wsRef.current?.readyState,
       });
     }
@@ -141,7 +144,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
         setConnected(true);
         reconnectAttemptsRef.current = 0;
         updateState('streaming');
-        console.log('[StreamControl] Connected', { streamId });
+        logger.info('Connected', { streamId });
       };
 
       ws.onmessage = (event) => {
@@ -157,13 +160,13 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
               updateState('complete');
               setConnected(false);
               onStreamComplete?.(data.payload || {});
-              console.log('[StreamControl] Stream complete', data.payload);
+              logger.info('Stream complete', data.payload);
               break;
 
             case 'ack':
               // Acknowledgment of a control command — optional logging
               if (process.env.NODE_ENV === 'development') {
-                console.log('[StreamControl] ACK', data.payload);
+                logger.info('ACK', data.payload);
               }
               break;
 
@@ -175,7 +178,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
 
             case 'error':
               onError?.(data.error || 'Unknown server error');
-              console.error('[StreamControl] Server error:', data.error);
+              logger.error('Server error:', data.error);
               break;
 
             case 'pong':
@@ -184,10 +187,10 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
               break;
 
             default:
-              console.warn('[StreamControl] Unknown message type:', data.type);
+              logger.warn('Unknown message type:', data.type);
           }
         } catch (e) {
-          console.warn('[StreamControl] Failed to parse message:', event.data);
+          logger.warn('Failed to parse message:', event.data);
         }
       };
 
@@ -196,7 +199,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
 
         const wasClean = event.wasClean;
         if (process.env.NODE_ENV === 'development') {
-          console.log('[StreamControl] Disconnected', {
+          logger.info('Disconnected', {
             streamId,
             code: event.code,
             reason: event.reason,
@@ -219,8 +222,8 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
         ) {
           unsupportedRef.current = true;
           if (process.env.NODE_ENV === 'development') {
-            console.debug(
-              '[StreamControl] /stream-control unavailable in this dev mode. ' +
+            logger.debug(
+              '/stream-control unavailable in this dev mode. ' +
               'Run `pnpm dev:ws` to enable the control WebSocket. ' +
               'SSE streaming still works without it.',
             );
@@ -233,7 +236,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
           reconnectAttemptsRef.current++;
           const delay = reconnectDelay * reconnectAttemptsRef.current;
           if (process.env.NODE_ENV === 'development') {
-            console.log('[StreamControl] Reconnecting in', delay, 'ms', {
+            logger.info('Reconnecting in', delay, 'ms', {
               attempt: reconnectAttemptsRef.current,
               max: maxReconnectAttempts,
             });
@@ -245,7 +248,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
           }, delay);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
           onError?.(`WebSocket reconnection failed after ${maxReconnectAttempts} attempts`);
-          console.error('[StreamControl] Max reconnection attempts reached');
+          logger.error('Max reconnection attempts reached');
         }
       };
 
@@ -254,12 +257,12 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
         // not support the path (e.g., plain `next dev` / Turbopack). The
         // onclose handler will detect this and flip unsupportedRef.
         if (!unsupportedRef.current && process.env.NODE_ENV === 'development') {
-          console.error('[StreamControl] WebSocket error', { streamId, event });
+          logger.error('WebSocket error', { streamId, event });
         }
         onError?.('WebSocket connection error');
       };
     } catch (e: any) {
-      console.error('[StreamControl] Failed to create WebSocket:', e.message);
+      logger.error('Failed to create WebSocket:', e.message);
       onError?.(e.message || 'Failed to connect');
     }
   }, [streamId, authToken, enabled, onNeedMoreTurns, onStreamComplete, onError, updateState]);

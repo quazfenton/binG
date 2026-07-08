@@ -26,9 +26,7 @@
 
 import { execFile, spawn, ExecFileOptions, SpawnOptions, ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
-import pino from 'pino';
-
-const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+import { logger } from '@/lib/utils/logger';
 const execFilePromise = promisify(execFile);
 
 // ============================================================================

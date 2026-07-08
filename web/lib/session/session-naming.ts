@@ -14,6 +14,9 @@
  */
 
 import { secureRandomString } from '../utils';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('SessionNaming');
 
 // Get the base URL for server-side fetch calls
 function getBaseUrl(): string {
@@ -29,13 +32,7 @@ function getBaseUrl(): string {
     : 'http://localhost:3000';
 }
 
-// Simple logger for session naming (defined early to avoid hoisting issues)
-const logger = {
-  debug: (msg: string) => console.debug(`[SessionNaming] ${msg}`),
-  info: (msg: string) => console.info(`[SessionNaming] ${msg}`),
-  warn: (msg: string, err?: unknown) => console.warn(`[SessionNaming] ${msg}`, err),
-  error: (msg: string, err?: unknown) => console.error(`[SessionNaming] ${msg}`, err),
-};
+
 
 // Stock words for naming after sequential numbers
 const STOCK_WORDS = [
@@ -498,7 +495,7 @@ export async function sessionNameExists(name: string): Promise<boolean> {
       return exists;
     }
   } catch (error) {
-    console.warn('Failed to check session name in filesystem:', error);
+    logger.warn('Failed to check session name in filesystem:', error);
   }
 
   return false;

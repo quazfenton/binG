@@ -18,12 +18,10 @@
  * @module session-hoist
  */
 
+import { createLogger } from '@/lib/utils/logger';
 import { sessionNameExists, registerSessionName, unregisterSessionName } from './session-naming';
 
-const logger = {
-  info: (msg: string) => console.info(`[SessionHoist] ${msg}`),
-  warn: (msg: string, err?: unknown) => console.warn(`[SessionHoist] ${msg}`, err),
-};
+const logger = createLogger('SessionHoist');
 
 /**
  * Post-write session folder hoisting.

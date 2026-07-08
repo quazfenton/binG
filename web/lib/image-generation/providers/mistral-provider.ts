@@ -16,6 +16,9 @@ import type {
   ImageGenerationErrorType,
 } from '../types';
 import { ASPECT_RATIO_DIMENSIONS, ImageGenerationErrorType as ErrorType } from '../types';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('MistralProvider');
 
 export class MistralImageProvider implements ImageGenerationProvider {
   readonly id = 'mistral';
@@ -48,36 +51,24 @@ export class MistralImageProvider implements ImageGenerationProvider {
     supportsImg2Img: false,
     supportsSeed: false,
     supportsBatchGeneration: false,
-    supportsSamplers: false,
-    maxBatchSize: 1,
-    stylePresets: [],
-    qualityPresets: ['medium', 'high', 'ultra'],
   };
-initialize(config: ProviderConfig): void {
-  this.apiKey = config.apiKey;
-  this.baseURL = config.baseURL;
 
-  if (this.apiKey) {
-    this.client = new Mistral({
-      apiKey: this.apiKey,
-      ...(this.baseURL && { baseURL: this.baseURL }),
-    });
-  }
-}
+  constructor(config?: ProviderConfig) {
+    if (config?.apiKey) {
+      this.apiKey = config.apiKey;
+    } else {
+      this.apiKey = process.env.MISTRAL_API_KEY;
+    }
 
-async isAvailable(): Promise<boolean> {
-  if (!this.client || !this.apiKey) {
-    return false;
-  }
+    this.baseURL = config?.baseURL || process.env.MISTRAL_BASE_URL;
 
-  try {
-    // Basic API call to check availability
-    await this.client.models.list();
-    return true;
-  } catch {
-    return false;
+    if (this.apiKey) {
+      this.client = new Mistral({
+        apiKey: this.apiKey,
+        ...(this.baseURL ? { serverURL: this.baseURL } : {}),
+      });
+    }
   }
-}
 
   async generate(
     params: ImageGenerationParams,
@@ -90,7 +81,7 @@ async isAvailable(): Promise<boolean> {
       );
     }
 
-    console.log('[MistralProvider] Starting image generation with prompt:', params.prompt.substring(0, 100));
+    logger.info('Starting image generation with prompt:', params.prompt.substring(0, 100));
 
     const startTime = Date.now();
     const controller = new AbortController();
@@ -102,10 +93,10 @@ async isAvailable(): Promise<boolean> {
     try {
       // Get or create the image generation agent
       const agentId = await this.getOrCreateImageAgent();
-      console.log('[MistralProvider] Using agent:', agentId);
+      logger.info('Using agent:', agentId);
 
       // Start conversation with the agent
-      console.log('[MistralProvider] Starting conversation with prompt:', this.buildPrompt(params));
+      logger.info('Starting conversation with prompt:', this.buildPrompt(params));
       
       const response = await this.client.beta.conversations.start({
         agentId,
@@ -114,13 +105,13 @@ async isAvailable(): Promise<boolean> {
         signal: controller.signal,
       });
 
-      console.log('[MistralProvider] Got response:', JSON.stringify(response, null, 2).substring(0, 500));
+      logger.info('Got response:', JSON.stringify(response, null, 2).substring(0, 500));
 
       // Extract images from the response
       const images = await this.extractImages(response);
 
       if (images.length === 0) {
-        console.error('[MistralProvider] No images found in response. Response structure:', JSON.stringify(response, null, 2));
+        logger.error('No images found in response. Response structure:', JSON.stringify(response, null, 2));
         throw this.createError(
           'No images were generated. The model may have declined the request or the image_generation tool is not properly configured.',
           ErrorType.GENERATION_FAILED
@@ -128,7 +119,7 @@ async isAvailable(): Promise<boolean> {
       }
 
       const duration = Date.now() - startTime;
-      console.log(`[MistralProvider] Successfully generated ${images.length} image(s) in ${duration}ms`);
+      logger.info(`Successfully generated ${images.length} image(s) in ${duration}ms`);
 
       return {
         success: true,
@@ -141,7 +132,7 @@ async isAvailable(): Promise<boolean> {
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      console.error(`[MistralProvider] Error after ${duration}ms:`, error);
+      logger.error(`Error after ${duration}ms:`, error);
 
       if (error instanceof Error) {
         if (error.name === 'AbortError' || error.message.includes('aborted')) {
@@ -207,7 +198,7 @@ async isAvailable(): Promise<boolean> {
         return existingAgent.id;
       }
     } catch (error) {
-      console.warn('[MistralProvider] Failed to list agents, creating new one:', error);
+      logger.warn('Failed to list agents, creating new one:', error);
     }
 
     // Create agent with explicit image_generation tool configuration
@@ -280,7 +271,7 @@ async isAvailable(): Promise<boolean> {
   private async extractImages(response: any): Promise<GeneratedImage[]> {
     const images: GeneratedImage[] = [];
 
-    console.log('[MistralProvider] Extracting images from response with', response.outputs?.length || 0, 'outputs');
+    logger.info('Extracting images from response with', response.outputs?.length || 0, 'outputs');
 
     if (!response?.outputs || response.outputs.length === 0) {
       return images;
@@ -288,29 +279,29 @@ async isAvailable(): Promise<boolean> {
 
     // Look through all outputs for message.output entries
     for (const output of response.outputs) {
-      console.log('[MistralProvider] Processing output type:', output.type);
+      logger.info('Processing output type:', output.type);
       
       if (output.type === 'message.output' && output.content) {
-        console.log('[MistralProvider] Found message.output with', output.content.length, 'content items');
+        logger.info('Found message.output with', output.content.length, 'content items');
         
         for (const chunk of output.content) {
-          console.log('[MistralProvider] Processing content type:', chunk.type);
+          logger.info('Processing content type:', chunk.type);
           
           // ✅ FIX 1: Extract image URL directly from text content (Mistral returns CDN URL in text)
           if (chunk.type === 'text' && chunk.text) {
             const urlMatch = chunk.text.match(/https:\/\/[^\s\)]+\.jpg[^\s\)]*|https:\/\/[^\s\)]+\.png[^\s\)]*/i);
             if (urlMatch) {
               let imageUrl = urlMatch[0];
-              console.log('[MistralProvider] Extracted image URL from text:', imageUrl);
+              logger.info('Extracted image URL from text:', imageUrl);
 
               // ✅ FIX: Decode URL-encoded characters (e.g., %3A -> :, %3F -> ?)
               // Blob storage URLs often have encoded SAS tokens that need decoding
               try {
                 imageUrl = decodeURIComponent(imageUrl);
-                console.log('[MistralProvider] Decoded image URL:', imageUrl);
+                logger.info('Decoded image URL:', imageUrl);
               } catch (e) {
                 // If decoding fails, use original URL
-                console.warn('[MistralProvider] URL decoding failed, using original:', e);
+                logger.warn('URL decoding failed, using original:', e);
               }
 
               images.push({
@@ -329,25 +320,25 @@ async isAvailable(): Promise<boolean> {
           // ✅ FIX 2: Handle tool_file with proper file download
           if (chunk.type === 'tool_file' && chunk.fileId) {
             try {
-              console.log('[MistralProvider] Downloading file:', chunk.fileId);
+              logger.info('Downloading file:', chunk.fileId);
               
               // Get file metadata first
               const fileInfo = await this.client!.files.retrieve({
                 fileId: chunk.fileId
               });
               
-              console.log('[MistralProvider] File info:', fileInfo);
+              logger.info('File info:', fileInfo);
               
               // If file has a direct URL, use it
               if ((fileInfo as any).url) {
                 let imageUrl = (fileInfo as any).url;
-                console.log('[MistralProvider] Using direct URL from file metadata');
+                logger.info('Using direct URL from file metadata');
 
                 // Decode URL-encoded characters
                 try {
                   imageUrl = decodeURIComponent(imageUrl);
                 } catch (e) {
-                  console.warn('[MistralProvider] URL decoding failed:', e);
+                  logger.warn('URL decoding failed:', e);
                 }
 
                 images.push({
@@ -373,18 +364,18 @@ async isAvailable(): Promise<boolean> {
               let imageUrl: string;
               let mimeType = 'image/png';
 
-              console.log('[MistralProvider] File response type:', typeof fileResponse, fileResponse?.constructor?.name);
+              logger.info('File response type:', typeof fileResponse, fileResponse?.constructor?.name);
 
               // Handle different response types
               if (typeof fileResponse === 'string') {
                 if (fileResponse.startsWith('http://') || fileResponse.startsWith('https://')) {
                   imageUrl = fileResponse;
-                  console.log('[MistralProvider] Using direct URL from response');
+                  logger.info('Using direct URL from response');
                 } else if (fileResponse.length > 100) {
                   // Likely base64
                   imageUrl = `data:${mimeType};base64,${fileResponse}`;
                 } else {
-                  console.warn('[MistralProvider] Got short string response, skipping');
+                  logger.warn('Got short string response, skipping');
                   continue;
                 }
               } else if (fileResponse instanceof Uint8Array || fileResponse instanceof ArrayBuffer) {
@@ -392,9 +383,9 @@ async isAvailable(): Promise<boolean> {
                 if (buffer.length > 1000) {
                   const base64 = Buffer.from(buffer).toString('base64');
                   imageUrl = `data:${mimeType};base64,${base64}`;
-                  console.log('[MistralProvider] Converted binary to base64, length:', base64.length);
+                  logger.info('Converted binary to base64, length:', base64.length);
                 } else {
-                  console.warn('[MistralProvider] Got small binary response, skipping');
+                  logger.warn('Got small binary response, skipping');
                   continue;
                 }
               } else if (typeof fileResponse === 'object' && fileResponse !== null) {
@@ -402,7 +393,7 @@ async isAvailable(): Promise<boolean> {
                 const objWithBody = fileResponse as any;
                 const fr = fileResponse as any;
                 if (fr instanceof ReadableStream || objWithBody.body instanceof ReadableStream) {
-                  console.log('[MistralProvider] Got ReadableStream, consuming...');
+                  logger.info('Got ReadableStream, consuming...');
                   try {
                     const stream = fr instanceof ReadableStream ? fr : objWithBody.body;
                     const reader = stream.getReader();
@@ -426,26 +417,26 @@ async isAvailable(): Promise<boolean> {
                     if (buffer.length > 1000) {
                       const base64 = Buffer.from(buffer).toString('base64');
                       imageUrl = `data:${mimeType};base64,${base64}`;
-                      console.log('[MistralProvider] Consumed ReadableStream to base64, length:', base64.length);
+                      logger.info('Consumed ReadableStream to base64, length:', base64.length);
                     } else {
-                      console.warn('[MistralProvider] ReadableStream produced small response, skipping');
+                      logger.warn('ReadableStream produced small response, skipping');
                       continue;
                     }
                   } catch (error) {
-                    console.error('[MistralProvider] Failed to consume ReadableStream:', error);
+                    logger.error('Failed to consume ReadableStream:', error);
                     continue;
                   }
                 }
                 // Check for URL in response object
                 else if ((fileResponse as any).url) {
                   let url = (fileResponse as any).url;
-                  console.log('[MistralProvider] Using URL from response object');
+                  logger.info('Using URL from response object');
                   
                   // Decode URL
                   try {
                     url = decodeURIComponent(url);
                   } catch (e) {
-                    console.warn('[MistralProvider] URL decoding failed:', e);
+                    logger.warn('URL decoding failed:', e);
                   }
                   imageUrl = url;
                 } else if ((fileResponse as any).data) {
@@ -458,11 +449,11 @@ async isAvailable(): Promise<boolean> {
                     imageUrl = `data:${mimeType};base64,${String(data)}`;
                   }
                 } else {
-                  console.warn('[MistralProvider] Unknown object response structure, skipping');
+                  logger.warn('Unknown object response structure, skipping');
                   continue;
                 }
               } else {
-                console.warn('[MistralProvider] Unknown response type, skipping');
+                logger.warn('Unknown response type, skipping');
                 continue;
               }
 
@@ -487,10 +478,10 @@ async isAvailable(): Promise<boolean> {
                 },
               });
               
-              console.log('[MistralProvider] Successfully extracted image from file:', chunk.fileId);
-              console.log('[MistralProvider] Image URL length:', imageUrl.length, 'characters');
+              logger.info('Successfully extracted image from file:', chunk.fileId);
+              logger.info('Image URL length:', imageUrl.length, 'characters');
             } catch (error) {
-              console.error('[MistralProvider] Failed to process file:', chunk.fileId, error);
+              logger.error('Failed to process file:', chunk.fileId, error);
               // Continue to next chunk instead of failing entirely
             }
           }
@@ -498,7 +489,7 @@ async isAvailable(): Promise<boolean> {
       }
     }
 
-    console.log('[MistralProvider] Extracted', images.length, 'images');
+    logger.info('Extracted', images.length, 'images');
     return images;
   }
 
