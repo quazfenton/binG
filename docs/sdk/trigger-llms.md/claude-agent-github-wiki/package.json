@@ -6,7 +6,7 @@
     "@radix-ui/react-progress": "^1.1.0",
     "@radix-ui/react-slot": "^1.1.0",
     "@trigger.dev/react-hooks": "4.3.0",
-    "@trigger.dev/sdk": "4.3.0",
+    "@trigger.dev/sdk": "4.5.2",
     "@types/node": "20.6.2",
     "@types/react": "18.2.22",
     "@types/react-dom": "18.2.7",
@@ -27,7 +27,7 @@
     "typescript": "5.2.2"
   },
   "devDependencies": {
-    "trigger.dev": "^4.1.0"
+    "trigger.dev": "^4.5.2"
   },
   "name": "claude-agent-github-wiki",
   "private": true,
