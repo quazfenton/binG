@@ -32,6 +32,7 @@ vi.mock('@/lib/utils/logger', () => ({
 }));
 
 import {
+  NINEROUTER_CLASS_PROVIDERS,
   coordinateConcurrentFallback,
 } from '../llm-fallback-coordinator';
 import {
@@ -756,7 +757,7 @@ describe('coordinateConcurrentFallback', () => {
   // drive the fallback to produce so the chain race resolves + the
   // generator exits cleanly (no stale-generator leak into sibling tests
   // under vi.useFakeTimers).
-  it.each(['ninerouter', 'ollama', 'kiro'] as const)(
+  it.each(NINEROUTER_CLASS_PROVIDERS)(
     '%s (ninerouter-class) defaults silenceMs to 5000ms when not explicitly set',
     async (ninerouterClassProvider) => {
       vi.useFakeTimers();

@@ -36,7 +36,7 @@ import {
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
@@ -1497,8 +1497,8 @@ FORMAT RULES:
     // response is freed even if the underlying SDK/provider ignores the abort.
     const agentTurnAbort = new AbortController();
     const agentTurnSignal: AbortSignal = request.signal
-      ? AbortSignal.any([request.signal, agentTurnAbort.signal])
-      : agentTurnAbort.signal;
+      ? AbortSignal.any([request.signal, agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)])
+      : AbortSignal.any([agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)]);
 
     // Chat-hang-fix #3 — HOISTED route-level stall watchdog.
     //
@@ -2834,22 +2834,33 @@ const config: UnifiedAgentConfig = {
             //    throw — clients expect normal stop-button semantics, not 524.
             const msgRaw =
               raceErr instanceof Error ? raceErr.message : String(raceErr);
+            // Bug #X (non-streaming race-winner 524): if the race
+            // winner is the stall promise, return 524 directly. The
+            // original 200 fallback masked timeouts from upstream load
+            // balancers.
+            //
+            // Belt-and-suspenders canonical detection (post STALL-524 close):
+            // only `raceErr instanceof StallWatchdogError` is canonical.
+            // The previous substring fallback (`msgRaw.startsWith('Chat route
+            // stall watchdog')`) AND the abort-during-watchdog OR-arm
+            // (`msgRaw === 'Chat route aborted' && stallDidFire`) were retired.
+            // The outer catch at L5392 uses the SAME `instanceof` check as
+            // the canonical detection site if anything leaks through here.
+            // SDKs that wrap the abort throw (Vercel AI SDK) bubble up
+            // naturally to the outer instanceof check, so a substring sniff
+            // that the typed-discriminator no longer promises is unneeded.
+            //
+            // Trade-off the user explicitly accepted: a user cancel that
+            // races an in-flight watchdog will now reach the outer catch
+            // as a plain `Error('Chat route aborted')` (NOT a
+            // `StallWatchdogError` instance). Outer-caught
+            // errorHandler.processError fallthrough returns 500. Operationally
+            // acceptable since `fireStall` sets `stallDidFire = true`
+            // synchronously BEFORE `agentTurnAbort.abort(stallErr)`, so the
+            // typing-vs-abort race is bounded to one tick.
             const isServerStall =
               typeof msgRaw === 'string' &&
-              (raceErr instanceof StallWatchdogError ||
-                msgRaw.startsWith('Chat route stall watchdog') ||
-                // `fireStall` sets `stallDidFire = true` BEFORE calling
-                // `agentTurnAbort.abort(stallErr)`, so an abort that fires
-                // while already in a watchdog state is ALSO a watchdog
-                // outcome (not a client-side cancel). The race-winner's
-                // `.message` is `'Chat route aborted'` (set by
-                // `rejectOnAbort`), not `'Chat route stall watchdog (...)'`
-                // (set by `fireStall`), because `rejectOnAbort` runs FIRST
-                // via the `addEventListener('abort', ...)` path and steals
-                // the rejection. Without this OR-arm, the watchdog stall
-                // falls through to the generic re-throw path and the
-                // caller sees a 500, not the contract's 524.
-                (msgRaw === 'Chat route aborted' && stallDidFire));
+              raceErr instanceof StallWatchdogError;
             if (isServerStall) {
               clearInterval(stallWatchdog);
               const reason = stallDidFireReason ?? 'race-winner-stall';

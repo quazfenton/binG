@@ -1146,6 +1146,15 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             timestamp: Date.now(),
             toolCallId,
           });
+          toolCallTracker.recordInvocationPayload({
+            timestamp: Date.now(),
+            model: this.validatedConfig.model,
+            provider: this.validatedConfig.provider,
+            toolName: name,
+            redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+            originStack: createOriginStack(),
+            toolCallId,
+          });
         }).catch((err) => { log.debug?.('PlanActVerify: recordToolResult failed:', err); });
 
         return result;
@@ -1162,6 +1171,15 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               success: false,
               error: error.message,
               timestamp: Date.now(),
+              toolCallId,
+            });
+            toolCallTracker.recordInvocationPayload({
+              timestamp: Date.now(),
+              model: this.validatedConfig.model,
+              provider: this.validatedConfig.provider,
+              toolName: name,
+              redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+              originStack: createOriginStack(),
               toolCallId,
             });
           }).catch((err) => { log.debug?.('PlanActVerify: executeTool telemetry failed:', err); });

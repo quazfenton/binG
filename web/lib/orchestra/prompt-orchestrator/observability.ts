@@ -73,32 +73,52 @@ type IdempotencyKey = `${string}|${string}|${string}`; // source|promptId|step
 type DurationKey = `${string}|${string}`; // source|promptId
 
 /**
- * Cardinality caps (long-running process memory bound):
- *   - MAX_KEYS_PER_MAP caps the per-counter Map size. When the cap is hit
- *     and a NEW key is being inserted, the OLDEST key (FIFO via Map
- *     insertion order) is evicted first. This bounds memory in the face of
- *     unbounded `(source, promptId, mode|step)` label combinations. With
- *     ~2-3 sources + ~10-30 promptIds + 3 modes / ~5 steps typical, the
- *     maps hold <500 keys in practice; 10k is a generous safety ceiling
- *     for label-explosion scenarios. Promote to LRU + per-process metrics
- *     if SRE alerting needs different eviction semantics.
- *   - MAX_SAMPLES_PER_KEY caps the per-(source,promptId) duration window.
- *     When the cap is hit, the OLDEST sample is shifted out (FIFO).
+ * Cardinality caps (long-running process memory bound). All four caps use
+ * the same FIFO-via-Map-insertion-order idiom: when a NEW key is being
+ * inserted AND the collection is at the cap, the OLDEST key (Map insertion
+ * order) is evicted first. Existing-key updates are unaffected. Promote
+ * to LRU + per-process metrics if SRE alerting needs different eviction
+ * semantics.
+ *
+ *   - MAX_KEYS_PER_MAP                cap on the per-counter Maps
+ *                                     (`_injectionCounts`, `_idempotencySkipCounts`).
+ *                                     Bounded ~10k for label-explosion safety.
+ *   - MAX_KEYS_PER_DURATION_MAP       cap on `_applyDurations` outer Map keys —
+ *                                     bounds the (source, promptId) duration-key
+ *                                     cardinality independently of the per-key
+ *                                     sample ring.
+ *   - MAX_SOURCES_PER_GAUGE           SHARED cap on `_markerCountGauge` AND
+ *                                     `_scriptsLoaded` (both per-source gauges).
+ *                                     Reflects the operational reality that a
+ *                                     single process instance sees at most a few
+ *                                     hundred distinct (source, promptId) pairs
+ *                                     even under aggressive load.
+ *   - MAX_SAMPLES_PER_KEY             inner ring-buffer cap per
+ *                                     (source, promptId) duration sample.
  */
 const MAX_KEYS_PER_MAP = 10_000;
 const _injectionCounts = new Map<InjectionKey, number>();
 const _idempotencySkipCounts = new Map<IdempotencyKey, number>();
 /**
- * Rolling samples per (source, promptId). Capped at MAX_SAMPLES to bound
- * memory — when the cap hits, the OLDEST sample is shifted out (FIFO).
+ * Rolling samples per (source, promptId). DOUBLE-capped:
+ *   - outer Map keys: FIFO eviction at MAX_KEYS_PER_DURATION_MAP (per-key
+ *                     cardinality, see observeApplyDurationMs)
+ *   - inner arrays:   FIFO ring-shift at MAX_SAMPLES_PER_KEY
  */
 const _applyDurations = new Map<DurationKey, number[]>();
-const MAX_SAMPLES_PER_KEY = 1000;
+const MAX_KEYS_PER_DURATION_MAP = 5_000;
+const MAX_SAMPLES_PER_KEY = 256;
 
-/** Per-source marker-count gauge (last-observed-value; passive last-wins). */
+/** Per-source marker-count gauge (last-observed-value; passive last-wins). FIFO at MAX_SOURCES_PER_GAUGE. */
 const _markerCountGauge = new Map<string, number>();
-/** Set of distinct script.promptId values — powers the scripts_loaded gauge. */
-const _scriptsLoaded = new Set<string>();
+/**
+ * Map (`key=promptId` → sentinel `true`) of distinct script.promptId values
+ * — replaces the prior `Set<string>` so the FIFO cap at MAX_SOURCES_PER_GAUGE
+ * uses the same Map-insertion-order idiom as the other capped collections.
+ * Iteration touches `.keys()`; cardinality uses `.size`; reset uses `.clear()`.
+ */
+const _scriptsLoaded = new Map<string, true>();
+const MAX_SOURCES_PER_GAUGE = 256;
 
 const _kInjection = (source: string, promptId: string, mode: string): InjectionKey =>
   `${source}|${promptId}|${mode}` as InjectionKey;
@@ -135,7 +155,16 @@ export function recordIdempotencySkip(source: string, promptId: string, step: st
 /** @internal — testing seam + future direct callers. */
 export function observeApplyDurationMs(source: string, promptId: string, durationMs: number): void {
   const k = _kDuration(source, promptId);
+  // Outer-Map FIFO cap: a NEW (source, promptId) key evicts the oldest existing
+  // key when the Map is at MAX_KEYS_PER_DURATION_MAP. Same idiom as
+  // recordInjection / recordIdempotencySkip above — existing-key updates skip
+  // the cap check.
+  if (!_applyDurations.has(k) && _applyDurations.size >= MAX_KEYS_PER_DURATION_MAP) {
+    const oldest = _applyDurations.keys().next().value;
+    if (oldest !== undefined) _applyDurations.delete(oldest);
+  }
   const arr = _applyDurations.get(k) ?? [];
+  // Inner ring FIFO: oldest sample shifts out when at MAX_SAMPLES_PER_KEY.
   if (arr.length >= MAX_SAMPLES_PER_KEY) arr.shift();
   arr.push(durationMs);
   _applyDurations.set(k, arr);
@@ -143,12 +172,27 @@ export function observeApplyDurationMs(source: string, promptId: string, duratio
 
 /** @internal — testing seam + future direct callers. */
 export function setMarkerCount(source: string, count: number): void {
+  // FIFO cap (shared with recordScriptsLoaded via MAX_SOURCES_PER_GAUGE):
+  // a NEW source key evicts the oldest existing source when at cap.
+  if (!_markerCountGauge.has(source) && _markerCountGauge.size >= MAX_SOURCES_PER_GAUGE) {
+    const oldest = _markerCountGauge.keys().next().value;
+    if (oldest !== undefined) _markerCountGauge.delete(oldest);
+  }
   _markerCountGauge.set(source, count);
 }
 
 /** @internal — testing seam + future direct callers. */
 export function recordScriptsLoaded(promptId: string): void {
-  _scriptsLoaded.add(promptId);
+  // FIFO cap (shared with setMarkerCount via MAX_SOURCES_PER_GAUGE):
+  // a NEW promptId key evicts the oldest existing entry when at cap.
+  // `_scriptsLoaded` is a Map (not a Set) so insertion order is iterable
+  // and we can apply the SAME FIFO-via-Map-insertion-order idiom used by
+  // recordInjection / recordIdempotencySkip / setMarkerCount above.
+  if (!_scriptsLoaded.has(promptId) && _scriptsLoaded.size >= MAX_SOURCES_PER_GAUGE) {
+    const oldest = _scriptsLoaded.keys().next().value;
+    if (oldest !== undefined) _scriptsLoaded.delete(oldest);
+  }
+  _scriptsLoaded.set(promptId, true);
 }
 
 // ─── @internal: read-side helpers (NOT re-exported from index.ts) ───────────

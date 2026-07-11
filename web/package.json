@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/init-db.js",
+    "prepare": "cd .. && husky web/.husky",
     "lint:tsc:cascade": "tsc --noEmit > /tmp/tsc-cascade-out 2>&1; tsc_exit=$?; grep -E 'route\\.ts|auto-continue-helper\\.ts|llm-continuation\\.ts|sse-prompt-chunk\\.ts|unified-agent-service\\.ts' /tmp/tsc-cascade-out | head -60; rm -f /tmp/tsc-cascade-out; exit $tsc_exit",
     "dev": "next dev",
     "dev:ws": "tsx server.ts",
@@ -22,6 +23,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:stateful-agent": "vitest run test/stateful-agent",
     "test:e2e": "vitest run --config vitest.integration.config.ts tests/e2e",
+    "test:firefox-preview-ws": "playwright test --config=playwright.firefox.config.ts",
     "test:fast-agent": "node test-fast-agent-integration.js",
     "test:sandbox": "vitest run __tests__/sandbox-providers-create.test.ts",
     "test:sandbox:watch": "vitest __tests__/sandbox-providers-create.test.ts",
@@ -261,6 +263,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "esprima": "^4.0.1",
     "globals": "^17.4.0",
+    "husky": "^9",
     "node-polyfill-webpack-plugin": "4.0.0",
     "postcss": "^8.5",
     "tailwindcss": "^3.4.17",

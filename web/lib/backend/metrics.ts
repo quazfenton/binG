@@ -355,6 +355,14 @@ export class SandboxMetrics {
   public providerHealthCheckTotal: Counter;
   public providerHealthCheckDuration: Histogram;
 
+  // Firefox /ws/previews metrics. Increments ONLY for clients whose
+  // User-Agent matches /Firefox/i so the counter stays scoped to the known
+  // regression surface (Firefox close-after-150ms, code 1006, ~4+ per day).
+  // The `timeout` label is reserved for a future upgrade-window timer; not
+  // emitted today — the bug pattern surfaces as either `success` rate
+  // dropping or `http_upgrade_failure` rising.
+  public firefoxPreviewWsConnectAttemptsTotal: Counter;
+
   constructor() {
     this.registry = new MetricsRegistry();
 
@@ -489,6 +497,20 @@ export class SandboxMetrics {
       ['provider']
     );
 
+    // Firefox /ws/previews connect outcomes. Outcome labels:
+    //   success             — broadcaster accepted client + sent initial state
+    //   http_upgrade_failure — broadcaster explicitly rejected
+    //                         (auth in production, MAX_CLIENTS, or internal error)
+    //   timeout             — reserved; not emitted today. Will be raised by
+    //                         a future server-side upgrade-window timer that
+    //                         observes `ws.onopen` against an upgrade-pending
+    //                         deadline set in server.ts before broadcaster handle.
+    this.firefoxPreviewWsConnectAttemptsTotal = new Counter(
+      'firefox_preview_ws_connect_attempts_total',
+      'Firefox /ws/previews connect attempt outcomes (increments only when User-Agent matches /Firefox/i). outcome=success ↦ broadcaster accepted client + sent initial state; outcome=http_upgrade_failure ↦ broadcaster explicitly rejected in handleConnection (auth in production, MAX_CLIENTS, or internal error in .catch). The timeout label is reserved for a future upgrade-window-timer instrumentation; not emitted today.',
+      ['outcome']
+    );
+
     // Register all metrics
     this.registry.register(this.sandboxCreatedTotal);
     this.registry.register(this.sandboxActive);
@@ -516,6 +538,7 @@ export class SandboxMetrics {
     this.registry.register(this.providerInitDuration);
     this.registry.register(this.providerHealthCheckTotal);
     this.registry.register(this.providerHealthCheckDuration);
+    this.registry.register(this.firefoxPreviewWsConnectAttemptsTotal);
   }
 }
 

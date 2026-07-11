@@ -13,6 +13,8 @@
 
 import { createLogger } from '../utils/logger';
 import { flattenToolResultContent } from './result-format';
+export { INIT_PROBE_TIMEOUT_MS } from './timeouts';
+import { INIT_PROBE_TIMEOUT_MS } from './timeouts';
 
 const logger = createLogger('MCP-HTTP-Transport');
 
@@ -161,7 +163,6 @@ export function clearAllHTTPTransports(): void {
  * N × 30s = 270s+ for N=9. With this constant + parallel probes, the
  * worst case is INIT_PROBE_TIMEOUT_MS regardless of N.
  */
-export const INIT_PROBE_TIMEOUT_MS = 5000;
 
 /**
  * Call a remote MCP tool by name

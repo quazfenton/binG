@@ -49,9 +49,22 @@ describe('F1: watchdog pre-stream returns HTTP 524 (route.ts + use-enhanced-chat
     // stream-interrupted copy. The audit says this is wired but the audit
     // identifies the 200-vs-524 conflict; the client copy must not lie
     // ("stream interrupted" when actually "server timed out").
+    //
+    // After the F1 refactor lifted the inline discriminator to a pure
+    // helper at lib/chat/build-error-final-content.ts, the discriminator
+    // read lives in the helper and the hook calls it. Cross-file
+    // invariant:
+    //   - HOOK has the helper call (so the discriminator is wired in)
+    //   - HELPER has the strict `=== true` read + the "Server timed out"
+    //     copy (single source of truth for the UX).
+    //   - HOOK does NOT still contain the inline discriminator read
+    //     (re-inlining silently bypasses the helper's tests).
     const src = readSrc('hooks/use-enhanced-chat.ts');
-    expect(src).toMatch(/isStall\s*===\s*true/);
-    expect(src).toMatch(/Server timed out/);
+    expect(src).toMatch(/buildErrorFinalContent\s*\(\s*\{\s*accumulatedContent\s*,\s*eventData\s*\}\s*\)/);
+    expect(src).not.toMatch(/const\s+isStall\s*=\s*eventData\.isStall\s*===\s*true/);
+    const helperSrc = readSrc('lib/chat/build-error-final-content.ts');
+    expect(helperSrc).toMatch(/isStall\s*===\s*true/);
+    expect(helperSrc).toMatch(/Server timed out/);
   });
 });
 

@@ -30,9 +30,20 @@ import { join } from 'path';
 // Anchor source paths at the repo root via process.cwd() so the test isn't
 // coupled to its own filesystem location (reorganizations silently break
 // readFileSync otherwise).
+//
+// Cross-file invariant surface AFTER the F1 refactor that lifted the SSE
+// stall discriminator to a pure helper at lib/chat/build-error-final-
+// content.ts:
+//   - route.ts (producer)        — anchors 1, 2, 3 — unchanged.
+//   - hooks/use-enhanced-chat.ts (consumer) — anchors 4d (metadata
+//     propagation). The inline discriminator reads (4a/4b/4c) were
+//     extracted to the helper so this test now also reads HELPER_TS.
+//   - lib/chat/build-error-final-content.ts (pure helper) — anchors 4a,
+//     4b, 4c (the actual discriminator reads + rendering).
 const ROOT = process.cwd();
 const ROUTE_TS = readFileSync(join(ROOT, 'app', 'api', 'chat', 'route.ts'), 'utf-8');
 const CLIENT_TS = readFileSync(join(ROOT, 'hooks', 'use-enhanced-chat.ts'), 'utf-8');
+const HELPER_TS = readFileSync(join(ROOT, 'lib', 'chat', 'build-error-final-content.ts'), 'utf-8');
 
 describe('Finding #1 — SSE stall discriminator cross-file invariant', () => {
   describe('route.ts (server) anchors', () => {
@@ -75,43 +86,68 @@ describe('Finding #1 — SSE stall discriminator cross-file invariant', () => {
   });
 
   describe('use-enhanced-chat.ts (client) anchors', () => {
-    it('case \'error\' reads eventData.isStall === true', () => {
-      // anchor 4: the case 'error' branch must detect the discriminator and
-      // branch the UX. Without this branch, the discriminator is emitted but
-      // the client still renders "Stream interrupted..." — silently dropped.
-      expect(CLIENT_TS).toMatch(/eventData\.isStall\s*===\s*true/);
+    it('case \'error\' delegates discriminator read to the pure helper (no inline discriminator remains in the hook)', () => {
+      // anchor 4: the case 'error' branch must use the helper. After the
+      // F1 refactor, `eventData.isStall === true` was lifted into
+      // lib/chat/build-error-final-content.ts so this test reads BOTH files:
+      // - HELPER_TS hosts the discriminator read (anchor 4a)
+      // - CLIENT_TS hosts the helper CALL (and previously would have hosted
+      //   the inline read; refactor's invariant is the read moved).
+      // The hook must NOT still contain the inline discriminator read —
+      // that's the regression we'd want to catch if a future engineer
+      // re-inlines the logic instead of calling the helper.
+      expect(HELPER_TS).toMatch(/eventData\.isStall\s*===\s*true/);
+      expect(CLIENT_TS).toMatch(/buildErrorFinalContent\s*\(\s*\{\s*accumulatedContent\s*,\s*eventData\s*\}\s*\)/);
+      expect(CLIENT_TS).not.toMatch(/const\s+isStall\s*=\s*eventData\.isStall\s*===\s*true/);
     });
 
-    it('stall branch surfaces "Server timed out — please try again." string', () => {
-      // The UX string is the only observable user-facing artifact of Finding
-      // #1 closing. If it disappears, the stall discriminator is invisible to
-      // operators — the audit defect is back.
-      expect(CLIENT_TS).toContain('Server timed out — please try again');
+    it('server-timed-out copy surfaces in the helper (the only user-facing artifact of F1)', () => {
+      // The UX string was the only observable user-facing artifact of
+      // Finding #1 closing. After the refactor it lives in the helper;
+      // the hook no longer contains it directly. Pinning HELPER_TS locks
+      // the canonical string drift; pinning CLIENT_TS confirms the hook
+      // is no longer the source of truth.
+      expect(HELPER_TS).toContain('Server timed out — please try again');
+      expect(CLIENT_TS).not.toContain('Server timed out — please try again');
     });
 
-    it('stall detection forces canRetry to false', () => {
+    it('stall detection forces canRetry to false (read from helper)', () => {
       // Audit invariant: a server-side timed-out request MUST NOT auto-retry.
-      // Without this assertion, the user-facing retry button would re-trigger
-      // the same timeout. The pattern is `isStall ? false : (eventData.canRetry !== false)`.
-      expect(CLIENT_TS).toMatch(/canRetry\s*=\s*isStall\s*\?\s*false\s*:/);
+      // After refactor, the `isStall ? false : (eventData.canRetry !== false)`
+      // pattern lives in the helper. Pinning HELPER_TS locks the
+      // stall-overrides-canRetry contract.
+      expect(HELPER_TS).toMatch(/canRetry\s*=\s*isStall\s*\?\s*false\s*:/);
     });
 
-    it('isStall propagated to message metadata', () => {
-      // The metadata block must include isStall so downstream UI affordances
-      // (chat bubbles, retry buttons, analytics) can read it without re-parsing
-      // the SSE event.
+    it('isStall propagated to message metadata (still in hook, helper-call destructure)', () => {
+      // The metadata block in use-enhanced-chat.ts must include isStall so
+      // downstream UI affordances (chat bubbles, retry buttons, analytics)
+      // can read it without re-parsing the SSE event. After the F1
+      // refactor, isStall reaches this site via the helper's destructure
+      // (`const { isStall, ... } = buildErrorFinalContent(...)`).
       expect(CLIENT_TS).toMatch(/streamError:\s*errMsg,\s*\n\s*isStall,/);
     });
   });
 
   describe('end-to-end invariant', () => {
-    it('route fireStall producer + client case \'error\' consumer named in the same SSE-stall-discriminator reference', () => {
-      // The two files should both reference "SSE-stall discriminator" so a
-      // future engineer grepping either side finds the architectural concept
-      // on the other side. Concept name (not audit-id) is preferred so the
-      // reference survives the audit being archived.
+    it('route fireStall producer + client case \'error\' consumer + pure helper named in the same SSE-stall-discriminator reference', () => {
+      // The three files should each reference "SSE-stall discriminator"
+      // so a future engineer grepping any side finds the architectural
+      // concept on the others. Concept name (not audit-id) is preferred so
+      // the reference survives the audit being archived.
       expect(ROUTE_TS).toContain('SSE-stall discriminator');
       expect(CLIENT_TS).toContain('SSE-stall discriminator');
+      expect(HELPER_TS).toContain('SSE-stall discriminator');
+    });
+
+    it('helper exposes the discriminator surface via a typed function (single source of truth)', () => {
+      // Confirm the helper exposes a single exported function whose
+      // signature carries the discriminator bundle. A refactor that
+      // accidentally de-types the surface (e.g. flattens to `(any, any)`
+      // or exports the discriminator inline) would fail this pinning.
+      expect(HELPER_TS).toMatch(/export\s+function\s+buildErrorFinalContent\s*\(/);
+      expect(HELPER_TS).toMatch(/isStall\?: boolean/);
+      expect(HELPER_TS).toMatch(/canRetry\?: boolean/);
     });
   });
 });

@@ -121,7 +121,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
 
   // Use OpencodeV2Provider directly
   const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
-  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
+  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } = await import('@/lib/mcp');
 
   const provider = new OpencodeV2Provider({
     session: {
@@ -186,7 +186,15 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       onTool?.(toolName, args, toolResult);
     },
     executeTool: async (name, args) => {
-      const toolResult = await callMCPToolFromAI_SDK(name, args, userId, session.id);
+      // chat-hang-fix back-port: 60s defensive ceiling matching route.ts:1499 agentTurnSignal.
+      const toolResult = await callMCPToolFromAI_SDK(
+        name,
+        args,
+        userId,
+        session.id,
+        undefined,
+        { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+      );
       return {
         success: toolResult.success,
         output: toolResult.output,

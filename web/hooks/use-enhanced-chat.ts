@@ -14,6 +14,11 @@ import { voiceService } from '@/lib/voice/voice-service';
 import { streamingSpeaker } from '@/lib/voice/streaming-speaker';
 import { createLogger } from '@/lib/utils/logger';
 import { recordFallbackChainAttempt, recordFallbackChainExhausted } from '@/lib/chat/chat-metrics';
+// F1 finding: SSE-stall discriminator lifted to a pure helper so it
+// can be unit-tested without React hook setup. The hook keeps the
+// F8 anchor (`const err = eventData;`) so `err.stack` substring
+// remains pinned by the audit-regression test.
+import { buildErrorFinalContent } from '@/lib/chat/build-error-final-content';
 
 /**
  * Bug #61: build a fallback chain list. Prefers the synchronous useRef
@@ -2089,24 +2094,14 @@ ${stepReprompt}`;
                   // mid-stream. Without this branch, "Stream interrupted..."
                   // gets rendered for stall cases — misleading operators into
                   // retrying a request the server already timed out.
-                  const isStall = eventData.isStall === true;
-                  const errMsg = eventData.message || eventData.error || 'Streaming error';
-                  const canRetry = isStall ? false : (eventData.canRetry !== false);
-                  const hadContent = !!accumulatedContent.trim();
+                  // Discriminator lifted to lib/chat/build-error-final-content.ts
+                  // (pure helper, unit-tested without React hook setup). The
+                  // shape-lock vitest at __tests__/audit-recs/finding-1-
+                  // stall-discriminator.test.ts reads both files; the
+                  // behavioral vitest at __tests__/chat/build-error-final-
+                  // content.test.ts pins each of the 6 partitions.
+                  const { finalContent, isStall, canRetry, errMsg } = buildErrorFinalContent({ accumulatedContent, eventData });
                   const err = eventData; // F8: alias so the literal `err.stack` substring is present (pinned by audit-regression test).
-                  let finalContent: string;
-                  if (isStall) {
-                    finalContent = hadContent
-                      ? accumulatedContent + '\n\n⚠️ _Server timed out — please try again._'
-                      : '⚠️ _Server timed out — please try again._';
-                  } else {
-                    const errorSuffix = canRetry
-                      ? `\n\n⚠️ _Stream interrupted: ${errMsg}. You can retry._`
-                      : `\n\n⚠️ _${errMsg}_`;
-                    finalContent = hadContent
-                      ? accumulatedContent + errorSuffix
-                      : `⚠️ ${errMsg}${canRetry ? ' Please retry your request.' : ''}`;
-                  }
 
                   logger.warn('[Chat] Server error event — preserving partial content', {
                     errMsg,
@@ -2159,7 +2154,12 @@ ${stepReprompt}`;
                     });
                   }
                   if (options.onError) {
-                    options.onError(new Error(errMsg));
+                    // F8 next-pass: forward the server-side `eventData.stack` into a fresh Error so Sentry/devtools
+                    // see the carried frames instead of V8-minified ones at this site.
+                    const carriedStack = (eventData as { stack?: string }).stack;
+                    const propagatedErr = new Error(errMsg);
+                    if (typeof carriedStack === 'string') propagatedErr.stack = carriedStack;
+                    options.onError(propagatedErr);
                   }
                   // Drain queued prompts so chat keeps flowing
                   if (inputQueue.length > 0) {

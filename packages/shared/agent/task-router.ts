@@ -745,7 +745,7 @@ class TaskRouter {
 
     const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
     const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
-    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
+    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } = await import('@/lib/mcp');
 
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
@@ -785,7 +785,7 @@ class TaskRouter {
           request.userId,
           session.id,
           undefined,
-          { signal: AbortSignal.timeout(60_000) },
+          { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
         );
         return { success: toolResult.success, output: toolResult.output, exitCode: toolResult.success ? 0 : 1 };
       },

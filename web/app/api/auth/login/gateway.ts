@@ -219,19 +219,27 @@ export async function POST(request: NextRequest) {
         error: error instanceof Error ? error.message : String(error),
         source: 'login-gateway-inline',
       });
-    });
-
-  // MED-5 fix: Log successful login. Fire-and-forget so the cookie
+    });    // MED-5 fix: Log successful login. Fire-and-forget so the cookie
     // + response can return immediately. The same shape as the VFS
-    // transfer above — non-fatal by design (failures are captured in
-    // the .catch) and the audit row gets written on the next event-loop
-    // tick, before the request's connection closes. Saves the cold-path
-    // roundtrip of the audit insert on the success path (small on warm,
-    // ~50-100ms on cold path right after dynamic-import resolution).
-    void logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled })
-      .catch((auditError) => {
-        logger.warn('Audit log failed (fire-and-forget):', auditError);
-      });
+    // transfer above — non-fatal by design (failures are surfaced
+    // internally via logAuthEvent → logger.warn so they appear in
+    // run.log without blocking the response). The audit row is
+    // written synchronously inside the function before this call site
+    // returns to the response-build path. Saves the cold-path
+    // roundtrip of the audit insert on the success path (small on
+    // warm, ~50-100ms on cold path right after dynamic-import
+    // resolution).
+    //
+    // NOTE: this is a plain call (no `void`, no `.catch()` chain).
+    // `logLoginSuccess` is declared as `(...): void` (synchronous),
+    // so neither `void foo()` nor `foo().catch(h)` compiles — TS2339
+    // fires on either (void discards into undefined, the .catch then
+    // lands on undefined). The right shape is exactly what you see:
+    // call it, ignore the void result, the function's internal
+    // logAuthEvent handles its own errors. ESLint's no-floating-promises
+    // rule is satisfied because the call returns void synchronously
+    // (no Promise to float).
+    logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });
 
     // Set session cookie
     const response = NextResponse.json({

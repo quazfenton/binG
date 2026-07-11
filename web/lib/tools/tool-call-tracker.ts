@@ -717,13 +717,8 @@ class ToolCallTracker {
    * (getModelToolStats, getRecentInvocations, getRawRecords) so consumers
    * who already await can drop this in directly.
    *
-   * Scope note: this is a *lifetime existence* check, NOT a *freshness*
-   * check. A row written 7 days ago (before `cleanupOldRecords(7)`
-   * evicted it) still satisfies the predicate. For time-windowed checks
-   * (matching `refreshModelTelemetryCache()`'s 10-min window), wrap with
-   * a TIME-filtered `getModelToolStats(10).then(arr => arr.length > 0)`.
-   * Adding a `minutesBack?: number` param would be a future API surface
-   * extension — call out if needed for a health-check endpoint.
+ * Lifetime existence only — not time-windowed. For time-windowed
+ * checks, use `getModelToolStats(N).then(s => s.length > 0)` instead.
    */
   async hasRecordedTools(): Promise<boolean> {
     await this.initialize();
@@ -762,6 +757,44 @@ class ToolCallTracker {
    */
   getDisconnectCountForTests(): number {
     return this.disconnectCount;
+  }
+
+  /**
+   * Test-only mock helper: monkey-patches `db.prepare` so subsequent
+   * INSERTs into `tool_calls` throw on .run() — every write falls
+   * through to memoryRecords, exercising the SEV-10 disconnect path.
+   * Returns a restore function that callers MUST invoke (via
+   * `try/finally`) to undo the patch.
+   *
+   * Centralizes the previously-inline monkey-patch shape that appeared
+   * in 2 disconnect tests (the audit reviewer flagged it as a drift
+   * risk — three easy-to-miss invariants: an exact INSERT-into-tool_calls
+   * regex that filter-defends `CREATE TABLE IF NOT EXISTS` and SELECT
+   * statements; the `.bind(db)` capture so `originalPrepare(sql)` keeps
+   * its `this`; and the finally-restore that, when missing, leaves the
+   * SQLite handle broken across sibling tests).
+   *
+   * Error message is fixed (no caller-customizable string) — the helper
+   * exists to enforce a single, recognizable signature in vitest output,
+   * not to give each test its own message.
+   */
+  simulateInsertDisconnectForTests(db: any): () => void {
+    const originalPrepare = db.prepare.bind(db);
+    db.prepare = (sql: string) => {
+      if (/INSERT INTO tool_calls/i.test(sql)) {
+        return {
+          run: (..._args: any[]) => {
+            throw new Error(
+              'Simulated read/write disconnect — SQLite INSERT intentionally throws (test-only)',
+            );
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+    return () => {
+      db.prepare = originalPrepare;
+    };
   }
 }
 

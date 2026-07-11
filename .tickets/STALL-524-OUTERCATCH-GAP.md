@@ -1,90 +1,21 @@
 # STALL-524-OUTERCATCH-GAP
 
-## Status: OPEN — non-blocking, tracked for follow-up
+## Status: CLOSED — landed (2026-07-08)
 
-## Background
+## What landed
 
-The `stallDidFire` propagation feature was wired through
-`bing/web/app/api/chat/route.ts` (8 surgical edits in the streaming branch
-+ the non-streaming `Promise.race` + `fireStall` + `rejectOnAbort` chain).
+The stall-aware catch branches were added at the outer try/catch candidates in `bing/web/app/api/chat/route.ts:5392-5422` via the typed-error-class splice (`class StallWatchdogError extends Error` with `readonly kind: 'stall' as const`). The chain-walk now propagates `stallDidFire` through the typed discriminator rather than the previous string-sniffing `err.message.startsWith('Chat route stall watchdog')` predicate, so the outer try/catches at L5529 + L6121 no longer collapse a fresh race-winner error from the inner branch into a generic 500. Any `StallWatchdogError` that reaches an outer catch now maps to the same 524 status (with `x-stall-fired` + `x-stall-reason` headers) that the inner race-winner branch at `route.ts:2774-2797` already returned, which closes the original "524 was bubbling as 500 on the non-streaming path" gap.
 
-## Gap
+The test assertion at `bing/web/app/api/chat/__tests__/route-shape-audit.test.ts:848` (FIX 9 test A's status assertion) and `:936` (the chain-engagement log assertion) was tightened from the prior "accepts 200/524/500" permissive pivot to an explicit `expect(response.status).toBe(524)` (with the existing `'[CHAT-ROUTE] Stall watchdog fired — aborting agent turn'` log assertion preserved), giving a vitest-native regression gate on the now-closed contract. Both sites sit inside the same fixed-test describe block that the previous "permit-all" pivot had deliberately relaxed; tightening them is the test-side half of the closed gap and locks the 524 correctness in CI going forward.
 
-When a stall race-winner is detected and the non-streaming catch at
-`route.ts:L2774-L2797` returns 524, the response should bubble cleanly back
-to the client. However, in production code:
+## Cross-references
 
-1. Some teaching fallthroughs from the `coordinator` chain-walk path can
-   bubble the SAME race error up through a SECOND outer-level try/catch
-   around `route.ts:L5529` or `route.ts:L6121` that does NOT have
-   stall-aware handling.
+- **`/opt/bing/.tickets/FIREFOX-WS-PATH-TRAVERSAL-PATH-FIX.md`** — the consolidating ticket that bundles this STALL fix as PR 1 of a 3-PR Next.js-splice landing plan (STALL polish → VFS safe-path → native bcrypt migration). Status: Open.
+- **`/opt/bing/.tickets/ARCH-001-vendor-shape-consolidation.md`** — the prior architectural-ticket family. Unrelated to STALL but cited in the cross-cutting comment pattern.
+- **`/opt/bing/web/app/api/chat/route.ts:2774-2797`** — the inner race-winner branch that the outer L5392-5422 splice now matches. Originally the only correctly-524 site; the close of this ticket makes L5392-5422 a symmetric sibling rather than a one-off.
+- **`/opt/bing/web/app/api/chat/__tests__/route-shape-audit.test.ts`** — FIX 9 test A describe block; the prior relaxed-pivot assertion is replaced by the tightening documented above.
 
-2. The outer catch converts any error reaching it (including a fresh
-   `Chat route stall watchdog (...)` throw from the inner race-winner
-   branch) to a generic 500 error response.
+## Out of scope
 
-3. End-user result: the prior 200-OK-contradicting-SSE-error-event bug
-   becomes a 500-OK-still-stall-signal which is BETTER than the silent
-   200-OK but WORSE than the contract-complied 524.
-
-## Detection (test-side)
-
-`bing/web/app/api/chat/__tests__/route-shape-audit.test.ts` test A
-(`returns 524 when the non-streaming race winner is the stall watchdog`)
-was pivoted in FIX 9 to assert the load-bearing chain engagement (the
-`[CHAT-ROUTE] Stall watchdog fired — aborting agent turn` log entry)
-and permits the response status to be 200/524/500 — accepting the current
-500-with-engaged-chain reality and marking the gap.
-
-## Why non-blocking
-
-For the user's primary use case (prevent silent stream-OK-but-stall
-situations), the CHAT-ROUTE log line + the streaming-branch pre-stream
-524 + the `controller.error()` mid-stream surface is sufficient.
-The 524 status on the non-streaming path is a polish/improvement, not a
-correctness blocker.
-
-## Suggested fix (production-side)
-
-Add a stall-aware branch to the outer try/catch candidates at L5529 and
-L6121:
-
-```ts
-} catch (err: any) {
-  const msg = err instanceof Error ? err.message : String(err);
-  const isStall = msg.startsWith('Chat route stall watchdog') ||
-                  (msg === 'Chat route aborted' && /* needs access to closure scope */);
-  if (isStall) {
-    clearInterval(stallWatchdog);  // already-cleared is no-op
-    return addAnonSessionCookie(
-      NextResponse.json(
-        { error: 'Chat stalled', reason: stallDidFireReason ?? 'unknown',
-          requestId, stitchedFromWatchDog: stallDidFire },
-        { status: 524, headers: {
-          'x-stall-fired': 'true',
-          'x-stall-reason': stallDidFireReason ?? 'unknown',
-        } },
-      ),
-    );
-  }
-  // Fallthrough to existing 500 handling
-  ...
-}
-```
-
-NOTE: requires either hoisting stallDidFire/stallWatchdog to module scope
-(currently closure-private to POST) OR threading the flag through the
-chain-walk so the outer catch can read it. Module-private hoist has
-risks (concurrent-request races on the flag); prefer option (b): make
-the chain-walk propagate stallDidFire via a typed-error class
-(`class StallWatchdogError extends Error`).
-
-## Companion changes worth considering
-
-* Refactor the message-string sniffing at L2771-L2775 to a typed
-  discriminator (`class StallWatchdogError extends Error` with a
-  `readonly kind: 'stall' as const`). Touches the FIX 7 second arm too.
-* Trim the FIX 7 comment from 8 lines to 3 lines; the "rejectOnAbort runs
-  first via addEventListener" mechanic only needs 1-2 lines.
-* Add a `child` route-level stallDidFire telemetry metric so ops can
-  alert on frequency.
+- Companion changes from the original ticket (FIX 7 comment trim, route-level `stallDidFire` telemetry metric) deferred intentionally; can be re-opened as a follow-up if a regression re-surfaces.
+- Re-bench of `bing/web/__tests__/chat/streaming/stall-bench.test.ts` (or its successor path) to capture post-fix timing delta — the prior run was a pre-splice baseline.

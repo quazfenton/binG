@@ -798,7 +798,7 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     process.env.ARCADE_API_KEY ? getArcadeToolDefinitions() : Promise.resolve(EMPTY),
     (process.env.COMPOSIO_API_KEY && userId) ? getComposioMCPTools(userId) : Promise.resolve(EMPTY),
     hasRemoteMCPServers()
-      ? getRemoteMCPTools().catch((error: any) => {
+      ? getRemoteMCPTools(false, { signal }).catch((error: any) => {
           logger.warn('Failed to get remote MCP tools:', error.message);
           return EMPTY;
         })

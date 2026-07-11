@@ -49,6 +49,7 @@ import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from './provider
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
+import { toolCallTracker } from '@/lib/tools/tool-call-tracker';
 // Bug #91 canonical response-shape helper (with 16 unit tests covering
 // whitespace/null/non-string/non-array edge cases — see classifying test).
 import { classifyResponseShape } from '@/lib/tools/unified-response-handler';
@@ -1720,7 +1721,38 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
-  log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
+  log.info('[F6] resolved mode vs startupCaps state', { resolvedMode: mode, desktopCap: startupCaps.desktop, opencodeSdkCap: startupCaps.opencodeSdk, v2NativeCap: startupCaps.v2Native, v2ContainerizedCap: startupCaps.v2Containerized, v2LocalCap: startupCaps.v2Local, v1ApiCap: startupCaps.v1Api, statefulAgentCap: startupCaps.statefulAgent, mastraWorkflowsCap: startupCaps.mastraWorkflows });
+
+  // F6 deepening: when the resolved mode's required cap is FALSE, record
+  // a synthetic tool-call into toolCallTracker so the Rec #3 telemetry
+  // surface (`toolCallTracker.hasRecordedTools()`) returns true after
+  // this request. The `toolName` encodes `mode` and `missingCap` (since
+  // ToolCallRecord has no `args` field) and is prefixed `system.` so
+  // dashboards can filter audit events out via
+  // `WHERE tool_name NOT LIKE 'system.%'`. Fire-and-forget — we don't
+  // block dispatch on a SQLite write.
+  {
+    // F6 deepening (DRY version): single source of truth via modeToCapFlag.
+    const _f6MissingCap = modeToCapFlag(mode);
+    if (_f6MissingCap !== null && startupCaps[_f6MissingCap] !== true) {
+      void toolCallTracker.recordToolCall({
+        toolCallId: `cap-bypass-${(config.conversationId || 'anon')}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        toolName: `system.capability-bypass[mode=${mode},missingCap=${_f6MissingCap}]`,
+        model: config.model || dynamicDefaults.model || 'unknown',
+        provider: config.provider || dynamicDefaults.provider || 'unknown',
+        success: true,  // mode DID succeed despite cap being false — that IS the bypass
+        timestamp: Date.now(),
+        conversationId: config.conversationId,
+      }).catch((err) => {
+        log.warn('[F6] toolCallTracker.recordToolCall failed for bypass event', {
+          error: (err as Error)?.message,
+          resolvedMode: mode,
+          missingCap: _f6MissingCap,
+        });
+      });
+    }
+  }
+log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
   log.info('[UnifiedAgent] │ resolvedMode:', mode);
   log.info('[UnifiedAgent] │ engine:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
   log.info('[UnifiedAgent] │ disableV2:', process.env.DISABLE_V2_MODE !== 'false');
@@ -2130,7 +2162,12 @@ export async function processUnifiedAgentRequest(
     }
 
     // All modes failed
-    log.error('[UnifiedAgent] ✗ ALL MODES FAILED', {
+    // F5 deepening: bind this warning to the outcome discriminator on
+    // L2148 so a log-reader can grep '[UnifiedAgent] ✗ ALL FALLBACKS
+    // EXHAUSTED' and see the matching 'exhausted' outcome emit.
+    // keep in sync: this 'outcome: "exhausted"' literal MUST match the
+    // auditResponseShape outcome-union member at the function signature.
+    log.error('[UnifiedAgent] ✗ ALL FALLBACKS EXHAUSTED → auditResponseShape(outcome: "exhausted")', {
       triedModes: Array.from(triedModes),
     });
     const allFailedResult: UnifiedAgentResult = {
@@ -2144,7 +2181,7 @@ export async function processUnifiedAgentRequest(
         allProvidersFailed: true,
       },
     };
-    auditResponseShape(allFailedResult, {provider: config.provider, model: config.model, mode, outcome: 'error'});
+    auditResponseShape(allFailedResult, {provider: config.provider, model: config.model, mode, outcome: 'exhausted'});
     return allFailedResult;
   }
 }
@@ -6593,6 +6630,52 @@ log.info('[Fallback] └──────────────────�
 }
 
 /**
+ * MINOR #1 + DRY refactor (post-F6 deep): the single source of truth for
+ * mode → capability-flag mapping. `isModeAvailable` (public listing surface,
+ * 5 modes) AND the F6 bypass-detection block (7 modes including orchestrator
+ * modes with capability flags) BOTH delegate to this helper. Future mode
+ * additions go here once and BOTH surfaces pick it up automatically.
+ *
+ * Maintenance contract — exhaustive-keep-in-sync:
+ * This switch is the SINGLE source of truth for mode → cap-flag mapping.
+ * TypeScript can't enforce exhaustiveness against the `mode` literal union
+ * on UnifiedAgentConfig (~20 variants) when this helper accepts `string`.
+ * If a future mode gains a cap flag:
+ *   1. UPDATE HERE FIRST (add the case + the cap-flag entry on
+ *      StartupCapabilities).
+ *   2. Then verify callers (`getAvailableModes` return-type subset, F6
+ *      bypass-detection block) wire correctly via existing tests/surfaces.
+ * If a new mode has no cap-flag requirement, consciously OMIT it (the
+ * `default: return null` fallthrough is the intentional contract — both
+ * `isModeAvailable` and the F6 bypass-detection block silently no-op for
+ * unmapped modes because they degrade to `available: false` / no record).
+ */
+function modeToCapFlag(mode: string): keyof StartupCapabilities | null {
+  switch (mode) {
+    case 'desktop': return 'desktop';
+    case 'opencode-sdk': return 'opencodeSdk';
+    case 'v2-native': return 'v2Native';
+    case 'v2-containerized': return 'v2Containerized';
+    case 'v2-local': return 'v2Local';
+    case 'v1-agent-loop': return 'statefulAgent';
+    case 'mastra-workflow': return 'mastraWorkflows';
+    default: return null;
+  }
+}
+
+/**
+ * Public listing-surface helper: returns true if `mode`'s capability flag
+ * is strictly true. Delegates to `modeToCapFlag` for the mapping so the
+ * listing block and F6 detection stay in lockstep.
+ */
+function isModeAvailable(
+  mode: 'opencode-sdk' | 'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api',
+): boolean {
+  const flag = modeToCapFlag(mode);
+  return flag !== null && Boolean(startupCaps[flag]);
+}
+
+/**
  * Get available modes based on startup capabilities
  */
 export function getAvailableModes(): Array<{
@@ -6608,34 +6691,34 @@ export function getAvailableModes(): Array<{
       mode: 'opencode-sdk',
       name: 'OpenCode SDK (Web + Desktop)',
       description: 'Agentic execution via HTTP API - works on web and desktop, no CLI binary needed',
-      available: startupCaps.opencodeSdk,
-      recommended: startupCaps.opencodeSdk,
+      available: isModeAvailable('opencode-sdk'),
+      recommended: isModeAvailable('opencode-sdk'),
       webReady: true,
     },
     {
       mode: 'v2-native',
       name: 'OpenCode Engine (Desktop Only)',
       description: 'Full agentic capabilities with native bash, file ops, and tool execution',
-      available: startupCaps.v2Native,
-      recommended: !startupCaps.opencodeSdk && startupCaps.v2Native,
+      available: isModeAvailable('v2-native'),
+      recommended: !isModeAvailable('opencode-sdk') && isModeAvailable('v2-native'),
     },
     {
       mode: 'v2-containerized',
       name: 'OpenCode Containerized (Desktop Only)',
       description: 'OpenCode CLI in isolated sandbox (production-ready)',
-      available: startupCaps.v2Containerized,
+      available: isModeAvailable('v2-containerized'),
     },
     {
       mode: 'v2-local',
       name: 'OpenCode Local (Desktop Only)',
       description: 'OpenCode CLI on your local machine',
-      available: startupCaps.v2Local,
+      available: isModeAvailable('v2-local'),
     },
     {
       mode: 'v1-api',
       name: 'LLM API (Fallback)',
       description: 'Cloud LLM APIs - simple chat only, no agentic capabilities',
-      available: startupCaps.v1Api,
+      available: isModeAvailable('v1-api'),
       webReady: true,
     },
   ];

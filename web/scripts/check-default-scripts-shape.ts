@@ -55,33 +55,34 @@
  *
  *   npx tsx scripts/check-default-scripts-shape.ts --self-test
  *
- * Runs 5 fixture cases (1 OK + 4 drift injections) against `parseAndCheck`
+ * Runs 7 fixture cases (1 OK + 4 drift injections + 2 robustness tests
+ * against comment-line false-positives) against `parseAndCheck`
  * IN-PROCESS — no subprocess, no temp files written, no SOURCE_PATH touched.
  * Prints a matrix `case-id → injected-drift-description → caught?`, exits
  * 0 if all caught, 1 if any missed. Lets the team regression-test the
  * parser without manual sed drift-test cycles.
  *
- * 6 fixture cases (see the JSDoc-limitation paragraph below for why this
- * is 6 not 5):
+ * 7 fixture cases (case 7 is the regression-test for the block-comment
+ * scanner fix documented below):
  *   1. ok-fixture               — canonical source; expects exit 0 + 0 drifts.
  *   2. decl-missing             — PO_UNIFIED_AGENT_SCRIPT removed via line-comment-replace; expects declaration-presence.
  *   3. promptid-drift           — PO_UNIFIED_AGENT_SCRIPT.promptId → 'unified-agent-DRIFT'; expects canonical-promptId.
  *   4. steps-drift              — both consts gain a step; expects empty-steps-contract.
  *   5. disjoint-violation       — both promptIds share 'unified-agent-entry'; expects disjoint-prompt-ids.
- *   6. jsdoc-comment-ignored    — JSDoc-style comment with `* export const X:` lines must NOT satisfy the declaration check (the SAFE pattern).
+ *   6. jsdoc-comment-ignored    — JSDoc-style comment with `* export const X:` lines (SAFE: asterisk-prefix) must NOT satisfy the declaration check.
+ *   7. jsdoc-comment-bare-decl  — `/* ... *​/` block containing a BARE `\nexport const X:` line (no `*` prefix) must NOT satisfy the declaration check (BUG pattern, now defended).
  *
- * ## Known limitation (TODO if it bites)
+ * ## BUG-pattern defense (added)
  *
- * The --self-test covers the SAFE pattern (JSDoc lines prefixed with ` *`)
- * but NOT the BUG pattern: a `/* ... */` block whose example content uses
- * a bare `\nexport const PO_X_SCRIPT:` line (no ` *` prefix) would STILL
- * match `declRegex`, because `(?:^|\n)\s*export...` is line-anchored, not
- * block-comment-aware. The current `default-scripts.ts` source has no such
- * pattern today, so the parser is correct in practice. If a future edit
- * adds a raw `\nexport const` line inside a `/* ... */` block, the parser
- * would falsely match it — the fix would be to layer a `/* ... */` boundary
- * scanner on top of `declRegex`. Case 6 above is the regression-test for
- * the current safe-side behavior; it does NOT defend against case (bug).
+ * A `/* ... *​/` block whose example content used a bare `\nexport const X:`
+ * line with NO `*` prefix USED to match `declRegex` falsely, because
+ * `(?:^|\n)\s*export...` is line-anchored and ignores block-comment regions.
+ * The fix layers a `buildBlockCommentIntervals(source)` scanner on top of
+ * `declRegex`; the `findDecl(reg, source, intervals)` helper filters any
+ * match whose `match.index` lands inside a `/* ... *​/` interval. Drift line
+ * numbers stay accurate because the source is never mutated — only the
+ * false-positive matches are skipped. Case 7 above is the regression-test
+ * for this defense.
  */
 
 import { readFileSync } from 'node:fs';
@@ -178,6 +179,75 @@ function nextConstBoundary(source: string, prevMatchEndIdx: number): number {
   return idx === -1 ? source.length : idx;
 }
 
+// Build a list of `[start, end]` intervals for every `/* ... */` block in
+// `source`. Used by `findDecl` to filter false-positive declRegex matches
+// whose `match.index` lands INSIDE a block comment — a `/* ...\nexport const
+// X: ... */` block whose example content uses a bare `\nexport const X:`
+// line (no `*` prefix) would otherwise be misread as a real declaration.
+//
+// Single linear pass over `source` via a non-greedy block-comment regex;
+// result is a small array reused for every decl match in `parseAndCheck`.
+// Drift line numbers stay accurate because the scanner preserves the
+// original source untouched — only the matches whose index falls inside an
+// interval are filtered, never the source itself.
+//
+// Does NOT parse string literals — a `/*` inside a string or template is
+// rare for a shape-lock prompt-script file, and treating it as a comment
+// start is the safer default (a literal `/*...*/` sequence in a
+// prompt-script source is suspicious on its own).
+function buildBlockCommentIntervals(source: string): Array<[number, number]> {
+  const intervals: Array<[number, number]> = [];
+  const re = /\/\*[\s\S]*?\*\//g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    intervals.push([m.index, m.index + m[0].length]);
+  }
+  // Sort by start offset so `findDecl`'s linear scan can short-circuit at
+  // the first interval whose start > match.index (intervals come from
+  // left-to-right in source order already via the regex, but `Array.sort`
+  // makes the invariant explicit + survives any future caller passing in
+  // intervals from a non-monotonic source).
+  intervals.sort((a, b) => a[0] - b[0]);
+  return intervals;
+}
+
+// Like `regex.exec(source)` but skips matches whose `.index` lies inside
+// any of the `intervals` (block comments). The regex MUST be global (`/g`)
+// so `exec` advances its `lastIndex` across iterations — otherwise the loop
+// would spin on an inside-comment match forever.
+//
+// Used as a defensive layer on top of `declRegex` for the bare-comment-line
+// bug pattern: a `/* ...\nexport const X: ... */` line (no `*` prefix)
+// USED TO falsely satisfy the decl-presence check. With this helper the
+// parser refuses to count a match whose `.index` sits inside a `/* … */`
+// interval — preserving all existing drift-line-number accuracy because
+// the source string is never mutated.
+function findDecl(
+  regex: RegExp,
+  source: string,
+  intervals: Array<[number, number]>,
+): RegExpExecArray | null {
+  // Sorted-aware linear scan: a match landing at index N can only be inside
+  // an interval whose start ≤ N < end. Since `intervals` is sorted by start
+  // offset (see buildBlockCommentIntervals), all candidate intervals come
+  // BEFORE any whose start > N. So we can `break` on the first interval
+  // with start > N — converting the per-match scan from O(N) to O(1)
+  // amortized (intervals past the test index are skipped entirely).
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(source)) !== null) {
+    let inside = false;
+    for (const [s, e] of intervals) {
+      if (s > m!.index) break; // sorted: no further interval can contain this match
+      if (m!.index >= s && m!.index < e) {
+        inside = true;
+        break;
+      }
+    }
+    if (!inside) return m;
+  }
+  return null;
+}
+
 // Match a REAL declaration like `export const PO_UNIFIED_AGENT_SCRIPT: PromptScript =`.
 // Anchored at `(?:^|\n)\s*` so a `// export const PO_UNIFIED_AGENT_SCRIPT` inside a
 // comment line cannot falsely satisfy the declaration check (commented-out
@@ -194,10 +264,11 @@ const promptIdRegex = (blockRegion: string): RegExp | null => {
 
 function parseAndCheck(source: string): Drift[] {
   const drifts: Drift[] = [];
+  const blockCommentIntervals = buildBlockCommentIntervals(source);
 
   // Check 2-4: per-const invariants
   for (const { constName, promptId: expectedPromptId } of CANONICAL) {
-    const declMatch = declRegex(constName).exec(source);
+    const declMatch = findDecl(declRegex(constName), source, blockCommentIntervals);
     if (!declMatch) {
       drifts.push({
         check: 'declaration-presence',
@@ -266,8 +337,8 @@ function parseAndCheck(source: string): Drift[] {
 
   // Check 5: disjoint invariant. Independent of per-const checks so a
   // disjoint drift surfaces as a separate finding (different failure mode).
-  const unifiedDecl = declRegex('PO_UNIFIED_AGENT_SCRIPT').exec(source);
-  const markerDecl = declRegex('PO_MARKER_TAIL_SCRIPT').exec(source);
+  const unifiedDecl = findDecl(declRegex('PO_UNIFIED_AGENT_SCRIPT'), source, blockCommentIntervals);
+  const markerDecl = findDecl(declRegex('PO_MARKER_TAIL_SCRIPT'), source, blockCommentIntervals);
   if (unifiedDecl && markerDecl) {
     // Same caller-contract as the main loop: skip past the entire prev
     // match, not just one char past it. See nextConstBoundary's JSDoc.
@@ -380,10 +451,6 @@ export const PO_MARKER_TAIL_SCRIPT: PromptScript = {
   //     removed `(?:^|\n)\s*`) and now `* export const X:` lines falsely
   //     satisfy the declaration check.
   //
-  // NOTE: This case tests the SAFE pattern only. The BUG pattern — a `/* ... */`
-  // block containing a bare `\nexport const X:` line (no `*` prefix) — is a
-  // known limitation documented in the script's main JSDoc.
-  //
   // Self-contained template literal (not derived from FIXTURE_OK via replace)
   // to avoid anchoring fragility to FIXTURE_OK's import-line format. If
   // FIXTURE_OK's structure ever changes (multiline-import refactor, import
@@ -406,6 +473,54 @@ export const PO_MARKER_TAIL_SCRIPT: PromptScript = {
  *       promptId: 'demo-marker',
  *       steps: [],
  *     }
+ */
+
+export const PO_UNIFIED_AGENT_SCRIPT: PromptScript = {
+  promptId: 'unified-agent-entry',
+  steps: [],
+}
+
+export const PO_MARKER_TAIL_SCRIPT: PromptScript = {
+  promptId: 'marker-tail-poll',
+  steps: [],
+}
+`;
+
+  // (7) BUG PATTERN defense — block comment containing BARE
+  // `\nexport const X:` lines (NO `*` prefix; just space-indented like
+  // code). Before the fix, `declRegex`'s `(?:^|\n)\s*export...` anchor was
+  // line-only — these bare lines matched and the parser falsely counted them
+  // as real declarations (declaration-presence was satisfied TWICE per
+  // const, and `nextConstBoundary` could be misled). The fix layers
+  // `buildBlockCommentIntervals` + `findDecl` on top of `declRegex` to
+  // filter matches whose index lands inside a `/* ... */` interval.
+  //   - Expected: parses cleanly (0 drifts, exit 0).
+  //   - If this case starts failing, the block-comment scanner is broken
+  //     and the bare-comment-line bug pattern is regressed: a future edit
+  //     that drops illustrative code blocks into a `/* ... */` would falsely
+  //     satisfy the declaration-presence check, masking a real missing
+  //     declaration in production source.
+  //
+  // Self-contained template literal — same rationale as case 6: visible
+  // tie to the canonical shape protects against FIXTURE_OK drift masking.
+  const FIXTURE_JSDOC_BARE = `import type { PromptScript } from './types'
+
+/*
+ * JSDoc-style block whose example content is space-indented like code
+ * (BUG pattern: NO asterisk prefix on the export lines). The
+ * block-comment scanner MUST skip these matches:
+ *
+   export const PO_UNIFIED_AGENT_SCRIPT: PromptScript = {
+     promptId: 'demo-unified',
+     steps: [],
+   }
+ *
+   export const PO_MARKER_TAIL_SCRIPT: PromptScript = {
+     promptId: 'demo-marker',
+     steps: [],
+   }
+ *
+ * More JSDoc.
  */
 
 export const PO_UNIFIED_AGENT_SCRIPT: PromptScript = {
@@ -467,6 +582,14 @@ export const PO_MARKER_TAIL_SCRIPT: PromptScript = {
       description:
         'JSDoc-style comment with `* export const X:` lines must NOT be parsed as declarations',
       source: FIXTURE_JSDOC_IGNORED,
+      expectedExit: 0,
+      expectedChecks: [],
+    },
+    {
+      id: 'jsdoc-comment-bare-decl',
+      description:
+        'block comment with bare \\nexport const X: lines (BUG pattern, no asterisk prefix) must NOT be parsed as declarations',
+      source: FIXTURE_JSDOC_BARE,
       expectedExit: 0,
       expectedChecks: [],
     },

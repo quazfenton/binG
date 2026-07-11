@@ -65,8 +65,12 @@ describe('orchestrator reproduction harness', () => {
     const errors = events.filter(e => e.type === 'tool_error');
     // No strict assertion here — presence is helpful but not required for this harness
 
+    // Yield microtask queue so fire-and-forget telemetry promises settle
+    await new Promise(resolve => setTimeout(resolve, 0));
+
     // Check that the tool-call-tracker has recorded redacted invocation payloads
     const invocations = await toolCallTracker.getRecentInvocations(10);
+    console.log('DEBUG invocations:', JSON.stringify(invocations));
     expect(invocations.length).toBeGreaterThanOrEqual(1);
     const hasWriteFile = invocations.some(i => (i.tool_name || i.toolName || '').includes('write'));
     expect(hasWriteFile).toBe(true);

@@ -110,25 +110,10 @@ describe('tool-call-tracker — read/write disconnect (SEV-10)', () => {
     // Polish nit (a): the prior `events` snapshot array was redundant —
     // read-side assertions on totalToolCalls / successfulToolCalls / etc.
     // already verify the 3 falls-through-to-memory. Dropped.
-    const originalPrepare = db.prepare.bind(db);
-    db.prepare = (sql: string) => {
-      if (/INSERT INTO tool_calls/i.test(sql)) {
-        // Return a runner whose .run(...) throws — every write goes through
-        // the catch block in recordToolCall and falls through to memoryRecords.
-        return {
-          run: (..._args: any[]) => {
-            throw new Error(
-              'Simulated read/write disconnect (SEV-10): SQLite INSERT intentionally throws',
-            );
-          },
-          // The defensive CREATE statements in initialize() also call .run()
-          // and reset the table — those SHOULD succeed. Filter them by
-          // statement shape so the monkey-patch only affects the data
-          // INSERT path (recordToolCall + recordToolCalls).
-        };
-      }
-      return originalPrepare(sql);
-    };
+    // Monkey-patch shape lives on the tracker (simulateInsertDisconnectForTests)
+    // — centralising it kept 3 easy-to-drift invariants (INSERT regex,
+    // .bind(db) on the original, and the finally-restore) in one place.
+    const restorePrepare = toolCallTracker.simulateInsertDisconnectForTests(db);
 
     try {
       const baseId = `disconnect-${Date.now()}`;
@@ -150,7 +135,7 @@ describe('tool-call-tracker — read/write disconnect (SEV-10)', () => {
       // counter is wired (not just present at 0 after __resetMemoryRecordsForTests).
       expect(toolCallTracker.getDisconnectCountForTests()).toBe(3);
     } finally {
-      db.prepare = originalPrepare;
+      restorePrepare();
     }
 
     // Read using the same shape as model-ranker.ts's periodic refresh
@@ -243,19 +228,9 @@ describe('tool-call-tracker — read/write disconnect (SEV-10)', () => {
         'Test requires better-sqlite3 with a working db.prepare — DB unavailable in this env',
       );
     }
-    const originalPrepare = db.prepare.bind(db);
-    db.prepare = (sql: string) => {
-      if (/INSERT INTO tool_calls/i.test(sql)) {
-        return {
-          run: (..._args: any[]) => {
-            throw new Error(
-              'Simulated read/write disconnect — INSERT intentionally throws for hasRecordedTools test',
-            );
-          },
-        };
-      }
-      return originalPrepare(sql);
-    };
+    // Same helper as the SEV-10 test above — centralised so INSERT-regex
+    // typos + missing finally-restores can't drift between sites.
+    const restorePrepare = toolCallTracker.simulateInsertDisconnectForTests(db);
     try {
       await toolCallTracker.recordToolCall({
         provider: 'integration-disconnect',
@@ -273,7 +248,7 @@ describe('tool-call-tracker — read/write disconnect (SEV-10)', () => {
       // SEV-10 fix is observable from the new boolean API.
       expect(await toolCallTracker.hasRecordedTools()).toBe(true);
     } finally {
-      db.prepare = originalPrepare;
+      restorePrepare();
       toolCallTracker.__resetMemoryRecordsForTests();
     }
   });

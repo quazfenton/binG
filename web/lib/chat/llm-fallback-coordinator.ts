@@ -175,6 +175,32 @@ const DEFAULT_SILENCE_MS = 20000;
 const DEFAULT_HARD_DEADLINE_MS = 30000;
 
 /**
+ * In-cluster "ninerouter-class" provider set — providers whose first-token
+ * (TTFT) arrival IS the reliability signal because they hit in-cluster
+ * edge-GPU routes (a stuck-tool hang pattern that no other provider class
+ * exhibits). Detected via `Bug #Y`: the coordinator defaults
+ * `silenceMs` to 5_000 ms for any primary whose name is in this set so the
+ * fallback chain walks faster on a TTFT stall. Other providers keep the
+ * 20_000 ms default — a working-but-slow primary is more valuable than a
+ * premature steal of its first chunk.
+ *
+ * Declared `as const` so the runtime array is a `readonly
+ * ['ninerouter', 'ollama', 'kiro']` literal-tuple type — narrows
+ * downstream call-site `primaryProvider: string` arguments to one of the
+ * three member literals at compile time where consumers want
+ * exhaustiveness checks (e.g. the provider-discrimination `it.each`
+ * matrix in `__tests__/llm-fallback-coordinator.test.ts`).
+ *
+ * Single source of truth for the membership list — referenced by both
+ * the production `silenceMs` default in
+ * `coordinateConcurrentFallback(...)` and the matching test parametrisation,
+ * so adding a 4th ninerouter-class provider in the future is a one-line
+ * change here (no risk of the test matrix drifting out of sync with the
+ * heuristic).
+ */
+export const NINEROUTER_CLASS_PROVIDERS = ['ninerouter', 'ollama', 'kiro'] as const;
+
+/**
  * Discriminated union for the first-race result (primary chunk vs silence
  * timeout). Errors are also represented here so they can be surfaced.
  */
@@ -228,7 +254,7 @@ export async function* coordinateConcurrentFallback<T>(
     // walks the fallback chain faster when TTFT stalls; keep the 20s default
     // for cross-provider AND quality-of-service-sensitive providers so we
     // don't prematurely steal a working-but-slow primary's first token.
-    silenceMs = ['ninerouter', 'ollama', 'kiro'].includes(primaryProvider)
+    silenceMs = (NINEROUTER_CLASS_PROVIDERS as readonly string[]).includes(primaryProvider)
       ? 5000
       : DEFAULT_SILENCE_MS,
     hardDeadlineMs = DEFAULT_HARD_DEADLINE_MS,
