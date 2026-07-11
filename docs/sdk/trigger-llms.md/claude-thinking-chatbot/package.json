@@ -39,8 +39,8 @@
     "@radix-ui/react-toggle": "^1.1.1",
     "@radix-ui/react-toggle-group": "^1.1.1",
     "@radix-ui/react-tooltip": "^1.1.6",
-    "@trigger.dev/react-hooks": "^3.3.16",
-    "@trigger.dev/sdk": "^3.3.16",
+    "@trigger.dev/react-hooks": "^4.5.3",
+    "@trigger.dev/sdk": "^4.5.3",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "ai": "^5.0.52",
@@ -67,7 +67,7 @@
     "zod": "latest"
   },
   "devDependencies": {
-    "@trigger.dev/build": "^3.3.16",
+    "@trigger.dev/build": "^4.5.3",
     "@types/node": "^22",
     "@types/react": "^18",
     "@types/react-dom": "^18",
