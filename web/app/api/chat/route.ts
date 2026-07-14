@@ -1776,11 +1776,31 @@ const config: UnifiedAgentConfig = {
       }
       tools = await Promise.race(mcpRace);
     } catch (err: any) {
-      chatLogger.warn('[CHAT-ROUTE] MCP tools unavailable — continuing without them', {
+      // Chat-hang-fix: when the full MCP tool assembly loses the race (slow
+      // network-bound source, mcporter runtime, remote MCP, etc.), do NOT drop
+      // the model to zero tools — that leaves it unable to edit files and it
+      // typically emits an intro then stalls until the turn watchdog fires.
+      // Fall back to the STATIC VFS file-edit tools (write_file, apply_diff,
+      // read_file, list_files, search_files, batch_write, delete_file). These
+      // are pure schema definitions with no network/subprocess dependency and
+      // are dispatched through the same config.executeTool → callMCPToolFromAI_SDK
+      // path below, so file editing keeps working in the degraded case.
+      let fallbackTools: typeof tools = [];
+      try {
+        const { getVFSToolDefinitions } = await import('@/lib/mcp/vfs-mcp-tools');
+        fallbackTools = getVFSToolDefinitions() as typeof tools;
+      } catch (fallbackErr: any) {
+        chatLogger.warn('[CHAT-ROUTE] VFS fallback tools unavailable', {
+          requestId,
+          error: fallbackErr?.message,
+        });
+      }
+      chatLogger.warn('[CHAT-ROUTE] MCP tools timed out — falling back to static VFS tools', {
         requestId,
         error: err.message,
+        fallbackToolCount: fallbackTools.length,
       });
-      tools = [];
+      tools = fallbackTools;
       mcpRaceError = err;
     }
     // Chat-hang-fix #4 boundary #4 — in-between anchor for the next

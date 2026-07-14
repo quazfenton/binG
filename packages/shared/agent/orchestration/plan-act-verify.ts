@@ -1136,9 +1136,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const result = await this.config.executeTool(name, args);
 
         // Record successful tool call in telemetry
-        import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-          const structuredResult = buildToolResult(name, args, result);
-          toolCallTracker.recordToolCall({
+        try {
+          const mod = await import('@/lib/tools/tool-call-tracker');
+          mod.toolCallTracker.recordToolCall({
             model: this.validatedConfig.model,
             provider: this.validatedConfig.provider,
             toolName: name,
@@ -1146,7 +1146,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             timestamp: Date.now(),
             toolCallId,
           });
-          toolCallTracker.recordInvocationPayload({
+          mod.toolCallTracker.recordInvocationPayload({
             timestamp: Date.now(),
             model: this.validatedConfig.model,
             provider: this.validatedConfig.provider,
@@ -1155,16 +1155,18 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             originStack: createOriginStack(),
             toolCallId,
           });
-        }).catch((err) => { log.debug?.('PlanActVerify: recordToolResult failed:', err); });
+        } catch (err) {
+          log.debug?.('PlanActVerify: recordToolResult failed:', err);
+        }
 
         return result;
       } catch (error: any) {
         attempt++;
         if (attempt > maxRetries) {
           // Record failed tool call in telemetry
-          import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-            const structuredResult = buildToolResult(name, args, undefined, error);
-            toolCallTracker.recordToolCall({
+          try {
+            const mod = await import('@/lib/tools/tool-call-tracker');
+            mod.toolCallTracker.recordToolCall({
               model: this.validatedConfig.model,
               provider: this.validatedConfig.provider,
               toolName: name,
@@ -1173,7 +1175,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               timestamp: Date.now(),
               toolCallId,
             });
-            toolCallTracker.recordInvocationPayload({
+            mod.toolCallTracker.recordInvocationPayload({
               timestamp: Date.now(),
               model: this.validatedConfig.model,
               provider: this.validatedConfig.provider,
@@ -1182,7 +1184,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               originStack: createOriginStack(),
               toolCallId,
             });
-          }).catch((err) => { log.debug?.('PlanActVerify: executeTool telemetry failed:', err); });
+          } catch (err) {
+            log.debug?.('PlanActVerify: executeTool telemetry failed:', err);
+          }
 
           throw new Error(`Tool ${name} failed after ${maxRetries} retries: ${error.message}`);
         }

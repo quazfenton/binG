@@ -303,17 +303,67 @@ let cachedMCPorterTools: Array<{
   }
 }> = []
 
+// Chat-hang-fix (mcporter): dedup + hard-timeout guard for the mcporter tool
+// cache refresh. mcporter is a runtime/process-spawning architecture (it can
+// `createRuntime()` + connect stdio/http servers). On the hosted web server a
+// slow or hung mcporter runtime (e.g. an npx spawn, a dead remote URL, or a
+// DESKTOP_MODE leak) must NEVER block the per-request tool assembly. This
+// refresh is a *cache* fill, so it is safe to run in the background and let
+// callers read whatever is currently cached (empty on first call, populated
+// once a prior background refresh lands).
+let mcporterRefreshInFlight: Promise<void> | null = null
+const MCPORTER_REFRESH_TIMEOUT_MS = parseInt(
+  process.env.MCPORTER_LIST_TIMEOUT_MS || '30000',
+  10,
+)
+
 async function refreshMCPorterToolsCache(): Promise<void> {
   if (!mcporterIntegration.isEnabled()) {
     cachedMCPorterTools = []
     return
   }
 
-  try {
-    cachedMCPorterTools = await getMCPorterToolDefinitions()
-  } catch (error: any) {
-    logger.warn(`Failed to refresh mcporter tools: ${error?.message || 'unknown error'}`)
+  // Dedup concurrent refreshes — a single in-flight listTools() is shared by
+  // all callers so a burst of chat requests doesn't spawn N mcporter runtimes.
+  if (mcporterRefreshInFlight) {
+    return mcporterRefreshInFlight
   }
+
+  mcporterRefreshInFlight = (async () => {
+    try {
+      // Hard ceiling so a hung mcporter runtime (unbounded connect/listTools)
+      // can't keep the in-flight promise — and thus a background timer — alive
+      // forever. On timeout we keep the previous cache and move on.
+      const defs = await Promise.race([
+        getMCPorterToolDefinitions(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`mcporter refresh timed out after ${MCPORTER_REFRESH_TIMEOUT_MS}ms`)),
+            MCPORTER_REFRESH_TIMEOUT_MS,
+          ),
+        ),
+      ])
+      cachedMCPorterTools = defs
+    } catch (error: any) {
+      logger.warn(`Failed to refresh mcporter tools: ${error?.message || 'unknown error'}`)
+    } finally {
+      mcporterRefreshInFlight = null
+    }
+  })()
+
+  return mcporterRefreshInFlight
+}
+
+/**
+ * Kick off an mcporter cache refresh WITHOUT awaiting it, so the caller's
+ * critical path (per-request tool assembly) never blocks on the mcporter
+ * runtime. The `.catch()` swallows any rejection (refreshMCPorterToolsCache
+ * already logs+degrades internally; this is belt-and-suspenders so an unhandled
+ * rejection can't crash the process).
+ */
+function scheduleMCPorterToolsRefresh(): void {
+  if (!mcporterIntegration.isEnabled()) return
+  void refreshMCPorterToolsCache().catch(() => {})
 }
 
 /**
@@ -678,6 +728,19 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
   // assignment-before-read for cachedMCPorterTools preserved (only read
   // downstream after this PA resolves). ~5-30ms/request saved when
   // mcporter is enabled; zero overhead when disabled.
+  // Chat-hang-fix (mcporter): the mcporter cache refresh is NO LONGER awaited
+  // in this critical path. It was previously the 5th slot of this Promise.all,
+  // which meant a slow/hung mcporter runtime (createRuntime + connect/listTools
+  // has no built-in ceiling) blocked the ENTIRE per-request tool assembly. When
+  // getMCPToolsForAI_SDK is wrapped by the chat route's Promise.race timeout,
+  // that block caused the route to discard ALL tools — including the static VFS
+  // file-edit tools that need no network/subprocess — leaving the model with
+  // zero tools (root cause of the "intro text then indefinite stall" hang).
+  // The refresh now runs in the background (bounded + deduped) and callers read
+  // whatever `cachedMCPorterTools` currently holds. Empty on first request,
+  // populated on subsequent ones once the background refresh lands.
+  scheduleMCPorterToolsRefresh();
+
   const [
     providerToolDefs,
     vfsToolDefs,
@@ -688,12 +751,6 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     import('./vfs-mcp-tools'),
     import('../bash/bash-tool'),
     import('../powers/mem0-power'),
-    // 5th slot value is irrelevant — refresh returns void and is ignored
-    // by the 4-element destructure. Promise.resolve(undefined) is explicit
-    // (vs Phase 2's sentinel-default style) since this op has no useful value.
-    mcporterIntegration.isEnabled()
-      ? refreshMCPorterToolsCache()
-      : Promise.resolve(undefined),
     // NEW-C3 (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
     // §NEW-1 followup-c NEW-C3): pre-flight module-cache warming for the 2
     // lazy-init singletons hoisted from getBlaxelProviderInstance (L1018) +
