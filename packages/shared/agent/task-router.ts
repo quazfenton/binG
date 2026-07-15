@@ -13,6 +13,7 @@ import { emitEvent } from '@/lib/events/bus';
 import { AnyEvent as EventTypes } from '@/lib/events/schema';
 import type { IntentMatch, IntentDefinition } from './intent-schema';
 import { classifyIntentStage1, classifyIntentStage2 } from './intent-schema';
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 
 // Re-export types for convenience
 export type { IntentMatch, IntentDefinition } from './intent-schema';
@@ -764,7 +765,12 @@ class TaskRouter {
       sandboxHandle: session.sandboxHandle,
     });
 
-    const tools = await getMCPToolsForAI_SDK(request.userId, request.task);
+    // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+    const toolPlan: SelectToolPlanResult = selectToolPlan({
+      userMessage: request.task,
+      authenticated: !!request.userId,
+    });
+    const tools = await getMCPToolsForAI_SDK(request.userId, toolPlan);
 
     const result = await provider.runAgentLoop({
       userMessage: request.task,

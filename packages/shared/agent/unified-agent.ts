@@ -45,6 +45,7 @@ import { enhancedTerminalManager } from '@/lib/terminal/enhanced-terminal-manage
 import { getSandboxProvider } from '@/lib/sandbox/providers'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp'
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan'
 import type { PreviewInfo } from '@/lib/sandbox/types'
 import type { DesktopHandle } from '@/lib/computer/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
@@ -686,7 +687,18 @@ export class UnifiedAgent {
     }
 
     log.debug('Listing MCP tools...')
-    const tools = await getMCPToolsForAI_SDK(this.config.userId, this.config.task)
+    // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+    const toolPlan: SelectToolPlanResult = selectToolPlan({
+      // TODO(mcp-audit): populate userMessage from getCurrentUserTurn()
+      // once the UnifiedAgent class exposes a current-turn accessor.
+      // For now we route the agent's standing task through the new
+      // `agentTask` field so it does not collide with the planner's
+      // current-turn weighting (selectToolPlan turns > history > task).
+      userMessage: '',
+      agentTask: this.config.task || '',
+      authenticated: !!this.config.userId,
+    })
+    const tools = await getMCPToolsForAI_SDK(this.config.userId, toolPlan)
     log.debug(`Found ${tools.length} MCP tools`)
     return tools.map(t => ({ name: t.function.name, description: t.function.description }))
   }
@@ -696,7 +708,18 @@ export class UnifiedAgent {
 
     try {
       log.debug('Initializing MCP...')
-      const tools = await getMCPToolsForAI_SDK(this.config.userId, this.config.task)
+      // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+      const toolPlan: SelectToolPlanResult = selectToolPlan({
+        // TODO(mcp-audit): populate userMessage from getCurrentUserTurn()
+      // once the UnifiedAgent class exposes a current-turn accessor.
+      // For now we route the agent's standing task through the new
+      // `agentTask` field so it does not collide with the planner's
+      // current-turn weighting (selectToolPlan turns > history > task).
+      userMessage: '',
+      agentTask: this.config.task || '',
+        authenticated: !!this.config.userId,
+      })
+      const tools = await getMCPToolsForAI_SDK(this.config.userId, toolPlan)
       this.mcpInitialized = true
       log.info(`MCP initialized with ${tools.length} tools`)
     } catch (error: any) {

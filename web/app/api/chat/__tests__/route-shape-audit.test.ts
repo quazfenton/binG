@@ -283,6 +283,15 @@ vi.mock('@/lib/streaming/sse-event-schema', () => ({
 vi.mock('@/lib/mcp', () => ({
   getMCPToolsForAI_SDK: vi.fn().mockResolvedValue([]),
   callMCPToolFromAI_SDK: vi.fn().mockResolvedValue({ success: true, output: '' }),
+  // The route imports MCP_AGENT_TIMEOUT_MS for the merged agentTurnSignal
+  // (request.signal + agentTurnAbort + this timeout). The previous mock
+  // omitted it, which surfaced as "No MCP_AGENT_TIMEOUT_MS export is
+  // defined on the @/lib/mcp mock" once the route-hit-path crossed the
+  // line that references it (route.ts:1501). Use a value lower than the
+  // 100-300ms watchdog timings the stall tests set via env vars so the
+  // mock timeout never wins the race successfully — the tests rely on
+  // the agent-side rejection to fire first.
+  MCP_AGENT_TIMEOUT_MS: 30_000,
 }));
 
 vi.mock('@/lib/powers/mem0-power', () => ({

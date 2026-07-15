@@ -37,6 +37,7 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
+import { selectToolPlan } from '@/lib/tools/select-tool-plan';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
@@ -1742,6 +1743,59 @@ const config: UnifiedAgentConfig = {
       10,
     );
     const MCP_TOOLS_ROUTE_TIMEOUT_MS = MCP_TOOLS_TIMEOUT_MS + 3000;
+
+    // ── selectToolPlan: route-level pure planner ────────────────────────────
+    // Compute the deterministic tool-selection plan BEFORE calling
+    // getMCPToolsForAI_SDK. The plan replaces the raw `task` string the
+    // route previously passed — see bing/web/lib/mcp/architecture-integration.ts
+    // `TaskFilterView` doc for the three-mode contract. Plan mode swaps the
+    // substring gates on Blaxel / Nullclaw / Arcade / Composio / Provider
+    // for intent + source-permission gates, scopes Composio via
+    // `requestedToolkits`, and zeroes out Arcade tools unless the planner
+    // matched a web.* / integration.* intent. The VFS / bash / native MCP /
+    // MCPorter / remote MCP / Mem0 / web_search sources remain
+    // unconditional so the chat-hang-fix VFS fallback stays intact.
+    //
+    // History is filtered to user/assistant/system roles so a turn carrying
+    // tool-call payloads (role:'tool') doesn't pollute the planner's
+    // history-weight signal — the planner only sees content strings.
+    const toolPlan = selectToolPlan({
+      userMessage: task,
+      conversationHistory: processedMessages
+        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant' | 'system',
+          content: typeof m.content === 'string'
+            ? m.content
+            : JSON.stringify(m.content ?? ''),
+        })),
+      attachedFiles: explicitFilesFromMentions,
+      authenticated: !!authenticatedUserId,
+      // The route's filesystem-edit gate already accepts/rejects writes
+      // via the existing shouldHandleFilesystemEdits() helper. We pass
+      // its result so the planner strips mutating tool IDs (file.write,
+      // file.str_replace, file.batch_write, file.append, code.ast_diff)
+      // when the route's gate is closed.
+      filesystemEditEligible: enableFilesystemEdits,
+      configuredSources: {
+        arcade: !!process.env.ARCADE_API_KEY,
+        composio: !!process.env.COMPOSIO_API_KEY,
+        nullclaw: process.env.NULLCLAW_ENABLED === 'true',
+        remoteMcp: true, // optimistic — runtime + Phase-2 transport decides
+        mem0: !!process.env.MEM0_API_KEY,
+        mcpHttp: true, // optimistic — Phase-2 transport decides
+      },
+    });
+    chatLogger.debug('[CHAT-ROUTE] selectToolPlan', {
+      requestId,
+      intents: toolPlan.intents,
+      coreToolsCount: toolPlan.coreTools.length,
+      matchCount: toolPlan.matchCount,
+      fallbackUsed: toolPlan.fallbackUsed,
+      sourcePermissions: toolPlan.sourcePermissions,
+      requestedToolkits: toolPlan.requestedToolkits,
+      authenticatedUser: !!authenticatedUserId,
+    });
     // Tier 1: abort signal for Phase 2 internal degradation.
     const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
     // Boundary #4 timestamp — measured AT try-entry so duration includes
@@ -1757,7 +1811,7 @@ const config: UnifiedAgentConfig = {
     let mcpRaceError: { message?: string } | null = null;
     try {
       const mcpRace: Promise<any>[] = [
-        getMCPToolsForAI_SDK(authenticatedUserId, task, mcpAbortSignal),
+        getMCPToolsForAI_SDK(authenticatedUserId, toolPlan, mcpAbortSignal),
         // Tier 2: safety-net ceiling — padded so the Tier-1 abort signal
         // fires first, Phase 2 degrades, and getMCPToolsForAI_SDK returns
         // Phase 1 tools before this timer rejects the race.
@@ -2741,17 +2795,17 @@ const config: UnifiedAgentConfig = {
                 });
 
                 // Send response content
-                if (orchestrationResult.response) {
+                if (orchestrationResult?.response) {
                   enqueue('token', {
-                    content: orchestrationResult.response,
+                    content: orchestrationResult?.response ?? "",
                   });
                 }
 
                 // Send completion
                 enqueue('done', {
-                  success: orchestrationResult.success,
-                  content: orchestrationResult.response,
-                  metadata: orchestrationResult.metadata,
+                  success: orchestrationResult?.success ?? false,
+                  content: orchestrationResult?.response ?? "",
+                  metadata: orchestrationResult?.metadata ?? null,
                 });
 
                 controller.close();
@@ -2790,8 +2844,8 @@ const config: UnifiedAgentConfig = {
 
         // Non-streaming response
         return NextResponse.json({
-          success: orchestrationResult.success,
-          content: orchestrationResult.response,
+          success: orchestrationResult?.success ?? false,
+          content: orchestrationResult?.response ?? "",
           data: orchestrationResult,
         });
       }
@@ -7212,6 +7266,31 @@ export async function GET(request: NextRequest) {
         timestamp: Date.now(),
       });
     } catch (error) {
+      // OUTERCATCH-GAP fix: mirror the L5497-L5516 524 contract from the
+      // POST handler's outer catch. A StallWatchdogError propagating to this
+      // GET warmup handler (e.g. watchdog firing during provider warmup probe,
+      // or via timeouts in prepareStep from a streaming variant) must
+      // surface as HTTP 524 with the x-stall-fired signal — not the
+      // generic 500 fallback below. Closes STALL-524-OUTERCATCH-GAP for the
+      // warmup route; the active /api/chat route was already covered.
+      if (error instanceof StallWatchdogError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: error.message,
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+          },
+          {
+            status: 524,
+            headers: {
+              'content-type': 'application/json',
+              'x-stall-fired': 'true',
+              'x-stall-reason': 'stall-watchdog',
+            },
+          },
+        );
+      }
       chatLogger.error("Chat API warmup error:", { error: error instanceof Error ? error.message : String(error) });
       return NextResponse.json(
         { success: false, error: "Warmup failed" },

@@ -56,6 +56,15 @@ export interface SelectToolPlanInput {
   /** Current user turn. Used as the highest-weight signal. */
   userMessage: string;
   /**
+   * Long-lived agent's standing task (e.g. unified-agent's `config.task`).
+   * Weighted between current turn and history — used so legacy callers
+   * that don't yet expose a `getCurrentUserTurn()` accessor can still
+   * surface their agent-level intent without confusing the planner's
+   * turn-vs-history weighting. Empty when no agent standing-task is
+   * available (e.g. direct chat route, which passes the live turn).
+   */
+  agentTask?: string;
+  /**
    * Prior turns in chronological order (oldest first). Weighted lower
    * than the current turn — used only to disambiguate "search" when the
    * surrounding history is unambiguously code-search.
@@ -84,6 +93,8 @@ export interface SelectToolPlanOptions {
   currentTurnWeight?: number;
   /** Weight multiplier on history matches. Default: 0.4. */
   historyWeight?: number;
+  /** Weight multiplier on agentTask matches. Default: 0.6. */
+  agentTaskWeight?: number;
   /**
    * Multiplier applied to an intent's score when its negative regex matches
    * the current turn. Default: 0 (hard exclude). Set to e.g. 0.25 for
@@ -443,6 +454,7 @@ function scoreIntent(
   rule: IntentRule,
   currentTurn: string,
   historyTurns: ReadonlyArray<string>,
+  agentTask: string,
   opts: Required<Omit<SelectToolPlanOptions, 'baselineCoreToolIds'>>,
 ): IntentMatchResult {
   let score = 0;
@@ -462,6 +474,16 @@ function scoreIntent(
       score += rule.weight * opts.historyWeight;
       matchedSignals.push(`history[${i}]`);
     }
+  }
+
+  // Agent-task positive match — intermediate weight (between current
+  // turn and history). Only meaningful for legacy callers that don't
+  // yet expose a current-turn accessor; the active chat route does
+  // NOT pass agentTask and continues to consume only currentTurn +
+  // history as before.
+  if (agentTask && safeMatches(rule.keywordsRegExp, agentTask)) {
+    score += rule.weight * opts.agentTaskWeight;
+    matchedSignals.push('agent-task');
   }
 
   // Negative evidence — current turn only, applied to current score
@@ -545,6 +567,7 @@ export function selectToolPlan(
   options: SelectToolPlanOptions = {},
 ): SelectToolPlanResult {
   const userMessage = isStringOrEmpty(input.userMessage);
+  const agentTask = isStringOrEmpty(input.agentTask);
   const historyTurns = extractHistoryTexts(input.conversationHistory);
 
   const opts = {
@@ -552,6 +575,7 @@ export function selectToolPlan(
     baselineCoreToolIds: options.baselineCoreToolIds ?? BASELINE_CORE_TOOL_IDS,
     currentTurnWeight: Math.max(0, options.currentTurnWeight ?? 1.0),
     historyWeight: Math.max(0, options.historyWeight ?? 0.4),
+    agentTaskWeight: Math.max(0, options.agentTaskWeight ?? 0.6),
     negativeMultiplier: clamp01(options.negativeMultiplier ?? 0),
     maxIntents: Math.max(1, options.maxIntents ?? DEFAULT_MAX_INTENTS),
   };
@@ -559,7 +583,7 @@ export function selectToolPlan(
   // ── Per-intent scoring ────────────────────────────────────────────────────
   const scored: IntentMatchResult[] = [];
   for (const rule of INTENT_RULES) {
-    const result = scoreIntent(rule, userMessage, historyTurns, opts);
+    const result = scoreIntent(rule, userMessage, historyTurns, agentTask, opts);
     scored.push(result);
   }
 
@@ -601,8 +625,12 @@ export function selectToolPlan(
   // - A bare URL in the current turn strongly hints at web.fetch — but
   //   only when the web.fetch intent was NOT negatively-evidenced this
   //   turn. "do not browse https://x" should NOT add web.fetch.
-  const urlMatch = /(https?:\/\/[^\s)}\]]+)/i.test(userMessage);
-  const explicitFileMatch = /[^\s]+\.[a-z0-9]{1,5}\b/i.test(userMessage);
+  const urlMatch =
+    /(https?:\/\/[^\s)}\]]+)/i.test(userMessage) ||
+    (!!agentTask && /(https?:\/\/[^\s)}\]]+)/i.test(agentTask));
+  const explicitFileMatch =
+    /[^\s]+\.[a-z0-9]{1,5}\b/i.test(userMessage) ||
+    (!!agentTask && /[^\s]+\.[a-z0-9]{1,5}\b/i.test(agentTask));
   const hasAttachedFile = !!(input.attachedFiles && input.attachedFiles.length > 0);
   // Detect negation before aggregating so we don't override it later.
   const webFetchNegated = (
@@ -653,7 +681,12 @@ export function selectToolPlan(
     allCandidateIds.add('web.fetch');
     allPermissions.nullclaw = true;
   }
-  if (urlMatch && !webSearchNegated) {
+  // URL-signal arcade grant is GUARDED by BOTH web.search AND web.fetch
+  // negation. Without the webFetchNegated check, "do not browse
+  // https://..." would still open Arcade's web/browse catalog because
+  // web.search's negation regex doesn't include "browse". Audit
+  // finding: P0 planner leak on URL signal — fixed.
+  if (urlMatch && !webSearchNegated && !webFetchNegated) {
     allPermissions.arcade = allPermissions.arcade || true;
   }
   if (hasAttachedFile || explicitFileMatch) {
