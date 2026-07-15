@@ -113,6 +113,21 @@ export function detectNeedsMoreTurns(result: DetectableResult): TurnDetectionRes
     confidence = 'high';
   }
 
+  // Signal: read-loop — same read tool with same path in consecutive steps.
+  // Catches the model re-reading the same file/directory instead of taking action.
+  if (steps.length >= 2) {
+    const secondLast = steps[steps.length - 2];
+    const bothRead = READ_ONLY_TOOL_NAMES.has(lastToolName) && READ_ONLY_TOOL_NAMES.has(secondLast?.toolName || '');
+    if (bothRead) {
+      const lastPath = lastStep?.args?.path || lastStep?.args?.filePath;
+      const prevPath = secondLast?.args?.path || secondLast?.args?.filePath;
+      if (lastPath && prevPath && lastPath === prevPath) {
+        signals.push('read-loop');
+        confidence = 'high';
+      }
+    }
+  }
+
   // Signal: deep-research-loop — 3+ consecutive reads/searches with no writes
   const trailingReadCount = _countTrailingConsecutive(
     steps, s => READ_ONLY_TOOL_NAMES.has(s.toolName)
@@ -310,13 +325,18 @@ export function buildDetectedReprompt(
     return `Several tools failed (${failedNames}). Try a DIFFERENT approach — use alternative tools or change your strategy. Do NOT retry the same failing calls.`;
   }
 
+  if (signals.includes('read-loop')) {
+    const path = lastStep?.args?.path || 'a resource';
+    return `You ALREADY read ${path} in a previous step and got its contents. DO NOT read it again. Take immediate action: write or edit files, run commands, or provide your analysis based on what you already know. Re-reading the same files wastes time and makes no progress.`;
+  }
+
   if (signals.includes('deep-research-loop')) {
-    return `You've gathered information through ${stepCount} read/search operations. STOP reading — take action NOW. Make the necessary file changes, create files, or provide your final analysis.`;
+    return `You've gathered information through ${stepCount} read/search operations. STOP reading — take action NOW. Make the necessary file changes, create files, or provide your final analysis. Do NOT call any read/search tool again.`;
   }
 
   if (signals.includes('read-then-stall') || signals.includes('read-many-write-none')) {
     const lastReadPath = lastStep?.args?.path || 'a resource';
-    return `You just read ${lastReadPath}. Now take action based on what you learned — make the necessary changes, create files, or provide your analysis. Do NOT re-read the same resource.`;
+    return `You just read ${lastReadPath} and now must take action. DO NOT call any read/list/search tool again — you have enough information. Make the necessary file changes, create files, run commands, or provide your analysis. Stopping after a read without acting is not acceptable.`;
   }
 
   if (signals.includes('unclosed-code-block')) {

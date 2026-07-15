@@ -1698,6 +1698,10 @@ const config: UnifiedAgentConfig = {
       // cancels the in-flight LLM HTTP request. See the abortSignal
       // JSDoc on UnifiedAgentConfig for the per-mode wiring status.
       abortSignal: agentTurnSignal,
+      // Reset the stall watchdog when the auto-continuation loop starts a
+      // new streaming call, preventing false timeouts during the gap between
+      // the primary stream ending and the continuation's first token.
+      onProgress: () => { lastProgressAt = Date.now(); },
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,

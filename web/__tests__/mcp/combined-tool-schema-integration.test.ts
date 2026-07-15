@@ -18,7 +18,7 @@
  *   ✅ web_search tool — hardcoded JSON Schema
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
@@ -152,6 +152,19 @@ interface CategorizedTool {
 
 // ── Test ───────────────────────────────────────────────────────────────────
 describe('Combined getMCPToolsForAI_SDK() schema integration', () => {
+  // F2 minimal fix (cascades to F3): buildMem0Tools gates on
+  // isMem0Configured() which reads process.env.MEM0_API_KEY. Without the
+  // key, buildMem0Tools returns {} and categoryCounts.mem0 stays at 0,
+  // failing both `expect(count).toBeGreaterThan(0)` and
+  // `expect(categoryCounts.mem0).toBe(6)`. Setting + clearing the key
+  // around each test restores the 6-tool catalog expected by this
+  // combined-integration test.
+  beforeEach(() => {
+    process.env.MEM0_API_KEY = 'test-mem0-api-key';
+  });
+  afterEach(() => {
+    delete process.env.MEM0_API_KEY;
+  });
   it('all tool sources should produce valid JSON Schema parameters when assembled together', async () => {
     const allTools: CategorizedTool[] = [];
 

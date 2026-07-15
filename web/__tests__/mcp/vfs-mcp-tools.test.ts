@@ -111,7 +111,8 @@ describe('VFS MCP Tools', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Content is required');
+      expect(result.error.code).toBe('INVALID_CONTENT');
+      expect(result.error.message).toBe('Content is required.');
     });
 
     it('should return error when content is null', async () => {
@@ -123,7 +124,8 @@ describe('VFS MCP Tools', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toBe('Content is required');
+      expect(result.error.code).toBe('INVALID_CONTENT');
+      expect(result.error.message).toBe('Content is required.');
     });
   });
 

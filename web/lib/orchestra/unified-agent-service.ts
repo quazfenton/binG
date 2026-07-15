@@ -789,6 +789,14 @@ export interface UnifiedAgentConfig {
   // Streaming
   onStreamChunk?: (chunk: string) => void;
   /**
+   * Progress heartbeat — called when the service is about to start a new
+   * streaming phase (e.g. auto-continuation re-invocation). The route uses
+   * this to reset its stall watchdog's lastProgressAt so the watchdog
+   * doesn't falsely fire during the gap between the primary stream ending
+   * and the continuation's first token arriving.
+   */
+  onProgress?: () => void;
+  /**
    * Caller-supplied AbortSignal. Upstream callers (e.g. the chat route's
    * POST handler) forward `request.signal` here so a user-initiated stop
    * can interrupt the orchestration chain.
@@ -4282,80 +4290,9 @@ async function runV1ApiWithTools(
       // via stepReprompt already handles it. Don't double-trigger.
       const hasRoleSelectMarker = response.includes('[ROLE_SELECT]') || response.includes('[ROUTING_METADATA]');
 
-      // Bug #Q7 mirror audit + 2 reviewer fixes (1)+(2):
-      //   (1) HOIST `lastThreeTools.some(isReadOnly)` above while condition --
-      //       restores the legacy `if (!hasReadOnlyTool) break` early-break semantics.
-      //       Note: dropped `hasListSuffix(name)` per reviewer rec to avoid
-      //       dependency on the missing-from-import hasListSuffix symbol.
-      //   (2) WRAP the migrated loop body in try { ... } finally { clearContinuationCount }
-      //       so the per-requestId counter is cleared on every exit path
-      //       (normal, break, throw).
-      // Note: reviewer's flag (3) [explicit const requestId declaration] is deferred
-      // to separate review since requestId is already in scope at L3387 inside
-      // runV1ApiWithTools.
-      try {
-        const lastThreeTools = toolInvocations.slice(-3);
-        const lastToolName = (t: { toolName?: string } | undefined): string =>
-          (t?.toolName?.toLowerCase() ?? '');
-        const hasReadOnlyTool = lastThreeTools.some(t => {
-          const name = lastToolName(t);
-          return READ_ONLY_TOOL_NAMES.has(name);
-        });
-        const hasWriteTool = lastThreeTools.some(t => {
-          const name = lastToolName(t);
-          return WRITE_TOOL_NAMES.has(name) || hasMutationSuffix(name);
-        });
-
-        while (
-          toolInvocations.length > 0 &&
-          response.trim() &&
-          !hasRoleSelectMarker &&
-          hasReadOnlyTool
-        ) {
-          const autoDecision = decideAutoContinue({
-            requestId,
-            advancedDetectorFn: needsMoreTurnsDetector,
-            steps: toolInvocations.map(t => ({ toolName: t.toolName, args: t.args })),
-            responseText: response,
-            result: {
-              response,
-              success: toolInvocations.every(t => t.result?.success !== false),
-              steps: toolInvocations.map(t => ({
-                toolName: t.toolName,
-                args: t.args,
-                result: t.result,
-              })),
-              fileEdits: toolInvocations
-                .filter(t => t?.toolName && WRITE_TOOL_NAMES.has(t.toolName.toLowerCase()))
-                .map(t => ({
-                  path: typeof t?.args?.path === 'string' ? t.args.path : undefined,
-                  action: 'write',
-                  toolName: t.toolName,
-                }))
-                .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
-            }
-          });
-          if (!autoDecision.continue) {
-            log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
-              reason: autoDecision.reason,
-              continuationsSoFar: autoDecision.continuationsSoFar,
-              finalIteration: autoDecision.finalIteration,
-            });
-            break;
-          }
-          // Preserve the legacy `if (hasWriteTool) break` stop-on-write semantics.
-          if (hasWriteTool) break;
-          log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
-            reason: autoDecision.reason,
-            continuationsSoFar: autoDecision.continuationsSoFar,
-            toolCount: toolInvocations.length,
-            responseLength: response.length,
-            lastTools: toolInvocations.slice(-3).map(t => t.toolName),
-          });
-        }
-      } finally {
-        clearContinuationCount(requestId);
-      }
+      // Counter cleanup is handled by the second continuation loop (L5191).
+      // The pre-check loop was removed — it called decideAutoContinue without
+      // re-invoking the LLM, wasting the continuation budget on a no-op.
 
       const duration = Date.now() - startTime;
       const steps = toolInvocations.map((invocation) => ({
@@ -5126,6 +5063,10 @@ async function runV1ApiWithTools(
 
         try {
           const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+          // Signal progress to the route's stall watchdog before starting the
+          // continuation stream, so the watchdog doesn't false-fire during
+          // the gap between the primary stream ending and the first token.
+          config.onProgress?.();
           let contContent = '';
           const contToolInvocations: typeof toolInvocations = [];
 

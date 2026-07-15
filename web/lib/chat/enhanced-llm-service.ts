@@ -2454,6 +2454,17 @@ export class EnhancedLLMService {
   private async resolveMCPToolName(rawName: string, userId?: string): Promise<string | null> {
     if (!rawName) return null;
 
+    // [DO NOT MIGRATE TO selectToolPlan — DO NOT PASS taskFilter]
+    // resolveMCPToolName MUST match against the entire MCP tool catalog so that
+    // tool-name normalization & fuzzy matching find every canonical name the
+    // LLM might invent (e.g. 'list_directory' -> 'list_files'). Passing a
+    // `SelectToolPlanResult` here would route computeTaskFilterView into
+    // `view.kind === 'plan'`, where the per-source filters shrink the catalog
+    // down to intents + baselines and break resolution for any tool not in
+    // the active intent set. The unfiltered `taskFilter = undefined` path
+    // (view.kind === 'none') returns the FULL catalog, which is what this
+    // helper depends on. Documented per the MCP-TOOL-SELECTION-POSTAUDIT
+    // remediation (Option C — skip & document).
     const mcpToolNames = (await getMCPToolsForAI_SDK(userId)).map((tool) => tool.function.name);
     if (mcpToolNames.includes(rawName)) return rawName;
 
@@ -2480,6 +2491,17 @@ export class EnhancedLLMService {
       name,
       inputSchema: cfg.inputSchema as any,
     }));
+    // [DO NOT MIGRATE TO selectToolPlan — DO NOT PASS taskFilter]
+    // extractToolCallsFromLLMResponse builds a registry of {name -> schema}
+    // for the advancedToolCallDispatcher, which needs the JSON Schema for
+    // every MCP tool the LLM could possibly call. Passing a
+    // `SelectToolPlanResult` here would route computeTaskFilterView into
+    // `view.kind === 'plan'` and shrink the catalog to intents + baselines,
+    // so the dispatcher would crash when the LLM invoked any
+    // out-of-intent-set tool. The unfiltered `taskFilter = undefined` path
+    // (view.kind === 'none') returns the FULL catalog, which is what the
+    // dispatcher's schema-lookup table depends on. Documented per the
+    // MCP-TOOL-SELECTION-POSTAUDIT remediation (Option C — skip & document).
     const mcpTools = (await getMCPToolsForAI_SDK(userId)).map((tool) => ({
       name: tool.function.name,
       inputSchema: tool.function.parameters as any,

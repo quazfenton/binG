@@ -699,3 +699,30 @@
 - TODO_IMPLEMENTATION_SUMMARY.md - Completed TODOs
 - 000.md - Architecture analysis
 - NEXT_STEPS_IMPLEMENTATION.md - Integration tests, templates
+
+
+---
+
+## 📋 Audit follow-up tickets
+
+These are SHOULD-CONSIDER items harvested from completed audits. None are blocking; each is documented in full in a dedicated file.
+
+### MCP-TOOL-SELECTION-POSTAUDIT (opened 2026-07-15)
+- **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).
+- **Status:** 🟡 OPEN (P2 — SHOULD-CONSIDER, 0 MUST-FIX)
+- **Effort:** ~1–2 days engineering
+- **Impact:** Hardens `selectToolPlan` symmetry; fixes CI tsc target for `packages/shared/`; prevents agent-purpose URL bleed; tracks `currentUserTurn` TODO.
+- **Full ticket:** [`docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md)
+- **Tasks (5):**
+  - [ ] ① Document `agentTask` negative-evidence asymmetry in `web/lib/tools/select-tool-plan.ts` (`scoreIntent` L484–L496).
+  - [ ] ② Gate `agentTask` positive scoring to fire ONLY when `currentTurn.trim() === ''` (same file).
+  - [ ] ③ Track `currentUserTurn()` TODO comments in `packages/shared/agent/unified-agent.ts` (L692, L713).
+  - [ ] ④ Add `packages/shared/tsconfig.json` + `"typecheck"` script to `packages/shared/package.json`.
+  - [ ] ⑤ Gate `agentTask` URL detection behind `agentTaskUrlReadsEnabled?: boolean` opt-in flag (default `false`).
+- **Source files:**
+  - `/opt/bing/web/lib/tools/select-tool-plan.ts`
+  - `/opt/bing/packages/shared/agent/unified-agent.ts`
+  - `/opt/bing/packages/shared/tsconfig.json` (new)
+  - `/opt/bing/packages/shared/package.json`
+  - `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` (this file)
+- **Acceptance:** Full audit suite + new tests green; `pnpm --filter @bing/shared typecheck` exits 0.

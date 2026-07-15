@@ -130,6 +130,7 @@ export type AutoContinueReason =
   | 'file_edits_present'
   | 'needs_more_turns'
   | 'read-then-stall'
+  | 'read-loop'
   | 'deep-research-loop'
   | 'failure-cascade'
   | 'write-verify-loop'
@@ -249,6 +250,7 @@ export const DETECTOR_BUCKET_REASONS: Set<string> = new Set<string>([
   'file_edits_present',           // defaultFileEditDetector
   'needs_more_turns',             // needsMoreTurnsDetector fallback (signal[0] undefined)
   'read-then-stall',
+  'read-loop',
   'deep-research-loop',
   'failure-cascade',
   'write-verify-loop',
