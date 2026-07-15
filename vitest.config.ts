@@ -27,7 +27,8 @@ export default defineConfig({
     // auto-discover under either workflow; vitest dedupes overlapping matches.
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx', 'test/**/*.spec.ts', 'test/**/*.spec.tsx', '**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx', '**/__tests__/**/*.spec.ts', '**/__tests__/**/*.spec.tsx'],
     exclude: [
-      'node_modules/',
+      '**/node_modules/**',
+      'web/**',
       'dist/',
       '.git/',
     ],

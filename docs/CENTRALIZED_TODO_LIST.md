@@ -726,3 +726,24 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - `/opt/bing/packages/shared/package.json`
   - `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` (this file)
 - **Acceptance:** Full audit suite + new tests green; `pnpm --filter @bing/shared typecheck` exits 0.
+
+
+### VITEST-WORKSPACE-DEDUPLICATION (opened 2026-07-15)
+- **Source:** Diagnostic from F1 + F2 followups — observed in vitest output that each canonical test failure + each canonical test pass coexists with stale node_modules duplicate runs (pnpm vendored `node_modules/bing/web/__tests__/**`). Inflates reported failures ~2-3x.
+- **Status:** 🟡 OPEN (P2 — CI infrastructure, non-blocking)
+- **Effort:** ~1 day (1 review PR + dry-run + rollout)
+- **Impact:** Medium. Reduces vitest failure counts from inflated 29 -> unique <=10; halves CI runtime on web tests; restores signal-to-noise for real regressions.
+- **Full ticket:** [`docs/VITEST_WORKSPACE_DEDUPLICATION.md`](VITEST_WORKSPACE_DEDUPLICATION.md)
+- **Recommended fix (Option A — Hybrid Exclude, 2 line changes):**
+  - In `/opt/bing/vitest.config.ts:25-30` (exclude array):
+    - Replace `'node_modules/'` -> `'**/node_modules/**'`
+    - Add `'web/**'`
+- **Tasks (3):**
+  - [ ] Apply the 2-line diff to `/opt/bing/vitest.config.ts`.
+  - [ ] Verify `/opt/bing/package.json` `"test"` script still triggers web tests via `pnpm --filter web test` (or workspace orchestration), so we don't drop 237 web tests from CI.
+  - [ ] Re-run audit suites + F1/F2/F3/select-tool-plan tests; confirm unique failure counts drop from 29 to <=10.
+- **Source files:**
+  - `/opt/bing/vitest.config.ts`
+  - `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` (this file)
+  - `/opt/bing/docs/VITEST_WORKSPACE_DEDUPLICATION.md` (detail)
+- **Acceptance:** `pnpm test` from root = 28 tests (no web dup); `pnpm --filter web test` = 237 tests (no symlink dup); CI failure count drops ~60%.

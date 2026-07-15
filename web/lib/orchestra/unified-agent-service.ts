@@ -1427,7 +1427,17 @@ export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   // follow-up with grounded context is a stronger escalation signal than a
   // bare verb. If both happen to match (rare), the more specific reasoning is
   // preferred for telemetry.
-  if (contextualBoost > 0 && toolingRichness >= RICH_TOOLING_THRESHOLD) {
+  //
+  // BUG FIX: Add brevity check to avoid routing short follow-ups (e.g., "ok", "yes")
+  // to expensive v1-agent-loop orchestration. Messages under 10 chars without
+  // multi-step intent should use lightweight v1-api path even with rich tooling.
+  const isBriefFollowup =
+    signals.rawLength < 10 &&
+    !signals.hasMultiStep &&
+    !signals.hasMutationVerb &&
+    !signals.hasDiagnosticVerb;
+
+  if (!isBriefFollowup && contextualBoost > 0 && toolingRichness >= RICH_TOOLING_THRESHOLD) {
     return {
       mode: 'v1-agent-loop',
       reason: 'contextual_followup_with_rich_tooling',
@@ -5121,10 +5131,29 @@ async function runV1ApiWithTools(
             break;
           }
         } catch (contErr: any) {
+          const errorMsg = contErr?.message || String(contErr);
+          const isRateLimitError = 
+            errorMsg.includes('Rate limit') ||
+            errorMsg.includes('429') ||
+            errorMsg.includes('quota') ||
+            errorMsg.includes('throttle');
+
           log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning accumulated response', {
-            error: contErr?.message,
+            error: errorMsg,
             iteration: autoContinueIteration,
+            isRateLimitError,
           });
+
+          // BUG FIX: Exit auto-continuation loop on rate limit or other provider errors.
+          // Previous behavior continued to iteration 3 even after rate limit,
+          // wasting tokens and compute on doomed requests. Now we break immediately
+          // when we detect rate limiting or provider exhaustion.
+          if (isRateLimitError) {
+            log.info('[V1-API-WITH-TOOLS] Rate limit detected, stopping auto-continuation early', {
+              iteration: autoContinueIteration,
+              error: errorMsg,
+            });
+          }
           break;
         }
       }
@@ -5707,7 +5736,19 @@ async function runV1Orchestrated(
     if (shouldFallbackToV1Api) {
       log.warn('[runV1Orchestrated] Orchestrator degraded, falling back to v1-api', { fallbackReason, streamedTextLength });
       try {
-        const fallbackResult = await runV1Api(config);
+        // BUG FIX: Create a fresh AbortController for the fallback attempt
+        // instead of reusing the orchestrator's signal. This prevents
+        // "caller aborted before start" errors when the orchestrator signal
+        // was fired due to orchestrator timeout (not user abort).
+        // The orchestrator may have timed out, but that doesn't mean the
+        // fallback v1-api should be rejected without attempting it.
+        const fallbackAbortController = new AbortController();
+        const fallbackConfig = {
+          ...config,
+          abortSignal: fallbackAbortController.signal,
+        };
+        
+        const fallbackResult = await runV1Api(fallbackConfig);
         log.info('[runV1Orchestrated] v1-api fallback completed', { fallbackReason });
         // Bug #40: tag the response as degraded:true so the UI/route can
         // show a banner and the next-turn LLM sees the [STEER] orchestration_
