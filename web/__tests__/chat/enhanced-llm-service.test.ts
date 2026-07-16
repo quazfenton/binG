@@ -256,6 +256,15 @@ describe('F3 rate-limit circuit breaker — fallback chain respects blacklist', 
     ).rejects.toThrow(/all providers exhausted/)
   })
 
+  // Mirror-vs-production divergence (2026-07-16, SHOULD-CONSIDER from code
+  // review): this test exercises ONLY the rate-limit (429) blacklist
+  // contract. The production fallback chain at enhanced-llm-service.ts:L880
+  // and L1467 ALSO calls `isServerErrorBlacklisted(provider)` (the 5xx
+  // blacklist) before invoking a provider — this mirror does not assert that
+  // branch because it predates the F1 server-error-skipped audit. A future
+  // Test 14 should mirror the 5xx-blacklist contract (provider returns 500 →
+  // isServerErrorBlacklisted → skip on next request). Tracked under
+  // .tickets/MCP-RATE-LIMITED-TTL-RECOVERY.md.
   it('Test 13: non-rate-limit errors (e.g. 500) do NOT blacklist the provider and are returned as-is', async () => {
     deepseekInvoke.mockResolvedValueOnce({ status: 500, error: 'server-error' })
 

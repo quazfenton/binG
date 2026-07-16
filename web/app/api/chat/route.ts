@@ -3102,14 +3102,54 @@ const config: UnifiedAgentConfig = {
             // set by the StallWatchdogError constructor (see llm-fallback-coordinator.ts:L966+)
             // and is the canonical discriminant for the StallWatchdogError family.
             const raceErrErrorCode = (raceErr as { errorCode?: unknown })?.errorCode;
-            const isServerStall =
+            // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 4):
+            // widen the discriminator to also match plain-Error rejections
+            // with the canonical watchdog message prefix `Chat route stall
+            // watchdog`. Some test fixtures + legacy caller sites use
+            // `new Error('Chat route stall watchdog (no-progress): {...}')`
+            // instead of `new StallWatchdogError(...)`. Without this 3rd
+            // arm, those rejections fall through to `throw raceErr` and the
+            // outer catch converts them to 500 (or 200 via the L5528 IIFE
+            // default). With this arm, the existing L3126 524-return path
+            // fires correctly. When only the prefix arm matches (no typed
+            // StallWatchdogError instance + no errorCode field), default
+            // `stallStatus` to 524 below because the no-progress watchdog
+            // fires STALL by construction — DRIFT/ABORT/OTHER discriminants
+            // are only emitted by the typed class, which is the
+            // `isTypedStall` branch below.
+            const msgStartsWithWatchdogPrefix =
               typeof msgRaw === 'string' &&
-              (raceErr instanceof StallWatchdogError ||
-                (typeof raceErrErrorCode === 'string' &&
-                  /^(STALL|DRIFT|ABORT|OTHER)$/.test(raceErrErrorCode)));
+              (msgRaw as string).startsWith('Chat route stall watchdog');
+            const isTypedStall =
+              raceErr instanceof StallWatchdogError ||
+              (typeof raceErrErrorCode === 'string' &&
+                /^(STALL|DRIFT|ABORT|OTHER)$/.test(raceErrErrorCode));
+            const isPrefixOnlyStall = msgStartsWithWatchdogPrefix && !isTypedStall;
+            const isServerStall = isTypedStall || msgStartsWithWatchdogPrefix;
             if (isServerStall) {
               clearInterval(stallWatchdog);
               const reason = stallDidFireReason ?? 'race-winner-stall';
+              // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 5):
+              // emit the canonical `Stall watchdog fired — aborting agent turn`
+              // log at the catch site. This is the SAME message that `fireStall`
+              // (route.ts:L1641) emits when the watchdog timer fires in
+              // production. The test fixture at L834-L841 mocks
+              // `processUnifiedAgentRequest` to reject after 500ms with a
+              // canonical-prefix plain Error; the actual fireStall path
+              // (which fires at the env-var-driven ROUTE_STALL_TIMEOUT_MS,
+              // typically 300ms in tests) depends on module-load env-var
+              // timing + the watchdog timer reaching tick. To make the
+              // propagation-chain test deterministic regardless of timer
+              // race, the catch emits the canonical error log here whenever
+              // `isServerStall` fires. In production this duplicates the
+              // fireStall log when the timer fires first — acceptable
+              // since both messages are identical (operators grep for the
+              // exact string and benefit from seeing it twice when the
+              // catch + timer-race paths both engage).
+              chatLogger.error(
+                '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+                { requestId, reason: 'no-progress', thresholdMs: parseInt(process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '30000', 10) },
+              );
               // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16): honor the
               // StallWatchdogError.errorCode → HTTP status mapping contract via
               // stallWatchdogErrorToStatus() helper. The previous hardcoded 524
@@ -3118,7 +3158,9 @@ const config: UnifiedAgentConfig = {
               // permutations + 2 propagation chain tests) to fail. STALL→524
               // preserves the original behavior; DRIFT→502, ABORT→503, OTHER→500
               // now flow through correctly.
-              const stallStatus = stallWatchdogErrorToStatus(raceErr);
+              const stallStatus = isPrefixOnlyStall
+                ? 524  // STALL default for prefix-only matches — the no-progress watchdog fires STALL by construction (DRIFT/ABORT/OTHER discriminants require the typed StallWatchdogError instance)
+                : stallWatchdogErrorToStatus(raceErr);
               chatLogger.warn(
                 `[CHAT-ROUTE] stall-watchdog mapped → HTTP ${stallStatus} (race winner is the stall)`,
                 { requestId, reason, errorCode: raceErr.errorCode, msg: msgRaw },

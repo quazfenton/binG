@@ -76,6 +76,11 @@ function recordRateLimitError(provider: string): void {
   }
 }
 
+// Recovery contract: this is for MANUAL health-check recovery (an operator
+// calling the function after verifying the upstream rate limit cleared) — NOT
+// for re-trying a 429 in the same call. Calling this after a fresh 429 just
+// resets the counter, so the next attempt re-enters the chain and gets 429'd
+// again, masking the rate limit. Use only after a positive health probe.
 export function resetRateLimitCounter(provider: string): void {
   _consecutive429Count.delete(provider);
 }
