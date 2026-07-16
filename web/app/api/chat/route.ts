@@ -2851,10 +2851,12 @@ const config: UnifiedAgentConfig = {
         const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
           task: task,  // User task only — filesystem context already in conversationHistory
           sessionId: resolvedConversationId,
-          ownerId: authenticatedUserId,
+          ownerId: authenticatedUserId || filesystemOwnerId,
           stream: stream === true,
           model: normalizedModel,
           workspacePath: `workspace/sessions/${resolvedConversationId}`,
+          tools: config.tools,
+          executeTool: config.executeTool,
         });
 
         if (stream === true) {

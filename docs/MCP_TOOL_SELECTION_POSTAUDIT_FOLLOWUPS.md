@@ -137,6 +137,7 @@ The MCP tool-selection audit closed with 0 MUST-FIX items. The code-reviewer fla
 - [x] ③ both TODO comments reference `MCP-TOOL-SELECTION-POSTAUDIT ③`. **(DONE 2026-07-16)** — TODOs verified at L692 + L713 of `/opt/bing/packages/shared/agent/unified-agent.ts`.
 - [ ] ④ `packages/shared/tsconfig.json` exists; `pnpm --filter @bing/shared typecheck` exits 0. **(PARTIAL 2026-07-16)** — see "What landed (item ④ PARTIAL closure 2026-07-16)" section below.
 - [x] ⑤ opt-in flag landed; unit test added & passing. **(DONE 2026-07-16)**
+- [x] ⑥ requireFullCatalog lock-in test landed (...legacy-substring-contract.test.ts:L519-L708 — 11 assertions covering computeTaskFilterView × 3 input shapes + 5 per-source-filter helpers [...all] returns + 3 regression tests; vitest 34/34 green 2026-07-16).
 - [ ] Full audit suite passes: `vitest run web/__tests__/api/chat/route-shape-audit.test.ts web/__tests__/api/chat/route-tool-list.test.ts web/__tests__/mcp/legacy-substring-contract.test.ts web/__tests__/mcp/request-to-final-list.test.ts web/__tests__/tools/select-tool-plan*.test.ts` — 100% green.
 - [ ] `tsc --noEmit` from `/opt/bing` reports 0 NEW errors (pre-existing errors in `unified-agent.ts`/`opencode-direct.ts`/`task-router.ts` are out of scope).
 - [ ] `CENTRALIZED_TODO_LIST.md` updated with `MCP-TOOL-SELECTION-POSTAUDIT` reference.
@@ -155,8 +156,7 @@ The MCP tool-selection audit closed with 0 MUST-FIX items. The code-reviewer fla
 ## Partial closure (items ② + ⑤ resolved 2026-07-16)
 
 Items ② and ⑤ are fully resolved as of 2026-07-16. Items ①, ④ remain open
-(separate work streams; not actioned this turn). Item ③ is also resolved —
-see "What landed (item ③)" subsection at the end of this section.
+(separate work streams; not actioned this turn).Item ③ is also resolved — see "What landed (item ③)" subsection at the end of this section. Item ⑥ was added as a post-postaudit follow-up and resolved 2026-07-16 — see "Item ⑥ closure (2026-07-16)" below.
 
 ## Partial closure (item ④ — tsc exits 0 NOT achieved 2026-07-16)
 
@@ -365,6 +365,84 @@ returning exactly two hits at L692 and L713.
   risks re-introducing the test isolation confound — see the long
   docblock at the top of select-tool-plan.test.ts for the pre-commit
   hook hardening recommendation.
+
+---
+
+## Item ⑥ closure (2026-07-16)
+
+Item ⑥ is fully resolved as of 2026-07-16. The `requireFullCatalog`
+typed sentinel — introduced in `enhanced-llm-service.ts` so tools-only
+helpers (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`) get
+the full MCP catalog for fuzzy name matching and JSON-Schema lookup —
+was previously locked in by prose JSDoc + `computeTaskFilterView`
+SHOULD-CONSIDER notes, not CI-runnable assertions. The risk: a future
+regression that loosened the sentinel's short-circuit OR widened the
+per-source-filter helpers' `[...all]` acceptance criteria would silently
+degrade tools-only dispatch with no test catching it. Item ⑥ closes that
+gap by codifying the contract as Vitest assertions.
+
+### What landed (item ⑥ DONE 2026-07-16)
+
+The lock-in test suite landed at
+`/opt/bing/web/__tests__/mcp/legacy-substring-contract.test.ts:L519-L708`
+with **11 assertions** distributed across three test groups:
+
+- **3 × `computeTaskFilterView` cases** (sentiment: the sentinel ALWAYS
+  short-circuits regardless of input shape):
+  1. `requireFullCatalog: plan-shaped taskFilter + sentinel → kind: "none"`
+     (verifies sentinel wins over a valid `SelectToolPlanResult` with
+     non-empty `intents` + populated `reasons[]`)
+  2. `requireFullCatalog: non-empty string taskFilter + sentinel → kind: "none"`
+     (verifies sentinel wins over substring-mode input that would
+     otherwise route through `view.kind === 'string'`)
+  3. `requireFullCatalog: undefined taskFilter + sentinel → kind: "none"`
+     (verifies sentinel wins over the "first request before any user
+     message" path)
+
+- **5 × per-source filter helpers under view.kind === 'none'** (sentiment:
+  when the sentinel short-circuits, each helper must return `[...all]`
+  verbatim — this is what makes the cap-bypass at
+  `architecture-integration.ts:L1666-L1668a` meaningful):
+  1. `filterBlaxelToolsByView` → returns `[...all]`
+  2. `filterNullclawToolsByView` → returns `[...all]` minus the always-
+     stripped `nullclaw_status` sentinel (existing invariant preserved
+     even under 'none' view)
+  3. `filterArcadeToolsByView` → returns `[...all]`
+  4. `filterComposioToolsByView` → returns `[...all]`
+  5. `filterProviderToolsByView` → returns `[...all]`
+
+- **3 × regression tests** (sentiment: the sentinel ONLY changes the
+  'none' short-circuit, not the 'plan' or 'string' discriminators):
+  1. `no sentinel: undefined taskFilter → kind: "none"` (legacy
+     fall-through preserved at `architecture-integration.ts:L787`)
+  2. `no sentinel: plan-shaped taskFilter → kind: "plan"` (plan mode
+     discriminator unchanged)
+  3. `no sentinel: string taskFilter → kind: "string"` (string mode
+     discriminator unchanged)
+
+### Test verification (vitest 34/34 green 2026-07-16)
+
+`npx vitest run __tests__/mcp/legacy-substring-contract.test.ts` reports
+**34 passing tests** in ~2.7s. The file's full `it()` count is 34,
+matching the breakdown (Tests 1-10 + per-source substring predicates +
+`isStructuredMcpError` + `unwrapStructuredToolError`).
+
+The MCP-CAPBYPASS SHOULD-CONSIDER follow-up is therefore closed: any
+future regression to the sentinel short-circuit, duck-type guard, OR
+per-source-helper `[...all]` invariant now fails in CI rather than
+surfacing as a tools-only dispatch ambiguity at LLM-runtime.
+
+### Why this is item ⑥ and not a wider ticket
+
+The `requireFullCatalog` typed sentinel was added in a separate turn
+post-audit per the SHOULD-CONSIDER narrowed to: "the typed sentinel does
+NOT bypass `normalizeAndCapTools`'s 25-tool budget, so a future default-
+flip could dispatch genuine MCP tools to an undefined bucket." Item ⑥
+closes the contract-test half — proving the sentinel short-circuit is
+honored + asserting the per-source helpers respect it. The cap-bypass
+itself (whether to override `getToolsMaxTotal()` via `maxBudget =
+Infinity` OR rename to `skipPerSourceFilters: true`) is left as a
+follow-up (CAP-BYPASS ticket) tracked separately, not in this closure.
 
 ---
 

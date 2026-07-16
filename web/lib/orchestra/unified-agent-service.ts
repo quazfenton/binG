@@ -1761,6 +1761,14 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ DISABLE_V2_MODE:', process.env.DISABLE_V2_MODE || 'unset');
   log.info('[UnifiedAgent] │ messageLength:', (config.userMessage || '').length);
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
+  if (Array.isArray(config.tools) && config.tools.length > 0) {
+    log.info('[UnifiedAgent-DEBUG] Tools ARE present:', { count: config.tools.length, names: config.tools.map(t => (t as any).name).slice(0, 5) });
+  } else {
+    log.info('[UnifiedAgent-DEBUG] Tools MISSING from config. keys count:', Object.keys(config).length);
+  if ((config as any).tools !== undefined) log.info('[UnifiedAgent-DEBUG] tools key EXISTS but count is 0 or not array');
+  if ((config as any).tools === undefined) log.info('[UnifiedAgent-DEBUG] tools key is UNDEFINED');
+  if (config.conversationId) log.info('[UnifiedAgent-DEBUG] conversationId:', config.conversationId);
+  }
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
   log.info('[F6] resolved mode vs startupCaps state', { resolvedMode: mode, desktopCap: startupCaps.desktop, opencodeSdkCap: startupCaps.opencodeSdk, v2NativeCap: startupCaps.v2Native, v2ContainerizedCap: startupCaps.v2Containerized, v2LocalCap: startupCaps.v2Local, v1ApiCap: startupCaps.v1Api, statefulAgentCap: startupCaps.statefulAgent, mastraWorkflowsCap: startupCaps.mastraWorkflows });
@@ -6271,10 +6279,11 @@ async function runV1ApiCompletion(
           const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
           const textEdits = extractFileEdits(content);
           const ownerId = config.userId || config.filesystemOwnerId || '1';
+          const textScopePath = config.scopePath || (config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined);
           for (const edit of textEdits) {
             if (edit.path && edit.content) {
               try {
-                const editPath = config.scopePath ? `${config.scopePath}/${edit.path}` : edit.path;
+                const editPath = textScopePath ? `${textScopePath}/${edit.path}` : edit.path;
                 if (edit.action === 'delete') {
                   await virtualFilesystem.deletePath(ownerId, editPath);
                 } else {

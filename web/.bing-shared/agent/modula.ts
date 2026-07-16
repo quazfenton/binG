@@ -260,6 +260,8 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
+          tools: (request as any).tools,
+          executeTool: (request as any).executeTool,
         });
 
         result = {
@@ -286,6 +288,8 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
+          tools: (request as any).tools,
+          executeTool: (request as any).executeTool,
         });
 
         result = {
