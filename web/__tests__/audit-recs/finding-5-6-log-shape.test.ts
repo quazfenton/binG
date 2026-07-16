@@ -74,9 +74,17 @@ describe('Finding #5 — processUnifiedAgentRequest returned outcome discriminat
       // surface the outcome to operators.
       //
       // Test surface: anchor on the auditResponseShape function-body block
-      // (greedy through the first `}`); assert `outcome: meta.outcome` and the
+      // (greedy through the LAST `}`); assert `outcome: meta.outcome` and the
       // canonical log prefix both live inside that block.
-      const bodyMatch = UAG.match(/function\s+auditResponseShape\([\s\S]*?\n\s*\}/m);
+      //
+      // Rationale for greedy `*` (vs non-greedy `*?`): the auditResponseShape
+      // function body contains multiple `}` characters — the meta-object's
+      // indented `},`, the log.info call's `});`, and the function's
+      // column-0 `}`. The non-greedy variant stopped at the FIRST
+      // `\n\s*}`, so the captured body excluded the actual log.info call
+      // where `outcome: meta.outcome` lives. Greedy matching captures up
+      // to the LAST `\n\s*}`, which is the intended "full function body" range.
+      const bodyMatch = UAG.match(/function\s+auditResponseShape\([\s\S]*\n\s*\}/m);
       expect(bodyMatch, 'auditResponseShape function body must exist in source').not.toBeNull();
       const body = bodyMatch?.[0] ?? '';
       expect(body).toMatch(/outcome:\s*meta\.outcome/);

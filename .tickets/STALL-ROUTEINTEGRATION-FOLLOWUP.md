@@ -1,6 +1,6 @@
 # STALL-ROUTEINTEGRATION-FOLLOWUP
 
-**Status**: OPEN
+**Status**: 🟡 PARTIAL (2026-07-16)
 **Date opened**: 2026-07-16
 **Related**: `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` (Path C section)
 **Related**: `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` (Path C row)
@@ -41,10 +41,43 @@ npx vitest run app/api/chat/__tests__/route-shape-audit.test.ts
 
 ## Acceptance criteria
 
-- [ ] All 6 `it.skip` tests are un-skipped and passing
-- [ ] route-shape-audit.test.ts: 0 failures, 0 skipped (current: 7 passing, 6 skipped)
-- [ ] Postaudit acceptance suite: 187 passing (current: 181 passing + 6 skipped)
-- [ ] No regression in route.ts's existing 524 / 502 / 503 / 500 contract for other code paths
+- [x] ~~All 6 `it.skip` tests are un-skipped and passing~~ — 3 `it.skip` / `it.skip.each` cases un-skipped (L800, L925, L994 with 4 cases = 6 total) but **0 of 6 currently pass**; all fail with status 200 from the L5528 override path
+- [ ] route-shape-audit.test.ts: 0 failures, 0 skipped — **CURRENTLY 6 fail / 7 pass / 0 skipped**; needs L5528 fix to close
+- [ ] Postaudit acceptance suite: 187 passing (current: 181 passing + 6 failing)
+- [x] No regression in route.ts's existing 524 / 502 / 503 / 500 contract for other code paths — verified via path C closure + 6 new tests in stall-watchdog-error.test.ts
+
+## Partial closure (2026-07-16)
+
+**What landed:**
+
+- `/opt/bing/web/app/api/chat/route.ts` L3046-L3075: inner catch uses `stallWatchdogErrorToStatus(raceErr)` instead of hardcoded 524. This honors the canonical errorCode → HTTP status mapping contract (STALL→524, DRIFT→502, ABORT→503, OTHER→500).
+- `/opt/bing/web/app/api/chat/route.ts` L3055-L3059: log message changed to `[CHAT-ROUTE] stall-watchdog mapped → HTTP ${stallStatus}` for grep-stable differentiation across all 4 errorCodes.
+- `/opt/bing/web/app/api/chat/__tests__/route-shape-audit.test.ts`: un-skipped 3 `it.skip` / `it.skip.each` declarations covering 6 total test cases (L800 stallDidFire propagation + L925 non-streaming 524 + L994 it.skip.each with 4 errorCode permutations). L982 comment now documents partial closure + remaining L5528 investigation.
+
+**What didn't land (next-action):**
+
+- vitest on route-shape-audit.test.ts reports **6 fail / 7 pass / 0 skipped** — all 6 fail with `AssertionError: expected 200 to be 524/502/503/500`. Root cause: the race at L2986-L2989 resolves with `clientResponse.success === true` BEFORE the mock's `Promise.reject(new StallWatchdogError(...))` propagates, so the inner catch never fires. The code at L5528 maps success:true → 200.
+
+**Two resolution paths to close this ticket:**
+
+- (a) **Race-resolution fix**: ensure the mock's Promise.reject wins the race (e.g., via microtask scheduling or test-side await). Once the inner catch fires, it returns stallStatus (524/502/503/500) and the test passes.
+- (b) **L5528 discriminator fix**: widen the L5528 logic to detect StallWatchdogError-shaped clientResponses (e.g., via `metadata.errorCode` or a new `stallError` field) and override status to stallStatus instead of 200. Defense-in-depth: catches ALL stall paths, not just the inner-race one.
+
+Path (b) is architecturally correct (production expectation); path (a) is lower-risk (test-only or minor race-fix). Either closes the L945 dispatch contract.
+
+## Test scaffold changes (2026-07-16)
+
+The 3 `it.skip` / `it.skip.each` declarations that were un-skipped:
+
+- **L800**: `it('surfaces the stallDidFire propagation chain when the non-streaming race winner is the stall watchdog')` — expects 524 for STALL errorCode
+- **L925**: `it('non-streaming 524 engages via instance check alone when message drifts from canonical')` — expects 524 via instance check
+- **L994**: `it.each(cases)('errorCode=%s → HTTP %i', ...)` — covers 4 errorCode permutations:
+  - STALL → 524
+  - DRIFT → 502
+  - ABORT → 503
+  - OTHER → 500
+
+Total: 3 declarations × test cases = 6 test cases that now actively run (previously skipped).
 
 ## Workaround
 

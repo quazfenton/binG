@@ -63,6 +63,27 @@ interface BaselineTrackedTest {
   ticket: string;
 }
 
+/**
+ * Acknowledged-orphan entry: operator-confirmed removal of a tracked
+ * test from source. The orphan-detection test treats these as
+ * informational (logged but not hard-failed) instead of forcing the
+ * operator to either restore the test to source OR delete the tracked
+ * entry (which would lose the audit trail of WHY it was removed).
+ *
+ * Shape extends BaselineTrackedTest with 2 audit-trail fields:
+ * - `acknowledgedAt`: ISO-8601 timestamp of when the operator marked
+ *   the removal as intentional
+ * - `reason`: free-text explanation (e.g. "test merged into new X.test.ts",
+ *   "superseded by contract-gated-call.test.ts", "replaced by Path C")
+ *
+ * The orphan-detection test logs every acknowledged-orphan hit so the
+ * audit trail is visible in CI logs even when no assertion fires.
+ */
+type AcknowledgedOrphan = BaselineTrackedTest & {
+  acknowledgedAt: string;
+  reason: string;
+};
+
 interface Baseline {
   version: string;
   capturedAt: string;
@@ -75,6 +96,10 @@ interface Baseline {
   };
   trackedSkipped: BaselineTrackedTest[];
   trackedFailed: BaselineTrackedTest[];
+  // Optional for forward-compat: older baseline files (pre-2026-07-16)
+  // predate the acknowledgedOrphans field. Runtime uses ?? [] so the
+  // type-system reflects the JSON-schema forward-compatibility contract.
+  acknowledgedOrphans?: AcknowledgedOrphan[];
   thresholds: {
     minTotalTests: number;
     minPassedTests: number;
@@ -309,35 +334,68 @@ describe('Postaudit acceptance baseline regression guard', () => {
     expect(positiveChanges).toBeDefined();
   });
 
-  it('every trackedSkipped + trackedFailed entry actually appears in the current run (orphan detection — hard-fail on ANY orphan)', () => {
+  it('every trackedSkipped + trackedFailed entry actually appears in the current run (orphan detection — hard-fail on UNACKNOWLEDGED orphan, log acknowledged as informational)', () => {
     // Edge case the untracked-skip check misses: if a trackedSkipped test
     // is REMOVED from the source file (e.g. someone deletes the it.skip
     // block), vitest never reports it, so the "untracked skip" check
     // never sees the orphaned baseline entry. Without this guard, the
     // baseline rots silently as tracked tests are removed without intent.
     //
-    // Policy: ANY orphan is a hard-fail. Operators must either (a)
-    // restore the test to source, or (b) delete the orphaned entry from
-    // baseline.trackedSkipped / baseline.trackedFailed (with a commit
-    // message explaining the intent). The prior "soft-warn at 1-2
-    // orphans" approach used `expect(orphans).toBeDefined()` (a no-op
-    // assertion) which silently passed even when orphans were present,
-    // defeating the warn intent. The ≥1 hard-fail threshold ensures CI
-    // dashboards see a red signal immediately.
+    // Policy:
+    //   - Untracked orphan (not in baseline.acknowledgedOrphans) → hard-fail
+    //   - Tracked orphan (in baseline.acknowledgedOrphans) → log as
+    //     informational (positive change), no failure
+    //
+    // Operators can either:
+    //   (a) restore the test to source
+    //   (b) add an entry to baseline.acknowledgedOrphans with a ticket
+    //       reference + reason (preserves audit trail)
+    //   (c) delete the orphaned entry from baseline.trackedSkipped /
+    //       baseline.trackedFailed (loses audit trail but acceptable when
+    //       removal was unintentional cleanup)
+    //
+    // The prior "soft-warn at 1-2 orphans" approach used
+    // `expect(orphans).toBeDefined()` (a no-op assertion) which silently
+    // passed even when orphans were present, defeating the warn intent.
+    // The current contract: untracked orphans are hard-fails so CI
+    // dashboards see a red signal immediately; tracked orphans are
+    // positive changes (acknowledged-removal audit trail).
     const currentKeys = new Set(flattenAssertions(current).map((t) => `${t.file}::${t.testPath}`));
-    const orphans: string[] = [];
+    const acknowledgedOrphans = baseline.acknowledgedOrphans ?? [];
+    const acknowledgedKeys = new Set(
+      acknowledgedOrphans.map((o) => `${o.file}::${o.testPath}`),
+    );
+    const acknowledgedOrphansHit: string[] = [];
+    const untrackedOrphans: string[] = [];
     for (const tracked of [...baseline.trackedSkipped, ...baseline.trackedFailed]) {
       const key = `${tracked.file}::${tracked.testPath}`;
       if (!currentKeys.has(key)) {
-        orphans.push(
-          `ORPHAN: ${tracked.file} > ${tracked.testPath} (baseline references test that no longer exists in source — ticket ${tracked.ticket ?? 'unknown'}; restore the test to source OR delete this entry from baseline if removal was intentional)`,
+        const acknowledged = acknowledgedKeys.has(key);
+        const acknowledgedEntry = acknowledgedOrphans.find(
+          (o) => `${o.file}::${o.testPath}` === key,
         );
+        if (acknowledged) {
+          acknowledgedOrphansHit.push(
+            `ACKNOWLEDGED ORPHAN (informational, no failure): ${tracked.file} > ${tracked.testPath}\n  ticket: ${tracked.ticket ?? 'unknown'}\n  acknowledged at: ${acknowledgedEntry?.acknowledgedAt ?? 'unknown'}\n  reason: ${acknowledgedEntry?.reason ?? 'unknown'}`,
+          );
+        } else {
+          untrackedOrphans.push(
+            `UNTRACKED ORPHAN: ${tracked.file} > ${tracked.testPath} (baseline references test that no longer exists in source — ticket ${tracked.ticket ?? 'unknown'}; restore the test to source OR add an entry to baseline.acknowledgedOrphans with reason OR delete this entry from baseline if removal was intentional)`,
+          );
+        }
       }
     }
-    if (orphans.length > 0) {
+    if (acknowledgedOrphansHit.length > 0) {
       // eslint-disable-next-line no-console
-      console.log('[postaudit-baseline] ORPHANED tracked entries:\n' + orphans.join('\n'));
+      console.log(
+        '[postaudit-baseline] ACKNOWLEDGED ORPHANS (operator-confirmed removals, no failure):\n' +
+          acknowledgedOrphansHit.join('\n'),
+      );
     }
-    expect(orphans).toEqual([]);
+    if (untrackedOrphans.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log('[postaudit-baseline] UNTRACKED ORPHANED tracked entries:\n' + untrackedOrphans.join('\n'));
+    }
+    expect(untrackedOrphans).toEqual([]);
   });
 });

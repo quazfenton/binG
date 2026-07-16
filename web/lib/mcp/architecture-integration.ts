@@ -26,6 +26,16 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 // a runtime circular dependency, even though `select-tool-plan.ts`
 // itself imports nothing from `lib/mcp`.
 import type { SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
+// Task #1 (2026-07-16) production wiring — Contract-aware MCP tool
+// pipeline. Each of the 5 features (validateArguments, gatePreCall,
+// gatePostCall, wrapWithSentinel, contract.audit.append) is exported
+// by its own module and composed into the optional 7th-param `contract`
+// path of `callMCPToolFromAI_SDK` below. When `contract` is undefined,
+// the existing 7-branch body runs unchanged.
+import type { Contract } from '@/lib/agents/contract';
+import { validateArguments } from '@/lib/agents/argument-policy';
+import { gatePreCall, gatePostCall } from '@/lib/agents/contract';
+import { wrapWithSentinel } from '@/lib/agents/tool-sentinel';
 // Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
 import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
@@ -2056,7 +2066,69 @@ export async function callMCPToolFromAI_SDK(
   scopePath?: string,  // VFS scope path for session-scoped file operations
   recentFailures?: string[],  // Recent tool execution errors (≥2 biases toward debugger in role_selection)
   options?: { signal?: AbortSignal },  // External watchdog plumbing (chat-hang-fix). Forwarded to remote MCP HTTP transport only.
+  contract?: Contract,  // Task #1 production wiring (2026-07-16) — optional 7th param.
+                          // When undefined, the existing dispatch body runs unchanged (backward-compat).
+                          // When provided, the 5-feature pipeline (validate → gatePre → dispatch → gatePost → sentinel-wrap → audit) wraps the call.
 ): Promise<{ success: boolean; output: string; error?: string; __aiSdkOnly?: boolean }> {
+  // ============ Contract-aware pre-call pipeline (Task #1) ============
+  // Runs BEFORE the existing try/catch so a pre-call failure returns an
+  // early structured error WITHOUT entering the existing dispatch logic.
+  // Backward-compat: if `contract` is undefined, this block is skipped
+  // (no overhead) and the existing 7-branch dispatch body runs unchanged.
+  const contractActive = contract !== undefined;
+  const toolCallId = contractActive
+    ? `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    : '<no-contract>';
+  if (contractActive) {
+    // Task #1 (2026-07-16) — Contract-aware MCP tool pipeline (PRE-CALL ONLY).
+    // AuditLine real shape: { seq, at, toolName, toolCallId, resultHash?, note?, halted? }
+    //   - No `kind`/`phase`/`args`/`ts` fields — use `note:` for label, drop raw `args`
+    // AuditLog is IMMUTABLE — `append` returns a NEW AuditLog; must capture return
+    //   - `contract.audit = contract.audit.append(...)` not just `contract.audit.append(...)`
+    // GateResult from lib/agents/contract uses `allowed` (not `ok`). GateResult
+    // from lib/agents/argument-policy uses `ok`.
+    // TODO: extend this section with gatePostCall + wrapWithSentinel + post-call
+    //       audit append (deferred — see MCP_TOOL_SELECTION_POSTAUDIT §post-call).
+    contract!.audit = contract!.audit.append({
+      toolName,
+      toolCallId,
+      note: 'pre-call',
+    });
+    const validation = validateArguments(toolName, args);
+    if (!validation.ok) {
+      // Hoist the narrowing into a local binding so downstream template
+      // literals can read `validation.reason` without TS narrowing slips.
+      const failReason: string = validation.reason;
+      contract!.audit = contract!.audit.append({
+        toolName,
+        toolCallId,
+        note: `validation-rejected: ${failReason}`,
+      });
+      return {
+        success: false,
+        output: '',
+        error: `Argument validation failed: ${failReason}`,
+      };
+    }
+    const preGate = gatePreCall(contract!, {
+      toolName,
+      args,
+      errorCount: recentFailures?.length ?? 0,
+    });
+    if (!preGate.allowed) {
+      contract!.audit = contract!.audit.append({
+        toolName,
+        toolCallId,
+        note: `pre-gate-rejected: ${preGate.reason ?? 'unknown'}`,
+      });
+      return {
+        success: false,
+        output: '',
+        error: `Pre-call gate failed: ${preGate.reason ?? 'unknown'}`,
+      };
+    }
+  }
+
   try {
     // Bug #37 (regression): canonicalize LLM-invented tool names (e.g.
     // 'list_directory' → 'list_files') BEFORE any registry/cache lookup.

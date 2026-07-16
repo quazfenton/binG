@@ -59,6 +59,10 @@ export const SSE_EVENT_TYPES = {
   /** Bug #41: loop-guard abort — emitted when the 3-consecutive-tool-failures
    *  kill fires. UI surfaces this as a banner with the categorized reason. */
   LOOP_ABORT: 'loop_abort',
+  /** Tool execution summary: total calls, succeeded, failed, duration */
+  TOOL_SUMMARY: 'tool_summary',
+  /** Auto-continuation progress: iteration, reason, requestId */
+  CONTINUATION: 'continuation',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -411,6 +415,36 @@ export interface SSEProgressiveBuildPayload {
   timestamp: number;
 }
 
+/** Tool execution summary from v1-api-with-tools */
+export interface SSEToolSummaryPayload {
+  /** Total tool calls attempted */
+  totalCalls: number;
+  /** Number of successful tool calls */
+  succeeded: number;
+  /** Number of failed tool calls */
+  failed: number;
+  /** Total duration in milliseconds */
+  durationMs?: number;
+  /** Timestamp */
+  timestamp?: number;
+}
+
+/** Auto-continuation progress update */
+export interface SSEContinuationPayload {
+  /** Request ID for correlation */
+  requestId: string;
+  /** Current iteration number */
+  iteration: number;
+  /** Reason for continuation ('tool_results', 'frustration', 'too_short', etc.) */
+  reason: string;
+  /** Whether this continuation was force-signaled */
+  forceSignal?: boolean;
+  /** Total continuations so far */
+  continuationsSoFar?: number;
+  /** Timestamp */
+  timestamp?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -436,7 +470,9 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.AUTO_CONTINUE; data: SSEAutoContinuePayload }
   | { type: typeof SSE_EVENT_TYPES.NEXT; data: SSENexPayload }
   | { type: typeof SSE_EVENT_TYPES.PROGRESSIVE_BUILD; data: SSEProgressiveBuildPayload }
-  | { type: typeof SSE_EVENT_TYPES.LOOP_ABORT; data: SSELoopAbortPayload };
+  | { type: typeof SSE_EVENT_TYPES.LOOP_ABORT; data: SSELoopAbortPayload }
+  | { type: typeof SSE_EVENT_TYPES.TOOL_SUMMARY; data: SSEToolSummaryPayload }
+  | { type: typeof SSE_EVENT_TYPES.CONTINUATION; data: SSEContinuationPayload };
 
 // ---------------------------------------------------------------------------
 // Encoder helpers (backend)

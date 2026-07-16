@@ -160,7 +160,13 @@ export interface Contract {
   readonly killSwitches: ReadonlyArray<KillSwitch>;
   readonly escalationGraph: ContractEscalationGraph;
   readonly contractHash: string;
-  readonly audit: AuditLog;
+  // audit is NOT readonly — production callers (architecture-integration.ts splice) must
+  // be able to reassign `contract.audit = contract.audit.append(...)` after each tool
+  // call so the new AuditLog reference actually persists (the AuditLog pattern is
+  // pure-immutable, so append returns a new object that must replace the field).
+  // The audit entries themselves (AuditLine) and the .lines array snapshot returned
+  // by the getter stay Object.freeze-d — only the contract-level field is mutable.
+  audit: AuditLog;
 }
 
 // ───── sha256 contractHash (canonical JSON, sorted keys, no audit) ────────────
@@ -206,34 +212,32 @@ export function computeContractHash(
 // ───── Audit log factory ──────────────────────────────────────────────────────
 
 export function createAuditLog(): AuditLog {
-  const lines: AuditLine[] = [];
-  return {
-    get lines() {
-      return lines;
-    },
-    append(line) {
-      const next: AuditLine = {
-        seq: lines.length,
-        at: Date.now(),
-        toolName: line.toolName,
-        toolCallId: line.toolCallId,
-        resultHash: line.resultHash,
-        note: line.note,
-        halted: line.halted,
-      };
-      return createAuditLogWith([...lines, next]);
-    },
-  };
+  // PURE append + Object.freeze immutability (Task #1 production wiring
+  // 2026-07-16). The public `lines` getter returns a fresh Object.frozen
+  // snapshot, and each entry is also individually frozen via deep-clone —
+  // so audit consumers can read the data but cannot mutate it:
+  //   - `c.audit.lines.push(x)` throws TypeError in strict mode (frozen array)
+  //   - `c.audit.lines[0].x = 'evil'` throws TypeError in strict mode (frozen entry)
+  // New entries are still appended via the existing PURE pattern (append
+  // returns a NEW AuditLog with `[...prevLines, newLine]`); tests calling
+  // `append !== mutate` continue to work — Object.freeze is the read-side
+  // guard, not the write-side guard.
+  return createAuditLogWith([]);
 }
 
 function createAuditLogWith(initial: ReadonlyArray<AuditLine>): AuditLog {
-  const lines = [...initial];
+  // Internal mutable backing — `append` re-spreads to a new AuditLog so
+  // the backing is only ever touched by THIS factory's constructor.
+  const lines: AuditLine[] = initial.map(e => Object.freeze({ ...e }));
   return {
-    get lines() {
-      return lines;
+    get lines(): ReadonlyArray<AuditLine> {
+      // Return a fresh Object.frozen snapshot each read. Prevents consumers
+      // from mutating the backing array AND preserves the per-call snapshot
+      // semantic (a read at time T sees what `append` had at time T).
+      return Object.freeze(lines.map(e => Object.freeze({ ...e })));
     },
-    append(line) {
-      const next: AuditLine = {
+    append(line: Omit<AuditLine, 'seq' | 'at'>): AuditLog {
+      const next: AuditLine = Object.freeze({
         seq: lines.length,
         at: Date.now(),
         toolName: line.toolName,
@@ -241,7 +245,7 @@ function createAuditLogWith(initial: ReadonlyArray<AuditLine>): AuditLog {
         resultHash: line.resultHash,
         note: line.note,
         halted: line.halted,
-      };
+      });
       return createAuditLogWith([...lines, next]);
     },
   };

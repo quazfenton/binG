@@ -76,7 +76,7 @@ function recordRateLimitError(provider: string): void {
   }
 }
 
-function resetRateLimitCounter(provider: string): void {
+export function resetRateLimitCounter(provider: string): void {
   _consecutive429Count.delete(provider);
 }
 

@@ -797,7 +797,7 @@ describe('POST /api/chat — route-level stall watchdog (bounds indefinite hangs
   // The integration tests below pin BOTH contracts so a future refactor
   // that reverts any one path fails fast.
 
-  it.skip('surfaces the stallDidFire propagation chain when the non-streaming race winner is the stall watchdog', async () => {
+  it('surfaces the stallDidFire propagation chain when the non-streaming race winner is the stall watchdog', async () => {
     process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '100';
     process.env.CHAT_ROUTE_MAX_TURN_MS = '5000';
 
@@ -922,7 +922,7 @@ vi.mocked(processUnifiedAgentRequest).mockImplementation(
   // the chatLogger spy assertion to be useful), we ALSO raise
   // CHAT_ROUTE_MAX_TURN_MS=5000 so the route's max-turn ceiling doesn't
   // trip prematurely — the agent's reject is what we WANT to win.
-  it.skip('non-streaming 524 engages via instance check alone when message drifts from canonical', async () => {
+  it('non-streaming 524 engages via instance check alone when message drifts from canonical', async () => {
     process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '300';
     process.env.CHAT_ROUTE_MAX_TURN_MS = '5000';
 
@@ -979,8 +979,21 @@ vi.mocked(processUnifiedAgentRequest).mockImplementation(
 // /opt/bing/web/lib/chat/__tests__/stall-watchdog-error.test.ts,
 // which asserts the same errorCode → HTTP status mapping WITHOUT
 // going through route.ts. That test is the regression guard — these
-// `it.skip` cases remain as a TODO marker so the route integration
-// layer can be fixed in a follow-up without losing the test scaffold.
+// STALL-ROUTEINTEGRATION-FOLLOWUP partial closure (2026-07-16): the 3
+// `it.skip` / `it.skip.each` cases above were UN-SKIPPED once the override-
+// path bug at /opt/bing/web/app/api/chat/route.ts:3062 (hardcoded 524
+// instead of `stallWatchdogErrorToStatus(raceErr)`) was fixed. The
+// errorCode permutation test now exercises all 4 errorCodes via the
+// canonical helper. NOTE: vitest still reports 6 failures with status
+// 200 because the override at route.ts L5528
+// (`clientResponse.success ? 200 : 500`) converts success:true results to
+// status 200 BEFORE the inner catch's mapped status propagates. The
+// L5528 override path needs a separate follow-up fix; this ticket is
+// PARTIAL until either:
+//   (a) the race resolves the mock's Promise.reject FIRST so the inner
+//       catch fires + returns 524/502/503/500, OR
+//   (b) L5528 is widened to honor stallWatchdogErrorToStatus when
+//       clientResponse carries stall metadata.
 //
 // Note: request body MUST match L945 fixture's format — route.ts body-validation
 // short-circuits to HTTP 400 on schema mismatch, never reaching the StallWatchdogError handler.
@@ -991,7 +1004,7 @@ describe('Path C: StallWatchdogError errorCode → HTTP status', () => {
     ['ABORT', 503],
     ['OTHER', 500],
   ];
-  it.skip.each(cases)('errorCode=%s → HTTP %i', async (errorCode, expectedStatus) => {
+  it.each(cases)('errorCode=%s → HTTP %i', async (errorCode, expectedStatus) => {
     vi.mocked(processUnifiedAgentRequest).mockImplementation(() =>
       Promise.reject(new StallWatchdogError('test ' + errorCode, { errorCode: errorCode as any })),
     );

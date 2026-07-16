@@ -74,7 +74,7 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // + `stallWatchdogErrorToStatus(err)` to map each errorCode to its HTTP status
 // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
 // llm-fallback-coordinator.ts.
-import { StallWatchdogError, stallWatchdogErrorToStatus } from '@/lib/chat/llm-fallback-coordinator';
+import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus } from '@/lib/chat/llm-fallback-coordinator';
 // Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
 // contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
 // already coerces via stringifyMessageContent; this import is the route's
@@ -3046,9 +3046,18 @@ const config: UnifiedAgentConfig = {
             if (isServerStall) {
               clearInterval(stallWatchdog);
               const reason = stallDidFireReason ?? 'race-winner-stall';
+              // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16): honor the
+              // StallWatchdogError.errorCode → HTTP status mapping contract via
+              // stallWatchdogErrorToStatus() helper. The previous hardcoded 524
+              // overrode the contract for DRIFT/ABORT/OTHER errorCodes, which
+              // caused the 6 skipped route-shape-audit tests (4 errorCode
+              // permutations + 2 propagation chain tests) to fail. STALL→524
+              // preserves the original behavior; DRIFT→502, ABORT→503, OTHER→500
+              // now flow through correctly.
+              const stallStatus = stallWatchdogErrorToStatus(raceErr);
               chatLogger.warn(
-                '[CHAT-ROUTE] Non-streaming 524 — race winner is the stall',
-                { requestId, reason, msg: msgRaw },
+                `[CHAT-ROUTE] stall-watchdog mapped → HTTP ${stallStatus} (race winner is the stall)`,
+                { requestId, reason, errorCode: raceErr.errorCode, msg: msgRaw },
               );
               return addAnonSessionCookie(
                 NextResponse.json(
@@ -3059,7 +3068,7 @@ const config: UnifiedAgentConfig = {
                     stitchedFromWatchDog: true,
                   },
                   {
-                    status: 524,
+                    status: stallStatus,
                     headers: {
                       'content-type': 'application/json',
                       'x-stall-fired': 'true',
@@ -5525,7 +5534,24 @@ const config: UnifiedAgentConfig = {
         }).catch((err) => chatLogger.warn('mem0 store failed (non-streaming)', { requestId }, { error: String(err) }));
       }
 
-      const responseStatus = clientResponse.success ? 200 : 500;
+      // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — L5528 discriminator
+      // override. The race at L2986-L2989 may resolve with success:true
+      // BEFORE the inner catch fires (e.g., when a stall error bubbles
+      // up through a non-throwing wrapper layer). If the result carries
+      // stall metadata (e.g., errorCode field on metadata), honor the
+      // canonical errorCode → HTTP status mapping instead of forcing 200.
+      // This is defense-in-depth for production paths where the race
+      // resolves with success:true but the underlying agent request was
+      // actually a stall. IIFE wrapper preserves const + scopes the
+      // discriminator's intermediate state.
+      const responseStatus = (() => {
+        const stallMetadata = (clientResponse as any)?.metadata?.stallError
+          || (clientResponse as any)?.metadata?.errorCode;
+        if (typeof stallMetadata === 'string' && /^(STALL|DRIFT|ABORT|OTHER)$/.test(stallMetadata)) {
+          return stallWatchdogErrorToStatus(stallMetadata as StallWatchdogErrorCode);
+        }
+        return clientResponse.success ? 200 : 500;
+      })();
       return addAnonSessionCookie(NextResponse.json(
         {
           success: clientResponse.success,
@@ -5539,6 +5565,41 @@ const config: UnifiedAgentConfig = {
         { status: responseStatus }
       ));
     } catch (routerError) {
+      // OUTERCATCH-GAP (2026-07-16) — when a StallWatchdogError escapes the
+      // race-winner inner catch (e.g. via abort-signal rethrow, V2-path
+      // self-heal retry path, or chain-walk promise rejection into the
+      // RequestContext), it MUST NOT be downgraded to a generic 500 by
+      // this emergency-fallback catch-all. Mirror the inner catch's
+      // mapping contract so each errorCode discriminant (STALL | DRIFT |
+      // ABORT | OTHER) yields its canonical HTTP status (524/502/503/500)
+      // via the helper, preserving the late-bound 524 (timeout) signal
+      // through to the client. Operator-visible at requestId-level logs.
+      if (routerError instanceof StallWatchdogError) {
+        const stallStatus = stallWatchdogErrorToStatus(routerError);
+        chatLogger.warn(
+          `[outercatch-gap] mapped StallWatchdogError → HTTP ${stallStatus}`,
+          { requestId, provider, model },
+          {
+            error: routerError.message,
+            errorCode: routerError.errorCode,
+            latencyMs: Date.now() - requestStartTime,
+          }
+        );
+        // Response shape mirrors existing OUTERCATCH-GAP sites at L5634 +
+        // L7411 so a single client-side parser handles all three stall-
+        // watchdog paths. Reason 'stall-watchdog' is the canonical flag;
+        // errorCode is the typed discriminant (STALL | DRIFT | ABORT |
+        // OTHER). requestId is reused from site 2 (L5634) so tracing stays
+        // consistent across all 3 sites — clients/SSE already have it.
+        return addAnonSessionCookie(NextResponse.json({
+          success: false,
+          error: routerError.message,
+          errorCode: routerError.errorCode,
+          reason: 'stall-watchdog',
+          stitchedFromWatchDog: true,
+          requestId,
+        }, { status: stallStatus }));
+      }
       const routerErrorObj = routerError as Error;
       const routerLatency = Date.now() - requestStartTime;
       const isNotConfigured = routerErrorObj.message.includes('not configured');

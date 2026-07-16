@@ -73,6 +73,7 @@ import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
 // distinct route-local fields like bufferLen/elapsedMs) for defense-in-depth
 // grep-ability. See `auditResponseShape` below.
 import { shapeKeyOf, serializableTextLength } from '@/lib/chat/shape-helpers';
+import { sseEncode, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { PROVIDER_DEFAULT_MODELS } from '../providers/provider-default-models';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
@@ -2116,8 +2117,7 @@ log.info('[UnifiedAgent] ┌─ MODE SELECTED ───────────�
     // The user would see a silent text-mode fallback with no indication the orchestrator crashed.
     if (result.metadata?.budgetExhausted && config.onStreamChunk && (mode === 'v1-agent-loop' || mode === 'execution-controller')) {
       try {
-        config.onStreamChunk(JSON.stringify({
-          type: 'error',
+        config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.ERROR, {
           error: 'Orchestrator exhausted budget',
           detail: result.error || result.metadata?.orchestratorError || 'Orchestrator failed after max attempts',
           mode: mode,
@@ -2716,6 +2716,25 @@ async function runOpencodeSDKMode(
     const statusList = await sessionManager.getStatus();
     const serverAvailable = Array.isArray(statusList);
     if (!serverAvailable) {
+      // Fix A (UAG-LOG-SHAPE-CONTRACT-INVESTIGATION, ticket /opt/bing/.tickets/UAG-LOG-SHAPE-CONTRACT-INVESTIGATION.md):
+      // emit `outcome: 'error'` so the postaudit contract
+      // (finding-5-6-log-shape.test.ts test #4: 'call-site outcome values cover
+      // the canonical 5-value set') can verify the error path. Synthetic
+      // UnifiedAgentResult mirrors the StallWatchdogError fields; the audit
+      // fires BEFORE the throw so log aggregators see the error before the
+      // stall watchdog propagates. This is the canonical 'error' emit site
+      // for engine-unreachable failures (ABORT errorCode); the 'exhausted'
+      // outcome at L2235 covers the chain-exhausted path separately.
+      auditResponseShape(
+        {
+          response: '',
+          success: false,
+          mode: 'opencode-sdk',
+          error: 'OpenCode server status check returned non-array — server likely not running',
+          metadata: { provider: 'opencode-sdk', duration: Date.now() - startTime },
+        },
+        { provider: config.provider, model: config.model, mode: 'opencode-sdk', outcome: 'error' },
+      );
       throw new StallWatchdogError('OpenCode server status check returned non-array — server likely not running', { errorCode: 'ABORT' });
     }
 
@@ -3171,8 +3190,8 @@ async function runProgressiveBuildMode(
   const emitBuildEvent = (event: string, data: unknown) => {
     log.info(`[ProgressiveBuild] Event: ${event}`, data);
     if (config.onStreamChunk && typeof data === 'object' && data !== null) {
-      // Emit structured build progress as JSON through the stream chunk handler
-      config.onStreamChunk(JSON.stringify({ type: 'progressive_build', event, ...data }));
+      // Emit structured build progress as SSE event
+      config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.PROGRESSIVE_BUILD, { event, ...(data as Record<string, unknown>), timestamp: Date.now() }));
     }
   };
 
@@ -4945,12 +4964,12 @@ async function runV1ApiWithTools(
       // Emit summary SSE event
       if (config.onStreamChunk) {
         try {
-          config.onStreamChunk(JSON.stringify({
-            type: 'tool_summary',
+          config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.TOOL_SUMMARY, {
             totalCalls: totalTools,
             succeeded: succeededTools,
             failed: failedTools,
             durationMs: duration,
+            timestamp: Date.now(),
           }));
         } catch { /* best effort */ }
       }
@@ -5065,18 +5084,14 @@ async function runV1ApiWithTools(
         // configured-and-delivered / configured-and-threw — is preserved.
         let sseDelivered = false;
         if (config.onStreamChunk) {
-          // JSON.stringify is intentionally OUTSIDE the try block —
-          // it cannot throw on this primitive shape (string/number/
-          // boolean values only — no BigInt, Symbol, or circular refs).
-          // Keeping it inside the try would over-mask any future code
-          // bug (e.g. someone adding a BigInt) as a benign SSE failure.
-          const ssePayload = JSON.stringify({
-            type: 'continuation',
+          // Use sseEncode to emit the continuation event in proper SSE format
+          const ssePayload = sseEncode(SSE_EVENT_TYPES.CONTINUATION, {
             requestId,
             iteration: autoContinueIteration,
             reason: autoDecision.reason,
             forceSignal: autoDecision.forceSignal,
             continuationsSoFar: autoDecision.continuationsSoFar,
+            timestamp: Date.now(),
           });
           try {
             config.onStreamChunk(ssePayload);
@@ -5540,8 +5555,7 @@ async function runV1ApiWithTools(
   // FIX: Emit error chunk to user so they see a failure instead of blank screen.
   if (config.onStreamChunk) {
     try {
-      config.onStreamChunk(JSON.stringify({
-        type: "error",
+      config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.ERROR, {
         error: "All providers failed",
         detail: lastError?.message || "All configured LLM providers exhausted",
         providersTried: uniqueProviders,
@@ -6453,8 +6467,7 @@ return {
   // FIX: Emit error chunk to user so they see a failure instead of blank screen.
   if (config.onStreamChunk) {
     try {
-      config.onStreamChunk(JSON.stringify({
-        type: "error",
+      config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.ERROR, {
         error: "All providers failed",
         detail: lastError?.message || "All configured LLM providers exhausted",
         providersTried: uniqueProviders,

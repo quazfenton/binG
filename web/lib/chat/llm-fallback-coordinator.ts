@@ -981,8 +981,25 @@ export class StallWatchdogError extends Error {
  * from the same function. Exhaustive switch over the discriminated
  * union ensures TypeScript catches missing cases at compile time.
  */
-export function stallWatchdogErrorToStatus(error: StallWatchdogError): number {
-  switch (error.errorCode) {
+/**
+ * Map a `StallWatchdogError` (or its `errorCode` alone) to the canonical HTTP
+ * status the chat route should return. Two overloads:
+ *   - `stallWatchdogErrorToStatus(error: StallWatchdogError)` — preferred when
+ *     you have the error instance (used by the route's inner/outer catches).
+ *   - `stallWatchdogErrorToStatus(errorCode: StallWatchdogErrorCode)` — preferred
+ *     for defense-in-depth discriminators that already validated a string code
+ *     and want to avoid allocating a throwable just to map it (used by the
+ *     L5528 IIFE discriminator that consumes a metadata field of unknown type).
+ * The implementation signature accepts `StallWatchdogError | StallWatchdogErrorCode`
+ * and dispatches by typeof — keeping the exhaustiveness guard in one place.
+ */
+export function stallWatchdogErrorToStatus(error: StallWatchdogError): number;
+export function stallWatchdogErrorToStatus(errorCode: StallWatchdogErrorCode): number;
+export function stallWatchdogErrorToStatus(
+  input: StallWatchdogError | StallWatchdogErrorCode,
+): number {
+  const code: StallWatchdogErrorCode = typeof input === 'string' ? input : input.errorCode;
+  switch (code) {
     case 'STALL': return 524;
     case 'DRIFT': return 502;
     case 'ABORT': return 503;
@@ -991,7 +1008,7 @@ export function stallWatchdogErrorToStatus(error: StallWatchdogError): number {
       // Exhaustiveness guard: if a new errorCode is added to StallWatchdogErrorCode
       // without being mapped here, TypeScript's `never` check fires here at compile
       // time and the runtime fallback throws. Single source of truth.
-      const _exhaustive: never = error.errorCode;
+      const _exhaustive: never = code;
       throw new Error(`stallWatchdogErrorToStatus: unhandled errorCode "${_exhaustive}"`);
     }
   }
