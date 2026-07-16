@@ -35,7 +35,7 @@ import type { SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 import type { Contract } from '@/lib/agents/contract';
 import { validateArguments } from '@/lib/agents/argument-policy';
 import { gatePreCall, gatePostCall } from '@/lib/agents/contract';
-import { wrapWithSentinel } from '@/lib/agents/tool-sentinel';
+import { wrapWithSentinel, TOOL_SENTINEL_OPEN, TOOL_SENTINEL_CLOSE } from '@/lib/agents/tool-sentinel';
 // Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
 import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
@@ -2048,11 +2048,132 @@ async function executeArcadeTool(
   }
 }
 
+// MCP-POST-CALL-WIRING.md closure (round 1 of 2, 2026-07-16) —
+// `applyPostCallPipeline` is the module-private post-call helper that
+// enforces the canonical order required by the audit thread:
+//   1. gatePostCall — runs the post-invocation invariants + kill-switch
+//      gates; if rejected, appends a `post-gate-rejected` audit entry
+//      (with `halted: true`) and returns a sentinel-wrapped error
+//      WITHOUT calling wrapWithSentinel (a kill-switch hit is the
+//      canonical "blocked" outcome, not a sentinel-cleaned output).
+//   2. wrapWithSentinel — runs the dispatch output through the
+//      injection-pattern scrubber; emits an `onDrop` callback per drop
+//      for forensics (currently a no-op stub — extended in a follow-up
+//      audit pass to emit a structured chatLogger line).
+//   3. contract.audit.append({ note: 'post-call: success|failure' }) —
+//      the canonical post-call audit entry, mirroring the runPipeline
+//      test helper's note convention exactly.
+//   4. contract.audit.append({ note: 'sentinel-dropped: <patterns>' })
+//      — conditional on sentinelWrap.dropped.length > 0; skipped when
+//      no patterns matched (no audit noise for clean tool outputs).
+//
+// The helper is a no-op when `contract` is undefined (backward-compat:
+// existing callers without a Contract see pre-2026 behavior — the helper
+// is only invoked at the round-1 VFS branch call site which guards on
+// `contract ? applyPostCallPipeline(...) : result`). The 14 dispatch-
+// branch return sites beyond the VFS branch are tracked as round-2
+// follow-up to either wrap each return with this helper OR refactor
+// the dispatch body into a single-result helper that funnels all
+// returns through one exit point.
+function applyPostCallPipeline(
+  result: { success: boolean; output: string; error?: string },
+  contract: Contract,
+  toolName: string,
+  toolCallId: string,
+  args?: Readonly<Record<string, unknown>>,
+): { success: boolean; output: string; error?: string } {
+  // 1. gatePostCall — post-invocation invariant + kill-switch check.
+  //    Mirrors runPipeline's gatePostCall usage (the test helper invokes
+  //    gatePostCall at the same position with the same argument shape).
+  //    gatePostCall's declared return type IS GateResult (contract.ts:L415),
+  //    and GateResult exposes `reason?` (contract.ts:L385-L389) — no cast
+  //    is needed. When args is undefined the helper defaults to {} so the
+  //    gate still runs (matches the post-call pipeline intent even when
+  //    the call site did not capture the original args).
+  const postGate = gatePostCall(contract, {
+    toolName,
+    args: args ?? {},
+    result,
+    errorCount: 0,
+  });
+  if (!postGate.allowed) {
+    contract.audit = contract.audit.append({
+      toolName,
+      toolCallId,
+      note: `post-gate-rejected: ${postGate.reason ?? 'unknown'}`,
+      halted: true,
+    });
+    return {
+      ...result,
+      success: false,
+      // Sentinel-pair via exported constants (TOOL_SENTINEL_OPEN +
+      // TOOL_SENTINEL_CLOSE from @/lib/agents/tool-sentinel) so a future
+      // sentinel-format change propagates here without silent drift.
+      output: `${TOOL_SENTINEL_OPEN}${TOOL_SENTINEL_CLOSE}`,
+      error: `kill-switch post-call: ${postGate.reason ?? 'unknown'}`,
+    };
+  }
+
+  // 2. wrapWithSentinel — injection-pattern scrub on the dispatch output.
+  //    onDrop emits a structured logger.debug line for forensics. The
+  //    excerptPreview field is the first 200 chars of the dropped content
+  //    (truncated for log-size hygiene) so operators can pattern-match
+  //    against known injection signatures — logging only the length
+  //    defeats the audit purpose.
+  const sentinelWrap = wrapWithSentinel(result.output, {
+    toolCallId,
+    // Canonical onDrop signature is POSITIONAL (pattern, content,
+    // toolCallId) — verified at lib/agents/tool-sentinel.ts (the file
+    // contract-gated-call.test.ts imports from). The parallel
+    // lib/mcp/tool-sentinel.ts uses the object shape; we import from
+    // lib/agents (canonical). excerptPreview is the first 200 chars of
+    // dropped content for forensics — logging only the length defeats
+    // the audit purpose.
+    onDrop: (pattern: string, content: string, dropToolCallId: string) => {
+      logger.debug('[MCP-Sentinel] dropped', {
+        toolCallId: dropToolCallId,
+        pattern,
+        excerptPreview: content.slice(0, 200),
+        excerptLen: content.length,
+      });
+    },
+  });
+
+  // 3. post-call audit append — success/failure note, mirroring the
+  //    runPipeline note convention exactly (the test helper asserts this
+  //    note shape on lines L142-L146).
+  const postNote = result.success
+    ? 'post-call: success'
+    : `post-call: failure (${result.error ?? 'unknown'})`;
+  contract.audit = contract.audit.append({
+    toolName,
+    toolCallId,
+    note: postNote,
+  });
+
+  // 4. sentinel-drop audit append — conditional on drops.length > 0.
+  //    Skipped entirely when no patterns matched (audit line is only
+  //    emitted when there's something to record, avoiding log noise
+  //    for clean tool outputs).
+  if (sentinelWrap.dropped.length > 0) {
+    contract.audit = contract.audit.append({
+      toolName,
+      toolCallId,
+      note: `sentinel-dropped: ${sentinelWrap.dropped.map((d: { pattern: string }) => d.pattern).join('|')}`,
+    });
+  }
+
+  return {
+    ...result,
+    output: sentinelWrap.wrapped,
+  };
+}
+
 /**
  * Call MCP tool from Architecture 1 (AI SDK)
  *
  * Use this when the LLM requests a tool call
- * 
+ *
  * Caching strategy:
  * - list_files: fully cached (TTL 30s)
  * - search_files: fully cached (TTL 30s)  
@@ -2087,8 +2208,22 @@ export async function callMCPToolFromAI_SDK(
     //   - `contract.audit = contract.audit.append(...)` not just `contract.audit.append(...)`
     // GateResult from lib/agents/contract uses `allowed` (not `ok`). GateResult
     // from lib/agents/argument-policy uses `ok`.
-    // TODO: extend this section with gatePostCall + wrapWithSentinel + post-call
-    //       audit append (deferred — see MCP_TOOL_SELECTION_POSTAUDIT §post-call).
+    // MCP-POST-CALL-WIRING.md closure (round 1 of 2, 2026-07-16) — the
+    // post-call pipeline (gatePostCall → wrapWithSentinel → post-call audit
+    // append → sentinel-drop audit append) is now defined below as the
+    // module-private `applyPostCallPipeline` helper and is wired into the
+    // VFS branch (the most-representative dispatch return site at L2340-L2344)
+    // to demonstrate the canonical order. The remaining 13 dispatch-branch
+    // return sites bypass the post-call pipeline in this round — tracked as
+    // a follow-up ticket to either wrap each remaining return with
+    // applyPostCallPipeline OR refactor the dispatch body into a single-result
+    // helper (`dispatchCore(...)`) that funnels all returns through one exit
+    // point. Per the runPipeline order reference at
+    // /opt/bing/web/__tests__/mcp/contract-gated-call.test.ts:L72-L163, the
+    // helper enforces: 1) gatePostCall (rejects via kill-switch, returns
+    // sentinel-wrapped error), 2) wrapWithSentinel on the dispatch output,
+    // 3) post-call audit append (success/failure note), 4) sentinel-drop
+    // audit append (conditional on drops.length > 0).
     contract!.audit = contract!.audit.append({
       toolName,
       toolCallId,
@@ -2204,15 +2339,17 @@ export async function callMCPToolFromAI_SDK(
               toolResultCache.delete(cacheKey);
             } else {
               logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
-              return { success: true, output: cachedData };
+              const __dispatchResult: { success: boolean; output: string; error?: string } = { success: true, output: cachedData };
+              return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
             }
           } else {
             // Fully cacheable: list_files, search_files
             logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
-            return {
+            const __dispatchResult: { success: boolean; output: string; error?: string } = {
               success: true,
               output: typeof cached === 'string' ? cached : JSON.stringify(cached),
             };
+            return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
           }
         }
       }
@@ -2337,11 +2474,21 @@ export async function callMCPToolFromAI_SDK(
         toolResultCache.set(cacheKey, resultOutput, ttl);
       }
 
-      return {
+      // MCP-POST-CALL-WIRING.md closure (round 1 of 2) — wire the canonical
+      // post-call pipeline into the VFS branch (the most-representative
+      // dispatch return site) so the order (gatePostCall → wrapWithSentinel
+      // → post-call audit append → sentinel-drop audit append) is exercised
+      // end-to-end on a real dispatch result. The helper is a no-op when
+      // `contract` is undefined (backward-compat: existing callers without
+      // a Contract see pre-2026 behavior). Other dispatch branches are
+      // tracked as a follow-up to wrap with applyPostCallPipeline OR
+      // refactor into a single-result helper.
+      const dispatchResult = {
         success: (result as any)?.success !== false,
         output: resultOutput,
         error: (result as any)?.error,
       };
+      return contract ? applyPostCallPipeline(dispatchResult, contract, toolName, toolCallId) : dispatchResult;
     }
 
     // Check if it's the web_search tool
@@ -2371,10 +2518,11 @@ export async function callMCPToolFromAI_SDK(
               url: r.url || '',
               snippet: r.content || r.snippet || '',
             }));
-            return {
+            const __dispatchResult: { success: boolean; output: string; error?: string } = {
               success: true,
               output: JSON.stringify({ results, query: args.query, source: 'searxng' }),
             };
+            return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
           }
         }
 
@@ -2386,17 +2534,19 @@ export async function callMCPToolFromAI_SDK(
           conversationId: args.conversationId,
         } as any);
 
-        return {
+        const __dispatchResult: { success: boolean; output: string; error?: string } = {
           success: true,
           output: JSON.stringify({ ...result, source: 'duckduckgo' }),
         };
+        return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
       } catch (error: any) {
         logger.error('[WebSearch] Failed', { error: error.message });
-        return {
+        const __dispatchResult: { success: boolean; output: string; error?: string } = {
           success: false,
           output: '',
           error: error.message || 'Web search failed',
         };
+        return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
       }
     }
 
@@ -2463,11 +2613,12 @@ export async function callMCPToolFromAI_SDK(
           threadId: sessionId,
         } as any);
 
-        return {
+        const __dispatchResult: { success: boolean; output: string; error?: string } = {
           success: (result as any)?.success !== false,
           output: (result as any)?.output || JSON.stringify(result),
           error: (result as any)?.error,
         };
+        return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
       }
     }
 
@@ -2494,11 +2645,12 @@ export async function callMCPToolFromAI_SDK(
         invalidateToolResultCache(args?.path);
       }
 
-      return {
+      const __dispatchResult: { success: boolean; output: string; error?: string } = {
         success: nativeResult.success,
         output: nativeResult.content,
         error: nativeResult.isError ? nativeResult.content : undefined,
       }
+      return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
     }
 
     const mcporterResult = await callMCPorterTool(toolName, args);
@@ -2511,11 +2663,12 @@ export async function callMCPToolFromAI_SDK(
     return mcporterResult
   } catch (error: any) {
     logger.error(`MCP tool call failed: ${toolName}`, error)
-    return {
+    const __dispatchResult: { success: boolean; output: string; error?: string } = {
       success: false,
       output: '',
       error: error.message || 'Tool call failed',
     }
+    return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
   }
 }
 

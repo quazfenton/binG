@@ -2950,6 +2950,57 @@ const config: UnifiedAgentConfig = {
           return new Response(streamBody, { headers: responseHeaders });
         }
 
+        // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — defense-in-depth for the
+        // orchestration-bypass case. When the custom orchestration block at L2866+
+        // wraps processUnifiedAgentRequest via executeWithOrchestrationMode, a stall
+        // from the inner race can surface in TWO places:
+        //   1. orchestrationResult.metadata.stallError | errorCode (canonical, when
+        //      the orchestrator carries the discriminant through UnifiedAgentResult.metadata)
+        //   2. orchestrationResult.error (the raw error instance — when the orchestrator
+        //      catches the rejection and assigns it to .error without preserving the
+        //      stallError metadata shape; this is the bypass path that Path C tests hit).
+        // We probe both shapes, map the matched errorCode to its HTTP status via the
+        // single-source-of-truth helper stallWatchdogErrorToStatus(), and surface the
+        // canonical {success:false, errorCode, reason:'stall-watchdog'} response.
+        // Without this guard, orchestrationResult.success === false would still produce
+        // HTTP 200 (the default status when NextResponse.json has no explicit {status: N}),
+        // masking the stall from upstream load balancers + clients.
+        const orchMetadata = (orchestrationResult as any)?.metadata;
+        const orchError = (orchestrationResult as any)?.error;
+        // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) — defense-in-depth
+        // for vi.mock hoist-hop case. When the test mock (or a future SDK wrap)
+        // produces a StallWatchdogError instance via a different module-load
+        // context, the strict `instanceof StallWatchdogError` check fails (the
+        // class identity differs across module instances). Mirror the OUTERCATCH
+        // discriminator at L5654-L5655: also accept `orchError?.name ===
+        // 'StallWatchdogError'` so the hoisted-mock case still triggers the
+        // canonical stall-status mapping. Fallback to default `'STALL'` when
+        // errorCode is missing (the canonical helper defaults to STALL too).
+        const orchErrorCodeFromError =
+          (orchError instanceof StallWatchdogError ||
+            orchError?.name === 'StallWatchdogError')
+            ? (orchError.errorCode ?? 'STALL')
+            : typeof orchError?.errorCode === 'string'
+              ? orchError.errorCode
+              : undefined;
+        const orchStallError =
+          orchMetadata?.stallError ?? orchMetadata?.errorCode ?? orchErrorCodeFromError;
+        if (typeof orchStallError === 'string' && /^(STALL|DRIFT|ABORT|OTHER)$/.test(orchStallError)) {
+          const stallStatus = stallWatchdogErrorToStatus(orchStallError as StallWatchdogErrorCode);
+          chatLogger.warn(
+            `[CHAT-ROUTE] orchestration-path stall detected → HTTP ${stallStatus}`,
+            { requestId, mode: orchestrationMode },
+            { errorCode: orchStallError, source: 'orchestrationResult.metadata' },
+          );
+          return NextResponse.json({
+            success: false,
+            error: `StallWatchdogError propagated through orchestration (errorCode=${orchStallError})`,
+            errorCode: orchStallError,
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+            requestId,
+          }, { status: stallStatus });
+        }
         // Non-streaming response
         return NextResponse.json({
           success: orchestrationResult?.success ?? false,
@@ -3040,9 +3091,22 @@ const config: UnifiedAgentConfig = {
             // acceptable since `fireStall` sets `stallDidFire = true`
             // synchronously BEFORE `agentTurnAbort.abort(stallErr)`, so the
             // typing-vs-abort race is bounded to one tick.
+            // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) — defense-in-depth
+            // belt-and-suspenders: PRIMARY is `instanceof StallWatchdogError`. FALLBACK
+            // is the errorCode field check (matches the IIFE pattern at L5547-L5554) —
+            // survives a dual-load case where vitest's module-resolution produces two
+            // class instances of `StallWatchdogError` (e.g. the route imports one
+            // instance, the test mock's `new StallWatchdogError(...)` constructs another)
+            // so `instanceof` returns false even though both imports point at the same
+            // `@/lib/chat/llm-fallback-coordinator` source path. The errorCode field is
+            // set by the StallWatchdogError constructor (see llm-fallback-coordinator.ts:L966+)
+            // and is the canonical discriminant for the StallWatchdogError family.
+            const raceErrErrorCode = (raceErr as { errorCode?: unknown })?.errorCode;
             const isServerStall =
               typeof msgRaw === 'string' &&
-              raceErr instanceof StallWatchdogError;
+              (raceErr instanceof StallWatchdogError ||
+                (typeof raceErrErrorCode === 'string' &&
+                  /^(STALL|DRIFT|ABORT|OTHER)$/.test(raceErrErrorCode)));
             if (isServerStall) {
               clearInterval(stallWatchdog);
               const reason = stallDidFireReason ?? 'race-winner-stall';
@@ -5574,14 +5638,62 @@ const config: UnifiedAgentConfig = {
       // ABORT | OTHER) yields its canonical HTTP status (524/502/503/500)
       // via the helper, preserving the late-bound 524 (timeout) signal
       // through to the client. Operator-visible at requestId-level logs.
-      if (routerError instanceof StallWatchdogError) {
-        const stallStatus = stallWatchdogErrorToStatus(routerError);
+      // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) — defense-in-depth
+      // belt-and-suspenders: PRIMARY is `instanceof StallWatchdogError`. FALLBACK
+      // is the errorCode property check (mirrors the IIFE pattern at L5547-L5554 +
+      // the inner-catch fallback at L3046+) — survives a dual-load case where
+      // vitest's module-resolution produces two class instances of
+      // `StallWatchdogError`. The errorCode field is the canonical discriminant
+      // for the StallWatchdogError family — both `instanceof` AND the field check
+      // map to the same helper `stallWatchdogErrorToStatus()` for consistent
+      // HTTP status mapping (STALL→524, DRIFT→502, ABORT→503, OTHER→500).
+      //
+      // OUTERCATCH-GAP closure (2026-07-16, resolution (a)) — added TWO more
+      // detection arms as defense-in-depth for the dual-load / SDK-wrap cases:
+      //   - `stallFromName`: catches errors whose `.name === 'StallWatchdogError'`
+      //     but whose prototype chain was lost (e.g. JSON-stringify round-trip,
+      //     structuredClone, cross-realm pass). This is the "name-discriminated"
+      //     branch requested by the code-reviewer.
+      //   - `stallFromCode`: regex check (canonical 4 codes) PLUS a broader
+      //     `startsWith('STALL')` fallback for non-canonical codes (e.g.
+      //     'STALLED', 'STALL_TIMEOUT') that future errorCode variants might
+      //     emit — default-maps to STALL→524 in the helper. Defense-in-depth:
+      //     without this, a future code drift would silently fall through to
+      //     the generic 503 fallback and mask timeouts from clients.
+      const stallFromInstance = routerError instanceof StallWatchdogError;
+      const stallFromName =
+        (routerError as { name?: unknown })?.name === 'StallWatchdogError';
+      const routerErrorCode = (routerError as { errorCode?: unknown })?.errorCode;
+      const stallFromCode =
+        typeof routerErrorCode === 'string' &&
+        ( /^(STALL|DRIFT|ABORT|OTHER)$/.test(routerErrorCode)
+          // Broader prefix check covers non-canonical variants like
+          // `STALL_TIMEOUT`, `DRIFT_502`, `ABORT-INTERNAL`, `OTHER_FOO`.
+          // Default-maps to the matching canonical errorCode via
+          // stallWatchdogErrorToStatus's regex fallback at helper L1005.
+          || /^(STALL|DRIFT|ABORT|OTHER)/.test(routerErrorCode) );
+      if (stallFromInstance || stallFromName || stallFromCode) {
+        // Type-safe dispatch: pick the helper overload that matches the detection
+        // branch. PRIMARY (instanceof): pass the StallWatchdogError instance.
+        // FALLBACK (errorCode property): pass the StallWatchdogErrorCode string
+        // literal — the helper's 2nd overload accepts this directly, no need to
+        // synthesize an object shape that doesn't satisfy the discriminator.
+        const stallStatus = stallFromInstance
+          ? stallWatchdogErrorToStatus(routerError)
+          : stallWatchdogErrorToStatus(routerErrorCode as StallWatchdogErrorCode);
+        const errorMessage = stallFromInstance
+          ? routerError.message
+          : `StallWatchdogError (errorCode=${routerErrorCode})`;
+        const resolvedErrorCode = stallFromInstance
+          ? routerError.errorCode
+          : (routerErrorCode as StallWatchdogErrorCode);
         chatLogger.warn(
           `[outercatch-gap] mapped StallWatchdogError → HTTP ${stallStatus}`,
           { requestId, provider, model },
           {
-            error: routerError.message,
-            errorCode: routerError.errorCode,
+            error: errorMessage,
+            errorCode: resolvedErrorCode,
+            detectionSource: stallFromInstance ? 'instanceof' : 'errorCode-property',
             latencyMs: Date.now() - requestStartTime,
           }
         );
@@ -5593,8 +5705,8 @@ const config: UnifiedAgentConfig = {
         // consistent across all 3 sites — clients/SSE already have it.
         return addAnonSessionCookie(NextResponse.json({
           success: false,
-          error: routerError.message,
-          errorCode: routerError.errorCode,
+          error: errorMessage,
+          errorCode: resolvedErrorCode,
           reason: 'stall-watchdog',
           stitchedFromWatchDog: true,
           requestId,

@@ -501,6 +501,20 @@ vi.mock('@/lib/virtual-filesystem/git-backed-vfs', () => ({
 import { POST } from '../route';
 import { chatLogger } from '@/lib/chat/chat-logger';
 import { processUnifiedAgentRequest } from '@/lib/orchestra/unified-agent-service';
+// STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — Path C tests + the
+// non-streaming 524 test now mock `executeWithOrchestrationMode` directly
+// (rather than `processUnifiedAgentRequest`) so the StallWatchdogError
+// rejection propagates to the route's OUTERCATCH-GAP catch at L5621,
+// which maps to canonical HTTP status (524/502/503/500). Mocking the
+// inner `processUnifiedAgentRequest` instead leaves the orchestrator's
+// `executeWithOrchestrationMode` (packages/shared/agent/modula.ts) to
+// catch the rejection internally and return `{success:false,
+// metadata:{errorCode, stallError}}` — but the orchestrator's
+// `case 'unified-agent'` branch dynamically imports processUnifiedAgentRequest,
+// which doesn't see vitest's static mock the same way. Mocking the
+// outer `executeWithOrchestrationMode` short-circuits this and routes
+// the StallWatchdogError directly to the OUTERCATCH catch.
+import { executeWithOrchestrationMode } from '@bing/shared/agent';
 
 // ────────────────────────────────────────────────────────────────────
 // Helpers
@@ -881,7 +895,11 @@ vi.mocked(processUnifiedAgentRequest).mockImplementation(
     process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '150';
     process.env.CHAT_ROUTE_MAX_TURN_MS = '60000';
 
-    vi.mocked(processUnifiedAgentRequest).mockImplementation(
+    // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — mock executeWithOrchestrationMode
+    // (not processUnifiedAgentRequest) so the hang surfaces at the orchestrator-block
+    // boundary, triggering the route's stall watchdog timer + the chatLogger.error
+    // propagation-chain assertion below.
+    vi.mocked(executeWithOrchestrationMode).mockImplementation(
       () => new Promise(() => { /* hang */ }) as any,
     );
 
@@ -926,7 +944,11 @@ vi.mocked(processUnifiedAgentRequest).mockImplementation(
     process.env.CHAT_ROUTE_STALL_TIMEOUT_MS = '300';
     process.env.CHAT_ROUTE_MAX_TURN_MS = '5000';
 
-    vi.mocked(processUnifiedAgentRequest).mockImplementation(
+    // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — mock executeWithOrchestrationMode
+    // (not processUnifiedAgentRequest) so the StallWatchdogError rejection propagates
+    // directly to the route's OUTERCATCH-GAP catch at L5621, which maps to the
+    // canonical 524 status via stallWatchdogErrorToStatus().
+    vi.mocked(executeWithOrchestrationMode).mockImplementation(
       () => new Promise((_, reject) => {
         setTimeout(
           () => reject(new StallWatchdogError('drift message — no canonical watchdog prefix here')),
@@ -1005,14 +1027,33 @@ describe('Path C: StallWatchdogError errorCode → HTTP status', () => {
     ['OTHER', 500],
   ];
   it.each(cases)('errorCode=%s → HTTP %i', async (errorCode, expectedStatus) => {
-    vi.mocked(processUnifiedAgentRequest).mockImplementation(() =>
-      Promise.reject(new StallWatchdogError('test ' + errorCode, { errorCode: errorCode as any })),
+    // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — mock
+    // executeWithOrchestrationMode (not processUnifiedAgentRequest) so the
+    // StallWatchdogError rejection propagates DIRECTLY to the route's
+    // OUTERCATCH-GAP catch at L5621-L5715, which maps to the canonical HTTP
+    // status (524/502/503/500) via stallWatchdogErrorToStatus(). The
+    // constructor at /opt/bing/web/lib/chat/llm-fallback-coordinator.ts:L966+
+    // already accepts `{ errorCode }` as the second arg and defaults to 'STALL'
+    // when omitted, so passing it directly works without Object.assign / as-any
+    // cast workarounds.
+    //
+    // Why executeWithOrchestrationMode (not processUnifiedAgentRequest):
+    // The orchestrator's case 'unified-agent' branch
+    // (modula.ts:L283-L306) does `await import('@/lib/orchestra/unified-agent-service')`
+    // — a DYNAMIC import that vitest's static `vi.mock(processUnifiedAgentRequest)`
+    // doesn't propagate to in the same module identity. Result: the
+    // orchestrator catches the rejection internally and returns
+    // `{success:false, metadata:{...errorCode...}}`, which then routes through
+    // the L2953 detector (a defense-in-depth path) but does NOT trigger the
+    // canonical OUTERCATCH mapping in production-realistic conditions.
+    // Mocking executeWithOrchestrationMode directly bypasses the orchestrator
+    // entirely, exercising the OUTERCATCH catch (which IS the production
+    // canonical mapping when executeWithOrchestrationMode rethrows).
+    vi.mocked(executeWithOrchestrationMode).mockImplementation(() =>
+      Promise.reject(new StallWatchdogError('test ' + errorCode, { errorCode })),
     );
     // Use the makeReq helper (not a raw Request object) so the request
-    // takes the same validation path as every other passing test. A raw
-    // Request object's .json() parsing + the chatRequestSchema mock
-    // interaction takes a different code path that returns HTTP 200
-    // before the StallWatchdogError handler is reached.
+    // takes the same validation path as every other passing test.
     const res = await POST(makeReq({ stream: false }) as any);
     expect(res.status).toBe(expectedStatus);
   }, 10000);

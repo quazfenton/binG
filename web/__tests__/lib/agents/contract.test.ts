@@ -218,4 +218,62 @@ describe('agents/contract', () => {
     const g = gatePostCall(c, { toolName: 'read_file', args: {}, result: { ok: true }, errorCount: 0 });
     expect(g.allowed).toBe(true);
   });
+
+  it('15. Object.freeze prevents audit-lines mutation (kill-switch evidence is tamper-resistant)', () => {
+    // Contract hardening — every Contract ships with `audit.lines` wrapped in
+    // Object.freeze (see createAuditLogWith in lib/agents/contract.ts). This
+    // test locks the invariant: any mutation attempt on the returned AuditLog
+    // throws TypeError under strict mode (which is what Vitest uses by
+    // default for `.ts` files). If a future refactor accidentally drops the
+    // freeze, this test flips FAIL -> PASS, surfacing the regression.
+    //
+    // Why this matters operationally: kill-switches (timestamp / regex /
+    // error-count) rely on the audit log as append-only evidence for
+    // post-mortem analysis. A silent mutation that survives a release would
+    // let a buggy tool-call site tamper with its own forensic trail.
+    //
+    // Note: `AuditLog.append()` is IMMUTABLE — it returns a NEW AuditLog with
+    // the appended line (see createAuditLogWith in lib/agents/contract.ts).
+    // We MUST capture the return value to populate `c.audit.lines[0]`.
+    // (TypeScript narrows `c.audit` to the new AuditLog because the field
+    // is declared `audit: AuditLog` not `readonly audit`.)
+    const c = createContract({
+      intent: 'audit-freeze-test', scope: { paths: [], exclude: [] }, capabilities: [],
+      budget: { tokens: 1, ms: 1, ops: 1 },
+      invariants: [],
+      acceptanceCriteria: [],
+      killSwitches: [],
+      escalationGraph: {},
+    });
+    // Capture the new AuditLog returned by append() — required because
+    // append() does NOT mutate c.audit (immutable design).
+    c.audit = c.audit.append({ toolName: 'read_file', toolCallId: 'freeze-test-1', note: 'pre-call' });
+    expect(c.audit.lines.length).toBeGreaterThan(0);
+    expect(c.audit.lines[0]).toMatchObject({ toolName: 'read_file', note: 'pre-call' });
+
+    // (a) Replacing an existing line's contents must throw TypeError
+    // (the `lines` getter returns a fresh Object.frozen snapshot).
+    expect(() => {
+      (c.audit.lines[0] as any) = { tampered: true };
+    }).toThrow(TypeError);
+
+    // (b) Pushing onto the frozen array must throw TypeError.
+    expect(() => {
+      (c.audit.lines as any).push({ tampered: true });
+    }).toThrow(TypeError);
+
+    // (c) Deleting a line via index assignment must throw TypeError.
+    expect(() => {
+      delete (c.audit.lines as any)[0];
+    }).toThrow(TypeError);
+
+    // (d) Mutating a single entry's properties must throw TypeError (per-entry
+    // freeze applied inside the getter's `.map(e => Object.freeze({ ...e }))`).
+    expect(() => {
+      (c.audit.lines[0] as any).note = 'tampered';
+    }).toThrow(TypeError);
+
+    // Sanity: the line we tried to tamper with is still the original.
+    expect(c.audit.lines[0]).toMatchObject({ toolName: 'read_file', note: 'pre-call' });
+  });
 });

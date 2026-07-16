@@ -3580,8 +3580,7 @@ function logToolCall(
   // SSE event for client-side display (if streaming is available)
   if (onStreamChunk) {
     try {
-      onStreamChunk(JSON.stringify({
-        type: 'tool_result',
+      onStreamChunk(sseEncode(SSE_EVENT_TYPES.TOOL_RESULT, {
         tool: toolName,
         success: result.success,
         exitCode: result.exitCode ?? (result.success ? 0 : 1),
@@ -6614,8 +6613,6 @@ async function attemptFallback(
   log.info('[Fallback] │ caps.v2Local:', caps.v2Local);
   log.info('[Fallback] │ caps.v1Api:', caps.v1Api);
   log.info('[Fallback] │ note: false caps fall through to override paths; chain-resolved mode follows this block.');
-log.info('[Fallback] │ note: false caps fall through to override paths; chain-resolved mode follows this block.');
-log.info('[Fallback] └───────────────────────────────────────────');
 log.info('[Fallback] └───────────────────────────────────────────');
 
   // Try fallback chain based on what failed, excluding already tried modes

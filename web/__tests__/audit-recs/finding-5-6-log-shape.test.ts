@@ -56,7 +56,28 @@ describe('Finding #5 — processUnifiedAgentRequest returned outcome discriminat
       // the function signature block and assert the presence of `outcome:`
       // plus each of the 5 union values. Shape-lock anchors on the function
       // name so it can't silently relocate the discriminator elsewhere.
-      const sigMatch = UAG.match(/function\s+auditResponseShape\s*\([\s\S]{0,2000}?\)/);
+      //
+      // Signature regex FIX (2026-07-16, rerun) — the prior regex tried
+      // to match `\}\s*\)\s*\{` (meta-object `}` + sig close paren + body
+      // opener) but returned null because the source has `: void` between
+      // `)` and `{` (`},\n): void {`) — the regex required the chars to
+      // be ADJACENT-ish with only whitespace between them, but TypeScript
+      // formatter inserts `: void` (the return-type annotation). The
+      // capture never reached the meta-object closer.
+      //
+      // New approach: anchor on the deterministic function-signature
+      // terminator `\): *void *{` which only appears at the END of the
+      // auditResponseShape signature. No magic bound needed because the
+      // `): void {` pattern is unique to a void-returning TS function
+      // declaration that follows an inline meta-object parameter — and
+      // no other function in unified-agent-service.ts returns void with
+      // an inline meta object literal. Greedy-then-non-greedy means:
+      // `[\s\S]*?` non-greedy from `function ... (` to the FIRST
+      // occurrence of `): void {`. The capture range INCLUDES the
+      // entire meta object (including `outcome:` at L1541-L1546).
+      const sigMatch = UAG.match(
+        /function\s+auditResponseShape\s*\([\s\S]*?\)\s*:\s*void\s*\{/,
+      );
       expect(sigMatch, 'auditResponseShape function signature must exist in source').not.toBeNull();
       const sig = sigMatch?.[0] ?? '';
       expect(sig).toMatch(/outcome:/);

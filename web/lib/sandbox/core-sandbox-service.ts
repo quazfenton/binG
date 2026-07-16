@@ -240,7 +240,7 @@ export class SandboxService {
           // installs run in the background since they take 30-300 seconds. The sandbox
           // is usable while installs proceed, albeit without the warm-start benefit.
           try {
-            const workspaceDir = handle.workspaceDir || '/workspace';
+            const workspaceDir = handle.workspaceDir || '/tmp';
             const image = await workspaceImageBuilder.ensureImage(handle, workspaceDir);
             if (image) {
               log.info('Workspace image ready', {
@@ -601,7 +601,7 @@ export class SandboxService {
       sessionId: randomUUID(),
       sandboxId: handle.id,
       userId,
-      cwd: '/workspace',
+      cwd: '/tmp',
       createdAt: new Date().toISOString(),
       lastActive: new Date().toISOString(),
       status: 'active',

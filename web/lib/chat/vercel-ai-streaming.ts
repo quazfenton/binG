@@ -1896,10 +1896,13 @@ export async function* streamWithVercelAI(
       // the middle of that would interrupt legitimate output. We pick
       // the higher TEXT_STALL_STEER_MS (60s default) for those states,
       // and keep the tighter STALL_STEER_MS (30s) for genuinely silent
-      // streams (no activity at all). The override only widens the
-      // window — it never tightens it.
+      // streams (no activity at all).
+      //
+      // FIX: Extend the stall window when the model is actively processing tools.
       const isActiveText = lastActivityType === 'text' || lastActivityType === 'reasoning';
-      const effectiveStallSteerMs = isActiveText ? TEXT_STALL_STEER_MS : STALL_STEER_MS;
+      const isActiveTool = lastActivityType === 'tool-call' || lastActivityType === 'tool-result';
+      const effectiveStallSteerMs = (isActiveText || isActiveTool) ? TEXT_STALL_STEER_MS : STALL_STEER_MS;
+
       if (silenceMs >= effectiveStallSteerMs && !stallSteerFiredThisSilence) {
         stallSteerFiredThisSilence = true;
         thinkPingQueue.push({
