@@ -52,14 +52,18 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { TaskFilterView } from '@/lib/mcp/architecture-integration';
 import {
+  computeTaskFilterView,
   filterArcadeToolsByView,
   filterComposioToolsByView,
   filterBlaxelToolsByView,
   filterNullclawToolsByView,
   filterProviderToolsByView,
+  isStructuredMcpError,
+  type TaskFilterView,
 } from '@/lib/mcp/architecture-integration';
+import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
+import type { SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 
 // ── Module mocks (hoisted) — needed for E2E Tests 1, 2, 8 ─────────────────
 //
@@ -494,5 +498,299 @@ describe('legacy substring contract — view.kind === "string" branch', () => {
     const filtered = filterProviderToolsByView(allProvider, stringView('hello world'));
     const kept = names(filtered);
     expect(kept).toContain('mystery_unknown_tool');
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // requireFullCatalog sentinel contract (MCP-CAPBYPASS ticket, 2026-07-16)
+  //
+  // The sentinel forces `view.kind === 'none'` regardless of `taskFilter`
+  // so the 5 per-source filter helpers return `[...all]` — i.e. the
+  // UNFILTERED upstream tool catalog. This in turn allows
+  // `getMCPToolsForAI_SDK` to thread `maxBudget: Number.POSITIVE_INFINITY`
+  // through `normalizeAndCapTools` (L1666-L1668a), giving tools-only
+  // helpers (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`) the
+  // FULL MCP catalog for fuzzy name matching and JSON-Schema lookup.
+  //
+  // These tests codify the contract so future regressions surface in CI.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ── Test 9 — Sentinel short-circuits view.kind to 'none' for ALL 3 inputs
+
+  it('requireFullCatalog: plan-shaped taskFilter + sentinel → kind: "none" (sentinel wins)', () => {
+    // The duck-type guard in `isSelectToolPlan` (architecture-integration.ts)
+    // only requires `intents: Array<string>` + `sourcePermissions: object`,
+    // but we populate the full SelectToolPlanResult shape (matching what
+    // `selectToolPlan()` returns at runtime on the active /api/chat route)
+    // so a future operator reading the fixture can verify the contract
+    // against a realistic planner output. `reasons[]` is non-empty to
+    // demonstrate the planner's telemetry surface; the sentinel test
+    // assertion is on `view.kind` regardless of content.
+    const plan: SelectToolPlanResult = {
+      intents: ['web.fetch', 'web.search'],
+      coreTools: ['web.fetch', 'web.search'],
+      candidateToolIds: ['web.fetch', 'web.search'],
+      requestedToolkits: ['gmail', 'slack'],
+      sourcePermissions: {
+        arcade: true,
+        composio: true,
+        mem0: true,
+        nullclaw: true,
+        remoteMcp: true,
+        mcpHttp: true,
+      },
+      maxBudget: 20,
+      reasons: [
+        {
+          intent: 'web.fetch',
+          score: 18,
+          matchedSignals: ['current-turn'],
+          negatedSignals: [],
+          weight: 18,
+        },
+        {
+          intent: 'web.search',
+          score: 14,
+          matchedSignals: ['current-turn'],
+          negatedSignals: [],
+          weight: 14,
+        },
+      ],
+      fallbackUsed: false,
+      matchCount: 2,
+    };
+    const view = computeTaskFilterView(plan, { requireFullCatalog: true });
+    expect(view.kind).toBe('none');
+  });
+
+  it('requireFullCatalog: non-empty string taskFilter + sentinel → kind: "none" (sentinel wins)', () => {
+    const view = computeTaskFilterView('browse https://example.com article', { requireFullCatalog: true });
+    expect(view.kind).toBe('none');
+  });
+
+  it('requireFullCatalog: undefined taskFilter + sentinel → kind: "none" (also legacy fall-through)', () => {
+    const view = computeTaskFilterView(undefined, { requireFullCatalog: true });
+    expect(view.kind).toBe('none');
+  });
+
+  // Regression: WITHOUT the sentinel, undefined taskFilter still falls to
+  // kind: 'none' (the existing legacy fall-through at L787 of
+  // architecture-integration.ts). This test pins that contract so the
+  // sentinel short-circuit at L772 doesn't accidentally SILENCE that path.
+  it('no sentinel: undefined taskFilter → kind: "none" (legacy fall-through preserved)', () => {
+    const view = computeTaskFilterView(undefined, {});
+    expect(view.kind).toBe('none');
+  });
+
+  // Regression: WITHOUT the sentinel, the plan + string branches take
+  // their normal shape — proves the sentinel ONLY changes the 'none'
+  // short-circuit, not the 'plan' or 'string' discriminators.
+  it('no sentinel: plan-shaped taskFilter → kind: "plan" (not short-circuited)', () => {
+    const plan: SelectToolPlanResult = {
+      intents: ['web.fetch'],
+      coreTools: ['web.fetch'],
+      candidateToolIds: ['web.fetch'],
+      requestedToolkits: [],
+      sourcePermissions: {
+        arcade: true,
+        composio: false,
+        mem0: false,
+        nullclaw: false,
+        remoteMcp: false,
+        mcpHttp: false,
+      },
+      maxBudget: 20,
+      reasons: [],
+      fallbackUsed: false,
+      matchCount: 1,
+    };
+    const view = computeTaskFilterView(plan, {});
+    expect(view.kind).toBe('plan');
+    if (view.kind === 'plan') {
+      expect(view.intents.has('web.fetch')).toBe(true);
+    }
+  });
+
+  it('no sentinel: string taskFilter → kind: "string" (not short-circuited)', () => {
+    const view = computeTaskFilterView('browse something', {});
+    expect(view.kind).toBe('string');
+    if (view.kind === 'string') {
+      expect(view.taskLower).toBe('browse something');
+    }
+  });
+
+  // ── Test 10 — 5 per-source filter helpers return `[...all]` on view.kind === 'none'
+  //
+  // Locks the downstream behavior of the sentinel: when the sentinel
+  // short-circuits the view, each of the 5 per-source filter helpers
+  // must return the unfiltered upstream tool catalog. This is what
+  // makes the cap-bypass at L1666-L1668a meaningful — if any helper
+  // broke the [...all] contract, the tools-only consumer would still
+  // miss tools even with sentinel on.
+  it('filterBlaxelToolsByView: view.kind === "none" → returns [...all] verbatim (sentinel path)', () => {
+    const allBlaxel = [
+      vfsSchemaFactory('blaxel_codegenGrepSearch'),
+      vfsSchemaFactory('blaxel_codegenParallelApply'),
+      vfsSchemaFactory('blaxel_codegenReapply'),
+    ];
+    const view: TaskFilterView = { kind: 'none' };
+    const filtered = filterBlaxelToolsByView(allBlaxel, view);
+    expect(names(filtered)).toEqual(names(allBlaxel));
+  });
+
+  it('filterNullclawToolsByView: view.kind === "none" → returns [...all] minus nullclaw_status sentinel (existing strip preserved)', () => {
+    const allNullclaw = [
+      vfsSchemaFactory('nullclaw_discord_send'),
+      vfsSchemaFactory('nullclaw_browse_navigate'),
+      vfsSchemaFactory('nullclaw_status'),  // Always stripped
+    ];
+    const view: TaskFilterView = { kind: 'none' };
+    const filtered = filterNullclawToolsByView(allNullclaw, view);
+    const kept = names(filtered);
+    expect(kept).toContain('nullclaw_discord_send');
+    expect(kept).toContain('nullclaw_browse_navigate');
+    expect(kept).not.toContain('nullclaw_status');
+  });
+
+  it('filterArcadeToolsByView: view.kind === "none" → returns [...all] verbatim (sentinel path)', () => {
+    const allArcade = [
+      vfsSchemaFactory('arcade_web_search'),
+      vfsSchemaFactory('arcade_gmail_send'),
+      vfsSchemaFactory('arcade_github_create_issue'),
+    ];
+    const view: TaskFilterView = { kind: 'none' };
+    const filtered = filterArcadeToolsByView(allArcade, view);
+    expect(names(filtered)).toEqual(names(allArcade));
+  });
+
+  it('filterComposioToolsByView: view.kind === "none" → returns [...all] verbatim (sentinel path)', () => {
+    const allComposio = [
+      { ...vfsSchemaFactory('gmail_send_draft'), toolkit: 'gmail' } as any,
+      { ...vfsSchemaFactory('slack_post_message'), toolkit: 'slack' } as any,
+      { ...vfsSchemaFactory('mystery_widget'), toolkit: 'unknown' } as any,
+    ];
+    const view: TaskFilterView = { kind: 'none' };
+    const filtered = filterComposioToolsByView(allComposio, view);
+    expect(names(filtered)).toEqual(names(allComposio));
+  });
+
+  it('filterProviderToolsByView: view.kind === "none" → returns [...all] verbatim (sentinel path)', () => {
+    const allProvider = [
+      vfsSchemaFactory('daytona_computer_use_zoom'),
+      vfsSchemaFactory('e2b_run_python'),
+      vfsSchemaFactory('codesandbox_create_sandbox'),
+      vfsSchemaFactory('sprites_create_checkpoint'),
+    ];
+    const view: TaskFilterView = { kind: 'none' };
+    const filtered = filterProviderToolsByView(allProvider, view);
+    expect(names(filtered)).toEqual(names(allProvider));
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // isStructuredMcpError type-guard contract (F1 SHOULD-CONSIDER fix,
+  // 2026-07-16)
+  //
+  // The guard at /opt/bing/web/lib/mcp/architecture-integration.ts:L740+
+  // narrows `unknown → { message: string; code?: string; retryable?: boolean;
+  // correctedExample?: string }`. These tests pin the runtime predicate
+  // behavior so future edits that loosen or tighten the guard regress in
+  // CI rather than at the orchestrator call site.
+  //
+  // Cases 1-2 cover positive paths (with + without optional fields) and
+  // confirm the TS-narrowed type lets callers read `e.message` directly.
+  // Cases 3-5 cover the fail-closed negatives: null, missing-message,
+  // empty-message-string — all must return false so the orchestrator
+  // (route.ts:L1968) does NOT silently treat a corrupt error blob as
+  // a structured error and produce a misleading ORCHESTRATOR-UNWRAP
+  // hint string.
+  // ════════════════════════════════════════════════════════════════════════
+
+  it('isStructuredMcpError: minimal valid { message } returns true and narrows type', () => {
+    const candidate = { message: 'something failed' };
+    expect(isStructuredMcpError(candidate)).toBe(true);
+    if (isStructuredMcpError(candidate)) {
+      // Compile-time narrowed access — type system flags any typo here
+      // as a TS error if the guard's predicate shape changes.
+      expect(candidate.message).toBe('something failed');
+    }
+  });
+
+  it('isStructuredMcpError: full { message, code, retryable, correctedExample } → true + all optional fields present', () => {
+    const candidate = {
+      message: 'tool execution failed',
+      code: 'INVALID_CONTENT',
+      retryable: true,
+      correctedExample: 'retry with {"foo": "bar"}',
+    };
+    expect(isStructuredMcpError(candidate)).toBe(true);
+    if (isStructuredMcpError(candidate)) {
+      expect(candidate.code).toBe('INVALID_CONTENT');
+      expect(candidate.retryable).toBe(true);
+      expect(candidate.correctedExample).toBe('retry with {"foo": "bar"}');
+    }
+  });
+
+  it('isStructuredMcpError: null → false (orchestrator falls through to generic WARN path)', () => {
+    expect(isStructuredMcpError(null)).toBe(false);
+  });
+
+  it('isStructuredMcpError: object without message field → false (avoids corrupt error-blob false-positive)', () => {
+    expect(isStructuredMcpError({ code: 'X', retryable: true })).toBe(false);
+    expect(isStructuredMcpError({})).toBe(false);
+  });
+
+  it('isStructuredMcpError: object with empty-string message → false (avoids empty-orchestratorHint false-positive)', () => {
+    expect(isStructuredMcpError({ message: '' })).toBe(false);
+  });
+
+  // Typeof-guard early-return coverage (code-reviewer SHOULD-CONSIDER #1):
+  // Pins the `value === null || typeof value !== 'object'` early-return
+  // branch so a regression that drops the typeof check surfaces in CI.
+  // Cases 4 and 5 above already use real objects (which pass the typeof
+  // check), so without these primitive/function cases a regression that
+  // drops the early-return would still pass the 5 existing tests.
+  it('isStructuredMcpError: primitives (number, string) and function return false (typeof-guard early-return)', () => {
+    expect(isStructuredMcpError(42)).toBe(false);
+    expect(isStructuredMcpError('a string')).toBe(false);
+    expect(isStructuredMcpError(true)).toBe(false);
+    expect(isStructuredMcpError(undefined)).toBe(false);
+    expect(isStructuredMcpError(() => ({ message: 'fake' }))).toBe(false);
+  });
+
+  // ════════════════════════════════════════════════════════════════════════
+  // unwrapStructuredToolError format-lock contract (code-reviewer
+  // SHOULD-CONSIDER follow-up)
+  //
+  // The helper at /opt/bing/web/lib/mcp/orchestrator-error-unwrap.ts
+  // composes the LLM-facing `[ORCHESTRATOR-UNWRAP]: ...` block. Its
+  // string template is the single source of truth that downstream LLM
+  // tool-result consumers depend on. Locking the EXACT format string
+  // means a future engineer changing the `UNKNOWN` literal, the `\n`
+  // newline, or the `→` arrow surfaces in CI rather than at LLM time.
+  // ════════════════════════════════════════════════════════════════════════
+
+  it('unwrapStructuredToolError: full shape asserts EXACT formatted string', () => {
+    const result = unwrapStructuredToolError({
+      message: 'tool execution failed',
+      code: 'INVALID_CONTENT',
+      retryable: true,
+      correctedExample: 'retry with {"foo": "bar"}',
+    });
+    expect(result).toBe(
+      '[ORCHESTRATOR-UNWRAP]: tool execution failed\n[error.code=INVALID_CONTENT] [retryable=true]\n→ retry with {"foo": "bar"}',
+    );
+  });
+
+  it('unwrapStructuredToolError: minimal { message } asserts default code + retryable + no arrow line', () => {
+    const result = unwrapStructuredToolError({ message: 'x' });
+    expect(result).toBe(
+      '[ORCHESTRATOR-UNWRAP]: x\n[error.code=UNKNOWN] [retryable=false]',
+    );
+  });
+
+  it('unwrapStructuredToolError: null input → null (passes through to caller WARN path)', () => {
+    expect(unwrapStructuredToolError(null)).toBe(null);
+    expect(unwrapStructuredToolError(undefined)).toBe(null);
+    expect(unwrapStructuredToolError({})).toBe(null);
+    expect(unwrapStructuredToolError({ message: '' })).toBe(null);
   });
 });

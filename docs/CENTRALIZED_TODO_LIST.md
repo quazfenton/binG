@@ -757,9 +757,10 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - **Net effect:** Failure count `29 -> 0`; CI runtime roughly halved on web tests.
   - **Final touch (2026-07-15):** glob hardening `'web/**'` -> `'**/web/**'` applied.
 ### F4 (vitest workspace config duplication) — UPGRADED to native vitest.workspace.ts
-- **Status:** ✅ RESOLVED
+- **Status:** 🔴 DEFERRED (vitest.workspace.ts migration has live blocker; reverted to pre-migration state; re-attempt needed)
 - **Opened:** 2026-07-16
-- **Resolved:** 2026-07-16
+- **Last updated:** 2026-07-16
+- **Resolved:** — (not yet resolved)
 - **Priority:** 🟡 P2 (audit SHOULD-CONSIDER)
 - **Impact:** Replaces brittle `**/__tests__/**` global globs with vitest 4 native workspacing. Two named projects (`packages` + `web`) with per-project pool sizing. Drops root/web config duplication.
 - **Resolution:**
@@ -770,4 +771,46 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - [x] `/opt/bing/web/vitest.config.ts`: include[] moved out (workspace.ts overrides); testTimeout, env, exclude, aliases preserved as base config for `web` project.
   - [x] `**/__tests__/**/*.test.ts` global glob removed from BOTH root and web configs.
   - [x] Verified by: `pnpm -r ... test` orchestrator end-to-end + 3 audit suites (route-tool-list, request-to-final-list, legacy-substring-contract, select-tool-plan) all pass.
+
+- **Revert (post-discovery):** `/opt/bing/vitest.workspace.ts` DELETED; `/opt/bing/vitest.config.ts` (root) restored to pre-migration include[] form so non-test tooling probes still get a working config.
+- **Next attempt guide (for future maintainer):**
+  - [ ] Read `https://vitest.dev/advanced/workspaces` in full BEFORE writing the first workspace.ts; per the F4 ticket's "Live blocker" section, two root-cause hypotheses remain untested (a) vitest-4 project-field shape mismatch + (b) workspace.ts file-load failure silently dropping projects — verify against vitest 4 docs before assuming any single cause.
+  - [ ] Verify whether `defineWorkspace`'s project entries use TOP-LEVEL `name`/`root` (vitest 4) or `test: { name, root }` (vitest 3) — the two emitted different diagnostics in the live blocker.
+  - [ ] Confirm whether `extends` resolves from workspace-cwd (in which case `'./web/vitest.config.ts'` is correct) or from project-root (in which case `'../web/vitest.config.ts'` is needed) — write a unit test that round-trips both before merging, rather than relying on real-CLI empirical traces.
+  - [ ] When re-attempting, KEEP `pnpm --filter web test 'path/to/foo'` working as-is (the established workflow) AND add workspace.ts via a separate `test:workspace` script so both paths coexist during the transition.
 - **Audit reference:** MCP-TOOL-SELECTION-POSTAUDIT 4 (SHOULD-CONSIDER ④).
+- **Live blocker (NOT RESOLVED):**
+  - [ ] `pnpm --filter web test 'path/to/foo.test.ts'` AND `cd /opt/bing/web && npx vitest run --project web 'pathArg'` both exit 1 with `Error: No projects matched the filter "web"`.
+  - [ ] The first surgical fix (`extends: './web/vitest.config.ts'` → `'../web/vitest.config.ts'`) did NOT resolve the failure.
+  - [ ] Two hypotheses remain untested: (a) vitest 4 workspace shape mismatch (project fields may need different placement), (b) workspace.ts file-load failure silently drops all projects.
+  - [ ] Workaround in place: `web/package.json#test` reverted to plain `"vitest run"` (no --project), and `web/vitest.config.ts` include[] restored to its pre-migration `'**/__tests__/**/*.test.ts'` form so direct-from-web invocations still work.
+
+---
+
+## MCP-CAPBYPASS — `requireFullCatalog` sentinel cap-bypass (RESOLVED 2026-07-16)
+
+- **Source:** code-reviewer-minimax-m3 SHOULD-CONSIDER flagged during the audit follow-up review of the `requireFullCatalog` typed-sentinel strengthening (2026-07-16). The sentinel name (`requireFullCatalog`) implied full-catalog delivery, but the cap portion of `normalizeAndCapTools` (env `MCP_TOOLS_MAX_TOTAL`, default 25) STILL APPLIED after the per-source filter helpers returned `[...all]`.
+- **Status:** ✅ RESOLVED
+- **Opened:** 2026-07-16
+- **Resolved:** 2026-07-16
+- **Priority:** 🟡 P2 (cap-bypass hardening — no user-visible regression today because no production MCP installation crosses 25 tools, but matched-the-name failure mode for tools-only callers when one does)
+- **Impact:** Prevents silent tool-dispatch failure in `enhanced-llm-service.ts` helpers (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`) when MCP set > 25 tools. Helpers depend on the FULL MCP catalog for fuzzy name matching + JSON-Schema lookup; `mcpToolNames.includes(rawName)` returning `false` for genuine MCP tools would break tool dispatch in the LLM tool-calling layer.
+- **Full ticket:** [`docs/MCP_CAPBYPASS_FOLLOWUP.md`](MCP_CAPBYPASS_FOLLOWUP.md)
+- **Resolution:**
+  - [x] `/opt/bing/web/lib/mcp/architecture-integration.ts` — `function computeTaskFilterView` (L754) → `export function computeTaskFilterView` for unit-test access.
+  - [x] `/opt/bing/web/lib/mcp/architecture-integration.ts` — SHOULD-CONSIDER doc block at L766-L771 → RESOLVED doc that documents the cap-bypass at L1666-L1668a and references this ticket.
+  - [x] `/opt/bing/web/lib/mcp/architecture-integration.ts` — `getMCPToolsForAI_SDK` JSDoc SHOULD-CONSIDER at L1291-L1311 → RESOLVED JSDoc that documents the `maxBudget: Number.POSITIVE_INFINITY` path.
+  - [x] `/opt/bing/web/lib/mcp/architecture-integration.ts` — `normalizeAndCapTools` call site at L1666-L1668a: `maxBudget: getToolsMaxTotal()` → `maxBudget: options?.requireFullCatalog === true ? Number.POSITIVE_INFINITY : getToolsMaxTotal()`.
+  - [x] `/opt/bing/web/__tests__/mcp/legacy-substring-contract.test.ts` — added 11 new unit-test assertions: Test 9 (6 sentinel contract cases covering plan/string/undefined taskFilter × sentinel on/off) + Test 10 (5 per-source filter helper `[...all]` lock-down cases).
+  - [x] `/opt/bing/docs/MCP_CAPBYPASS_FOLLOWUP.md` — new ticket documenting root cause, resolution, risk analysis, and closure evidence.
+  - [x] This discoverability entry appended (so operators searching "what does `requireFullCatalog` do?" find a central-list reference).
+- **Call sites pinned:**
+  - `/opt/bing/web/lib/chat/enhanced-llm-service.ts:2486` — `resolveMCPToolName` invokes `getMCPToolsForAI_SDK(userId, undefined, undefined, { requireFullCatalog: true })` and uses `.map(...)` for fuzzy name matching. MUST receive full catalog.
+  - `/opt/bing/web/lib/chat/enhanced-llm-service.ts:2520` — `extractToolCallsFromLLMResponse` invokes the same shape and uses `.map(...)` for JSON-Schema lookup table. MUST receive full catalog.
+- **Active route safety:** zero risk. `/api/chat` always passes a `SelectToolPlanResult` so `computeTaskFilterView` hits `view.kind === 'plan'` and never `view.kind === 'none'`. The `options?.requireFullCatalog === true` short-circuit at L772 only fires for the 2 helper callers. The 25-tool cap on the LLM list is preserved exactly as before on the active route.
+- **Acceptance (RESOLVED 2026-07-16):**
+  - [x] `pnpm --filter web test __tests__/mcp/legacy-substring-contract.test.ts` exits 0 — pre-existing 8 tests still pass + new 11 assertions pass = 19 total.
+  - [x] `tsc --noEmit` on the workspace reports no new errors introduced by the export change (`computeTaskFilterView` already had the same signature, just added `export`).
+  - [x] Audit suite (`route-tool-list.test.ts` + `request-to-final-list.test.ts` + `select-tool-plan.test.ts`) still passes — the active route's `view.kind === 'plan'` path is unaffected.
+  - [x] `pnpm --filter shared typecheck` (item ④ of MCP-TOOL-SELECTION-POSTAUDIT) still exits 0 or has the same pre-existing errors (no regression).
+- **Closure evidence:** see ticket `/opt/bing/docs/MCP_CAPBYPASS_FOLLOWUP.md` Section "Closure evidence (2026-07-16)". Pre-fix risk: silent dispatch failure for MCP installations > 25 tools. Post-fix: `maxBudget = Infinity` for the 2 helper callers only. Active /api/chat route cap unchanged.

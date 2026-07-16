@@ -147,9 +147,11 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     pool: 'forks', // Required for AsyncLocalStorage support (toolContextStore)
-    // include[] moved to /opt/bing/vitest.workspace.ts (project `web` extends
-    // this file as base; workspace.ts re-lists explicit top-level directories).
-    include: [],
+    // include[] temporarily RESTORED (workspace.ts migration has a known
+    // unresolved blocker with `--project web`). Once the migration is
+    // re-attempted, revert to `include: []` per the audit-ticket's intent.
+    // SEE: F4 in /opt/bing/docs/CENTRALIZED_TODO_LIST.md (status: PARTIAL).
+    include: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx', '**/*.test.ts', '**/*.test.tsx'],
     exclude: [
       '**/node_modules/**',
       '**/deprecated/**',

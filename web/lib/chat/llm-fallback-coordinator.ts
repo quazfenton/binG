@@ -496,7 +496,40 @@ export async function* coordinateConcurrentFallback<T>(
       rethrowIfStallReason(signal);
       return;
     }
+    // Isolate this fallback's lifecycle with a dedicated AbortController so
+    // aborts targeted at this fallback do NOT accidentally propagate to other
+    // iterations or the primary. Wrap the factory-provided abort handle so
+    // the controller and the handle remain in sync and cleanup listeners are
+    // well-scoped.
+    const fallbackLifecycleController = new AbortController();
+    const fallbackLifecycleSignal = fallbackLifecycleController.signal;
+
+    // Wrap the factory's abort to ensure idempotence and to fire the
+    // lifecycle signal for any listeners we attach below.
+    const originalFallbackAbort = fallbackHandle.abort;
+    let fallbackAborted = false;
+    const wrappedFallbackAbort = (): void => {
+      if (fallbackAborted) return;
+      fallbackAborted = true;
+      try {
+        originalFallbackAbort();
+      } catch (e) {
+        // swallow — abort handles should be best-effort
+      }
+      try {
+        // ensure our lifecycle signal is also aborted so any attached
+        // listeners inside this coordinator can observe the cancellation
+        // without depending on the factory's implementation.
+        fallbackLifecycleController.abort();
+      } catch (e) {
+        // ignore
+      }
+    };
+    // Replace the handle's abort with the wrapped version
+    fallbackHandle.abort = wrappedFallbackAbort;
+
     const fallbackIt = fallbackHandle.gen[Symbol.asyncIterator]();
+
 
     // Build the primary chunk promise for this race iteration. Three
     // paths: (1) cache-consume when a prior iter pinned a non-done chunk,
@@ -806,6 +839,28 @@ export async function* coordinateConcurrentFallback<T>(
       // natural success — both tracks should be cleared.
       maybeReset530OnSuccess(fallbackProvider);
       maybeResetServerErrorOnSuccess(fallbackProvider);
+    }
+
+    // Tag winner chunk when it came from a fallback so callers (e.g. the
+    // streaming continuation harness) can detect a fallback-continue and
+    // merge tokens/emit a single consolidated SSE metadata event. The
+    // `raceResult.value` is the raw chunk emitted by the provider; augment
+    // its `.metadata` object defensively if present.
+    try {
+      if (raceResult.source === 'fallback') {
+        const v = raceResult.value as any;
+        if (v && typeof v === 'object') {
+          v.metadata = {
+            ...(v.metadata || {}),
+            fallbackOccurred: true,
+            fallbackProvider,
+            fallbackIndex,
+            fallbackChain: chain.slice(0, fallbackIndex + 1),
+          };
+        }
+      }
+    } catch (e) {
+      // Best-effort tagging; do not break streaming on metadata attach failures
     }
 
     yield raceResult.value;

@@ -37,6 +37,13 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
+// Import the structured-error type guard directly from the file that
+// defines it. Could be re-exported from '@/lib/mcp' for barrel-style
+// consistency, but keeping the import file-specific makes the contract
+// (vfs-mcp-tools.ts:640+ returns `{ message, code, retryable, correctedExample }`)
+// grep-discoverable from the call site.
+import { isStructuredMcpError } from '@/lib/mcp/architecture-integration';
+import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
 import { selectToolPlan } from '@/lib/tools/select-tool-plan';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
@@ -1964,21 +1971,17 @@ const config: UnifiedAgentConfig = {
       // info; the generic WARN line would be redundant).
       // SHOULD-CONSIDER: error.code may be 'UNKNOWN' for unrecognized shapes;
       // the LLM should treat this as a fresh retry rather than a typed failure.
-      let orchestratorHint: string | null = null;
-      if (result.error && typeof result.error === 'object') {
-        const e = result.error as {
-          code?: string;
-          message?: string;
-          retryable?: boolean;
-          correctedExample?: string;
-        };
-        if (typeof e.message === 'string' && e.message.length > 0) {
-          const retryable = typeof e.retryable === 'boolean' ? e.retryable : false;
-          const code = e.code ?? 'UNKNOWN';
-          const exampleLine = e.correctedExample ? `\n→ ${e.correctedExample}` : '';
-          orchestratorHint = `[ORCHESTRATOR-UNWRAP]: ${e.message}\n[error.code=${code}] [retryable=${retryable}]${exampleLine}`;
-        }
-      }
+      // F1 fix (helper-extracted): structured-error unwrap migrated to a
+      // module-private helper. `unwrapStructuredToolError` returns the
+      // formatted `[ORCHESTRATOR-UNWRAP]: …` block OR `null` when the
+      // input does not match the VFS/MCP `{ message, code?, retryable?,
+      // correctedExample? }` shape. The prior 16-line inline build at
+      // this site was lifted out so future V2-path migration +
+      // chat-helpers.ts tool-result surfacing reuse the same format
+      // without copy-paste drift. See
+      // /opt/bing/web/lib/mcp/orchestrator-error-unwrap.ts for the format
+      // contract + reuse guidance.
+      const orchestratorHint = unwrapStructuredToolError(result.error);
       const finalOutput = orchestratorHint
         ? (result.output && result.output.length > 0
             ? `${result.output}\n\n${orchestratorHint}`
@@ -2003,53 +2006,6 @@ const config: UnifiedAgentConfig = {
         // the next tick once the per-call signal is aborted.
         toolCallAbort.abort();
       }
-    };
-
-      // F1 fix: structured-error unwrap. VFS tools (vfs-mcp-tools.ts:640+) return
-      // errors as `{ code, message, retryable, correctedExample }` blobs. The
-      // SDK type signature declares `error?: string`, so by the time results
-      // reach the orchestrator the structured info is collapsed to a generic
-      // "Unknown error — tool result has keys" log line that gives the LLM
-      // no actionable context. Detect the structured object shape and lift
-      // its fields into the LLM-facing `output` so the model can self-correct.
-      //
-      // Output format (single LLM-facing block appended to existing output):
-      //   [ORCHESTRATOR-UNWRAP]: <error.message>
-      //   [error.code=<code>] [retryable=<bool>]
-      //   → <correctedExample>      (omitted if undefined)
-      //
-      // Plain-string errors pass through unchanged. Suppresses the existing
-      // "Unknown error — tool result has keys" log spam only when structured
-      // shape is detected + unwrap succeeds (the LLM now sees the structured
-      // info; the generic WARN line would be redundant).
-      // SHOULD-CONSIDER: error.code may be 'UNKNOWN' for unrecognized shapes;
-      // the LLM should treat this as a fresh retry rather than a typed failure.
-      let orchestratorHint: string | null = null;
-      if (result.error && typeof result.error === 'object') {
-        const e = result.error as {
-          code?: string;
-          message?: string;
-          retryable?: boolean;
-          correctedExample?: string;
-        };
-        if (typeof e.message === 'string' && e.message.length > 0) {
-          const retryable = typeof e.retryable === 'boolean' ? e.retryable : false;
-          const code = e.code ?? 'UNKNOWN';
-          const exampleLine = e.correctedExample ? `\n→ ${e.correctedExample}` : '';
-          orchestratorHint = `[ORCHESTRATOR-UNWRAP]: ${e.message}\n[error.code=${code}] [retryable=${retryable}]${exampleLine}`;
-        }
-      }
-      const finalOutput = orchestratorHint
-        ? (result.output && result.output.length > 0
-            ? `${result.output}\n\n${orchestratorHint}`
-            : orchestratorHint)
-        : result.output;
-
-      return {
-        success: result.success,
-        output: finalOutput,
-        exitCode: result.success ? 0 : 1,
-      };
     };
 
     // FIX: When AGENT_EXECUTION_ENGINE='v1-agent-loop', skip unified-agent streaming

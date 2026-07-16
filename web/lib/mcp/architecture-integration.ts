@@ -751,7 +751,42 @@ function isSelectToolPlan(value: unknown): value is SelectToolPlanResult {
   );
 }
 
-function computeTaskFilterView(
+/**
+ * Duck-typed validation of the structured-error shape that VFS tools
+ * (vfs-mcp-tools.ts:640+) return from tool results. The orchestrator
+ * previously did an unsafe `as { code?: string; message?: string; ...}`
+ * cast after `typeof result.error === 'object'`; this guard tightens
+ * the contract so any future SDK signature change surfaces as a
+ * TypeScript-level regression at the call site rather than a silent
+ * runtime type shift.
+ *
+ * Mirrors the spec from SHOULD-CONSIDER #1 of the orchestrator
+ * structured-error review (audit F1 followup): the resulting narrowed
+ * type `{ message: string; code?: string; retryable?: boolean;
+ * correctedExample?: string }` lets call sites read `e.message`,
+ * `e.code`, `e.retryable`, `e.correctedExample` with full
+ * compile-time type-safety — TypeScript flags field-name typos that the
+ * prior prose-only contract missed.
+ *
+ * @param value - The candidate error blob (typically `result.error`).
+ * @returns `true` if `value` is a non-null object with a non-empty `message`
+ *          string. Field-name shapes (presence of `code` / `retryable` /
+ *          `correctedExample`) are intentionally NOT validated here — those
+ *          fields are optional and downstream code already defensively
+ *          guards them with `?? 'UNKNOWN'` / `typeof === 'boolean'` patterns.
+ */
+export function isStructuredMcpError(
+  value: unknown,
+): value is { message: string; code?: string; retryable?: boolean; correctedExample?: string } {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as { message?: unknown };
+  return typeof candidate.message === 'string' && candidate.message.length > 0;
+}
+
+// Exported for unit-test access (see
+// /opt/bing/web/__tests__/mcp/legacy-substring-contract.test.ts:
+// `requireFullCatalog` sentinel contract tests + view.branch coverage).
+export function computeTaskFilterView(
   taskFilter: string | SelectToolPlanResult | undefined,
   options?: { requireFullCatalog?: boolean },
 ): TaskFilterView {
@@ -763,12 +798,16 @@ function computeTaskFilterView(
   // branch that returns `[...all]` — i.e. the unfiltered source catalog —
   // which is exactly what tools-only consumers need.
   //
-  // SHOULD-CONSIDER: the cap portion of `normalizeAndCapTools` (env
-  // `MCP_TOOLS_MAX_TOTAL`, default 25) still applies. If helpers call
-  // with `{ requireFullCatalog: true }` and the configured MCP count
-  // exceeds MCP_TOOLS_MAX_TOTAL, the returned list will be cap-culled.
-  // Future work may extend the sentinel to override `getToolsMaxTotal`;
-  // today we document but do not enforce.
+  // Cap bypass (resolved 2026-07-16, MCP-CAPBYPASS ticket):
+  // `getMCPToolsForAI_SDK` reads `options?.requireFullCatalog` at the
+  // `normalizeAndCapTools` call site (L1666-L1668) and threads
+  // `Number.POSITIVE_INFINITY` for `maxBudget` when the sentinel is true.
+  // Tools-only helpers in `enhanced-llm-service.ts`
+  // (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`) therefore
+  // receive the FULL MCP catalog even when `MCP_TOOLS_MAX_TOTAL` would
+  // otherwise cap it. The active /api/chat route does NOT pass the
+  // sentinel, so the 25-tool budget protecting LLM-list size is
+  // preserved (no risk of leaking Infinity to the chat path).
   if (options?.requireFullCatalog === true) {
     return { kind: 'none' };
   }
@@ -1292,8 +1331,10 @@ function normalizeAndCapTools(
  *                     When `true`, forces `view.kind === 'none'` regardless
  *                     of the `taskFilter` arg. The unfiltered per-source
  *                     catalog reaches `normalizeAndCapTools`, so per-source
- *                     substring/plan gates are bypassed. Used by tools-only
- *                     helpers in `enhanced-llm-service.ts`
+ *                     substring/plan gates are bypassed AND the cap portion
+ *                     of the pipeline is bypassed via
+ *                     `maxBudget: Number.POSITIVE_INFINITY` at L1666-L1668.
+ *                     Used by tools-only helpers in `enhanced-llm-service.ts`
  *                     (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`)
  *                     that depend on the FULL MCP tool catalog for fuzzy
  *                     name matching and JSON-Schema lookup tables. The
@@ -1301,13 +1342,13 @@ function normalizeAndCapTools(
  *                     is forced to make the unfiltered dependency explicit
  *                     at the call site (compile error if the sentinel is
  *                     forgotten) rather than the prior prose-only contract.
- *                     SHOULD-CONSIDER: the cap portion of `normalizeAndCapTools`
- *                     (env `MCP_TOOLS_MAX_TOTAL`, default 25) still applies
- *                     — if a configured MCP set exceeds the cap, the helper
- *                     callers may receive a cap-culled list. If that becomes
- *                     a real problem, extend the sentinel to also bypass
- *                     `getToolsMaxTotal()` (e.g. `maxBudget = Infinity`
- *                     OR expose a second `options.maxBudget` overload).
+ *                     The active /api/chat route does NOT pass the sentinel,
+ *                     so `MCP_TOOLS_MAX_TOTAL` cap (default 25) still
+ *                     protects the LLM list size — Infinity is scoped only
+ *                     to the 2 helper callers that genuinely need the full
+ *                     catalog. Resolved via MCP-CAPBYPASS ticket; audit
+ *                     reference in
+ *                     /opt/bing/docs/MCP_CAPBYPASS_FOLLOWUP.md.
  */
 export async function getMCPToolsForAI_SDK(
   userId?: string,
@@ -1663,8 +1704,16 @@ export async function getMCPToolsForAI_SDK(
     { origin: 'web_search', tools: webSearchTools },
   ];
 
+  // Cap-bypass for tools-only helpers (MCP-CAPBYPASS): when the caller
+  // passed `{ requireFullCatalog: true }`, maxBudget = Infinity so
+  // `normalizeAndCapTools` skips the `MCP_TOOLS_MAX_TOTAL` cap. The
+  // active /api/chat route does NOT pass the sentinel (it passes a
+  // `SelectToolPlanResult` so the view.kind === 'plan' branch applies
+  // and cap remains in effect), so this branch ONLY widens the cap for
+  // the 2 helper callers in `enhanced-llm-service.ts` that genuinely
+  // need the full MCP catalog.
   const normalization = normalizeAndCapTools(bundles, {
-    maxBudget: getToolsMaxTotal(),
+    maxBudget: options?.requireFullCatalog === true ? Number.POSITIVE_INFINITY : getToolsMaxTotal(),
     exempt: WORKFLOW_COMPANIONS,
   });
   const tools = normalization.kept;

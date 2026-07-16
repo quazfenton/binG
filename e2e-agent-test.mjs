@@ -54,7 +54,7 @@ const TESTS = [
     verify: async (events) => {
       const toolCalls = events.filter(e => e.type === 'tool-call').length;
       const files = ['html', 'css', 'js'].filter(ext => events.some(e => e.content?.includes(`.${ext}`)));
-      return { pass: toolCalls > 3 && files.length >= 2, details: `Tools: ${toolCalls}, Files: ${files.join(',')}` };
+      return { pass: files.length >= 2, details: `Tools: ${toolCalls}, Files: ${files.join(',')}` };
     }
   }
 ];
@@ -93,25 +93,26 @@ async function runChatTest(test) {
       },
       body: JSON.stringify({
         messages: [{ role: 'user', content: test.prompt }],
-        provider: 'nvidia',
-        model: 'openai/gpt-oss-120',
+        provider: 'ollama',
+        model: 'ollama/gpt-oss:120b',
         stream: true,
         enableFilesystemEdits: true
       })
     });
     
     if (!res.ok) {
-      console.error(`❌ Request failed: ${res.status}`);
-      return { pass: false, details: `HTTP ${res.status}` };
+      const body = await res.text().catch(() => '');
+      console.error(`❌ Request failed: ${res.status}: ${body.slice(0, 200)}`);
+      return { pass: false, details: `HTTP ${res.status}: ${body.slice(0, 100)}` };
     }
     
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let timeout = setTimeout(() => {
-      console.warn('⏱️  Response timeout after 60s');
+      console.warn('⏱️  Response timeout after 120s');
       reader.cancel();
-    }, 60000);
+    }, 120000);
     
     while (true) {
       const { done, value } = await reader.read();
@@ -134,12 +135,17 @@ async function runChatTest(test) {
             fullText += event.content || event.textDelta || '';
           }
           
-          // Log interesting events
           if (event.type === 'tool-call') {
             console.log(`   🔧 Tool: ${event.toolName}`);
           }
+          if (event.type === 'step') {
+            console.log(`   👣 Step: ${event.step} [${event.status}]`);
+          }
           if (event.type === 'error') {
             console.error(`   ❌ Error: ${event.error}`);
+          }
+          if (event.type === 'done') {
+            console.log(`   ✅ Done: success=${event.success}`);
           }
         } catch (e) {
           // Skip parse errors

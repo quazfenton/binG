@@ -9,9 +9,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 type MockError = Error & { message: string };
 
 function isRateLimitError(err: MockError): boolean {
-  const errorMsg = err?.message || String(err);
+  const errorMsg = (err?.message || String(err)).toLowerCase();
   return (
-    errorMsg.includes('Rate limit') ||
+    errorMsg.includes('rate limit') ||
     errorMsg.includes('429') ||
     errorMsg.includes('quota') ||
     errorMsg.includes('throttle')
