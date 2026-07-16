@@ -141,11 +141,19 @@ async function runChatTest(test) {
           if (event.type === 'step') {
             console.log(`   👣 Step: ${event.step} [${event.status}]`);
           }
+          if (event.type === 'token') {
+            const c = (event.content || '').slice(0, 80);
+            console.log(`   💬 Token: ${c}`);
+          }
           if (event.type === 'error') {
             console.error(`   ❌ Error: ${event.error}`);
           }
           if (event.type === 'done') {
             console.log(`   ✅ Done: success=${event.success}`);
+          }
+          if (event.type === 'tool_invocation') {
+            const s = event.state || 'unknown';
+            console.log(`   🔧 ToolInv: ${event.toolName} [${s}]`);
           }
         } catch (e) {
           // Skip parse errors

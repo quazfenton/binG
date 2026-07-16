@@ -486,6 +486,68 @@ function scoreIntent(
     }
   }
 
+  /**
+   * Agent-task positive-match gate (MCP-TOOL-SELECTION-POSTAUDIT item ②).
+   *
+   * Why this gate exists
+   * --------------------
+   * `agentTask` carries the agent's standing task (e.g. a unified-agent
+   * loop configured with `task: "review PRs daily"`). Legacy callers
+   * that don't yet expose a `getCurrentUserTurn()` accessor always
+   * populate this field. Without a gate, EVERY user turn ("write a
+   * function") would ALSO score against the agent's standing task and
+   * inflate the tool list with artefacts the user never asked for.
+   *
+   * The MCP-TOOL-SELECTION-POSTAUDIT (closed 2026-07-15) documented
+   * this exact leak as a P0 finding — agent-purpose URLs and keywords
+   * bled into every user-driven turn.
+   *
+   * Gate semantic
+   * -------------
+   * The line below fires ONLY when `currentTurn.trim() === ''`:
+   *
+   *   - User spoke THIS turn: currentTurn + history already carry the
+   *     full signal. agentTask is silently ignored — by design, not a
+   *     bug.
+   *   - User did NOT speak (empty / whitespace turn, agent re-prompt
+   *     mid-loop): agentTask is the ONLY signal we have, so we want
+   *     it to score.
+   *
+   * False-positive risks if the gate is REMOVED
+   * -------------------------------------------
+   * Reproduced during the original audit's staging reproduction of a
+   * unified-agent standing-task loop:
+   *
+   *   - Agent-purpose URLs in agentTask (e.g. "review https://github.com/x")
+   *     promote `web.fetch` via the URL-signal boost on every unrelated
+   *     user turn. URL signal leak → false-positive `web.fetch` intent.
+   *   - Agent-purpose keyword matches (e.g. "schedule my meetings")
+   *     surface `bash.execute` on every user turn unrelated to scheduling.
+   *     Keyword leak → false-positive `bash.run` intent.
+   *   - Each leaked tool costs attention and tokens. Important scope
+   *     note: this defect only affects LEGACY CALLERS that pass
+   *     agentTask. The active chat route does NOT pass agentTask, so
+   *     its tool count is unaffected by the gate. The audit's most-cited
+   *     selector-leak finding (P0 #1, "Active /api/chat bypasses the
+   *     capability selector") was the upstream root cause that allowed
+   *     adjacent unfiltered-source families to compound in the active
+   *     route's 15-19 baseline; the agentTask-gate fix closes a
+   *     correlated pathway in the legacy caller family.
+   *
+   * Item ⑤ covers the URL-signal half independently via the
+   * `opts.agentTaskUrlReadsEnabled` opt-in flag (default off). Keep
+   * this item-② gate intact regardless of the item-⑤ flag.
+   *
+   * Operational guidance
+   * --------------------
+   *   - Default callers (chat route, V2 path): do NOT pass agentTask.
+   *     The gate is moot for them.
+   *   - Legacy unified-agent: pass agentTask; the gate correctly
+   *     suppresses it once the user types a turn ("write a function").
+   *   - New agent-loop callers who WANT agentTask signal to fire on
+   *     non-empty turns: route through item ① API additions instead of
+   *     weakening this gate.
+   */
   // Agent-task positive match — intermediate weight (between current
   // turn and history). Only meaningful for legacy callers that don't
   // yet expose a current-turn accessor; the active chat route does

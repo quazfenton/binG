@@ -1573,7 +1573,7 @@ FORMAT RULES:
     // no client-visible SSE stream); the max-turn cap below catches
     // those cases unconditionally.
     const ROUTE_STALL_TIMEOUT_MS = parseInt(
-      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '60000',
+      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000',
       10,
     );
     // Absolute hard cap (default 120s): an unconditional upper bound on
