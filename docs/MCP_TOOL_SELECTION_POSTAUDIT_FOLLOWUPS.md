@@ -140,7 +140,7 @@ The MCP tool-selection audit closed with 0 MUST-FIX items. The code-reviewer fla
 - [x] ⑥ requireFullCatalog lock-in test landed (...legacy-substring-contract.test.ts:L519-L708 — 11 assertions covering computeTaskFilterView × 3 input shapes + 5 per-source-filter helpers [...all] returns + 3 regression tests; vitest 34/34 green 2026-07-16).
 - [ ] Full audit suite passes: `vitest run web/__tests__/api/chat/route-shape-audit.test.ts web/__tests__/api/chat/route-tool-list.test.ts web/__tests__/mcp/legacy-substring-contract.test.ts web/__tests__/mcp/request-to-final-list.test.ts web/__tests__/tools/select-tool-plan*.test.ts` — 100% green.
 - [ ] `tsc --noEmit` from `/opt/bing` reports 0 NEW errors (pre-existing errors in `unified-agent.ts`/`opencode-direct.ts`/`task-router.ts` are out of scope).
-- [ ] `CENTRALIZED_TODO_LIST.md` updated with `MCP-TOOL-SELECTION-POSTAUDIT` reference.
+- [x] `CENTRALIZED_TODO_LIST.md` updated with `MCP-TOOL-SELECTION-POSTAUDIT` reference.
 
 ---
 

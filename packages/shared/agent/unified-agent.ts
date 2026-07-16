@@ -49,7 +49,11 @@ import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-to
 import type { PreviewInfo } from '@/lib/sandbox/types'
 import type { DesktopHandle } from '@/lib/computer/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
-import { createLogger } from '@/lib/utils/logger'
+// Option 1 (postaudit item ④): migrated from `@/lib/utils/logger` to
+// direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
+// — a real file inside this package, NOT a cross-package reference into
+// web/lib/*.
+import { createLogger } from '../lib/utils/logger'
 
 const log = createLogger('UnifiedAgent')
 

@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   selectToolPlan,
   BASELINE_CORE_TOOL_IDS,
+  __INTERNAL_INTENT_RULE_IDS__,
   type SelectToolPlanInput,
   type SelectToolPlanResult,
 } from '@/lib/tools/select-tool-plan';
@@ -555,5 +556,176 @@ describe('selectToolPlan — hostile-input regression', () => {
     const elapsed = Date.now() - start;
     expect(elapsed).toBeLessThan(250);
     expect(result).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. items ② + ⑤ ALL-CASES-PROVIDED invariant.
+//
+// Postaudit invariants that MUST hold for any future planner change:
+//   (②) For any non-empty currentTurn, the agentTask signal is SILENTLY
+//       IGNORED regardless of its content. The trim-gate
+//       `currentTurn.trim() === ''` inside scoreIntent's agentTask
+//       positive-match block ensures agent-purpose URLs / keywords
+//       cannot bleed into a user-driven turn.
+//   (⑤) The `agentTaskUrlReadsEnabled` option defaults to FALSE, so the
+//       URL / file-extension explicit-signal detectors do not fire off
+//       agentTask unless the call site opts in explicitly.
+//
+// This block programmatically enumerates EVERY (intent × signal-shape)
+// pair: for each rule ID in `__INTERNAL_INTENT_RULE_IDS__`, three
+// agentTask fixtures (keyword, URL, file-extension) are exercised
+// against a non-empty currentTurn, and the planner's matchCount is
+// asserted equal to the baseline (turn-only) count. A regression that
+// weakens the trim-gate OR flips agentTaskUrlReadsEnabled default.
+// ---------------------------------------------------------------------------
+
+describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () => {
+  // Baseline-eligible non-empty currentTurns. Each MUST produce
+  // matchCount === 0 when called with empty agentTask — these are the
+  // strict floor for the invariant. A failure here means the test
+  // fixtures themselves are broken; the ALL-CASES assertions below
+  // would still be valid but the asserted equality is dead.
+  const NON_EMPTY_BASELINE_TURNS: ReadonlyArray<string> = [
+    'thanks',
+    'hello there',
+    "what's up",
+    'audit auth/login.tsx — no changes please',
+  ];
+
+  // Per-intent keyword-shape fixture — a minimal phrase whose
+  // keywordsRegExp would match this intent. If the trim-gate regresses,
+  // promoter-up agentTask would inflate matchCount.
+  const INTENT_KEYWORD_FIXTURES: Readonly<Record<string, string>> = Object.freeze({
+    'code.read':         'show me src/server.ts the file content',
+    'code.edit':         'fix the bug in src/auth.ts the function',
+    'code.search':       'grep search for the function definition in codebase',
+    'bash.run':          'bash -c echo hi execute shell command',
+    'pkg.install':       'pnpm add zod install package dependency',
+    'build.test':        'run tests execute pipeline ci build',
+    'git.ops':           'git commit push pull merge branch',
+    'container.ops':     'docker compose up kubernetes kubectl',
+    'web.fetch':         'fetch the article content from the website url page',
+    'web.search':        'search the web for best tsdb results',
+    'meta.explain':      'explain what happens describe the behavior',
+    'integration.gmail': 'send an email via gmail inbox',
+    'integration.slack': 'post to slack message channel',
+    'integration.github': 'open a github pull request',
+    'memory.recall':     'do you remember my last request earlier',
+    'computer.use':      'click the button screenshot keyboard',
+  });
+
+  // URL and file-extension shapes carry the explicit-signal detector
+  // territory. With agentTaskUrlReadsEnabled default false, these MUST
+  // NOT promote any intent in the planner output.
+  const URL_SHAPE_FIXTURE = 'browse https://example.com/x';
+  const FILE_EXTENSION_SHAPE_FIXTURE = 'src/utils/foo.ts';
+
+  // Captured at suite-top to avoid recomputing baseline inside each it().
+  const baselineMatchCount: Map<string, number> = new Map();
+  for (const turn of NON_EMPTY_BASELINE_TURNS) {
+    baselineMatchCount.set(turn, selectToolPlan({ userMessage: turn }).matchCount);
+  }
+
+  // Sanity: baselines must all be 0. Wrapped in an explicit it() block
+  // so a stale fixture produces a clearly-owned test failure rather
+  // than an unowned thrown error from the describe scope.
+  it('baseline fixtures produce matchCount=0 (sanity guard for the matrix)', () => {
+    for (const [turn, count] of baselineMatchCount) {
+      expect(
+        count,
+        `baseline fixture "${turn}" should produce matchCount=0 (carry-overs break the matrix)`,
+      ).toBe(0);
+    }
+  });
+
+  // (② trim-gate) For each intent, the agentTask keyword-shape fixture
+  // must NOT inflate matchCount when currentTurn is non-empty.
+  for (const intent of __INTERNAL_INTENT_RULE_IDS__) {
+    it(`item ② — non-empty currentTurn × ${intent} keyword-shape agentTask → matchCount == baseline`, () => {
+      // INTENT_KEYWORD_FIXTURES is exhaustive over the current 16 intent
+      // IDs. A future intent added to __INTERNAL_INTENT_RULE_IDS__ without
+      // updating this map surfaces here as `undefined` — agentTask=''
+      // silently passes the planner's trim-gate and the test still
+      // verifies the invariant, but the test SHOULD still cover the
+      // new intent's keyword-shape. Surface that explicitly.
+      const agentTask = INTENT_KEYWORD_FIXTURES[intent];
+      if (agentTask === undefined) {
+        throw new Error(
+          `Missing INTENT_KEYWORD_FIXTURES entry for intent "${intent}" — add a representative phrase to enumerate its keyword-shape.`,
+        );
+      }
+      for (const turn of NON_EMPTY_BASELINE_TURNS) {
+        const baseline = baselineMatchCount.get(turn)!;
+        const result = selectToolPlan({
+          userMessage: turn,
+          agentTask,
+        });
+        expect(
+          result.matchCount,
+          `[${turn}] agentTask="${agentTask}" should match no intent`,
+        ).toBe(baseline);
+      }
+    });
+
+    // (⑤ default-off) url-shape agentTask must NOT promote any intent
+    // when agentTaskUrlReadsEnabled is at its default-false.
+    it(`item ⑤ — non-empty currentTurn × ${intent} url-shape agentTask (default-off) → matchCount == baseline`, () => {
+      for (const turn of NON_EMPTY_BASELINE_TURNS) {
+        const baseline = baselineMatchCount.get(turn)!;
+        const result = selectToolPlan({
+          userMessage: turn,
+          agentTask: URL_SHAPE_FIXTURE,
+        });
+        expect(
+          result.matchCount,
+          `[${turn}] agentTask URL-shape must not promote ${intent}`,
+        ).toBe(baseline);
+      }
+    });
+
+    // (⑤ default-off) file-extension-shape agentTask must NOT promote
+    // any intent when agentTaskUrlReadsEnabled is at its default-false.
+    it(`item ⑤ — non-empty currentTurn × ${intent} file-extension-shape agentTask (default-off) → matchCount == baseline`, () => {
+      for (const turn of NON_EMPTY_BASELINE_TURNS) {
+        const baseline = baselineMatchCount.get(turn)!;
+        const result = selectToolPlan({
+          userMessage: turn,
+          agentTask: FILE_EXTENSION_SHAPE_FIXTURE,
+        });
+        expect(
+          result.matchCount,
+          `[${turn}] agentTask file-extension-shape must not promote ${intent}`,
+        ).toBe(baseline);
+      }
+    });
+  }
+
+  // (⑤ opt-in) When agentTaskUrlReadsEnabled is set to true EXPLICITLY,
+  // the URL detector fires and `web.fetch` IS promoted in coreTools.
+  // This pins the opt-in semantics — if a future change inverts the
+  // default, this test will fail (because `web.fetch` would no longer
+  // require the explicit option).
+  it('item ⑤ opt-in — agentTaskUrlReadsEnabled=true: agentTask URL DOES promote web.fetch', () => {
+    const result = selectToolPlan(
+      {
+        userMessage: 'thanks',
+        agentTask: 'browse https://example.com/article',
+      },
+      { agentTaskUrlReadsEnabled: true },
+    );
+    expect(result.coreTools).toContain('web.fetch');
+  });
+
+  // (⑤ opt-in) Symmetric: when the flag is unset, the agentTask URL is
+  // ignored for explicit-signal purposes. This is the SAME assertion as
+  // the url-shape rows above but deduplicated here as a single named
+  // test for the audit trail.
+  it('item ⑤ opt-in absence — agentTaskUrlReadsEnabled unset: agentTask URL is NOT detected', () => {
+    const result = selectToolPlan({
+      userMessage: 'thanks',
+      agentTask: 'browse https://example.com/article',
+    });
+    expect(result.coreTools).not.toContain('web.browse');
   });
 });

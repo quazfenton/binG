@@ -21,6 +21,7 @@ export const knownGoodFCModels: string[] = [
   'mistral-large-2411',
   'mistral-large-2407',
   'mistral-medium-latest',
+  'mistral-small-latest',
   'gpt-4',
   'gpt-3.5',
   'claude-3',

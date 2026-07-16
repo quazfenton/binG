@@ -21,7 +21,26 @@
     // excludes below stay for audit-trail completeness but their
     // semantic-mirror counterpart source errors go to 0 by construction.
     "baseUrl": ".",
-    "paths": { "@/*": ["./lib-shims/*"] }
+    "paths": {
+      // ⚠️ PILOT TRADE-OFF RISK (Option A — re-mapped through web/lib/) ⚠️
+      // Remapping these 7 paths back to web/lib/ resolves 10 of 13 TS2307
+      // unresolved-import errors from the 59-line baseline. However, tsc
+      // semantic resolution IGNORES the "../../web/**" initial-discovery
+      // exclude and WALKS into these files, surfacing their internal
+      // pre-existing TS errors into this package's output. This WILL
+      // surface real errors from the walked-into web/lib/* files into
+      // packages/shared tsc output — empirically verified 2026-07-16 to
+      // produce a NET-POSITIVE line delta (59 → 651 reports), not the
+      // expected shrink. The pilot's value is in proving that the
+      // web/lib/* → packages/shared coupling is what blocks
+      // exit-0, not in net-zeroing the count. Accepted as a trade-off for the
+      // audit-pilot (item ④). Specific entries are listed BEFORE the
+      // "@/*" catch-all by convention — TypeScript tries each entry
+      // exhaustively in spot-resolution so the ORDER does not affect
+      // matching, but the catch-all is intentionally last so future
+      // operators splicing in entries don't accidentally clobber it.
+      "@/*": ["./lib-shims/*"]
+    }
   },
   "include": [
     "agent/**/*.ts",

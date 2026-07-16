@@ -923,11 +923,6 @@ export class EnhancedLLMService {
               // instead of re-trying it. Tracker is independent;
               // 429/5xx/530 counters do not interfere.
               recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
-              // F3 fix: also track 429 rate-limit responses so the next
-              // fallback iteration skips the rate-limited provider instead
-              // of re-trying it. Tracker is independent (its own Map), so
-              // 429/5xx/530 counters don't interfere.
-              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,

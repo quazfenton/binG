@@ -188,7 +188,7 @@ declare module '@/lib/voice/types' {
   export const determineExecutionPolicy: (...args: unknown[]) => ExecutionPolicy;
 }
 
-// --- Second-round body-less declarations: 9 paths discovered post first validator run ---
+// --- Second-round body-less declarations: 10 paths discovered post first validator run (+ crewai for path-alias pilot) ---
 // Body-less form is used because the consumer (mirror file body) accesses a
 // partial subset of these modules' exports. Typed declaration with explicit
 // `export const X` would force every property access into the typed surface
@@ -202,3 +202,4 @@ declare module '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 declare module '@/lib/providers/model-ranker';
 declare module '@/lib/orchestra/unified-agent-service';
 declare module '@/lib/virtual-filesystem/filesystem-diffs';
+declare module '@/lib/crewai';

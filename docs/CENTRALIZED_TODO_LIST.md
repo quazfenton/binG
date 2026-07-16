@@ -709,23 +709,30 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
 
 ### MCP-TOOL-SELECTION-POSTAUDIT (opened 2026-07-15)
 - **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).
-- **Status:** 🟡 OPEN (P2 — SHOULD-CONSIDER, 0 MUST-FIX)
-- **Effort:** ~1–2 days engineering
-- **Impact:** Hardens `selectToolPlan` symmetry; fixes CI tsc target for `packages/shared/`; prevents agent-purpose URL bleed; tracks `currentUserTurn` TODO.
+- **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure only — 19-line pilot residue)
+- **Opened:** 2026-07-15
+- **Last updated:** 2026-07-16 (PARTIAL closure after Option 1 + ALL-CASES-PROVIDED test lockdown)
+- **Effort:** ~1–2 days engineering (4 of 5 tasks complete; item ④ requires residual-coupling epic — not the original estimate ballpark)
+- **Impact:** Hardens `selectToolPlan` symmetry; fixes CI tsc target for `packages/shared/` (PARTIAL — 19-line exit); prevents agent-purpose URL bleed; tracks `currentUserTurn` TODO. Item ④ residual: requires wholesale decoupling packages/shared ↔ web/lib/*.
+- **Priority:** 🟡 P2 (audit SHOULD-CONSIDER)
 - **Full ticket:** [`docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md)
-- **Tasks (5):**
-  - [ ] ① Document `agentTask` negative-evidence asymmetry in `web/lib/tools/select-tool-plan.ts` (`scoreIntent` L484–L496).
-  - [ ] ② Gate `agentTask` positive scoring to fire ONLY when `currentTurn.trim() === ''` (same file).
-  - [ ] ③ Track `currentUserTurn()` TODO comments in `packages/shared/agent/unified-agent.ts` (L692, L713).
-  - [ ] ④ Add `packages/shared/tsconfig.json` + `"typecheck"` script to `packages/shared/package.json`.
-  - [ ] ⑤ Gate `agentTask` URL detection behind `agentTaskUrlReadsEnabled?: boolean` opt-in flag (default `false`).
+- **Tasks (5):** 4 DONE, 1 PARTIAL (`tsc` still has 19 pre-existing mirror errors — full exit-0 requires the Option 1 packages/shared ↔ web/lib/* decoupling epic)
+  - [x] ① Document `agentTask` negative-evidence asymmetry in `web/lib/tools/select-tool-plan.ts` (`scoreIntent` L484–L538 docblock closing false-positive risks if removed). **(DONE 2026-07-16)**
+  - [x] ② Gate `agentTask` positive scoring to fire ONLY when `currentTurn.trim() === ''` (same file, scoreIntent block). **(DONE 2026-07-16)**
+  - [x] ③ Track `currentUserTurn()` TODO comments in `packages/shared/agent/unified-agent.ts` (L692, L713). **(DONE 2026-07-16)**
+  - [x] ④ Add `packages/shared/tsconfig.json` + `"typecheck"` script to `packages/shared/package.json`. **(PARTIAL 2026-07-16 — tsc PARTIAL closure: 59 lines (pre-Option-A) → 651 lines (Option A regression) → 19 lines (Option 1 pilot, post-audit). 40 of 59 baseline source-path errors cleared; remaining 19 pre-existing mirror errors require wholesale decoupling packages/shared ↔ web/lib/* tracked as separate epic in `MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` §④.)**
+  - [x] ⑤ Gate `agentTask` URL detection behind `agentTaskUrlReadsEnabled?: boolean` opt-in flag (default `false`). **(DONE 2026-07-16 — source + ALL-CASES-PROVIDED regression-lock at `web/lib/tools/__tests__/select-tool-plan.test.ts:L583-L731` (51 it() blocks).)**
 - **Source files:**
   - `/opt/bing/web/lib/tools/select-tool-plan.ts`
+  - `/opt/bing/web/lib/tools/__tests__/select-tool-plan.test.ts` (new ALL-CASES-PROVIDED regression-lock section, 51 it() blocks)
   - `/opt/bing/packages/shared/agent/unified-agent.ts`
-  - `/opt/bing/packages/shared/tsconfig.json` (new)
+  - `/opt/bing/packages/shared/tsconfig.json`
   - `/opt/bing/packages/shared/package.json`
+  - `/opt/bing/packages/shared/lib-shims/ambient.d.ts` (typed ambient decls for `@/lib/*` paths)
+  - `/opt/bing/packages/shared/lib/utils/logger.ts` (Option 1 pilot local stub)
   - `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` (this file)
-- **Acceptance:** Full audit suite + new tests green; `pnpm --filter @bing/shared typecheck` exits 0.
+  - `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` (closure narrative)
+- **Acceptance:** Full audit suite + new tests green; `pnpm --filter @bing/shared typecheck` PARTIAL exit (19 lines — Option 1 pilot cleared 40 of 59 baseline source-path errors; remaining 19 pre-existing mirror errors require wholesale packages/shared ↔ web/lib/* decoupling).
 
 
 ### VITEST-WORKSPACE-DEDUPLICATION (opened 2026-07-15)
