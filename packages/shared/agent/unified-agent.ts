@@ -689,7 +689,7 @@ export class UnifiedAgent {
     log.debug('Listing MCP tools...')
     // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
     const toolPlan: SelectToolPlanResult = selectToolPlan({
-      // TODO(mcp-audit): populate userMessage from getCurrentUserTurn()
+      // TODO(MCP-TOOL-SELECTION-POSTAUDIT item-3): populate userMessage from getCurrentUserTurn()
       // once the UnifiedAgent class exposes a current-turn accessor.
       // For now we route the agent's standing task through the new
       // `agentTask` field so it does not collide with the planner's
@@ -710,7 +710,7 @@ export class UnifiedAgent {
       log.debug('Initializing MCP...')
       // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
       const toolPlan: SelectToolPlanResult = selectToolPlan({
-        // TODO(mcp-audit): populate userMessage from getCurrentUserTurn()
+        // TODO(MCP-TOOL-SELECTION-POSTAUDIT item-3): populate userMessage from getCurrentUserTurn()
       // once the UnifiedAgent class exposes a current-turn accessor.
       // For now we route the agent's standing task through the new
       // `agentTask` field so it does not collide with the planner's

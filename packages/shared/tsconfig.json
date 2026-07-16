@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowSyntheticDefaultImports": true
+  },
+  "include": [
+    "agent/**/*.ts", "agent/**/*.tsx",
+    "FS/**/*.ts", "auth/**/*.ts", "lib/**/*.ts", "types/**/*.ts", "index.ts"
+  ],
+  "exclude": [
+    "node_modules", "dist", "**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"
+  ]
+}

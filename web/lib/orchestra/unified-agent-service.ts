@@ -267,6 +267,30 @@ const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
 
+// In-process orchestrator concurrency limiter to prevent "All workers are busy" failures.
+// Simple FIFO queue with a configurable max concurrency. This is an additive safety
+// layer that queues requests when the orchestrator is saturated instead of failing.
+const ORCH_MAX_CONCURRENCY = Number.parseInt(process.env.ORCH_MAX_CONCURRENCY || '3', 10);
+let _orchCurrent = 0;
+const _orchQueue: Array<() => void> = [];
+async function acquireOrchSlot(): Promise<void> {
+  if (_orchCurrent < ORCH_MAX_CONCURRENCY) {
+    _orchCurrent++;
+    return;
+  }
+  await new Promise<void>((resolve) => _orchQueue.push(resolve));
+  _orchCurrent++;
+}
+function releaseOrchSlot(): void {
+  _orchCurrent = Math.max(0, _orchCurrent - 1);
+  const next = _orchQueue.shift();
+  if (next) next();
+}
+
+// Export helpers for testing
+export { acquireOrchSlot, releaseOrchSlot };
+
+
 // Bug #108 (Pass-7 audit) — emit a structured env-var fingerprint at
 // module load so operators can verify which feature flags / routing
 // overrides are active in this process. Pass-7 noted that "env-var /
@@ -5132,11 +5156,13 @@ async function runV1ApiWithTools(
           }
         } catch (contErr: any) {
           const errorMsg = contErr?.message || String(contErr);
-          const isRateLimitError = 
-            errorMsg.includes('Rate limit') ||
-            errorMsg.includes('429') ||
-            errorMsg.includes('quota') ||
-            errorMsg.includes('throttle');
+          const lowerErr = String(errorMsg).toLowerCase();
+          const isRateLimitError =
+            lowerErr.includes('rate limit') ||
+            lowerErr.includes('429') ||
+            lowerErr.includes('quota') ||
+            lowerErr.includes('throttle') ||
+            lowerErr.includes('too many requests');
 
           log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning accumulated response', {
             error: errorMsg,
@@ -5149,10 +5175,84 @@ async function runV1ApiWithTools(
           // wasting tokens and compute on doomed requests. Now we break immediately
           // when we detect rate limiting or provider exhaustion.
           if (isRateLimitError) {
-            log.info('[V1-API-WITH-TOOLS] Rate limit detected, stopping auto-continuation early', {
+            log.info('[V1-API-WITH-TOOLS] Rate limit detected, attempting continuation on next fallback provider(s)', {
               iteration: autoContinueIteration,
               error: errorMsg,
             });
+
+            // Try continuation on the next provider(s) in the configured chain
+            const nextProviders = uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).filter(p => !isProviderPermanentlyFailed(p));
+            if (nextProviders.length > 0) {
+              const nextPrimary = nextProviders[0];
+              const nextFallbacks = nextProviders.slice(1);
+              try {
+                config.onProgress?.();
+                const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+                let fallbackContContent = '';
+                const fallbackContToolInvocations: typeof contToolInvocations = [];
+
+                for await (const chunk of streamWithConcurrentFallback({
+                  provider: nextPrimary,
+                  fallbackProviders: nextFallbacks,
+                  model: getModelForProvider(nextPrimary),
+                  messages: contMessages as any,
+                  temperature: config.temperature || 0.7,
+                  maxTokens: config.maxTokens || 65536,
+                  maxSteps: config.maxSteps || 15,
+                  tools: aiSdkTools,
+                  toolCallStreaming: true,
+                  signal: config.abortSignal,
+                })) {
+                  if (chunk.content) {
+                    fallbackContContent += chunk.content;
+                    config.onStreamChunk?.(chunk.content);
+                  }
+                  if (chunk.toolInvocations) {
+                    for (const inv of chunk.toolInvocations) {
+                      if (inv.state !== 'result') continue;
+                      fallbackContToolInvocations.push({
+                        toolCallId: inv.toolCallId,
+                        toolName: inv.toolName,
+                        args: (inv.args as Record<string, any>) || {},
+                        result: inv.result ?? { success: false, error: 'Tool result was undefined' },
+                      });
+                    }
+                  }
+                }
+
+                if (fallbackContContent.trim() || fallbackContToolInvocations.length > 0) {
+                  log.info('[V1-API-WITH-TOOLS] Fallback-continuation produced results', {
+                    contentLength: fallbackContContent.length,
+                    toolCount: fallbackContToolInvocations.length,
+                    iteration: autoContinueIteration,
+                    attemptedProviders: nextProviders,
+                  });
+
+                  accumulatedResponse = (accumulatedResponse + '\n\n' + fallbackContContent).trim();
+                  accumulatedSteps.push(...fallbackContToolInvocations.map(inv => ({
+                    toolName: inv.toolName,
+                    args: inv.args,
+                    result: inv.result,
+                  })));
+                  accumulatedToolInvocations.push(...fallbackContToolInvocations);
+
+                  // Successfully continued on a fallback provider — continue outer loop
+                  continue;
+                } else {
+                  log.info('[V1-API-WITH-TOOLS] Fallback-continuation produced no output, stopping loop', { attemptedProviders: nextProviders });
+                  break;
+                }
+              } catch (fbContErr: any) {
+                log.warn('[V1-API-WITH-TOOLS] Fallback-continuation failed, returning accumulated response', {
+                  error: fbContErr?.message || String(fbContErr),
+                  attemptedProviders: nextProviders,
+                });
+                // If fallback continuation failed, stop auto-continuation here
+                break;
+              }
+            } else {
+              log.info('[V1-API-WITH-TOOLS] No fallback providers available for continuation, stopping auto-continuation', { iteration: autoContinueIteration });
+            }
           }
           break;
         }
@@ -5462,6 +5562,9 @@ async function runV1Orchestrated(
     corrections: [],
   };
 
+  // Acquire orchestrator concurrency slot (queue when saturated)
+  await acquireOrchSlot();
+
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
@@ -5758,7 +5861,7 @@ async function runV1Orchestrated(
         // typed budgetExhausted boolean is in scope here (no substring
         // detection needed). sessionId is composite-keyed so the counter
         // is scoped to the same key the chat route uses.
-        return tagResultDegraded({
+        const _tagged = await tagResultDegraded({
           ...fallbackResult,
           metadata: {
             ...fallbackResult.metadata,
@@ -5791,6 +5894,9 @@ async function runV1Orchestrated(
             : (config.conversationId || config.userId || 'default'),
           budgetExhausted,
         });
+        // Release orchestrator slot before returning
+        try { releaseOrchSlot(); } catch { /* best-effort */ }
+        return _tagged;
       } catch (fbError: any) {
         log.error('[runV1Orchestrated] v1-api fallback also failed', { error: fbError?.message || String(fbError) });
 
@@ -5826,7 +5932,7 @@ async function runV1Orchestrated(
           log.error('[runV1Orchestrated] attemptFallback chain also failed', { error: chainErr?.message || String(chainErr) });
         }
         // Both fallbacks failed after budget exhaustion — return partial orchestrated result with budgetExhausted signal so callers can distinguish degraded response
-        return {
+        const _resFallbackFailed = {
           success: true,
           response: stringifyMessageContent(cleanedResponse),
           steps,
@@ -5851,10 +5957,12 @@ async function runV1Orchestrated(
             }} : {}),
           },
         };
+        try { releaseOrchSlot(); } catch { /* best-effort */ }
+        return _resFallbackFailed;
       }
     }
 
-    return {
+    const _resSuccess = {
       success: true,
       response: stringifyMessageContent(cleanedResponse),
       steps,
@@ -5878,6 +5986,8 @@ async function runV1Orchestrated(
         } : undefined,
       },
     };
+    try { releaseOrchSlot(); } catch { /* best-effort */ }
+    return _resSuccess;
   } catch (err: any) {
     invalidateDynamicDefaultsCache();
     const _orchDefaults = await resolveDynamicDefaults();
@@ -5896,6 +6006,7 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
+    try { releaseOrchSlot(); } catch { /* best-effort */ }
     throw err;
   }
 }

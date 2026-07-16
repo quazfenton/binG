@@ -42,6 +42,11 @@ import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
 // (530 tracker) fire in tandem — pure record-or-noop helpers that NEVER
 // cross-wipe each other's counter. Single source of truth at line 730.
 import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
+// F3 fix: rate-limit (HTTP 429) circuit breaker. Mirrors the 530 / 5xx
+// trackers — a single 429 definitively blacklists the provider so the
+// next request skips it instead of retrying a provider that just told
+// us to back off.
+import { isRateLimitedBlacklisted, recordRateLimitedIfApplicable } from '@/lib/orchestra/provider-rate-limit-tracker';
 
 /**
  * PR-S2 (Stage 3 R2 lock target) — the success-path `clearTimeout` re-arm
@@ -832,7 +837,8 @@ export class EnhancedLLMService {
         if (fallbackChain.length > 0) {
           for (const fallbackProvider of fallbackChain) {
             // FIX: Skip providers blacklisted for 2+ consecutive 530 errors
-            if (is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider)) {
+            // F3: also skip providers blacklisted for a single 429 (rate limit).
+            if (is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider) || isRateLimitedBlacklisted(fallbackProvider)) {
                 // PR-E: 5xx-blacklist iteration skip (paired with 530 skip). The provider
                 // is excluded from the chain regardless of whether the cause was origin-unreachable
                 // (530/1016/tunnel-DNS) or generic 5xx (500/502/503/504).
@@ -910,9 +916,18 @@ export class EnhancedLLMService {
           // matching error signatures (4xx, 5xx-mismatch, 530-mismatch)
           // leave both counters untouched; only the corresponding
           // success-path helpers decrement them on a successful
-          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).
-          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
-          record530ErrorIfApplicable(fallbackProvider, fallbackError);
+          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+              record530ErrorIfApplicable(fallbackProvider, fallbackError);
+              // F3 fix: also track 429 rate-limit responses so the
+              // next fallback iteration skips the rate-limited provider
+              // instead of re-trying it. Tracker is independent;
+              // 429/5xx/530 counters do not interfere.
+              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
+              // F3 fix: also track 429 rate-limit responses so the next
+              // fallback iteration skips the rate-limited provider instead
+              // of re-trying it. Tracker is independent (its own Map), so
+              // 429/5xx/530 counters don't interfere.
+              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,
@@ -1415,8 +1430,7 @@ export class EnhancedLLMService {
       let availableFallbacks = fallbacks.filter(fallbackProvider => {
         const hasConfig = !!this.getProviderConfigForRequest(fallbackProvider, requestId);
         const isHealthy = this.isProviderHealthy(fallbackProvider);
-        const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
-        const isBlacklisted = is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider);
+        const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;          const isBlacklisted = is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider) || isRateLimitedBlacklisted(fallbackProvider);
         if (!hasConfig || !isHealthy || !supportsStream || isBlacklisted) {
           chatLogger.debug('Streaming fallback excluded provider', {
             requestId,
@@ -1547,9 +1561,18 @@ export class EnhancedLLMService {
             latencyMs: fallbackLatency,
             error: errorMsg,
           });
-          // Record error for blacklist tracking (mirrors non-streaming fallback)
-          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
-          record530ErrorIfApplicable(fallbackProvider, fallbackError);
+          // Record error for blacklist tracking (mirrors non-streaming fallback)          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          // F3 fix: also track 429 rate-limit responses so the
+          // next fallback iteration skips the rate-limited provider
+          // instead of re-trying it. Tracker is independent;
+          // 429/5xx/530 counters do not interfere.
+          recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
+              record530ErrorIfApplicable(fallbackProvider, fallbackError);
+              // F3 fix: also track 429 rate-limit responses so the next
+              // fallback iteration skips the rate-limited provider instead
+              // of re-trying it. Tracker is independent (its own Map), so
+              // 429/5xx/530 counters don't interfere.
+              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
           lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
           // Continue to next fallback in chain
@@ -2454,18 +2477,13 @@ export class EnhancedLLMService {
   private async resolveMCPToolName(rawName: string, userId?: string): Promise<string | null> {
     if (!rawName) return null;
 
-    // [DO NOT MIGRATE TO selectToolPlan — DO NOT PASS taskFilter]
-    // resolveMCPToolName MUST match against the entire MCP tool catalog so that
-    // tool-name normalization & fuzzy matching find every canonical name the
-    // LLM might invent (e.g. 'list_directory' -> 'list_files'). Passing a
-    // `SelectToolPlanResult` here would route computeTaskFilterView into
-    // `view.kind === 'plan'`, where the per-source filters shrink the catalog
-    // down to intents + baselines and break resolution for any tool not in
-    // the active intent set. The unfiltered `taskFilter = undefined` path
-    // (view.kind === 'none') returns the FULL catalog, which is what this
-    // helper depends on. Documented per the MCP-TOOL-SELECTION-POSTAUDIT
-    // remediation (Option C — skip & document).
-    const mcpToolNames = (await getMCPToolsForAI_SDK(userId)).map((tool) => tool.function.name);
+    // Compile-enforced typed-sentinel (`requireFullCatalog: true`) on the
+    // 4th arg forces `view.kind === 'none'` in `computeTaskFilterView`,
+    // bypassing per-source substring/plan gates so the FULL MCP catalog
+    // reaches `mcpToolNames` for fuzzy tool-name resolution. A future
+    // operator who edits this call will get a TypeScript error if the
+    // sentinel is removed — replaces the prior prose-only contract.
+    const mcpToolNames = (await getMCPToolsForAI_SDK(userId, undefined, undefined, { requireFullCatalog: true })).map((tool) => tool.function.name);
     if (mcpToolNames.includes(rawName)) return rawName;
 
     const normalized = rawName.toLowerCase().replace(/[\s_/-]+/g, '.');
@@ -2491,18 +2509,15 @@ export class EnhancedLLMService {
       name,
       inputSchema: cfg.inputSchema as any,
     }));
-    // [DO NOT MIGRATE TO selectToolPlan — DO NOT PASS taskFilter]
-    // extractToolCallsFromLLMResponse builds a registry of {name -> schema}
-    // for the advancedToolCallDispatcher, which needs the JSON Schema for
-    // every MCP tool the LLM could possibly call. Passing a
-    // `SelectToolPlanResult` here would route computeTaskFilterView into
-    // `view.kind === 'plan'` and shrink the catalog to intents + baselines,
-    // so the dispatcher would crash when the LLM invoked any
-    // out-of-intent-set tool. The unfiltered `taskFilter = undefined` path
-    // (view.kind === 'none') returns the FULL catalog, which is what the
-    // dispatcher's schema-lookup table depends on. Documented per the
-    // MCP-TOOL-SELECTION-POSTAUDIT remediation (Option C — skip & document).
-    const mcpTools = (await getMCPToolsForAI_SDK(userId)).map((tool) => ({
+    // Compile-enforced typed-sentinel (`requireFullCatalog: true`) forces
+    // `view.kind === 'none'` so per-source substring/plan gates bypass, and
+    // the FULL MCP tool catalog populates `mcpTools` for
+    // `advancedToolCallDispatcher`'s name → JSON-Schema lookup table. The
+    // dispatcher relies on this registry for every MCP tool the LLM could
+    // invoke, including out-of-intent-set tools; a TS compile error fires
+    // if the sentinel is removed in a future edit — replaces the prior
+    // prose-only contract.
+    const mcpTools = (await getMCPToolsForAI_SDK(userId, undefined, undefined, { requireFullCatalog: true })).map((tool) => ({
       name: tool.function.name,
       inputSchema: tool.function.parameters as any,
     }));

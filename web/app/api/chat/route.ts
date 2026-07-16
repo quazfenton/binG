@@ -1910,20 +1910,144 @@ const config: UnifiedAgentConfig = {
       parameters: t.function.parameters,
     }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      // chat-hang-fix (Step A): thread agentTurnSignal into the MCP HTTP
-      // transport chain so the watchdog aborts a hung remote fetch in
-      // ≤100ms instead of waiting `maxRetries × timeout = 3 × 30s = 90s`.
-      const result = await callMCPToolFromAI_SDK(
-        name,
-        args,
-        authenticatedUserId ?? '',
-        requestedScopePath ?? '',
-        undefined,                     // recentFailures (unchanged)
-        { signal: agentTurnSignal },   // ADDITIVE: chat-hang-fix Step A
-      );
+      // F2 + F4 redesign: per-call AbortController isolation + watchdog
+      // progress bumps. Each tool invocation gets its own
+      // `toolCallAbort` that is disposed at completion; this prevents a
+      //   stalled-stage abort from permanently poisoning the global
+      //   `agentTurnSignal` chain (F4: per-stage signal isolation —
+      //   resets in `finally`). The next tool call walks in with a
+      //   fresh signal, so self-heal retry paths (or subsequent tool
+      //   calls) don't inherit an already-aborted signal.
+      //
+      //   Pair: combine toolCallAbort.signal + agentTurnSignal into a
+      //   per-call `toolCallSignal` via `AbortSignal.any` so user-
+      //   initiated stops + a route-level stall watchdog bleed into
+      //   the transport chain without poisoning the parent.
+      const toolCallAbort = new AbortController();
+      const toolCallSignal = AbortSignal.any([
+        agentTurnSignal,
+        toolCallAbort.signal,
+      ]);
+      // F2 part (a): bump `lastProgressAt` on tool START so the
+      // route-level stall watchdog (which keys off `Date.now() -
+      // lastProgressAt`) does not fire while the tool is awaiting.
+      // setInterval ticks continuously; a fresh `lastProgressAt`
+      // resets the cumulative idle window.
+      lastProgressAt = Date.now();
+
+      try {
+        const result = await callMCPToolFromAI_SDK(
+          name,
+          args,
+          authenticatedUserId ?? '',
+          requestedScopePath ?? '',
+          undefined,                     // recentFailures (unchanged)
+          { signal: toolCallSignal },    // F4: per-call signal (was agentTurnSignal)
+        );
+
+      // F1 fix: structured-error unwrap. VFS tools (vfs-mcp-tools.ts:640+) return
+      // errors as `{ code, message, retryable, correctedExample }` blobs. The
+      // SDK type signature declares `error?: string`, so by the time results
+      // reach the orchestrator the structured info is collapsed to a generic
+      // "Unknown error — tool result has keys" log line that gives the LLM
+      // no actionable context. Detect the structured object shape and lift
+      // its fields into the LLM-facing `output` so the model can self-correct.
+      //
+      // Output format (single LLM-facing block appended to existing output):
+      //   [ORCHESTRATOR-UNWRAP]: <error.message>
+      //   [error.code=<code>] [retryable=<bool>]
+      //   → <correctedExample>      (omitted if undefined)
+      //
+      // Plain-string errors pass through unchanged. Suppresses the existing
+      // "Unknown error — tool result has keys" log spam only when structured
+      // shape is detected + unwrap succeeds (the LLM now sees the structured
+      // info; the generic WARN line would be redundant).
+      // SHOULD-CONSIDER: error.code may be 'UNKNOWN' for unrecognized shapes;
+      // the LLM should treat this as a fresh retry rather than a typed failure.
+      let orchestratorHint: string | null = null;
+      if (result.error && typeof result.error === 'object') {
+        const e = result.error as {
+          code?: string;
+          message?: string;
+          retryable?: boolean;
+          correctedExample?: string;
+        };
+        if (typeof e.message === 'string' && e.message.length > 0) {
+          const retryable = typeof e.retryable === 'boolean' ? e.retryable : false;
+          const code = e.code ?? 'UNKNOWN';
+          const exampleLine = e.correctedExample ? `\n→ ${e.correctedExample}` : '';
+          orchestratorHint = `[ORCHESTRATOR-UNWRAP]: ${e.message}\n[error.code=${code}] [retryable=${retryable}]${exampleLine}`;
+        }
+      }
+      const finalOutput = orchestratorHint
+        ? (result.output && result.output.length > 0
+            ? `${result.output}\n\n${orchestratorHint}`
+            : orchestratorHint)
+        : result.output;
+
       return {
         success: result.success,
-        output: result.output,
+        output: finalOutput,
+        exitCode: result.success ? 0 : 1,
+      };
+      } finally {
+        // F2 part (a): bump `lastProgressAt` on tool COMPLETE so the
+        // watchdog tally resets even if the tool returned
+        // structured-error or failed. Without this, a sequence of
+        // tool calls could cumulatively trip the stall watchdog
+        // (each tool returning would leave lastProgressAt stale).
+        lastProgressAt = Date.now();
+        // F4: dispose the per-call AbortController so a subsequent
+        // call (or self-heal retry) gets a fresh signal. The
+        // `AbortSignal.any` parent reference drops the listener on
+        // the next tick once the per-call signal is aborted.
+        toolCallAbort.abort();
+      }
+    };
+
+      // F1 fix: structured-error unwrap. VFS tools (vfs-mcp-tools.ts:640+) return
+      // errors as `{ code, message, retryable, correctedExample }` blobs. The
+      // SDK type signature declares `error?: string`, so by the time results
+      // reach the orchestrator the structured info is collapsed to a generic
+      // "Unknown error — tool result has keys" log line that gives the LLM
+      // no actionable context. Detect the structured object shape and lift
+      // its fields into the LLM-facing `output` so the model can self-correct.
+      //
+      // Output format (single LLM-facing block appended to existing output):
+      //   [ORCHESTRATOR-UNWRAP]: <error.message>
+      //   [error.code=<code>] [retryable=<bool>]
+      //   → <correctedExample>      (omitted if undefined)
+      //
+      // Plain-string errors pass through unchanged. Suppresses the existing
+      // "Unknown error — tool result has keys" log spam only when structured
+      // shape is detected + unwrap succeeds (the LLM now sees the structured
+      // info; the generic WARN line would be redundant).
+      // SHOULD-CONSIDER: error.code may be 'UNKNOWN' for unrecognized shapes;
+      // the LLM should treat this as a fresh retry rather than a typed failure.
+      let orchestratorHint: string | null = null;
+      if (result.error && typeof result.error === 'object') {
+        const e = result.error as {
+          code?: string;
+          message?: string;
+          retryable?: boolean;
+          correctedExample?: string;
+        };
+        if (typeof e.message === 'string' && e.message.length > 0) {
+          const retryable = typeof e.retryable === 'boolean' ? e.retryable : false;
+          const code = e.code ?? 'UNKNOWN';
+          const exampleLine = e.correctedExample ? `\n→ ${e.correctedExample}` : '';
+          orchestratorHint = `[ORCHESTRATOR-UNWRAP]: ${e.message}\n[error.code=${code}] [retryable=${retryable}]${exampleLine}`;
+        }
+      }
+      const finalOutput = orchestratorHint
+        ? (result.output && result.output.length > 0
+            ? `${result.output}\n\n${orchestratorHint}`
+            : orchestratorHint)
+        : result.output;
+
+      return {
+        success: result.success,
+        output: finalOutput,
         exitCode: result.success ? 0 : 1,
       };
     };

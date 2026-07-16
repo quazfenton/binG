@@ -753,7 +753,25 @@ function isSelectToolPlan(value: unknown): value is SelectToolPlanResult {
 
 function computeTaskFilterView(
   taskFilter: string | SelectToolPlanResult | undefined,
+  options?: { requireFullCatalog?: boolean },
 ): TaskFilterView {
+  // Compile-enforced typed sentinel: short-circuit to `kind: 'none'`
+  // BEFORE consulting `taskFilter` so a `SelectToolPlanResult` or
+  // non-empty string can never reach `kind === 'plan'` or
+  // `kind === 'string'`. The per-source filter helpers
+  // (`filterBlaxelToolsByView` etc.) all have a `view.kind === 'none'`
+  // branch that returns `[...all]` — i.e. the unfiltered source catalog —
+  // which is exactly what tools-only consumers need.
+  //
+  // SHOULD-CONSIDER: the cap portion of `normalizeAndCapTools` (env
+  // `MCP_TOOLS_MAX_TOTAL`, default 25) still applies. If helpers call
+  // with `{ requireFullCatalog: true }` and the configured MCP count
+  // exceeds MCP_TOOLS_MAX_TOTAL, the returned list will be cap-culled.
+  // Future work may extend the sentinel to override `getToolsMaxTotal`;
+  // today we document but do not enforce.
+  if (options?.requireFullCatalog === true) {
+    return { kind: 'none' };
+  }
   if (isSelectToolPlan(taskFilter)) {
     return {
       kind: 'plan',
@@ -1270,13 +1288,34 @@ function normalizeAndCapTools(
  *                       `requestedToolkits`).
  *                     When provided, only tools relevant to the request
  *                     are included.
+ * @param options.requireFullCatalog - Compile-enforced typed sentinel.
+ *                     When `true`, forces `view.kind === 'none'` regardless
+ *                     of the `taskFilter` arg. The unfiltered per-source
+ *                     catalog reaches `normalizeAndCapTools`, so per-source
+ *                     substring/plan gates are bypassed. Used by tools-only
+ *                     helpers in `enhanced-llm-service.ts`
+ *                     (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`)
+ *                     that depend on the FULL MCP tool catalog for fuzzy
+ *                     name matching and JSON-Schema lookup tables. The
+ *                     intent is: a future operator who edits this signature
+ *                     is forced to make the unfiltered dependency explicit
+ *                     at the call site (compile error if the sentinel is
+ *                     forgotten) rather than the prior prose-only contract.
+ *                     SHOULD-CONSIDER: the cap portion of `normalizeAndCapTools`
+ *                     (env `MCP_TOOLS_MAX_TOTAL`, default 25) still applies
+ *                     — if a configured MCP set exceeds the cap, the helper
+ *                     callers may receive a cap-culled list. If that becomes
+ *                     a real problem, extend the sentinel to also bypass
+ *                     `getToolsMaxTotal()` (e.g. `maxBudget = Infinity`
+ *                     OR expose a second `options.maxBudget` overload).
  */
 export async function getMCPToolsForAI_SDK(
   userId?: string,
   taskFilter?: string | SelectToolPlanResult,
   signal?: AbortSignal,
+  options?: { requireFullCatalog?: boolean },
 ) {
-  const view = computeTaskFilterView(taskFilter);
+  const view = computeTaskFilterView(taskFilter, options);
   const callStart = Date.now();
 
   // =============================================================================
