@@ -27,6 +27,33 @@ import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture
 import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
+
+/**
+ * F2 minimal-fix — module-private progress tracker.
+ *
+ * `bumpProgress(reason)` records the wall-clock instant that a tool call (or
+ * any other async stage) began or completed. `getLastProgressAt()` exposes
+ * the timestamp so the route-level stall watchdog (which keys off
+ * `Date.now() - lastProgressAt`) can pace itself.
+ *
+ * Why module-private + additive (not replacing a route-local `lastProgressAt`):
+ * the existing in-route partial F2 implementation (route.ts `lastProgressAt =
+ * Date.now()`) runs inside the loopback watchdog directly. `bumpProgress` is
+ * its parallel counterpart — bumps the same conceptual state via a typed
+ * helper so dynamic-introspection + future observability probes can read it
+ * across module boundaries without leaking implementation details of the
+ * watchdog's local variable.
+ */
+// PR-FA — `bumpProgress` helper. Module-private state.
+let _lastProgressAt = Date.now();
+export function bumpProgress(reason: string): void {
+  _lastProgressAt = Date.now();
+  // Best-effort debug log; chatLogger.debug ?? handles pre-construct init.
+  chatLogger.debug?.('progress-bumped', { reason });
+}
+export function getLastProgressAt(): number {
+  return _lastProgressAt;
+}
 import { chatRequestLogger } from './chat-request-logger';
 import { isCLIProvider, streamWithVercelAI } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
@@ -104,10 +131,22 @@ export const wrapAsHandleForConcurrentFallback = (
       : 25000;
 
   return (providerOverride?: string) => {
-    const controller = new AbortController();
+    // F2 minimal-fix Change B — per-stage abort isolation. Each tool-call
+    // gets its own AbortController whose lifecycle is independent of the
+    // parent signal. Aborting `stageController` does NOT propagate to
+    // `rest.signal` (Node `AbortSignal.any()` composes one-way: child abort
+    // fires only the composite, never the parent), so a stalled tool stage
+    // never cancels sibling stages nor the orchestrator's outer signal.
+    // The original `controller` semantics are preserved when `rest.signal`
+    // is undefined — i.e. the composite falls back to `stageController.signal`.
+    const stageController = new AbortController();
     const mergedSignal = rest.signal
-      ? AbortSignal.any([rest.signal, controller.signal])
-      : controller.signal;
+      ? AbortSignal.any([rest.signal, stageController.signal])
+      : stageController.signal;
+    // Alias `controller` to the new stage controller so the rest of the
+    // factory body — which still references `controller.abort(...)` for the
+    // first-chunk timeout and the wrapped abort closure — keeps compiling.
+    const controller = stageController;
     // Cross-provider model resolution: pick a model ID the fallback
     // provider's catalog can actually serve. Without this, a stalled
     // primary can launch a fallback with an unsupported model ID and

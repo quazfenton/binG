@@ -151,6 +151,16 @@ export default defineConfig({
     // unresolved blocker with `--project web`). Once the migration is
     // re-attempted, revert to `include: []` per the audit-ticket's intent.
     // SEE: F4 in /opt/bing/docs/CENTRALIZED_TODO_LIST.md (status: PARTIAL).
+    //
+    // LOGICAL GROUP: audit-recs
+    // The audit-recs family (finding-1-stall-discriminator.test.ts,
+    //  finding-2-stall-watchdog-stress.test.ts,
+    //  finding-5-6-log-shape.test.ts) is picked up automatically by the glob
+    // below. To run just this group: `pnpm test:audit-recs`. The path-based
+    // selector covers ALL files under `__tests__/audit-recs/` so the family
+    // ships as a single self-contained discoverable group without colliding
+    // with the vitest-workspace migration tracked in F4 (see audit-ticket
+    // /opt/bing/docs/CENTRALIZED_TODO_LIST.md, F4 section).
     include: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx', '**/*.test.ts', '**/*.test.tsx'],
     exclude: [
       '**/node_modules/**',

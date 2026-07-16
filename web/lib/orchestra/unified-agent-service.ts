@@ -212,6 +212,7 @@ import { buildSessionScopeSteerPrompt, wireFinishReasonSteer } from './steer-ser
 // sessionId is passed through config.conversationId / config.userId / 'default'.
 import { recordDegradation } from '@/lib/observability/degradation-tracker';
 import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, hasMutationSuffix, hasReadSuffix } from '@bing/shared/agent/tool-classification';
+import { StallWatchdogError } from '@/lib/chat/llm-fallback-coordinator';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
@@ -2374,7 +2375,7 @@ async function runV2Native(
     
     if (!result.success) {
       recordFailure('v2-cli', 'opencode-engine', result.error);
-      throw new Error(result.error || 'OpenCode engine failed');
+      throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
     }
     
     recordSuccess('v2-cli', 'opencode-engine');
@@ -2463,7 +2464,7 @@ async function runDesktopMode(
     const result = await engine.execute(config.userMessage);
 
     if (!result.success) {
-      throw new Error(result.error || 'Desktop execution failed');
+      throw new StallWatchdogError(result.error || 'Desktop execution failed', { errorCode: 'OTHER' });
     }
 
     const steps = [
@@ -2605,7 +2606,7 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   const result = await engine.execute(config.userMessage);
   
   if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
+    throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
   }
   
   return {
@@ -2651,7 +2652,7 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   const result = await engine.execute(config.userMessage);
   
   if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
+    throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
   }
   
   return {
@@ -2715,7 +2716,7 @@ async function runOpencodeSDKMode(
     const statusList = await sessionManager.getStatus();
     const serverAvailable = Array.isArray(statusList);
     if (!serverAvailable) {
-      throw new Error('OpenCode server status check returned non-array — server likely not running');
+      throw new StallWatchdogError('OpenCode server status check returned non-array — server likely not running', { errorCode: 'ABORT' });
     }
 
     log.info('OpenCode SDK server reachable', {
@@ -3020,7 +3021,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
 
     // FIX: Throw on failure to trigger fallback instead of returning unsuccessful result
     if (!workflowResult.success) {
-      throw new Error(workflowResult.error || 'Mastra workflow execution failed');
+      throw new StallWatchdogError(workflowResult.error || 'Mastra workflow execution failed', { errorCode: 'OTHER' });
     }
 
     // Convert workflow result to unified format

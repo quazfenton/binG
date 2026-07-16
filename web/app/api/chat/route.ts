@@ -37,6 +37,12 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
+// F2 minimal-fix Change C — bumpProgress observability helper. The existing
+// `lastProgressAt` module-local variable is preserved (it's the watchdog's
+// primary read at route.ts L2056/L2065/L2071); bumpProgress is additive —
+// bumps the helper's module-private state in parallel for observability +
+// future per-stage telemetry without disturbing the watchdog contract.
+import { bumpProgress, getLastProgressAt } from '@/lib/chat/enhanced-llm-service';
 // Import the structured-error type guard directly from the file that
 // defines it. Could be re-exported from '@/lib/mcp' for barrel-style
 // consistency, but keeping the import file-specific makes the contract
@@ -64,8 +70,11 @@ import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers
 import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, type AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
 // StallWatchdogError typed discriminator — fired by `fireStall` (route.ts:L1623
 // in this file) and propagated through the chain-walk's abort cascade. The
-// outer catch at L2796 uses `instanceof` to map it to HTTP 524 (vs 500).
-import { StallWatchdogError } from '@/lib/chat/llm-fallback-coordinator';
+// inner-catch (L2987-L3010) + outer-catches (L5609 + L7381) use `instanceof`
+// + `stallWatchdogErrorToStatus(err)` to map each errorCode to its HTTP status
+// (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
+// llm-fallback-coordinator.ts.
+import { StallWatchdogError, stallWatchdogErrorToStatus } from '@/lib/chat/llm-fallback-coordinator';
 // Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
 // contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
 // already coerces via stringifyMessageContent; this import is the route's
@@ -1941,6 +1950,12 @@ const config: UnifiedAgentConfig = {
       // setInterval ticks continuously; a fresh `lastProgressAt`
       // resets the cumulative idle window.
       lastProgressAt = Date.now();
+      // F2 minimal-fix Change C — additive observability bump. The
+      // existing module-local `lastProgressAt` above is the watchdog's
+      // primary read; this parallel `bumpProgress('tool-call-start')`
+      // also bumps the helper's module-private state for downstream
+      // observability probes (telemetry, future per-stage reporting).
+      bumpProgress('tool-call-start');
 
       try {
         const result = await callMCPToolFromAI_SDK(
@@ -2000,6 +2015,13 @@ const config: UnifiedAgentConfig = {
         // tool calls could cumulatively trip the stall watchdog
         // (each tool returning would leave lastProgressAt stale).
         lastProgressAt = Date.now();
+        // F2 minimal-fix Change C Part 2 COMPLETE — additive observability
+        // bump. The existing module-local `lastProgressAt` above is the
+        // watchdog's primary read; this parallel `bumpProgress('tool-call-complete')`
+        // bumps the helper's module-private state on the COMPLETE path
+        // (success OR error — finally runs on both). Pairs with the START
+        // bump at L1949 to form a complete observability trace.
+        bumpProgress('tool-call-complete');
         // F4: dispose the per-call AbortController so a subsequent
         // call (or self-heal retry) gets a fresh signal. The
         // `AbortSignal.any` parent reference drops the listener on
@@ -5592,12 +5614,15 @@ const config: UnifiedAgentConfig = {
         NextResponse.json(
           {
             error: error.message,
+            errorCode: error.errorCode,
             reason: 'stall-watchdog',
             requestId,
             stitchedFromWatchDog: true,
           },
           {
-            status: 524,
+            // Path C: errorCode → status mapping (STALL=524, DRIFT=502, ABORT=503, OTHER=500).
+            // Single source of truth in llm-fallback-coordinator.ts.
+            status: stallWatchdogErrorToStatus(error),
             headers: {
               'content-type': 'application/json',
               'x-stall-fired': 'true',
@@ -7364,11 +7389,14 @@ export async function GET(request: NextRequest) {
           {
             success: false,
             error: error.message,
+            errorCode: error.errorCode,
             reason: 'stall-watchdog',
             stitchedFromWatchDog: true,
           },
           {
-            status: 524,
+            // Path C: errorCode → status mapping (STALL=524, DRIFT=502, ABORT=503, OTHER=500).
+            // Single source of truth in llm-fallback-coordinator.ts.
+            status: stallWatchdogErrorToStatus(error),
             headers: {
               'content-type': 'application/json',
               'x-stall-fired': 'true',

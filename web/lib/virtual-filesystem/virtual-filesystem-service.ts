@@ -2667,11 +2667,24 @@ class GitBackedVFSProxy {
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
 // Without this, each module reload creates a new instance with empty workspaces
 declare global {
-   
-  var __vfsSingleton__: GitBackedVFSProxy | undefined;
+    
+   var __vfsSingleton__: GitBackedVFSProxy | undefined;
 }
 
-export const virtualFilesystem: GitBackedVFSProxy = globalThis.__vfsSingleton__ ?? (globalThis.__vfsSingleton__ = new GitBackedVFSProxy(new VirtualFilesystemService()));
+let _vfsInstanceCache: GitBackedVFSProxy | undefined;
+
+export const getVirtualFilesystem = (): GitBackedVFSProxy => {
+  if (_vfsInstanceCache) return _vfsInstanceCache;
+  _vfsInstanceCache = globalThis.__vfsSingleton__ ?? (globalThis.__vfsSingleton__ = new GitBackedVFSProxy(new VirtualFilesystemService()));
+  return _vfsInstanceCache;
+};
+
+export const virtualFilesystem: GitBackedVFSProxy = new Proxy({} as any, {
+  get: (target, prop) => {
+    const vfs = getVirtualFilesystem();
+    return (vfs as any)[prop];
+  }
+});
 
 // Bug #36 (audit) — startup fingerprint. The snapshot gateway calls
 // `virtualFilesystem.getCurrentVersionSync(ownerId)` as the primary

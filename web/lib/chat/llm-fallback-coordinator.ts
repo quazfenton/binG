@@ -937,7 +937,15 @@ export class IdleTimeoutError extends Error {
 }
 
 /**
- * Typed discriminator for the route-level stall watchdog.
+ * Typed discriminator for the route-level stall watchdog + downstream
+ * stall-family errors.
+ *
+ * `errorCode` discriminant (Path C, 2026-07-16) lets the chat route map
+ * each stall subtype to a distinct HTTP status:
+ *   - 'STALL' (default): no-progress / max-turn watchdog fired → 524
+ *   - 'DRIFT': LLM stream deviated from expected shape → 502
+ *   - 'ABORT': user/system aborted mid-request → 503
+ *   - 'OTHER': generic stall-related error → 500
  *
  * The chat route's `fireStall` (in `app/api/chat/route.ts`) creates THIS
  * error class (instead of a plain `Error`) when the no-progress or
@@ -947,16 +955,45 @@ export class IdleTimeoutError extends Error {
  * the StallWatchdogError carried as `signal.reason`. The chain-walk
  * re-throws on abort ONLY when the reason is a StallWatchdogError, so
  * user-initiated aborts keep their silent-return semantics. The route's
- * outer catch at L2796 sees `err instanceof StallWatchdogError` and
- * returns HTTP 524 instead of 500.
+ * outer catch (L5609 + L7381) sees `err instanceof StallWatchdogError`
+ * and returns HTTP `stallWatchdogErrorToStatus(err)` instead of 500.
  *
  * Defined next to `IdleTimeoutError` so the chain-walk's typed-error
  * vocabulary lives in one place.
  */
+export type StallWatchdogErrorCode = 'STALL' | 'DRIFT' | 'ABORT' | 'OTHER';
+
 export class StallWatchdogError extends Error {
   name = 'StallWatchdogError' as const;
-  constructor(message: string) {
+  readonly errorCode: StallWatchdogErrorCode;
+  constructor(message: string, opts?: { errorCode?: StallWatchdogErrorCode }) {
     super(message);
+    this.errorCode = opts?.errorCode ?? 'STALL';
+  }
+}
+
+/**
+ * Map a StallWatchdogError's `errorCode` discriminant to the HTTP status
+ * the chat route should return.
+ *
+ * Single source of truth for the mapping so inner + outer catches in
+ * `app/api/chat/route.ts` (L2987-L3010, L5609, L7381) all derive status
+ * from the same function. Exhaustive switch over the discriminated
+ * union ensures TypeScript catches missing cases at compile time.
+ */
+export function stallWatchdogErrorToStatus(error: StallWatchdogError): number {
+  switch (error.errorCode) {
+    case 'STALL': return 524;
+    case 'DRIFT': return 502;
+    case 'ABORT': return 503;
+    case 'OTHER': return 500;
+    default: {
+      // Exhaustiveness guard: if a new errorCode is added to StallWatchdogErrorCode
+      // without being mapped here, TypeScript's `never` check fires here at compile
+      // time and the runtime fallback throws. Single source of truth.
+      const _exhaustive: never = error.errorCode;
+      throw new Error(`stallWatchdogErrorToStatus: unhandled errorCode "${_exhaustive}"`);
+    }
   }
 }
 

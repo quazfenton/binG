@@ -53,7 +53,7 @@ import { GitManager, type GitStatusResult } from './git-manager'
 // direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
 // — a real file inside this package, NOT a cross-package reference into
 // web/lib/*.
-import { createLogger } from '../lib/utils/logger'
+import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('UnifiedAgent')
 

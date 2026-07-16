@@ -55,6 +55,10 @@ export class IndexedDBBackend {
   }
 
   async initialize(ownerId: string): Promise<void> {
+    if (!IndexedDBBackend.isSupported()) {
+      throw new IndexedDBError('IndexedDB is not supported in this environment (browser API not available on server)');
+    }
+
     if (!ownerId || typeof ownerId !== 'string') {
       throw new IndexedDBError('Invalid owner ID: must be a non-empty string');
     }

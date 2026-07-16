@@ -20,6 +20,7 @@
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
+    "test:audit-recs": "vitest run __tests__/audit-recs/",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:stateful-agent": "vitest run test/stateful-agent",
     "test:e2e": "vitest run --config vitest.integration.config.ts tests/e2e",

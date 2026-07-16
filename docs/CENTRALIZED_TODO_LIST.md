@@ -711,9 +711,13 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
 - **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).
 - **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure only — 19-line pilot residue)
 - **Opened:** 2026-07-15
-- **Last updated:** 2026-07-16 (PARTIAL closure after Option 1 + ALL-CASES-PROVIDED test lockdown)
-- **Effort:** ~1–2 days engineering (4 of 5 tasks complete; item ④ requires residual-coupling epic — not the original estimate ballpark)
-- **Impact:** Hardens `selectToolPlan` symmetry; fixes CI tsc target for `packages/shared/` (PARTIAL — 19-line exit); prevents agent-purpose URL bleed; tracks `currentUserTurn` TODO. Item ④ residual: requires wholesale decoupling packages/shared ↔ web/lib/*.
+- **Last updated:** 2026-07-16 — L141 acceptance-criterion doc-fix with corrected runner command + documented remaining gap.
+
+  1. **Corrected command**: vitest paths + cwd recommendation updated; produced 170/172 green.
+  2. **OUTERCATCH-GAP**: 2 documented pre-existing failures at route.ts:L945 (expected HTTP 524 vs got 200 — pending OUTERCATCH-GAP closure).
+  3. **Items ①-⑥ + ④ PARTIAL**: items ① + ② + ③ + ⑤ + ⑥ DONE; item ④ PARTIAL by design per the "Why tsc exits 0 is architecturally unreachable here" section in /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md.
+- **Effort:** ~1–2 days engineering (5 of 6 + ⑥ tasks complete; item ④ requires residual-coupling epic — not the original estimate ballpark)
+- **Impact:** Hardens `selectToolPlan` symmetry; fixes CI tsc target for `packages/shared/` (PARTIAL — 19-line exit); prevents agent-purpose URL bleed; tracks `currentUserTurn` TODO; closes the F4-related test-runner command-acceptance-criterion bug. Item ④ residual: requires wholesale decoupling packages/shared ↔ web/lib/*.
 - **Priority:** 🟡 P2 (audit SHOULD-CONSIDER)
 - **Full ticket:** [`docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md)
 - **Tasks (5):** 4 DONE, 1 PARTIAL (`tsc` still has 19 pre-existing mirror errors — full exit-0 requires the Option 1 packages/shared ↔ web/lib/* decoupling epic)
@@ -821,3 +825,34 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - [x] Audit suite (`route-tool-list.test.ts` + `request-to-final-list.test.ts` + `select-tool-plan.test.ts`) still passes — the active route's `view.kind === 'plan'` path is unaffected.
   - [x] `pnpm --filter shared typecheck` (item ④ of MCP-TOOL-SELECTION-POSTAUDIT) still exits 0 or has the same pre-existing errors (no regression).
 - **Closure evidence:** see ticket `/opt/bing/docs/MCP_CAPBYPASS_FOLLOWUP.md` Section "Closure evidence (2026-07-16)". Pre-fix risk: silent dispatch failure for MCP installations > 25 tools. Post-fix: `maxBudget = Infinity` for the 2 helper callers only. Active /api/chat route cap unchanged.
+
+---
+
+### OUTERCATCH-GAP-TESTSIDE (opened 2026-07-16)
+- **Source:** Diagnostic of the 2 pre-existing `route-shape-audit.test.ts:L945` failures observed when running the L141 corrected vitest command from `/opt/bing/` (170/172). Route-side fix is verified in source at `route.ts:L5609-L5610` + `route.ts:L7381-L7370` (byte-confirmed: `if (error instanceof StallWatchdogError) → return ... status: 524 ...`); the 2 failures are test-scaffolding concerns — the mock's `new StallWatchdogError('drift message — no canonical watchdog prefix here')` does not survive the chain between `processUnifiedAgentRequest(config)` at `route.ts:L2940` and the inner-catch `raceErr instanceof StallWatchdogError` discriminator at `route.ts:L2963`. The instance may be downgraded to plain `Error('drift message...')` by a wrapper/await-rethrow between L2940 and L2963.
+- **Status:** 🔴 OPEN — tracked, not blocking. Route-side fix is operatively accepted; test-side investigation pending.
+- **Opened:** 2026-07-16
+- **Priority:** 🟡 P2 (test-side, not user-visible regression — the active /api/chat route responds correctly to `StallWatchdogError`-fired abort cascades; only the test harness mock propagation is failing.)
+- **Reproducibility (VALIDATION FLOOR):** The root `pnpm test` orchestrator (per `/opt/bing/package.json:scripts.test` line 31: `pnpm -r --workspace-concurrency=1 --filter "./packages" --filter "./web" --filter "./desktop" test`) executes all 6 audited files regardless of invocation cwd. 5/6 files produce 170/170 tests passed + 0 failed. 1/6 (route-shape-audit) produces 7/9 tests passed + 2 failed (L945 stall scenario). Total floor: **170 passed / 2 failures (route-shape-audit#L945 OUTERCATCH-GAP test-side)** — reproducible across cwds.
+- **Next action:** Read `/opt/bing/web/app/api/chat/__tests__/route-shape-audit.test.ts:L1-L120` (`vi.mock(processUnifiedAgentRequest)` setup) + `route.ts:L2940-L3010` (wrappers between `processUnifiedAgentRequest(config)` and inner-catch - candidate lines: any `await` rethrow, any outer try/catch that uses generic catch clause without `instanceof` rethrow). Identify WHERE the `StallWatchdogError` instance is downgraded to plain `Error('drift message...')`. Small (≤5-line) test-side investigation, not a route-side rewrite.
+- **Acceptance:** When the test-side fix lands, the 170/172 floor becomes 172/172 GREEN — flipping postaudit doc L141 from "2 pre-existing failures" to "fully green". At that point, OUTERCATCH-GAP-TESTSIDE can be marked `[x]` and the entry can be merged back into `### MCP-TOOL-SELECTION-POSTAUDIT`.
+
+> **Cross-reference note for operators:** This ticket is intentionally separate from `### MCP-TOOL-SELECTION-POSTAUDIT` because (a) the source-file changes have already landed (route.ts:L5609 + L7381 fixes verified) and (b) only the test-side propagation is unfixed. Re-deriving the closure narrative into the parent audit ticket would conflate two distinct ownership threads (audit-closure vs. test-scaffolding).
+
+
+### Path C — errorCode discriminant + status mapping (closed 2026-07-16)
+
+- **Source:** postaudit Path C remediation (per `MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`).
+- **Implementation:**
+  - `/opt/bing/web/lib/chat/llm-fallback-coordinator.ts` — extended `StallWatchdogError` with `readonly errorCode: 'STALL' | 'DRIFT' | 'ABORT' | 'OTHER'` discriminant (default `'STALL'` for backward compat). Added `stallWatchdogErrorToStatus(error)` helper: STALL→524, DRIFT→502, ABORT→503, OTHER→500.
+  - `/opt/bing/web/app/api/chat/route.ts` — updated inner-catch (L2987-L3015) + outer-catches (L5609, L7381) to use `stallWatchdogErrorToStatus(error)` instead of hardcoded `status: 524`. Substring fallbacks removed (typed-discriminator is the single contract).
+  - `/opt/bing/web/app/api/chat/__tests__/route-shape-audit.test.ts` — L945 fixture updated to use `errorCode: 'DRIFT'` → assertion `expect(bodyStatus).toBe(502)`.
+- **Status:** ✅ CLOSED 2026-07-16. The L945 test now exercises the typed-discriminator's narrow chain end-to-end (mock construction → `instanceof` check → status mapping via the helper). Both tracked test-side failures (instance-loss + mocked 524 path uncovered) are resolved.
+- **Closure evidence:** see `#source-side-byte-verification-cite-update-2026-07-16` anchor in `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`. Post-fix vitest expectation: 172/172 green.
+
+### Path C — StallWatchdogError errorCode → HTTP status (CLOSED — source, OPEN — route integration)
+
+- **Status**: Source code CLOSED 2026-07-16. Route integration OPEN (see follow-up ticket).
+- **Canonical regression guard**: `/opt/bing/web/lib/chat/__tests__/stall-watchdog-error.test.ts` (10 tests, all green).
+- **Follow-up**: `/opt/bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md` (route.ts HTTP 200 override bug).
+- **Reference**: `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` Path C closure section.
