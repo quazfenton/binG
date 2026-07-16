@@ -18,7 +18,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const BASE = process.env.BASE || 'http://localhost:3000';
+// NOTE: use 127.0.0.1, NOT localhost — Node/undici fetch resolves localhost to
+// ::1 (IPv6) first and hangs indefinitely when the dev server binds IPv4 only.
+const BASE = process.env.BASE || 'http://127.0.0.1:3000';
 const EMAIL = process.env.EMAIL || 'test@test.com';
 const PASS = process.env.PASS || 'Testing00000?';
 const PROVIDER = process.env.PROVIDER || 'nvidia';
@@ -45,13 +47,37 @@ function parseSetCookie(headers) {
   return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
+async function doLogin() {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), 15000);
+  try {
+    const res = await fetch(`${BASE}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: EMAIL, password: PASS }),
+      signal: c.signal,
+    });
+    const body = await res.json();
+    return { res, body };
+  } finally { clearTimeout(t); }
+}
+
 async function login() {
-  const res = await fetch(`${BASE}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: EMAIL, password: PASS }),
-  });
-  const body = await res.json();
+  let { res, body } = await doLogin();
+  if (!res.ok || !body.success) {
+    // In-memory user store may have been reset on server restart — re-register.
+    log('  login failed, attempting register…');
+    const c = new AbortController();
+    const t = setTimeout(() => c.abort(), 15000);
+    try {
+      await fetch(`${BASE}/api/auth/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: EMAIL, password: PASS, username: 'tester' }),
+        signal: c.signal,
+      });
+    } finally { clearTimeout(t); }
+    ({ res, body } = await doLogin());
+  }
   if (!res.ok || !body.success) throw new Error('login failed: ' + JSON.stringify(body));
   COOKIES = parseSetCookie(res.headers);
   USER_ID = body.user.id;
@@ -71,11 +97,21 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
     conversationId,
     ...extra,
   };
-  const res = await fetch(`${BASE}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Cookie: COOKIES },
-    body: JSON.stringify(body),
-  });
+  const CHAT_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS || 180000);
+  const ac = new AbortController();
+  const chatTimer = setTimeout(() => ac.abort(), CHAT_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(`${BASE}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Cookie: COOKIES },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+  } catch (e) {
+    clearTimeout(chatTimer);
+    return { httpStatus: 0, headers: {}, events: [], tokens: '', rawBytes: 0, toolCalls: [], errors: ['FETCH_ABORTED_OR_FAILED: ' + e.message], done: null, durationMs: Date.now() - started, ttfbMs: 0 };
+  }
 
   const result = {
     httpStatus: res.status,
@@ -90,7 +126,7 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
     ttfbMs: 0,
   };
 
-  if (!res.body) { result.durationMs = Date.now() - started; return result; }
+  if (!res.body) { clearTimeout(chatTimer); result.durationMs = Date.now() - started; return result; }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -134,7 +170,9 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
       if (d.toolName || d.tool_name) result.toolCalls.push({ name: d.toolName || d.tool_name, args: d.args || d.arguments });
     }
   }
+  clearTimeout(chatTimer);
   result.durationMs = Date.now() - started;
+  result.aborted = ac.signal.aborted;
   return result;
 }
 

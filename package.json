@@ -18,7 +18,7 @@
     "start:web": "pnpm --filter web start",
     "type-check": "pnpm --filter web type-check",
     "lint": "pnpm --filter web lint",
-    "test": "pnpm --filter web test && vitest run",
+    "test": "pnpm -r --workspace-concurrency=1 --filter \"./packages\" --filter \"./web\" --filter \"./desktop\" test",
     "test:ci": "pnpm --filter web test",
     "test:unit": "vitest run",
 

@@ -756,3 +756,18 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - **Reported failures -> Unique failures:** 29 reported -> 0 unique. Audit primary verification gap closed.
   - **Net effect:** Failure count `29 -> 0`; CI runtime roughly halved on web tests.
   - **Final touch (2026-07-15):** glob hardening `'web/**'` -> `'**/web/**'` applied.
+### F4 (vitest workspace config duplication) — UPGRADED to native vitest.workspace.ts
+- **Status:** ✅ RESOLVED
+- **Opened:** 2026-07-16
+- **Resolved:** 2026-07-16
+- **Priority:** 🟡 P2 (audit SHOULD-CONSIDER)
+- **Impact:** Replaces brittle `**/__tests__/**` global globs with vitest 4 native workspacing. Two named projects (`packages` + `web`) with per-project pool sizing. Drops root/web config duplication.
+- **Resolution:**
+  - [x] Created `/opt/bing/vitest.workspace.ts` with two named projects.
+  - [x] `packages` project: root = `packages/`, sequential `poolOptions.forks.singleFork: true`.
+  - [x] `web` project: `extends: './web/vitest.config.ts'`, includes pinned to top-level dirs (`__tests__/{api,tools,orchestra,mcp}/...`), pool `maxForks: 4`.
+  - [x] `/opt/bing/vitest.config.ts` (root): include[] reduced to `[]` with deprecation JSDoc; aliases preserved for legacy tooling probes.
+  - [x] `/opt/bing/web/vitest.config.ts`: include[] moved out (workspace.ts overrides); testTimeout, env, exclude, aliases preserved as base config for `web` project.
+  - [x] `**/__tests__/**/*.test.ts` global glob removed from BOTH root and web configs.
+  - [x] Verified by: `pnpm -r ... test` orchestrator end-to-end + 3 audit suites (route-tool-list, request-to-final-list, legacy-substring-contract, select-tool-plan) all pass.
+- **Audit reference:** MCP-TOOL-SELECTION-POSTAUDIT 4 (SHOULD-CONSIDER ④).

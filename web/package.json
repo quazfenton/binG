@@ -16,7 +16,7 @@
     "start:ws": "NODE_ENV=production tsx server.ts",
     "lint": "eslint .",
     "migrate": "node scripts/run-migrations.js",
-    "test": "vitest run",
+    "test": "vitest run --project web",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",

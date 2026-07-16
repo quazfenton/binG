@@ -1,0 +1,33 @@
+{
+  "httpStatus": 500,
+  "headers": {
+    "cache-control": "no-cache, must-revalidate",
+    "connection": "keep-alive",
+    "content-encoding": "gzip",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "text/html; charset=utf-8",
+    "date": "Thu, 16 Jul 2026 00:34:50 GMT",
+    "etag": "\"aysufz0z8p39d\"",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "Accept-Encoding",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "wPYzIFi5uUcxj1UCbKw32ivwjULdq55fK26IPAXzYYQ",
+    "x-csp-nonce-style": "udSIuFQHh1TXWNSCsBWr1kjMKII0uB-4rmVwkaWsxjU",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1784162085615_mi382waaaqs",
+    "x-xss-protection": "1; mode=block"
+  },
+  "events": [],
+  "tokens": "",
+  "rawBytes": 4225,
+  "toolCalls": [],
+  "errors": [],
+  "done": null,
+  "durationMs": 5181,
+  "ttfbMs": 5181,
+  "aborted": false
+}
