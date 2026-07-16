@@ -91,7 +91,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid or expired MFA token' }, { status: 401 });
     }
 
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       return NextResponse.json({ success: false, error: 'Database not available' }, { status: 500 });
@@ -204,6 +204,15 @@ export async function POST(request: NextRequest) {
       });
     });
 
+    // Only set Secure when the actual connection is HTTPS (checked via
+    // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+    // seen by the server). This allows Secure to work correctly through the
+    // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+    // on plain HTTP localhost (dev, CI, local preview of production build).
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const actualProtocol = request.nextUrl.protocol;
+    const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
     // Set cookies and return
     const response = NextResponse.json({
       success: true,
@@ -219,7 +228,7 @@ export async function POST(request: NextRequest) {
     // Set session cookie
     response.cookies.set('session_id', sessionId, {
       httpOnly: true,
-      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
+      secure: isSecureConnection,
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60,
       path: '/',
@@ -228,7 +237,7 @@ export async function POST(request: NextRequest) {
     // Set auth-token cookie
     response.cookies.set('auth-token', token, {
       httpOnly: true,
-      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
+      secure: isSecureConnection,
       sameSite: 'lax',
       maxAge: 60 * 60,
       path: '/',
@@ -242,7 +251,7 @@ export async function POST(request: NextRequest) {
     // Clear anon session
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
+      secure: isSecureConnection,
       sameSite: 'lax',
       maxAge: 0,
       path: '/',

@@ -185,8 +185,7 @@ export class UnifiedAgent {
           // P1 FIX: Use envVars key instead of env
           envVars: this.config.env,
         } as any)
-        const sessionProvider = (workspaceSession as any).provider ?? this.config.provider;
-        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${sessionProvider}`)
+        log.info(`Workspace created: ${workspaceSession.sandboxId} on provider ${workspaceSession.provider || this.config.provider}`)
       } catch (error: any) {
         log.error(`Failed to create sandbox session: ${error.message}`)
         throw new Error(
@@ -274,7 +273,7 @@ export class UnifiedAgent {
               initResults[capability] = false
           }
         } catch (error: any) {
-          log.error(`Failed to initialize capability ${capability}:`, error.message)
+          log.error(`Failed to initialize capability ${capability}: ${error.message}`)
           this.initializationErrors.set(capability, error)
           initResults[capability] = false
           
@@ -299,7 +298,7 @@ export class UnifiedAgent {
       return this.session
 
     } catch (error: any) {
-      log.error('Initialization failed:', error.message)
+      log.error(`Initialization failed: ${error.message}`)
       throw error
     }
   }
@@ -598,6 +597,9 @@ export class UnifiedAgent {
   async desktopMove(opts: { x: number; y: number }): Promise<void> {
     if (!this.desktopHandle) {
       throw new Error('Desktop not initialized')
+    }
+    if (!Number.isFinite(opts.x) || !Number.isFinite(opts.y)) {
+      throw new Error(`Invalid coordinates: x=${opts.x}, y=${opts.y}`)
     }
 
     await this.desktopHandle.moveMouse(opts.x, opts.y)

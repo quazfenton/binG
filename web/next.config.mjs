@@ -101,20 +101,24 @@ const nextConfig = {
       'date-fns',
       'lodash',
     ],
-    // Turbopack aliases — replaces server-only npm packages leaking into
-    // client bundles with no-op stubs. (Webpack equivalents are in the
-    // webpack() function below; Turbopack ignores that section entirely.)
-    turbo: {
-      resolveAlias: {
-        'server-only': './lib/utils/server-only-stub.ts',
-        'mcporter': './lib/utils/empty-module.ts',
-        'modal': './lib/utils/empty-module.ts',
-        'tar': './lib/utils/empty-module.ts',
-        'node-fetch': './lib/utils/empty-module.ts',
-        '@daytonaio/sdk': './lib/utils/empty-module.ts',
-      },
+  },
+
+  // Turbopack aliases — replaces server-only npm packages leaking into
+  // client bundles with no-op stubs. Moved from `experimental.turbo` (Next 16
+  // deprecation: that key became top-level `turbopack`). Webpack equivalents
+  // remain in the webpack() function below; Turbopack ignores that section.
+  turbopack: {
+    resolveAlias: {
+      'server-only': './lib/utils/server-only-stub.ts',
+      'node:module': './lib/utils/node-module-stub.ts',
+      'mcporter': './lib/utils/empty-module.ts',
+      'modal': './lib/utils/empty-module.ts',
+      'tar': './lib/utils/empty-module.ts',
+      'node-fetch': './lib/utils/empty-module.ts',
+      '@daytonaio/sdk': './lib/utils/empty-module.ts',
     },
   },
+
   compiler: {
     removeConsole: process.env.NODE_ENV === 'production'
       ? {

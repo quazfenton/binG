@@ -7,8 +7,13 @@ export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
-    // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
-    const authResult = await verifyAuth(req);
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. No CSRF / no rate-limit / no Zod on this route — direct apply. Used
+    // by the streaming agent loop on every chat request. ~2-5ms saved per request
+    // on the auth+body overlap window. CRITICAL: Authenticate user from JWT token
+    // - do NOT trust userId from request body
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -18,8 +23,6 @@ export async function POST(req: NextRequest) {
 
     // Use authenticated userId from token, ignore body userId
     const authenticatedUserId = authResult.userId;
-
-    const body = await req.json();
     const { message, history } = body;
 
     if (!message) {
@@ -27,7 +30,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Get or create sandbox session for the authenticated user
-    const session = await sandboxBridge.getOrCreateSession(authenticatedUserId);
+    const session = await sandboxBridge.getOrCreateSession(
+      authenticatedUserId,
+    );
 
     // Dynamic import to avoid build errors when sandbox module not available
     let runAgentLoop: any;

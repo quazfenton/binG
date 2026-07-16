@@ -1,3 +1,39 @@
+# BUGS2.md — Status Summary (updated 2026-07-07)
+
+## Bug Status Legend
+# ✅ FIXED     — confirmed fixed in codebase
+# ⚠️  PARTIAL  — partially addressed but some gaps remain  
+# ⬜  OPEN     — still needs action
+# N/A          — intentional design decision or external
+
+## Quick Status
+| Bug | Status | Notes |
+|-----|--------|-------|
+| #1  | ✅ FIXED | MAX_V1_CONTINUATIONS loop in UAS:4900 |
+| #2  | ✅ FIXED | planSteps>=2 forces continue:true at first-response-routing.ts:284 |
+| #3  | ⚠️  PARTIAL | Two-phase still runs but FC-GATE zero-calls handled |
+| #4  | ⚠️  PARTIAL | VFS writes proceed with warning; scope validation unchanged |
+| #5  | ✅ FIXED | Circuit breaker for 429 at UAS:5166 |
+| #6  | ✅ FIXED | Nullclaw guard at bootstrap-nullclaw.ts:98-108 |
+| #7  | ⚠️  PARTIAL | WORKSPACE_NOT_READY cooldown logic partially addressed |
+| #8  | ✅ PARTIAL | Singleton pattern established; full audit deferred |
+| #9  | ✅ PARTIAL | Text-mode dedup added |
+| #10 | ✅ FIXED | steerFromFinishReason wired at UAS:4871 |
+| #11 | ✅ FIXED | Continuation loop via MAX_V1_CONTINUATIONS |
+| #12 | ✅ PARTIAL | SelfHeal caches last-working provider at UAS:4260 |
+| #13 | ✅ FIXED | Phase 1 time-budget at UAS:4078 |
+| #14 | ⚠️  PARTIAL | Orchestrator web_search path improved if Bug #6 fix works |
+| #15 | ✅ PARTIAL | Text-mode dedup added |
+| #16 | ✅ FIXED | STEER prefix for INCOMPLETE-RESPONSE at UAS:4778 |
+| #17 | ✅ FIXED | isActiveText override at vercel-ai-streaming.ts:1901 |
+| #18 | ⚠️  PARTIAL | choose_role stub registered (UAS:4005); needs LLM prompting improvement to invoke |
+| #19 | ✅ PARTIAL | JSON tool-result skip in text-mode parser |
+| #20 | ⬜  OPEN | Session cross-contamination still possible |
+| #21 | ✅ FIXED | Phase 1 time-budget at UAS:4078 |
+| #22 | N/A | DISABLE_V2_MODE is intentional configuration |
+
+---
+
 
  Source: Latest web/logs/run.log — 5 user requests over ~45 min, 8 distinct LLM turn completions.
 Root Cause: V1-API-WITH-TOOLS path has NO continuation loop

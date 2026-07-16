@@ -1,3 +1,4 @@
+// Modes delegate the continuation decision to processUnifiedAgentRequest upstream. If you need a continuation loop here, use runAutoContinueLoop instead of rolling your own.
 /**
  * Agent Execution Modes — Barrel Export
  *

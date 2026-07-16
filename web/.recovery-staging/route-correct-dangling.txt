@@ -1,0 +1,71 @@
+                result.metadata = result.metadata || {};
+                result.metadata.appliedEditCount = accumulatedEditCount.applied;
+                result.metadata.extractedEditCount = accumulatedEditCount.extracted;
+                result.metadata.iterationCount = iteration + 1;
+              }
+              if (accumulatedSteps.length > 0) {
+                result.steps = accumulatedSteps;
+              }
+              // Post-loop: extract any final edits from the LAST iteration's buffer
+              // and apply session naming detection. The loop already handled VFS
+              // writes and step accumulation; this block runs once after the loop.
+              const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
+
+              // SESSION NAMING: Detect if this is a new single-folder workspace
+              const responseContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '') || '';
+              try {
+                const { detectSingleFolderFromResponse, sessionNameExists } = await import('@/lib/session/session-naming');
+                const detectedFolder = detectSingleFolderFromResponse(responseContent);
+                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
+                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
+                if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
+                  const folderExists = await sessionNameExists(detectedFolder);
+                  if (!folderExists) {
+                    // Capture previousId BEFORE reassignment so the SSE event
+                    // shows the actual rename (previous !== new), not a no-op.
+                    const previousId = resolvedConversationId;
+                    resolvedConversationId = detectedFolder;
+                    requestedScopePath = `workspace/sessions/${detectedFolder}`;
+                    emit(SSE_EVENT_TYPES.FILESYSTEM, {
+                      previousId,
+                      newId: detectedFolder,
+                      reason: 'single-folder-workspace',
+                    });
+                    chatLogger.info('Session folder renamed based on detected workspace structure', {
+                      previousId,
+                      newId: detectedFolder,
+                    });
+                  }
+                }
+              } catch (sessionErr: any) {
+                chatLogger.debug('Session naming detection failed (non-fatal)', {
+                  error: sessionErr instanceof Error ? sessionErr.message : String(sessionErr),
+                });
+              }
+
+              // Final file edits emit (post-stream parse catch-all)
+              if (finalEdits && finalEdits.length > 0) {
+                for (const edit of finalEdits) {
+                  if (!isValidFilePath(edit.path)) continue;
+                  const editContent = edit.content || edit.diff || '';
+                  if (!editContent || editContent.trim().length === 0) continue;
+                  const isPatch = edit.action === 'patch' || !!edit.diff;
+                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                    path: edit.path,
+                    status: 'detected',
+                    operation: isPatch ? 'patch' : 'write',
+                    timestamp: Date.now(),
+                    content: edit.content || '',
+                    diff: isPatch ? (edit.diff || '') : undefined,
+                    isFinal: true,
+                  });
+                }
+              }
+
+              // VFS WRITE: Apply final filesystem edits to the virtual filesystem.
+              // This mirrors the per-iteration VFS write in the loop — without this,
+              // edits from the post-stream parse are only emitted as SSE events
+              // (status: 'detected') but NEVER persisted to VFS. Critical for
+              // single-iteration requests where the loop's per-iteration VFS write
+              // may not catch edits that arrived after the last iteration boundary.
+              if (finalEdits.length > 0 && filesystemOwnerId) {

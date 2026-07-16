@@ -608,34 +608,80 @@ Create a unified final output that incorporates the best elements from all contr
       this.progress.iteration = iteration;
       this.updateProgress('all', iteration * 20, `Iteration ${iteration}/${this.config.maxIterations}`);
 
-      // Each agent provides solution
+      // #70 NEW-1 followup-d (Group C, ~50-200ms/team-call × N agents):
+      // Sequential for-loop over consensus iteration's per-agent runLLM
+      // collapsed into `Promise.all(agents.map(safeRun))`. Multi-Agent-team
+      // read-back verdict: agents operate purely on the static initial
+      // prompt + previous iteration's solutions array (read-only reference
+      // during this iteration's parallel window) — no sibling dependency
+      // inside one iteration, safe parallel fan-out.
+      //
+      // SAFETY PROPERTIES (Multi-Agent team approved):
+      // (a) Per-agent `try { ... } catch (error) { logger.warn(...); return null; }`
+      //     isolation. Single agent failure → `null` skip; voteOnSolutions
+      //     still gets a partial `solutions` array, computes a
+      //     consensusScore from surviving agents (partial-consensus is valid).
+      // (b) `solutions.splice(0, solutions.length)` happens BEFORE the fan-out
+      //     so all parallel agents see the SAME previous-iteration snapshot.
+      //     Mutation of `solutions` and `contributions` is deferred until
+      //     AFTER `Promise.all` resolves — sequential `for…of` push avoids
+      //     any concurrent-mutation concern on shared JS arrays.
+      // (c) `Promise.all` PRESERVES input-array order in the output array —
+      //     this matters for tied-vote tie-breaking in `voteOnSolutions`
+      //     where equal-score solutions resolve via earlier array indices.
+      //     NOT `Promise.allSettled` — the explicit `null`-filter pattern
+      //     gives clearer types and avoids the `SettledResult<T>` wrapping.
+      //     (Compare with #72 events.ts:209 which DOES use `Promise.allSettled`
+      //     because listener reject-order is unrelated to emit semantics —
+      //     different shape, different rationale.)
+      // (d) `this.updateProgress('all', iteration * 20, ...)` is centralized
+      //     at L609 (the call BEFORE this block) — NOT inside the per-agent
+      //     fan-out. Racing per-agent progress emits would create chaotic
+      //     30→90→30 UX oscillation as agents finish out-of-order.
+      //
+      // DELIBERATELY UNCHANGED — [DEFER #69 executeHierarchical] stays
+      // sequential at L460: hierarchical plan has step-to-step data deps
+      // (Step 2's `runLLM` message references Step 1's result via the
+      // `runners` array). Do NOT apply this recipe to executeHierarchical
+      // without first restructuring the plan-recording scheme.
       solutions.splice(0, solutions.length); // Clear array for new iteration
 
-      for (const [role, agent] of agents) {
-        const result = await this.runLLM({
-          agent,
-          role,
-          message: `Provide your solution for:
+      const consensusResults = await Promise.all(
+        agents.map(async ([role, agent]) => {
+          try {
+            const result = await this.runLLM({
+              agent,
+              role,
+              message: `Provide your solution for:
 
 Task: ${task.task}
 ${iteration > 1 ? 'Previous solutions:\n' + solutions.map(s => s.solution.substring(0, 300)).join('\n') : ''}
 
 Provide your best solution.`,
-          timeout: this.config.timeout / this.config.maxIterations / agents.length,
-        });
+              timeout: this.config.timeout / this.config.maxIterations / agents.length,
+            });
+            const weight = this.config.agents.find(a => a.role === role)?.weight || 1;
+            return { role, result, weight };
+          } catch (error: any) {
+            logger.warn(`Agent ${role} failed in consensus iteration ${iteration}`, { error });
+            return null;
+          }
+        }),
+      );
 
+      for (const res of consensusResults) {
+        if (!res) continue;
         solutions.push({
-          role,
-          solution: result.response,
-          weight: this.config.agents.find(a => a.role === role)?.weight || 1,
+          role: res.role,
+          solution: res.result.response,
+          weight: res.weight,
         });
-
         contributions.push({
-          role: role as AgentRole,
+          role: res.role as AgentRole,
           type: 'claude-code',
-          content: result.response,
+          content: res.result.response,
           timestamp: Date.now(),
-          filesModified: result.filesModified,
+          filesModified: res.result.filesModified,
         });
       }
 
@@ -719,34 +765,82 @@ Enhance, improve, or transform the input based on your expertise.`,
 
     this.updateProgress('all', 0, 'Starting competition');
 
-    // All agents create solutions
-    for (const [role, agent] of agents) {
-      this.updateProgress(role as AgentRole, 30, `${role} creating solution`);
+    // #71 NEW-1 followup-d (Group C, ~80-300ms/team-call × N agents):
+    // Sequential for-loop over competitive generation collapsed into
+    // `Promise.all(agents.map(safeRun))`. Multi-Agent-team read-back
+    // verdict: competitive agents generate in SILOS — each agent's
+    // creation prompt is identical (Task + Success Criteria, with NO
+    // sibling-peek and NO previous-iteration feedback), so they are fully
+    // independent during the generation window. Safe parallel fan-out.
+    //
+    // SAFETY PROPERTIES (Multi-Agent team approved):
+    // (a) Per-agent `try { ... } catch (error) { logger.warn(...); return null; }`
+    //     isolation. `executeCompetitive` does NOT require all agents to
+    //     succeed; partial solves are valid competition inputs to the judge.
+    //     Null entries are cleanly skipped in the post-`Promise.all` push loop.
+    // (b) Single batched `updateProgress('all', 30, ...)` BEFORE the fan-out
+    //     replaces the per-agent racing calls (under parallel, racing
+    //     per-agent `updateProgress` emits create chaotic UX with rapid
+    //     30→90→30 oscillation as agents finish out-of-order).
+    // (c) `solutions.push(...)` DEFERRED to AFTER `Promise.all` resolves —
+    //     sequential `for…of` push preserves `solutions[index] ↔ agent-index`
+    //     correspondence, which the judge's
+    //     `solutions.map((s, i) => `...Solution ${i + 1} (${s.role})...`)`
+    //     downstream depends on for the structured judge prompt. Hygiene
+    //     violation in single-threaded JS is moot, but the explicit ordering
+    //     is easier to reason about than concurrent push semantics.
+    // (d) `contributions.push(...)` similarly deferred — preserves the
+    //     chronological order in which agents' contributions appear in
+    //     the final `AgentContribution[]` (which feeds observability,
+    //     audit trail, and downstream `voteOnSolutions` ordering heuristics).
+    //
+    // The judge-runs-after block at L754 (judging + `judgingResponse`
+    // extraction + scoring) is UNCHANGED — `judging` depends on `solutions`
+    // being FULLY POPULATED BEFORE invocation. Sequential push via the
+    // `for…of` loop guarantees this regardless of how many agents succeeded.
+    //
+    // DELIBERATELY UNCHANGED — [DEFER #69 executeHierarchical] stays
+    // sequential at L460: step-to-step data deps. Do NOT apply this recipe
+    // to executeHierarchical — its `for…of workers` loop awaits each
+    // worker's `runLLM` and feeds the result into the NEXT worker's prompt,
+    // which is a fundamentally sequential dependency graph.
+    this.updateProgress('all', 30, `${agents.length} agents creating competitive solutions in parallel`);
 
-      const result = await this.runLLM({
-        agent,
-        role,
-        message: `Create the best possible solution for:
+    const compResults = await Promise.all(
+      agents.map(async ([role, agent]) => {
+        try {
+          const result = await this.runLLM({
+            agent,
+            role,
+            message: `Create the best possible solution for:
 
 Task: ${task.task}
 ${task.successCriteria ? 'Success Criteria:\n' + task.successCriteria.join('\n') : ''}
 
 Create a comprehensive, high-quality solution.`,
-        timeout: this.config.timeout / 2,
-      });
+            timeout: this.config.timeout / 2,
+          });
+          return { role, result };
+        } catch (error: any) {
+          logger.warn(`Agent ${role} failed in competitive strategy`, { error });
+          return null;
+        }
+      }),
+    );
 
+    for (const res of compResults) {
+      if (!res) continue;
       solutions.push({
-        role,
-        solution: result.response,
+        role: res.role,
+        solution: res.result.response,
         score: 0,
       });
-
       contributions.push({
-        role: role as AgentRole,
+        role: res.role as AgentRole,
         type: 'claude-code',
-        content: result.response,
+        content: res.result.response,
         timestamp: Date.now(),
-        filesModified: result.filesModified,
+        filesModified: res.result.filesModified,
       });
     }
 

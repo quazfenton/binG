@@ -20,10 +20,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-# Use `git rev-parse --git-dir` to support worktrees and custom git
-# directories (e.g. `--separate-git-dir`). The hardcoded `.git/hooks`
-# path breaks for both of those.
-HOOKS_DIR="$(git -C "${REPO_ROOT}" rev-parse --git-dir)/hooks"
+# Use `git rev-parse --absolute-git-dir` to support worktrees and custom
+# git directories (e.g. `--separate-git-dir`). `--git-dir` returns a
+# relative path (`.git`) that would fail when the script is invoked from
+# outside the repo root. The absolute form always returns a rooted path.
+HOOKS_DIR="$(git -C "${REPO_ROOT}" rev-parse --absolute-git-dir)/hooks"
 
 # Each entry: "<hook-name>:<source-path-relative-to-repo-root>"
 HOOKS=(

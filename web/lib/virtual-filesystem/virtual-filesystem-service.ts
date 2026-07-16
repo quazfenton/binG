@@ -16,14 +16,14 @@ import type {
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 import { diffTracker } from './filesystem-diffs';
-import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';;;
+import { stripWorkspacePrefixes, resolveScopePathFromOwnerId, resolveFilePathScopeFromOwnerId} from './scope-utils';
 import { reconcileScopePathWithSessionId, DETECTION_TERMS, withDetectionTerms } from './session-path-guard';
 // Bug #72 review fix: removed dead assertScopePathMatchesSessionId import
 // (both call sites in this file now use the recovery variant).
 import { getSnapshotBroadcaster } from './snapshot-broadcaster';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
 // Bug #10/#25: import the shared error classes directly. Previously these
@@ -1310,6 +1310,9 @@ export class VirtualFilesystemService {
           expectedScope: workspacePrefix,
           hint: `Use canonical path like '${workspacePrefix}/${inputPath}' or let the tool layer prepend scopePath.`,
         });
+        if (normalizedPath.length > MAX_PATH_LENGTH) {
+          throw new Error(`Path exceeds max length (${MAX_PATH_LENGTH})`);
+        }
         return normalizedPath; // Allow bare relative paths
       }
 
@@ -1632,10 +1635,251 @@ export class VirtualFilesystemService {
   }
 
   /**
+   * Apply a batch of write/delete mutations to the workspace IN MEMORY (no
+   * per-mutation persistWorkspace call), then run ONE shared persistWorkspace
+   * which internally wraps everything in a single better-sqlite3
+   * `db.transaction(() => { ... })` call. Net effect: N sqlite commits
+   * collapse into 1 commit, so the SQLite writes actually run in series
+   * without each branch re-acquiring the event-loop mutex (`better-sqlite3`
+   * is synchronous and holds the V8 loop while the transaction body runs).
+   *
+   * Audit context (NEW Meta-coalesce, 2026-06-20): Promise.all over 10
+   * `writeFile`/`deletePath` calls previously serialized through better-sqlite3's
+   * `db.transaction` synchronous body — each parallel branch blocked the
+   * event loop while its own transaction committed. Coalescing into ONE
+   * transaction saves N-1 fsyncs (~5-20ms each on plan flash storage).
+   *
+   * Design decisions (opts already applied to base virtual-filesystem-service):
+   *   1. **Partial-success semantics** (NOT atomic). Each mutation is
+   *      validated independently; failures are collected into the result's
+   *      `processed` array without aborting the rest. This preserves the
+   *      existing `Promise.allSettled` semantics used by callers like
+   *      `vfs-batch-operations.ts:batchWriteIncremental`.
+   *   2. **Events emit AFTER the single persist**. If events fired mid-batch,
+   *      listeners (snapshot broadcasters, filesystem-updated event handlers)
+   *      could read stale DB state. Aggregating events and firing post-persist
+   *      is cheap and avoids the read-after-write race in `getSnapshotBroadcaster`.
+   *   3. **Per-mutation validation** delegates to the existing
+   *      `writeFile`/`deletePath` validation logic via the helper
+   *      `_writeFileToMemory` and `_deletePathToMemory` (extracted below).
+   *      No DRY violation: callers compute the workspace Map mutation +
+   *      validation outcome in one shot, persist writes to disk once.
+   *   4. **Concurrent-modification check** still fires per-write (200ms window
+   *      in production). If a batch writes to the same path twice, the second
+   *      write sees the first's just-emitted version and may trip the
+   *      conflict-warn (or `strictConcurrency` throw). Callers should
+   *      dedupe path-mutations before submitting to this API.
+   *   5. **`expectedVersion` / `strictConcurrency` are NOT YET supported.**
+   *      Bug #10 (#25)'s per-call optimistic-concurrency checks are intentionally
+   *      omitted because (a) batch callers don't currently pass them, and (b)
+   *      implementing them across N mutations adds non-trivial branching — the
+   *      CAS sequence per file is part of `writeFile`'s atom semantics, not the
+   *      batch path. If a future caller passes either, drop them silently and
+   *      consider opening a follow-up to implement.
+   *
+   * @param ownerId  VFS owner.
+   * @param mutations Array of mutations to apply (in order — last write wins per path).
+   * @returns Aggregate stats: per-path success/failure plus totals + duration.
+   */
+  async applyBatchMutations(
+    ownerId: string,
+    mutations: Array<{
+      type: 'write' | 'delete';
+      path: string;
+      content?: string;
+      language?: string;
+      options?: { failIfExists?: boolean; append?: boolean };
+    }>,
+  ): Promise<{
+    success: boolean;
+    successful: number;
+    failed: number;
+    processed: Array<{ path: string; success: boolean; error?: string }>;
+    duration: number;
+  }> {
+    const startTime = Date.now();
+    const processed: Array<{ path: string; success: boolean; error?: string }> = [];
+    let successful = 0;
+    let failed = 0;
+
+    if (mutations.length === 0) {
+      return { success: true, successful: 0, failed: 0, processed, duration: 0 };
+    }
+
+    const workspace = await this.ensureWorkspace(ownerId);
+
+    // Aggregate events for post-persist emission (decision #2 above).
+    const pendingEvents: Array<{ path: string; type: FilesystemChangeType; version: number }> = [];
+
+    for (const mutation of mutations) {
+      try {
+        if (mutation.type === 'delete') {
+          this._deletePathToMemory(ownerId, mutation.path, workspace, pendingEvents);
+        } else {
+          this._writeFileToMemory(
+            ownerId,
+            mutation.path,
+            mutation.content ?? '',
+            mutation.language,
+            mutation.options ?? {},
+            workspace,
+            pendingEvents,
+          );
+        }
+        processed.push({ path: mutation.path, success: true });
+        successful += 1;
+      } catch (error: any) {
+        // Partial-success: record error, skip this mutation, continue with the rest.
+        processed.push({ path: mutation.path, success: false, error: error?.message ?? String(error) });
+        failed += 1;
+      }
+    }
+
+    if (pendingEvents.length > 0) {
+      await this.persistWorkspace(ownerId, workspace);
+      // Emit ALL fileChange events AFTER successful persist (decision #2).
+      const snapshotVersion = workspace.version;
+      for (const evt of pendingEvents) {          this.emitFileChange(ownerId, evt.path, evt.type, evt.version);
+      }
+      // Single snapshotChange covers the whole batch (cheaper than N emits).
+      this.emitSnapshotChange(ownerId, snapshotVersion);
+    }
+
+    return {
+      success: failed === 0,
+      successful,
+      failed,
+      processed,
+      duration: Date.now() - startTime,
+    };
+  }
+
+  /**
+   * Write a file to the workspace Map WITHOUT calling persistWorkspace.
+   * Mirrors the in-memory portion of `writeFile` (path normalize, content
+   * validation, size/quota checks, version bump) but skips the DB commit +
+   * event emit so a batch caller can coalesce N writes into one persist.
+   *
+   * Returns the new VirtualFile object so the caller can track version
+   * bumps. Throws on validation failures (the caller catches these for
+   * partial-success semantics in `applyBatchMutations`).
+   *
+   * @param workspace The already-loaded workspace object — caller passes it
+   *   in to avoid re-loading.
+   * @param pendingEvents Array to append the file-change event metadata
+   *   into; the caller emits them AFTER the coalesced persistWorkspace.
+   */
+  private _writeFileToMemory(
+    ownerId: string,
+    filePath: string,
+    content: string,
+    language: string | undefined,
+    options: { failIfExists?: boolean; append?: boolean },
+    workspace: WorkspaceState,
+    pendingEvents: Array<{ path: string; type: FilesystemChangeType; version: number }>,
+  ): VirtualFile {
+    const normalizedPath = this.normalizePath(filePath);
+    const previous = workspace.files.get(normalizedPath);
+    const now = new Date().toISOString();
+
+    let normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+    if (options?.append && previous) {
+      normalizedContent = (previous.content || '') + normalizedContent;
+    }
+    if (previous && options?.failIfExists && !options?.append) {
+      throw new Error(`File already exists: ${normalizedPath}`);
+    }
+    if (previous && previous.content === normalizedContent) {
+      // No-op: same content passes through without a version bump.
+      return previous;
+    }
+
+    const fileSize = Buffer.byteLength(normalizedContent, 'utf8');
+    if (fileSize > MAX_FILE_SIZE) {
+      throw new Error(
+        `File size exceeds limit: ${this.formatFileSize(fileSize)} > ${this.formatFileSize(MAX_FILE_SIZE)}`,
+      );
+    }
+    const currentTotalSize = Array.from(workspace.files.values())
+      .reduce((sum, file) => sum + file.size, 0);
+    const newTotalSize = currentTotalSize - (previous?.size || 0) + fileSize;
+    if (newTotalSize > MAX_TOTAL_WORKSPACE_SIZE) {
+      throw new Error(
+        `Workspace quota exceeded: ${this.formatFileSize(newTotalSize)} > ${this.formatFileSize(MAX_TOTAL_WORKSPACE_SIZE)}.`,
+      );
+    }
+    if (!previous && workspace.files.size >= MAX_FILES_PER_WORKSPACE) {
+      throw new Error(
+        `Maximum file count exceeded: ${workspace.files.size} >= ${MAX_FILES_PER_WORKSPACE}`,
+      );
+    }
+
+    const file: VirtualFile = {
+      path: normalizedPath,
+      content: normalizedContent,
+      language: language ?? this.getLanguageFromPath(normalizedPath),
+      lastModified: now,
+      createdAt: previous?.createdAt || now,
+      version: (previous?.version || 0) + 1,
+      size: fileSize,
+      ownerId: this.sanitizeOwnerId(ownerId),
+    };
+    workspace.files.set(normalizedPath, file);
+    workspace.version += 1;
+    workspace.updatedAt = now;
+
+    const changeType: FilesystemChangeType = previous ? 'update' : 'create';
+    diffTracker.trackChange(file, ownerId, previous?.content);
+    pendingEvents.push({ path: normalizedPath, type: changeType, version: workspace.version });
+    return file;
+  }
+
+  /**
+   * Delete a path from the workspace Map WITHOUT calling persistWorkspace.
+   * Mirror of `deletePath`'s in-memory half (collect targets, remove from
+   * Map, increment version) but skips the persist + events so a batch
+   * caller can coalesce N deletes into one persist.
+   *
+   * Returns the count of files removed (may include nested prefix-deleted files).
+   */
+  private _deletePathToMemory(
+    ownerId: string,
+    targetPath: string,
+    workspace: WorkspaceState,
+    pendingEvents: Array<{ path: string; type: FilesystemChangeType; version: number }>,
+  ): { deletedCount: number } {
+    const normalizedPath = this.normalizePath(targetPath);
+    const normalizedPrefix = `${normalizedPath}/`;
+
+    const toDelete: string[] = [];
+    for (const existingPath of Array.from(workspace.files.keys())) {
+      if (existingPath === normalizedPath || existingPath.startsWith(normalizedPrefix)) {
+        toDelete.push(existingPath);
+      }
+    }
+
+    let deletedCount = 0;
+    if (toDelete.length > 0) {
+      workspace.version += 1;
+      workspace.updatedAt = new Date().toISOString();
+      for (const existingPath of toDelete) {
+        const deletedFile = workspace.files.get(existingPath);
+        workspace.files.delete(existingPath);
+        deletedCount += 1;
+        if (deletedFile) {
+          diffTracker.trackDeletion(existingPath, ownerId, deletedFile.content);
+        }
+        pendingEvents.push({ path: existingPath, type: 'delete', version: workspace.version });
+      }
+    }
+    return { deletedCount };
+  }
+
+  /**
    * Get diff summary for LLM context
    * Returns a human-readable summary of all file changes
    */
-  getDiffSummary(ownerId: string, maxDiffs = 10): string {
+  getDiffSummary(ownerId: string, maxDiffs: number = 100): string {
     const result = diffTracker.getDiffSummary(ownerId, maxDiffs);
     return JSON.stringify(result);
   }
@@ -2095,6 +2339,13 @@ class GitBackedVFSProxy {
     // time-based semantic (we don't want to block legitimate sequential
     // edits where the file already exists).
     const gitVFS = this.vfs.getGitBackedVFS(ownerId, sessionId ? { sessionId } : undefined);
+    if (typeof gitVFS?.writeFile !== 'function') {
+      // SEV-7 — fall through to base VFS writeFile when gitVFS is unhealthy.
+      // The file is still persisted to SQLite (base VFS); we lose git commit
+      // tracking but the user's write succeeds.
+      this.noteProxyGuardFired('writeFile');
+      return this.vfs.writeFile(ownerId, filePath, content, language, options, sessionId);
+    }
     return gitVFS.writeFile(ownerId, filePath, content, language, options);
   }
 
@@ -2119,12 +2370,14 @@ class GitBackedVFSProxy {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
     const listing = await this.vfs.listDirectory(ownerId, targetPath);
     
-    // Record deletions
+    // Record deletions (best-effort; tracked via single canTrackTransaction hoist — SEV-7)
+    const canTrackTransaction = typeof gitVFS?.trackTransaction === 'function';
+    if (!canTrackTransaction) this.noteProxyGuardFired('deletePath:trackTransaction');
     for (const node of listing.nodes) {
       if (node.type === 'file') {
         try {
           const file = await this.vfs.readFile(ownerId, node.path);
-          gitVFS.trackTransaction(ownerId, {
+          if (canTrackTransaction) gitVFS.trackTransaction(ownerId, {
             path: node.path,
             type: 'DELETE',
             timestamp: Date.now(),
@@ -2139,9 +2392,13 @@ class GitBackedVFSProxy {
     
     const result = await this.vfs.deletePath(ownerId, targetPath);
 
-    // Commit the deletion
+    // Commit the deletion (guarded — SEV-7).
     if (result !== null && result !== undefined && typeof result === 'object' && result.deletedCount > 0) {
-      await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`);
+      if (typeof gitVFS?.commitChanges === 'function') {
+        try { await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`); } catch { /* heal-on-miss noise */ }
+      } else {
+        this.noteProxyGuardFired('deletePath:commitChanges');
+      }
     }
 
     const deletedCount = result === null || result === undefined
@@ -2198,15 +2455,19 @@ class GitBackedVFSProxy {
   ): Promise<{ path: string; createdAt: string }> {
     const result = await this.vfs.createDirectory(ownerId, dirPath);
 
-    // Track directory creation in git
+    // Track directory creation in git — best-effort (SEV-7).
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
-    gitVFS.trackTransaction(ownerId, {
-      path: dirPath,
-      type: 'CREATE',
-      timestamp: Date.now(),
-      newContent: '',
-    });
-    await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`);
+    if (typeof gitVFS?.trackTransaction === 'function' && typeof gitVFS?.commitChanges === 'function') {
+      gitVFS.trackTransaction(ownerId, {
+        path: dirPath,
+        type: 'CREATE',
+        timestamp: Date.now(),
+        newContent: '',
+      });
+      try { await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`); } catch { /* heal-on-miss noise */ }
+    } else {
+      this.noteProxyGuardFired('createDirectory');
+    }
 
     return result;
   }
@@ -2215,25 +2476,80 @@ class GitBackedVFSProxy {
 
   /**
    * Enable batch mode - disables auto-commit until flushBatchMode is called
+   *
+   * SEV-7 (audit) — defensive guard. `getGitBackedVFS` returns the cached
+   * GitBackedVFS instance, which under Next.js HMR / module-resolution races
+   * can transiently resolve to `undefined` or an instance whose prototype
+   * chain was severed (the `isHealthyGitVFS` check in
+   * `getGitBackedVFSForOwner` heals on miss but the heal is process-local,
+   * so during a hot-reload window the returned value can still be invalid).
+   * Without this guard the call throws
+   * `Cannot read properties of undefined (reading 'enableBatchMode')` —
+   * the exact phrase in the 8 occurrence Chat:Logger warn entries.
+   * Pattern mirrors the guard in lib/vfs/transactional-vfs.ts.
    */
+  /**
+   * SEV-7 (audit) — one-time HMR correlation warn. Persisted on globalThis
+   * so the message fires at most ONCE per process. The tripped-methods Set
+   * tallies every distinct proxy method that hit this guard during the
+   * current process so the first warn line carries the full affected
+   * surface, not just the method that happened to fire first. Subsequent
+   * calls within the same process are silent (dedup).
+   */
+  private noteProxyGuardFired(methodName: string): void {
+    const tallyState = globalThis as unknown as {
+      __vfsProxyGuardFiredMethods__?: Set<string>;
+      __vfsProxyGuardFiredWarned__?: boolean;
+    };
+    if (!tallyState.__vfsProxyGuardFiredMethods__) {
+      tallyState.__vfsProxyGuardFiredMethods__ = new Set<string>();
+    }
+    tallyState.__vfsProxyGuardFiredMethods__.add(methodName);
+    if (tallyState.__vfsProxyGuardFiredWarned__ === true) return;
+    tallyState.__vfsProxyGuardFiredWarned__ = true;
+    const distinct = (tallyState.__vfsProxyGuardFiredMethods__).size;
+    const list = Array.from(tallyState.__vfsProxyGuardFiredMethods__).sort().join(', ');
+    logger.warn(
+      `[VFS Proxy] ${methodName} guard fired — gitVFS unavailable (HMR re-init in flight). Distinct methods tripped in this process: ${list} (${distinct} total). Subsequent calls will silently no-op until next module reload.`,
+    );
+  }
+
   enableBatchMode(ownerId: string): void {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    if (typeof gitVFS?.enableBatchMode !== 'function') {
+      this.noteProxyGuardFired('enableBatchMode');
+      return;
+    }
     gitVFS.enableBatchMode(ownerId);
   }
 
   /**
    * Flush batch mode - commit all pending changes and re-enable auto-commit
+   *
+   * SEV-7 — same defensive guard as enableBatchMode. Returns a defensive
+   * failure-shape when the inner gitVFS is unhealthy so callers can react
+   * without throwing out of an async context.
    */
-  async flushBatchMode(ownerId: string): Promise<{ success: boolean; committedFiles: number }> {
+  async flushBatchMode(ownerId: string): Promise<{ success: boolean; committedFiles: number; error?: string }> {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    if (typeof gitVFS?.flushBatch !== 'function') {
+      this.noteProxyGuardFired('flushBatchMode');
+      return { success: false, committedFiles: 0, error: 'gitVFS unavailable (HMR re-init in flight)' };
+    }
     return await gitVFS.flushBatch();
   }
 
   /**
    * Disable batch mode without committing (for error recovery)
+   *
+   * SEV-7 — same defensive guard.
    */
   disableBatchMode(ownerId: string): void {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    if (typeof gitVFS?.disableBatchMode !== 'function') {
+      this.noteProxyGuardFired('disableBatchMode');
+      return;
+    }
     gitVFS.disableBatchMode();
   }
 
@@ -2319,6 +2635,31 @@ class GitBackedVFSProxy {
    */
   async findAnonOwnerIds(maxAgeHours: number = 24 * 7): Promise<string[]> {
     return this.vfs.findAnonOwnerIds(maxAgeHours);
+  }
+
+  // NEW Meta-coalesce follow-up: passthrough to the base service's
+  // applyBatchMutations so the typed `virtualFilesystem` export (this
+  // proxy, not the base class) can exercise the batch-coalesced persist
+  // path. Git-tracking is intentionally omitted for the initial pass —
+  // layer it into the gitVFS.writeFile delegation if a future caller
+  // needs git-tracked batch writes.
+  async applyBatchMutations(
+    ownerId: string,
+    mutations: Array<{
+      type: 'write' | 'delete';
+      path: string;
+      content?: string;
+      language?: string;
+      options?: { failIfExists?: boolean; append?: boolean };
+    }>,
+  ): Promise<{
+    success: boolean;
+    successful: number;
+    failed: number;
+    processed: Array<{ path: string; success: boolean; error?: string }>;
+    duration: number;
+  }> {
+    return this.vfs.applyBatchMutations(ownerId, mutations);
   }
 }
 

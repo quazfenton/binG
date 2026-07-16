@@ -257,9 +257,19 @@ export async function getConnectionsNeedingRefresh(
     
     // For now, we check each provider (this is O(n) per provider)
     const providers = ['claude-code', 'codex', 'cursor', 'copilot', 'github', 'kiro', 'gitlab', 'iflow', 'kimi-coding', 'kilocode', 'codebuddy']
-    
-    for (const provider of providers) {
-      try {
+
+    // NEW-1 followup-d (2026-07-08, ~30-150ms/token-refresh): sequential
+    // for-of over 11 OAuth providers folded into Promise.allSettled —
+    // each provider's getUserConnections is an independent read-only graph
+    // fetch (no shared state mutation, distinct from invalidated #64
+    // which mutates getOrRefreshUserTokens backing store). allSettled
+    // preserves the original try/catch semantics: a single provider's
+    // failure no longer aborts the entire token-refresh sweep. The inner
+    // for-of over connections per provider is preserved (per-connection
+    // logic is sync). Push order to `results` is non-deterministic
+    // (parallel completion order) — downstream consumer is order-agnostic.
+    await Promise.allSettled(
+      providers.map(async (provider) => {
         const connections = await oauthService.getUserConnections('', provider)
         for (const connection of connections) {
           const expiresAt = connection.tokenExpiresAt
@@ -267,10 +277,8 @@ export async function getConnectionsNeedingRefresh(
             results.push({ connection, userId: connection.userId })
           }
         }
-      } catch {
-        // Skip providers with no connections
-      }
-    }
+      })
+    )
 
     return results
   } catch (error) {

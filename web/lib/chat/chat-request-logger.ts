@@ -14,7 +14,7 @@
  * - Telemetry scoring (latency, token efficiency, tool success, overall)
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
 

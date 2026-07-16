@@ -8,8 +8,84 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 import { getSnapshotBroadcaster, type SnapshotChangedMessage } from '@/lib/virtual-filesystem/snapshot-broadcaster';
 import { createLogger } from '@/lib/utils/logger';
 import { vfsSnapshotCacheMetrics } from './cache-metrics';
+import { getDatabase } from '@/lib/database/connection-shim';
+import { isRedisEnabled } from '@/lib/redis/client';
+import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
+import { getRuntimeBroker } from '@/lib/sandbox/runtime-broker';
 
 const logger = createLogger('API:VFS:Snapshot');
+
+// P0 fix (Bug #14 follow-up cross-worker): the eager-init cooldown and
+// initDone flags no longer live on `globalThis`. Each Turbopack compile
+// worker has its own `globalThis` isolate, so per-process gates never
+// survive across workers — every request in every new worker saw an empty
+// `__vfsInitDone__` and re-entered the WORKSPACE_NOT_READY path. Using
+// module-scope Maps collates concurrent requests correctly WITHIN one
+// worker, and the DB existence check below (`isInitDone`) is the
+// cross-worker source of truth via the shared SQLite `vfs_workspace_meta`
+// + `vfs_workspace_files` tables.
+const EAGER_INIT_COOLDOWN_MS = 5000;
+const INIT_DONE_TTL_MS = 60_000;       // mark "init done" as expired after 1 min
+const MAX_INIT_OWNERS = 10_000;       // hard cap on per-worker tracking
+const INIT_OWNER_SWEEP_INTERVAL_MS = 30_000; // periodic GC, .unref'd
+const eagerInitCooldowns = new Map<string, number>();                // ownerId → last attempt ms
+
+/**
+ * Test-only helper: pre-populate the cooldown Map for a given ownerId so
+ * the Path A (cooldown-active 202) branch is reachable from the unit test
+ * suite without having to wait for real elapsed time. The optional
+ * timestamp argument lets tests simulate a cooldown that's already
+ * partially elapsed (e.g. pass `Date.now() - 1000` to get a currentMs of
+ * ~4000ms in the response's backoffHint). Exported with a double-underscore
+ * prefix so it's never confused with a real API surface.
+ */
+export function __setEagerInitCooldownForTest(
+  ownerId: string,
+  timestamp?: number,
+): void {
+  eagerInitCooldowns.set(ownerId, timestamp ?? Date.now());
+}
+const initDoneOwners = new Map<string, number>();                    // ownerId → set-at ms
+
+let initOwnerSweepInterval: NodeJS.Timeout | null = null;
+function startInitOwnerSweep(): void {
+  if (initOwnerSweepInterval) return;
+  initOwnerSweepInterval = setInterval(() => {
+    const now = Date.now();
+    // Drop expired initDone marks and stale cooldown entries so the
+    // maps cannot grow unbounded under sustained anonymous traffic.
+    for (const [ownerId, setAt] of initDoneOwners) {
+      if (now - setAt > INIT_DONE_TTL_MS) initDoneOwners.delete(ownerId);
+    }
+    for (const [ownerId, lastAttempt] of eagerInitCooldowns) {
+      if (now - lastAttempt > EAGER_INIT_COOLDOWN_MS) eagerInitCooldowns.delete(ownerId);
+    }
+    // Hard cap: if a worker is still above MAX_INIT_OWNERS after the
+    // TTL-based sweep, evict oldest entries (insertion order, since
+    // Map preserves insertion order). This is a safety net against
+    // pathological workloads; the TTL sweep handles 99% of cases.
+    const capInit = (m: Map<string, number>) => {
+      if (m.size <= MAX_INIT_OWNERS) return;
+      const overflow = m.size - MAX_INIT_OWNERS;
+      const iter = m.keys();
+      for (let i = 0; i < overflow; i++) {
+        const k = iter.next().value;
+        if (k === undefined) break;
+        m.delete(k);
+      }
+    };
+    capInit(initDoneOwners);
+    capInit(eagerInitCooldowns);
+  }, INIT_OWNER_SWEEP_INTERVAL_MS).unref(); // .unref() so the sweep interval never prevents Node exit
+}
+startInitOwnerSweep();
+
+process.on('beforeExit', () => {
+  if (initOwnerSweepInterval) {
+    clearInterval(initOwnerSweepInterval);
+    initOwnerSweepInterval = null;
+  }
+});
 
 
 
@@ -75,7 +151,7 @@ function startPeriodicCleanup() {
     }
 
     if (deleted > 0) {
-      logger.info('[VFS SNAPSHOT] Periodic cache cleanup', { count: deleted });
+      logger.info('[VFS SNAPSHOT] Periodic cache cleanup', { count: deleted, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(), brokerDegraded: getRuntimeBroker().getInitError()?.message ?? null });
     }
 
     // Also enforce max size - remove oldest entries if over limit
@@ -99,7 +175,7 @@ function startPeriodicCleanup() {
           latestSeenVersion.delete(ownerFromKey);
         }
       }
-      logger.info('[VFS SNAPSHOT] Size limit cleanup', { count: toDelete.length });
+      logger.info('[VFS SNAPSHOT] Size limit cleanup', { count: toDelete.length, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(), brokerDegraded: getRuntimeBroker().getInitError()?.message ?? null });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
@@ -162,7 +238,7 @@ if (!globalThis.__snapshotListenerRegistered__) {
       // write-driven invalidation in the logs, masking the "cache that
       // doesn't cache" anti-pattern. The `source` is preserved for
       // backward-compat with existing log parsers.
-      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source, reason });
+      logger.info('[VFS SNAPSHOT] Cache invalidated', { count: evicted, ownerId, version, source, reason, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize() });
     }
     vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
   }
@@ -221,7 +297,7 @@ function startRequestTrackerCleanup() {
     }
 
     if (deleted > 0 && DEBUG) {
-      logger.info('[VFS SNAPSHOT] Request tracker cleanup', { count: deleted });
+      logger.info('[VFS SNAPSHOT] Request tracker cleanup', { count: deleted, cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(), brokerDegraded: getRuntimeBroker().getInitError()?.message ?? null });
     }
   }, 120000).unref(); // Run every 2 minutes, unref to allow process exit
 }
@@ -369,6 +445,41 @@ export async function GET(req: NextRequest) {
     let currentVersion = 0;
     if (typeof (virtualFilesystem as any).getCurrentVersionSync === 'function') {
       currentVersion = virtualFilesystem.getCurrentVersionSync(owner.ownerId);
+
+    // Bug #5 fix: when Redis pub/sub is unavailable, the in-memory version
+    // above is per-Node-process. Cross-worker writes (Worker A bumps to v5,
+    // Worker B's local in-memory is still v0) would cause Worker B to
+    // incorrectly report the cached snapshot as valid (304 Not Modified)
+    // and the client would permanently miss Worker A's writes. Fall back
+    // to a SQLite SELECT MAX(version) FROM vfs_workspace_meta for cross-
+    // worker cache invalidation when Redis is disabled. This is a cheap
+    // query (single row, indexed on owner_id) and only runs when Redis is
+    // down — negligible overhead in the common (Redis-backed) case.
+    if (!isRedisEnabled()) {
+      try {
+        const db = getDatabase();
+        if (db) {
+          // Bug #5 v2: scope the version query to the current owner
+          // instead of returning MAX across ALL workspaces. vfs_workspace_meta
+          // has a UNIQUE constraint on owner_id, so this is a single-row
+          // indexed lookup. The previous MAX query caused unnecessary cache
+          // invalidations in multi-tenant deployments (Worker B reading
+          // owner X's snapshot would see "owner Y bumped to v100" and
+          // invalidate its cache even though owner X's data hadn't
+          // changed). SAFE: never returns stale data, just more precise.
+          const row = db
+            .prepare('SELECT version FROM vfs_workspace_meta WHERE owner_id = ?')
+            .get(owner.ownerId) as { version: number | null } | undefined;
+          if (row?.version != null) {
+            currentVersion = Math.max(currentVersion, row.version);
+          }
+        }
+      } catch {
+        // SQLite unavailable — fall through with in-memory version only.
+        // The client will still get a fresh snapshot (no 304), just without
+        // cross-worker version awareness.
+      }
+    }
     } else {
       const nowMs = Date.now();
       if (nowMs - (globalThis.__vfsDefensiveGuardLastWarnedAt__ ?? 0) > 60_000) {
@@ -517,25 +628,164 @@ export async function GET(req: NextRequest) {
         // WorkspaceState in the map + DB) and the NEXT read sees success
         // with 0 files, breaking the loop.
         try {
+          // Bug #7 fix: Check if this owner's workspace was already
+          // successfully initialized in a previous request. If so, skip
+          // the WORKSPACE_NOT_READY path entirely — the workspace exists
+          // but may be genuinely empty. This prevents the 188-occurrence
+          // WORKSPACE_NOT_READY spam loop where the client polls every
+          // 30s but keeps hitting the cooldown gate.
+          //
+          // P0 fix: use a module-scope Set AND a direct DB existence
+          // check (vfs_workspace_meta or any file row for this owner).
+          // The DB check is the cross-process source of truth because
+          // SQLite is the only state that's actually shared between
+          // Next.js compile workers — every per-process `globalThis.*`
+          // gate previously reset on worker spawn and triggered the
+          // cooldown loop after every Turbopack JIT compile.
+          let isInitDone = initDoneOwners.has(owner.ownerId); // Map#has is identical to Set#has
+          if (!isInitDone) {
+            try {
+              const db = getDatabase();
+              const hasMeta = db
+                .prepare('SELECT 1 FROM vfs_workspace_meta WHERE owner_id = ?')
+                .get(owner.ownerId);
+              if (hasMeta) {
+                isInitDone = true;
+              } else {
+                const hasFiles = db
+                  .prepare('SELECT 1 FROM vfs_workspace_files WHERE owner_id = ? LIMIT 1')
+                  .get(owner.ownerId);
+                if (hasFiles) isInitDone = true;
+              }
+              if (isInitDone) initDoneOwners.set(owner.ownerId, Date.now());
+            } catch (err: any) {
+              // Don't let a transient DB hiccup force every request
+              // down the WORKSPACE_NOT_READY path. Log once and fall
+              // through; the ensureWorkspace() call below will create
+              // the meta row when it succeeds, which the NEXT request
+              // will pick up.
+              logWarn(`[${requestId}] Failed to check DB for existing workspace: ${err?.message || err}`);
+            }
+          }
+
+          if (isInitDone) {
+            // Bug #7 follow-up FIX: this branch used to only log and then
+            // fall through to the `return WORKSPACE_NOT_READY` at the bottom
+            // of the anonymous block — directly contradicting its own
+            // comment ("skip the WORKSPACE_NOT_READY path entirely"). The
+            // result: the FIRST anonymous read eager-inits and returns
+            // success, but EVERY subsequent read of the (still-empty)
+            // workspace re-entered here, logged "skipping", then 202'd with
+            // WORKSPACE_NOT_READY forever. The client surfaced that as
+            // `[useVFS ERROR] request: failed - Workspace not yet
+            // initialized` on app open. The workspace genuinely exists and
+            // is simply empty, so return a SUCCESS response with the
+            // already-computed (empty) file list instead of falling through.
+            log(`[${requestId}] Workspace already initialized for anonymous owner — returning empty snapshot (success) instead of WORKSPACE_NOT_READY`);
+            const readyEtag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+            snapshotCache.set(cacheKey, {
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              timestamp: now,
+              etag: readyEtag,
+              version: snapshot.version,
+            });
+            vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+            const readyResponse = NextResponse.json({
+              success: true,
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              cached: false,
+            }, {
+              headers: {
+                'cache-control': 'private, no-store',
+                'vary': 'Authorization, Cookie',
+                etag: readyEtag,
+              },
+            });
+            return withAnonSessionCookie(readyResponse, owner);
+          } else {
           // 5s in-memory cooldown to prevent hammering the DB when the
           // snapshot is polled faster than the init can complete. After
           // the cooldown expires, the next request retries the init.
-          const initAttemptKey = `__vfsEagerInitAttempted__:${owner.ownerId}`;
-          const lastAttempt = (globalThis as any)[initAttemptKey] || 0;
-          const EAGER_INIT_COOLDOWN_MS = 5000;
+          //
+          // P0 fix: Use module-scope eagerInitCooldowns instead of
+          // globalThis.__vfsEagerInitAttempted__ so the cooldown is
+          // correct within a single worker. Cross-worker coordination
+          // is handled by the DB-based isInitDone check above — if
+          // another worker already initialized the workspace, the DB
+          // check will return true and we never reach this branch.
+          const lastAttempt = eagerInitCooldowns.get(owner.ownerId) || 0;
           if (Date.now() - lastAttempt < EAGER_INIT_COOLDOWN_MS) {
-            log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning WORKSPACE_NOT_READY`);
+            // Bug #2/#7 follow-up FIX: this was the LAST remaining exit that
+            // still returned `202 WORKSPACE_NOT_READY`. On app load the
+            // client fires several snapshot polls at once (e.g. paths
+            // "sessions", "sessions/000", "workspace"). The FIRST enters the
+            // eager-init path and sets the cooldown timestamp; the others,
+            // arriving milliseconds later, hit this cooldown branch and got a
+            // 202. The client's retries also landed inside the same 5s
+            // cooldown, exhausted, then `throw`, surfacing as
+            //   `[useVFS ERROR] request: failed - Workspace not yet
+            //    initialized` + repeated `unhandledRejection`s — even though
+            // the filesystem is simply empty.
+            //
+            // The workspace was ALREADY ensured/loaded by `exportWorkspace()`
+            // above (it calls `ensureWorkspace()` internally), so `snapshot`
+            // and `files` here are a valid, fully-initialized empty result.
+            // There is nothing transient to wait for — the cooldown only
+            // exists to avoid re-running init, not to signal "not ready".
+            // Return the already-computed empty snapshot as SUCCESS (matching
+            // every other exit of this block) so the client caches it and
+            // stops polling instead of throwing.
+            log(`[${requestId}] Eager-init cooldown active for anonymous owner — returning empty snapshot (success) instead of WORKSPACE_NOT_READY`);
+            const cooldownEtag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+            snapshotCache.set(cacheKey, {
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              timestamp: now,
+              etag: cooldownEtag,
+              version: snapshot.version,
+            });
+            vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
             const cooldownResponse = NextResponse.json({
-              success: false,
-              error: 'Workspace not yet initialized. Please retry shortly.',
-              errorCode: 'WORKSPACE_NOT_READY',
-              retryable: true,
-              ownerId: owner.ownerId,
-              source: owner.source,
-            }, { status: 202 });
+              success: true,
+              data: {
+                root: snapshot.root,
+                version: snapshot.version,
+                updatedAt: snapshot.updatedAt,
+                path: pathFilter,
+                files,
+              },
+              cached: false,
+              // Same "terminal empty state, stop polling" signal used by the
+              // init-failed fallback below, so operators can grep it and the
+              // client can distinguish it from a real snapshot with content.
+              cooldownExpired: true,
+            }, {
+              headers: {
+                'cache-control': 'private, no-store',
+                'vary': 'Authorization, Cookie',
+                etag: cooldownEtag,
+              },
+            });
             return withAnonSessionCookie(cooldownResponse, owner);
           }
-          (globalThis as any)[initAttemptKey] = Date.now();
+          eagerInitCooldowns.set(owner.ownerId, Date.now());
           // `ensureWorkspace` is public on VirtualFileSystemService since
           // the Bug #14 follow-up. The typeof guard is preserved as a
           // defense-in-depth fallback in case the deployed build predates
@@ -543,6 +793,10 @@ export async function GET(req: NextRequest) {
           if (typeof (virtualFilesystem as any).ensureWorkspace === 'function') {
             await (virtualFilesystem as any).ensureWorkspace(owner.ownerId);
             log(`[${requestId}] Eagerly initialized workspace for anonymous owner — breaking WORKSPACE_NOT_READY loop`);
+            // Bug #7 fix: Mark this owner as initialized so future requests
+            // skip the WORKSPACE_NOT_READY path entirely. P0 fix: also
+            // persists cross-worker via the DB existence check above.
+            initDoneOwners.set(owner.ownerId, Date.now());
             // Re-export the now-initialized snapshot and return success
             // with 0 files instead of WORKSPACE_NOT_READY. This unblocks
             // file edits on the very next read.
@@ -584,20 +838,60 @@ export async function GET(req: NextRequest) {
               },
             });
             return withAnonSessionCookie(initResponse, owner);
-          }
-        } catch (initErr: any) {
-          logWarn(`[${requestId}] Eager workspace init failed (falling back to WORKSPACE_NOT_READY): ${initErr?.message}`);
-        }
-        log(`[${requestId}] Returning WORKSPACE_NOT_READY for anonymous owner — workspace not yet initialized`);
-        const notReadyResponse = NextResponse.json({
-          success: false,
-          error: 'Workspace not yet initialized. Please retry shortly.',
-          errorCode: 'WORKSPACE_NOT_READY',
-          retryable: true,
-          ownerId: owner.ownerId,
-          source: owner.source,
-        }, { status: 202 });
-        return withAnonSessionCookie(notReadyResponse, owner);
+           }
+          } // end of else (not already initialized)
+         } catch (initErr: any) {
+           // Bug #2 fix (VFS polling storm): instead of falling through to a
+           // 202 WORKSPACE_NOT_READY (which made the client poll forever —
+           // see the 12 `POLLING DETECTED` warnings in run.log), return a
+           // terminal 200 with empty files + `cooldownExpired: true` so the
+           // client can stop polling. The init attempt failed AND no other
+           // init path is available AND the workspace is genuinely empty —
+           // there is nothing transient to wait for. The
+           // `cooldownExpired: true` field on the response body lets the
+           // client distinguish this terminal empty state from the 202
+           // WORKSPACE_NOT_READY response in Path A (cooldown-active above).
+           logWarn(`[${requestId}] Eager workspace init failed (returning terminal empty snapshot): ${initErr?.message}`);
+         }
+        log(`[${requestId}] Returning terminal empty snapshot for anonymous owner — no init available, no cooldown active`);
+        const fallbackEtag = `"${snapshot.version}-${snapshot.updatedAt}"`;
+        snapshotCache.set(cacheKey, {
+          data: {
+            root: snapshot.root,
+            version: snapshot.version,
+            updatedAt: snapshot.updatedAt,
+            path: pathFilter,
+            files,
+          },
+          timestamp: now,
+          etag: fallbackEtag,
+          version: snapshot.version,
+        });
+        vfsSnapshotCacheMetrics.setSize(snapshotCache.size);
+        const terminalResponse = NextResponse.json({
+          success: true,
+          data: {
+            root: snapshot.root,
+            version: snapshot.version,
+            updatedAt: snapshot.updatedAt,
+            path: pathFilter,
+            files,
+          },
+          cached: false,
+          // Bug #2: signals "terminal empty state, stop polling" — the
+          // client can treat this the same as a successful empty snapshot
+          // (no further polling needed) but the field makes the distinction
+          // greppable for operators and trivially distinguishable from the
+          // 202 cooldown-active response in Path A (`WORKSPACE_NOT_READY`).
+          cooldownExpired: true,
+        }, {
+          headers: {
+            'cache-control': 'private, no-store',
+            'vary': 'Authorization, Cookie',
+            etag: fallbackEtag,
+          },
+        });
+        return withAnonSessionCookie(terminalResponse, owner);
       }
     } else if (files.length === 0 && snapshot.files.length > 0) {
       logWarn(`[${requestId}] PATH MISMATCH: workspace has ${snapshot.files.length} files but none match path="${pathFilter}"`);

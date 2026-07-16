@@ -90,10 +90,25 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
     });
     count++;
 
-    // Register web search tool
-    await registry.registerTool({
-      name: 'nullclaw:search',
-      capability: 'web.search',
+    // Register web search tool — Bug #6 fix: only register when a container
+    // is actually available or URL mode is confirmed working. Without this
+    // guard, the LLM sees web_search as available, selects it 3×, gets
+    // "No Nullclaw container available" every time, and the orchestrator
+    // hits 3-consecutive-failures → abort.
+    let hasContainer = false;
+    try {
+      const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
+      if (nullclawIntegration.isAvailable()) {
+        // isAvailable() is true when the module loaded, but that doesn't
+        // mean a container exists. Check for NULLCLAW_URL (URL mode) or
+        // verify the container pool has a ready entry.
+        hasContainer = !!process.env.NULLCLAW_URL;
+      }
+    } catch { /* nullclaw integration unavailable */ }
+    if (hasContainer) {
+      await registry.registerTool({
+        name: 'nullclaw:search',
+        capability: 'web.search',
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
         const { nullclawIntegration } = await import('@bing/shared/agent/nullclaw-integration');
@@ -122,6 +137,9 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       permissions: ['web:search'],
     });
     count++;
+    } else {
+      logger.warn('[WARN] web.search unavailable — Nullclaw has no container and no NULLCLAW_URL configured. Tool omitted from registry.');
+    }
 
     logger.info(`Registered ${count} Nullclaw tools`);
   } catch (error: any) {

@@ -16,6 +16,30 @@ export interface OrchestrationFallbackRecord {
   lastAt: number | null;
 }
 
+/**
+ * Bug #117 (Pass-9 audit) — discriminated completion-outcome bucket.
+ *
+ * Counters the FINAL completion shape so operators can distinguish
+ * - `toolOnlyCompletions`: native-FC success — model emitted tool calls but no prose
+ * - `emptyCompletions`: total failure — model emitted nothing at all
+ * (text+ toolCall mixed responses or pure text responses are implicitly NOT counted here —
+ * those are the success baseline and don’t need discrimination).
+ *
+ * The bucket key `${provider}:${finishReason}` captures both cheaply
+ * so /api/health can surface "openai:stop" vs "mistral:length" per
+ * outcome without nested objects. Cardinality is naturally bounded
+ * (~20 providers × ~5 finishReason values = ~100 keys max).
+ *
+ * Naming note: `emptyCompletions` is intentionally camelCase to avoid
+ * collision with steer-service.ts’ `kind: ‘empty_completion’` value
+ * (which is a different namespace — Steer trigger kind, not metric key).
+ */
+export interface CompletionOutcomeRecord {
+  count: number;
+  byProviderAndReason: Record<string, number>;
+  lastAt: number | null;
+}
+
 interface ChatMetricsState {
   orchestrationFallbacks: OrchestrationFallbackRecord;
   doubleWriteBlocked: { count: number; paths: string[] };
@@ -45,6 +69,20 @@ interface ChatMetricsState {
       at: number;
     }>;
   };
+  // Bug #119 (Pass-8 audit) — JSON.parse fallback counter. Tracks
+  // cases where an LLM- or AI-SDK-emitted JSON string failed to parse
+  // and the code path fell through to a default (e.g. `{}` for args).
+  // Operators can `grep -c '\\[INVALID-JSON-FALLBACK\\]'` in run.log
+  // and cross-reference with this counter; mismatched sources point
+  // at hidden io/codepaths that aren't surfacing the warn.
+  invalidJsonFallbacks: {
+    count: number;
+    bySource: Record<string, number>;
+    lastAt: number | null;
+  };
+  /** Bug #117 (Pass-9) — final-shape discriminator */
+  emptyCompletions: CompletionOutcomeRecord;
+  toolOnlyCompletions: CompletionOutcomeRecord;
 }
 
 declare global {
@@ -52,7 +90,7 @@ declare global {
   var __chatMetrics__: ChatMetricsState | undefined;
 }
 
-function getState(): ChatMetricsState {
+export function getState(): ChatMetricsState {
   if (!globalThis.__chatMetrics__) {
     globalThis.__chatMetrics__ = {
       orchestrationFallbacks: { count: 0, lastReason: null, lastAt: null },
@@ -68,6 +106,22 @@ function getState(): ChatMetricsState {
         lastReason: null,
         lastExhaustedAt: null,
         recentAttempts: [],
+      },
+      // Bug #119 — see ChatMetricsState.invalidJsonFallbacks above.
+      invalidJsonFallbacks: {
+        count: 0,
+        bySource: {},
+        lastAt: null,
+      },
+      emptyCompletions: {
+        count: 0,
+        byProviderAndReason: {},
+        lastAt: null,
+      },
+      toolOnlyCompletions: {
+        count: 0,
+        byProviderAndReason: {},
+        lastAt: null,
       },
     };
   }
@@ -262,5 +316,77 @@ export function _resetChatMetricsForTests(): void {
       lastExhaustedAt: null,
       recentAttempts: [],
     };
+    globalThis.__chatMetrics__.emptyCompletions = { count: 0, byProviderAndReason: {}, lastAt: null };
+    globalThis.__chatMetrics__.toolOnlyCompletions = { count: 0, byProviderAndReason: {}, lastAt: null };
+  }
+}
+
+
+/**
+ * Bug #119 (Pass-8 audit) — record that a JSON.parse call has fallen
+ * back to a default value because the input was malformed. Permanently
+ * tied to `chatMetrics.invalidJsonFallbacks` so that `recordInvalidJsonFallback`
+ * callers in `bing/web/lib/chat/vercel-ai-streaming.ts` (tool-args parser)
+ * and any future caller stay in lockstep. Note: this counter is web-only.
+ * The shared-package companion (e.g. `bing/packages/shared/agent/orchestration/
+ * plan-act-verify.ts`) uses `logger.warn('[INVALID-JSON-FALLBACK]')` directly
+ * because the cross-package boundary (shared → web) is forbidden.
+ *
+ * @param source — short identifier for the callsite emitting the fallback
+ *   (e.g. `'vercel-ai-streaming.tool-call-args-cache'`). Becomes a key
+ *   in `bySource` so /api/health?detailed can surface per-source counts.
+ */
+export function recordInvalidJsonFallback(source: string): void {
+  try {
+    const state = getState();
+    state.invalidJsonFallbacks.count += 1;
+    state.invalidJsonFallbacks.bySource[source] =
+      (state.invalidJsonFallbacks.bySource[source] ?? 0) + 1;
+    state.invalidJsonFallbacks.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordInvalidJsonFallback] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Bug #117 (Pass-9) — bump the empty-completion (total-failure) metric.
+ * Bucket key is `${provider}:${finishReason}` so operators can triage
+ * per-model whether a particular finishReason is correlated with the
+ * "model emitted nothing" failure mode.
+ */
+export function recordEmptyCompletion(provider: string, finishReason: string): void {
+  try {
+    const state = getState();
+    state.emptyCompletions.count += 1;
+    const key = `${provider}:${finishReason}`;
+    state.emptyCompletions.byProviderAndReason[key] =
+      (state.emptyCompletions.byProviderAndReason[key] ?? 0) + 1;
+    state.emptyCompletions.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordEmptyCompletion] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Bug #117 (Pass-9) — bump the tool-only-completion (native-FC success)
+ * metric. Mirrors `recordEmptyCompletion` and shares the bucket
+ * key format so /api/health can compose tool-only / empty side-by-side.
+ */
+export function recordToolOnlyCompletion(provider: string, finishReason: string): void {
+  try {
+    const state = getState();
+    state.toolOnlyCompletions.count += 1;
+    const key = `${provider}:${finishReason}`;
+    state.toolOnlyCompletions.byProviderAndReason[key] =
+      (state.toolOnlyCompletions.byProviderAndReason[key] ?? 0) + 1;
+    state.toolOnlyCompletions.lastAt = Date.now();
+  } catch (err) {
+    logger.debug('[recordToolOnlyCompletion] counter update failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }

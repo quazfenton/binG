@@ -586,6 +586,65 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     await handleStreamingResponse(response.body, assistantMessage, abortController);
   }, [isLoading, inputQueue, messagesRef, options, voiceService, setError, setMessages, setIsLoading, buildRequestHeaders]);
 
+  // Silent continuation — used by auto-continue/step-reprompt to send follow-up
+  // prompts WITHOUT creating new user message bubbles in the UI. The continuation
+  // prompt is sent as a user message in the API body (for server context) but is
+  // NOT appended to the visible messages array. The response streams into the
+  // EXISTING assistant message (currentMessageRef.current).
+  const continueRequest = useCallback(async (prompt: string) => {
+    if (!prompt.trim()) return;
+    const existingAssistant = currentMessageRef.current;
+    if (!existingAssistant) {
+      logger.warn('[continueRequest] No active assistant message to stream into');
+      return;
+    }
+
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: prompt.trim(),
+    };
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    setIsLoading(true);
+
+    try {
+      const _fetchTimeoutId = setTimeout(() => {
+        if (!abortController.signal.aborted) abortController.abort(new Error('Request timed out'));
+      }, 60000);
+
+      const response = await fetch(options.api, {
+        method: 'POST',
+        headers: buildRequestHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({
+          messages: [...messagesRef.current, userMessage],
+          ...(typeof options.body === 'function' ? options.body() : options.body || {}),
+        }),
+        signal: abortController.signal,
+      });
+      clearTimeout(_fetchTimeoutId);
+
+      if (!response.ok || !response.body) {
+        setIsLoading(false);
+        return;
+      }
+
+      await handleStreamingResponse(response.body, existingAssistant, abortController);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        setIsLoading(false);
+        abortControllerRef.current = null;
+        setAgentStatus('idle');
+        return;
+      }
+      setIsLoading(false);
+      abortControllerRef.current = null;
+      setAgentStatus('error');
+    }
+  }, [messagesRef, options, buildRequestHeaders, setIsLoading, setAgentStatus]);
+
   // Process next queued prompt after current response completes
   const processQueue = useCallback(async () => {
     if (inputQueue.length === 0) {
@@ -683,6 +742,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Clear timeout recovery ref on new request
     timeoutRecoveryRef.current = null;
 
+      // CRITICAL: fetch-level timeout — prevents indefinite hang when the
+      // tunnel/proxy is broken but TCP accepts the connection. Without this,
+      // the UI stays in "loading" forever because handleStreamingResponse
+      // (and its 120s streaming timeout) is never entered.
+      const _fetchTimeoutId = setTimeout(() => {
+        if (!abortController.signal.aborted) abortController.abort(new Error('Request timed out'));
+      }, 60000);
       const response = await fetch(options.api, {
         method: 'POST',
         headers: buildRequestHeaders(),
@@ -690,6 +756,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         body: JSON.stringify(requestBody),
         signal: abortController.signal,
       });
+      clearTimeout(_fetchTimeoutId);
 
       // Call onResponse callback
       if (options.onResponse) {
@@ -818,7 +885,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
-        // Request was cancelled
+        setIsLoading(false);
+        abortControllerRef.current = null;
+        setAgentStatus('idle');
         return;
       }
 
@@ -849,14 +918,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           const origModel = String(resolvedBody?.model ?? '');
           const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, retryCount, 'pre-stream');
 
-          // Bug #61: push to synchronous chain ref so the catch block sees the
-          // full rotation history even if setMessages hasn't committed yet.
-          pushChainEntry(fallbackChainRef.current, assistantMessage.id, origProvider, origModel);
-          pushChainEntry(fallbackChainRef.current, assistantMessage.id, selectedProvider, selectedModel);
-
           // Bug #61: record the original (pre-stream) attempt as failure so the
-          // fallback chain metric actually fires in production. Without this the
-          // chat-metrics helper is dead code.
+          // fallback chain metric actually fires in production. emitFallbackOutcome
+          // already calls pushChainEntry for the original provider — do NOT also
+          // push manually or the chain gets duplicate entries.
           emitFallbackOutcome({
             chainRef: fallbackChainRef.current,
             messageId: assistantMessage.id,
@@ -937,6 +1002,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               },
             };
 
+            const _retryFetchTimeoutId = setTimeout(() => {
+              if (!retryAbortController.signal.aborted) retryAbortController.abort(new Error('Retry request timed out'));
+            }, 60000);
             const retryResponse = await fetch(options.api, {
               method: 'POST',
               headers: buildRequestHeaders(),
@@ -944,6 +1012,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               body: JSON.stringify(retryRequestBody),
               signal: retryAbortController.signal,
             });
+            clearTimeout(_retryFetchTimeoutId);
 
             if (!retryResponse.ok || !retryResponse.body) {
               // Bug #61: record the rotated attempt as failure with the actual
@@ -1689,14 +1758,9 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           const origModel = String(doneMetadata.model ?? '');
                           const { selectedProvider, selectedModel } = await rotateProviderModel(origProvider, origModel, assistantRetryCount, 'empty-response');
 
-                        // Bug #61: push to synchronous chain ref so the catch block
-                        // sees the full rotation history even if setMessages hasn't
-                        // committed yet.
-                        pushChainEntry(fallbackChainRef.current, assistantMessage.id, origProvider, origModel);
-                        pushChainEntry(fallbackChainRef.current, assistantMessage.id, selectedProvider, selectedModel);
-
                         // Bug #61: record the original (empty-response) attempt
-                        // as failure so the fallback chain metric fires in production.
+                        // as failure. emitFallbackOutcome already calls
+                        // pushChainEntry — do NOT also push manually.
                         emitFallbackOutcome({
                           chainRef: fallbackChainRef.current,
                           messageId: assistantMessage.id,
@@ -1959,26 +2023,11 @@ ${stepReprompt}`;
                       hasToolFailureContext: shouldRetryForToolFailure,
                     });
                   
-                    // Set input and submit after state settles
-                    // Increment counter so subsequent DONE events know how many auto-continues happened
+                    // Silent auto-continue: send reprompt without creating new UI bubbles
                     stepRepromptCountRef.current++;
-                    setInput(enhancedReprompt);
                     setTimeout(() => {
                       if (!isMountedRef.current) return;
-                      // FIX: Add error handling for auto-continue request failures
-                      // If handleSubmit fails (network error, etc.), cleanup isLoading state
-                      try {
-                        handleSubmit(
-                          {
-                            preventDefault: () => {},
-                            currentTarget: { reset: () => {} },
-                          } as React.FormEvent<HTMLFormElement>
-                        );
-                      } catch (err) {
-                        logger.error('[Auto-continue] handleSubmit failed:', err);
-                        setIsLoading(false);
-                        setAgentStatus('error');
-                      }
+                      continueRequest(enhancedReprompt);
                     }, 150);
                   }
                   
@@ -2986,30 +3035,14 @@ ${stepReprompt}`;
                     fileConfidence,
                   });
 
-                  // Set the input and submit after state settles
-                  setInput(continuationPrompt);
+                  // Silent auto-continue: send continuation prompt without new UI bubbles
                   setTimeout(() => {
-                    // FIX: Re-check inputQueue right before handleSubmit to prevent
-                    // overwriting user input that may have been typed during the 100ms delay
                     if (!isMountedRef.current) return;
                     if (inputQueue.length > 0) {
                       logger.info('[Auto-continue] Skipping - user typed during delay');
                       return;
                     }
-                    // FIX: Add error handling for auto-continue request failures
-                    // If handleSubmit fails (network error, etc.), cleanup isLoading state
-                    try {
-                      handleSubmit(
-                        {
-                          preventDefault: () => {},
-                          currentTarget: { reset: () => {} },
-                        } as React.FormEvent<HTMLFormElement>
-                      );
-                    } catch (err) {
-                      logger.error('[Auto-continue] handleSubmit failed:', err);
-                      setIsLoading(false);
-                      setAgentStatus('error');
-                    }
+                    continueRequest(continuationPrompt);
                   }, 100);
                   break;
                 }
@@ -3037,15 +3070,10 @@ ${stepReprompt}`;
                     };
                   }));
 
-                  // Auto-submit with the [NEXT] content appended
-                  setInput(nextContent);
-                  setTimeout(() => { if (!isMountedRef.current) return;
-                    handleSubmit(
-                      {
-                        preventDefault: () => {},
-                        currentTarget: { reset: () => {} },
-                      } as React.FormEvent<HTMLFormElement>
-                    );
+                  // Silent auto-submit with the [NEXT] content appended
+                  setTimeout(() => {
+                    if (!isMountedRef.current) return;
+                    continueRequest(nextContent);
                   }, 100);
                   break;
                 }

@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { getEmbeddingProvider } from '@/lib/vector-memory/embeddings';
 import { contentHash, embeddingCache } from '@/lib/utils/cache';
 

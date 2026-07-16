@@ -11,7 +11,7 @@
 // Server-only module - do not import directly in Client Components
 export const runtime = 'nodejs';
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 
@@ -134,6 +134,11 @@ class EmailQuotaManager {
 
       if (!parsed?.quotas) return;
       for (const [provider, fromFile] of Object.entries(parsed.quotas)) {
+        // Skip providers not in the known email provider configuration
+        if (!DEFAULT_EMAIL_QUOTAS[provider]) {
+          console.warn(`[EmailQuotaManager] Skipping unknown provider '${provider}' from quota file`);
+          continue;
+        }
         const existing = this.quotas.get(provider);
         if (!existing) {
           this.quotas.set(provider, {
@@ -212,6 +217,11 @@ class EmailQuotaManager {
       const rows = stmt.all() as any[];
 
       for (const row of rows) {
+        // Skip providers not in the known email provider configuration
+        if (!DEFAULT_EMAIL_QUOTAS[row.provider]) {
+          console.warn(`[EmailQuotaManager] Skipping unknown provider '${row.provider}' from database`);
+          continue;
+        }
         const quota: EmailProviderQuota = {
           provider: row.provider,
           monthlyLimit: row.monthly_limit,

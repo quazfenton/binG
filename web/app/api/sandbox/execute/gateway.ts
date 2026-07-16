@@ -45,8 +45,13 @@ export async function POST(req: NextRequest) {
     const csrfReject = csrfCheckOrReject(req);
     if (csrfReject) return csrfReject;
 
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. Pre-PA CSRF gate stays BEFORE this PA; rate-limit calls above stay
+    // AFTER this PA because they read authResult.userId; Zod sandboxExecuteRequestSchema
+    // .safeParse(body) downstream. ~2-5ms saved per request on the auth+body overlap.
     // CRITICAL: Authenticate user from JWT token - do NOT trust userId from request body
-    const authResult = await verifyAuth(req);
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()]);
     if (!authResult.success || !authResult.userId) {
       logError(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.red}Unauthorized:${COLORS.reset} No valid authentication token`);
       return NextResponse.json(
@@ -68,8 +73,6 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: rateLimitResult.headers }
       );
     }
-
-    const body = await req.json();
     
     // Validate request body with Zod
     const parseResult = sandboxExecuteRequestSchema.safeParse(body);

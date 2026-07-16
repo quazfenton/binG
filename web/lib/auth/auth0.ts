@@ -23,17 +23,17 @@ import { auth0, AUTH0_CONNECTIONS } from './auth0-edge';
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
 // Dynamic import to avoid bundling in Edge Runtime
 async function getDatabase() {
-  const dbModule = await import('@/lib/database/connection');
+  const dbModule = await import('@/lib/database/connection-shim');
   return dbModule.getDatabase();
 }
 
 async function encryptApiKey(apiKey: string) {
-  const dbModule = await import('../database/connection');;
+  const dbModule = await import('../database/connection-shim');
   return dbModule.encryptApiKey(apiKey);
 }
 
 async function decryptApiKey(encryptedData: string) {
-  const dbModule = await import('../database/connection');;
+  const dbModule = await import('../database/connection-shim');
   return dbModule.decryptApiKey(encryptedData);
 }
 
@@ -160,13 +160,34 @@ export async function saveConnectedAccount(
   try {
     const db = await getDatabase();
 
-    const { encrypted: accessTokenEncrypted } = accessToken
-      ? await encryptApiKey(accessToken)
-      : { encrypted: null };
-
-    const { encrypted: refreshTokenEncrypted } = refreshToken
-      ? await encryptApiKey(refreshToken)
-      : { encrypted: null };
+    // #52 NEW-1 followup-d (2026-07-07, ~2-8ms/call × 2): sequential
+    // `encryptApiKey` calls for access + refresh tokens collapsed into
+    // `Promise.all`. Verdict table rationale: `encryptApiKey` is a stateless
+    // pure function — each call uses an internal random IV (AES-GCM/CCM
+    // pattern), parallel invocations do not share state, and ciphertexts
+    // are independently generated (non-deterministic across calls, as
+    // expected for token-at-rest encryption; the parallel ops produce the
+    // same set of valid ciphertexts as the sequential ops). No DB
+    // transaction wrapping (this is pure compute, no DB I/O), no write-side
+    // concerns. The two tokens are independent inputs (one is the OAuth
+    // `access_token`, the other is the OAuth `refresh_token`); encrypting
+    // both in parallel is safe.
+    //
+    // GUARD PRESERVATION — the conditional `? : { encrypted: null }`
+    // guards are preserved via Promise.resolve({ encrypted: null })
+    // short-circuit slots, so the parallel fan-out never invokes
+    // `encryptApiKey(undefined)` when either token is absent.
+    //
+    // DESTRUCTURE PRESERVATION — the outer destructure
+    // `[{ encrypted: accessTokenEncrypted }, { encrypted: refreshTokenEncrypted }]`
+    // preserves the original shape so the downstream INSERT at L189+
+    // consumes identical types. The `tokenCache` module-level `Map`
+    // (L59) is unrelated to this hot path — it's the OAuth refresh-token
+    // cache, only populated by `getAccessTokenForConnection` upstream.
+    const [{ encrypted: accessTokenEncrypted }, { encrypted: refreshTokenEncrypted }] = await Promise.all([
+      accessToken ? encryptApiKey(accessToken) : Promise.resolve({ encrypted: null }),
+      refreshToken ? encryptApiKey(refreshToken) : Promise.resolve({ encrypted: null }),
+    ]);
 
     const stmt = db.prepare(`
       INSERT INTO external_connections 

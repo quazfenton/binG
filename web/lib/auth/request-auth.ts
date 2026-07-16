@@ -128,6 +128,13 @@ export async function resolveRequestAuth(
   const jwtAuth = await verifyAuth(requestForJwt);
   if (jwtAuth.success && jwtAuth.userId) {
     const result: ResolvedRequestAuth = { success: true, userId: jwtAuth.userId, source: 'jwt' };
+    // Bug #4 fix: Invalidate the anonymous cache entry if one exists so
+    // the VFS owner resolution upgrades from anon:ID to the real userId
+    // after login. Without this, the cached anonymous result persists and
+    // the ownerId stays `anon:TIMESTAMP` even after successful authentication.
+    if (anonId) {
+      authCache.invalidateAnonymous(anonId);
+    }
     // SECURITY: Don't cache JWT success - always re-verify to check blacklist
     // authCache.set(cacheKey, result); // REMOVED for security
     return result;
@@ -142,6 +149,10 @@ export async function resolveRequestAuth(
         userId: String(sessionAuth.user.id),
         source: 'session'
       };
+      // Bug #4 fix: Invalidate the anonymous cache entry on session auth too.
+      if (anonId) {
+        authCache.invalidateAnonymous(anonId);
+      }
       // Get session expiration for cache re-validation
       const session = (sessionAuth as any).session;
       const sessionExpiresAt = session?.expires_at ? new Date(session.expires_at).getTime() : undefined;

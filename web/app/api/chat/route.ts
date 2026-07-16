@@ -53,31 +53,44 @@ import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
-import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
-
-// =========================================================================
-// Auto-continuation counter
-// =========================================================================
-// Tracks how many continuations have been triggered per requestId so the
-// max-continuations cap in `shouldAutoContinue` actually fires across
-// iterations. Entries are cleaned up when the cap is reached or when the
-// request finishes.
-const continuationCounters = new Map<string, number>();
+import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, type AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
+// Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
+// contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
+// already coerces via stringifyMessageContent; this import is the route's
+// belt-and-suspenders guard against any future drift — closing the silent
+// stream regression where non-string response shapes became `'[object Object]'`
+// at L1889 (operator-precedence floor: `+` binds tighter than `||`).
+import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
+// Inspector helpers (extracted to `lib/chat/shape-helpers.ts` in this turn
+// so they're unit-testable without a live LLM). Used at L1717-L1718 to emit
+// `[CHAT-ROUTE] processUnifiedAgentRequest returned` INFO lines that surface
+// a non-string response shape at INFO level — without this telemetry the
+// silent-stream regression is invisible until a user complains.
+import { shapeKeyOf, serializableTextLength } from '@/lib/chat/shape-helpers';
+// Bug #86 (Pass-6 audit): wire detectNeedsMoreTurns() from the
+// auto-continue-detector module. The detector is the single source of truth
+// for "did the LLM stop too early?" — it inspects 17+ named signals
+// (read-then-stall, single-write-silent, deep-research-loop, etc.) and
+// returns a rich TurnDetectionResult with confidence + suggestedReprompt.
+// shouldAutoContinue() (from llm-continuation) is a thin boolean wrapper
+// and doesn't surface the detector's signal-level detail. Wiring the
+// detector here lets us auto-recover from the "1 max tool call" failure
+// mode the user reported — the detector sees the LLM's silence + tool
+// pattern and re-prompts with a specific next-step.
 
 /**
- * Maximum number of auto-continuations allowed per request turn. Read once at
- * module load from `LLM_MAX_CONTINUATIONS_PER_TURN` (with a NaN/negative guard
- * falling back to 3) so the cap is consistent across all requests and doesn't
- * re-parse the env var on every loop iteration.
+ * Bug #86 (Pass-6, reviewer nits #2 + #3) — small named helper that runs
+ * `detectNeedsMoreTurns` against the current `result` and returns an
+ * optional {force: true, prompt, signals, confidence} override when the
+ * detector sees an LLM-stops-too-early signal that `shouldAutoContinue`
+ * missed. Returns `null` when no override applies (or on detector error).
+ *
+ * Real `result.fileEdits` is forwarded so the detector's `edits-mismatch`
+ * signal can fire (reviewer nit #3). Previously the call hardcoded
+ * `fileEdits: []` which silently disabled that signal.
  */
-const parsedMaxContinuations = parseInt(process.env.LLM_MAX_CONTINUATIONS_PER_TURN || '3', 10);
-const MAX_CONTINUATIONS =
-  Number.isFinite(parsedMaxContinuations) && parsedMaxContinuations > 0
-    ? parsedMaxContinuations
-    : 3;
-
 /**
- * Normalize a step's `args` field for the `shouldAutoContinue` helper.
+ * Normalize a step's `args` field for the `shouldAutoContinue` / `decideAutoContinue` helper.
  * Stream results sometimes encode args as JSON strings (e.g. `"{}"`); parse
  * them so the helper's `Object.keys(s.args).length === 0` check sees the
  * real shape. Pass-through for objects; return `undefined` for non-parseable
@@ -101,54 +114,6 @@ function normalizeStepArgs(value: unknown): Record<string, unknown> | undefined 
   return undefined;
 }
 
-/**
- * Bug #86 (Pass-6, reviewer nits #1 + #2) — extracted to a small named helper
- * for readability. The helper forwards the REAL `result.fileEdits ?? []`
- * (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
- * actually fire. Returns `null` when the detector has no opinion; callers
- * coalesce with `?? { force: false }` at the call site.
- */
-function maybeDetectorContinuation(
-  result: { fileEdits?: unknown[] } | undefined,
-  continuationDecision: { continue: boolean; reason?: string },
-  log: { debug: (msg: string, ctx?: unknown) => void },
-): { force: boolean; reason?: string } | null {
-  // Bug #86 (Pass-6, reviewer nit #2) — forwards the REAL `result.fileEdits ?? []`
-  // (not a hardcoded `[]`) so the detector's `edits-mismatch` signal can
-  // actually fire. Bug #86 (Pass-6, reviewer nit #1) — extracted to a small
-  // named helper for readability. Returns `null` when the detector has no
-  // opinion (no edits, or shouldAutoContinue already said stop); callers
-  // coalesce with `?? { force: false }` at the call site.
-  const edits = result?.fileEdits ?? [];
-  if (!Array.isArray(edits) || edits.length === 0) {
-    return null;
-  }
-  // NOTE: we deliberately do NOT gate on continuationDecision.continue here.
-  // The detector's job is to override shouldAutoContinue when there's an
-  // edits-mismatch. The caller's OR combines both signals so the detector
-  // CAN force a continuation even when shouldAutoContinue said stop.
-  //
-  // Carve-out: if shouldAutoContinue said stop because the max-continuations
-  // cap was reached, the detector should NOT force another iteration — the
-  // cap is the safety net that prevents infinite loops.
-  if (continuationDecision.reason === 'max_continuations_reached') {
-    log.debug('[maybeDetectorContinuation] suppressed: max_continuations_reached', {
-      editCount: edits.length,
-    });
-    return null;
-  }
-  // Only log the forward when the detector is actually overriding
-  // shouldAutoContinue (i.e. shouldAutoContinue said stop). When both
-  // signals agree, the auto-continue block's normal flow already covers
-  // the case and the log would be redundant noise.
-  if (!continuationDecision.continue) {
-    log.debug('[maybeDetectorContinuation] forwarding edits-mismatch signal', {
-      editCount: edits.length,
-      reason: continuationDecision.reason,
-    });
-  }
-  return { force: true, reason: 'edits-mismatch' };
-}
 import { generateSessionName, sessionNameExists } from '@/lib/session/session-naming';
 import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
@@ -162,6 +127,25 @@ import {
   chatRequestSchema,
 } from './chat-helpers';
 import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
+import { getRuntimeBroker } from '@/lib/sandbox/runtime-broker';
+import { getContentAddressableStorage } from '@/lib/storage/content-addressable-storage';
+
+/**
+ * One-call snapshot of the RuntimeBroker degraded state + CAS cache size
+ * for surfacing on CHAT-ROUTE boundary logs. Both reads are O(1) and have
+ * no I/O — safe to call on every boundary log without measurable cost.
+ * `degraded` is null on a clean init, or the init error message when the
+ * broker fell back to degraded mode (see RuntimeBroker.getInitError).
+ */
+function getBrokerDiagnostics(): {
+  degraded: string | null;
+  cacheSizeBytes: number;
+} {
+  return {
+    degraded: getRuntimeBroker().getInitError()?.message ?? null,
+    cacheSizeBytes: getContentAddressableStorage().getCurrentCacheSize(),
+  };
+}
 
 // Force Node.js runtime for Daytona SDK compatibility
 
@@ -323,9 +307,17 @@ async function classifyRequest(
     // Bug #66: promote to warn so operators know the classifier is degraded
     chatLogger.warn('Task classifier failed, using regex fallback', { error: error.message });
     // Bug #66: increment counter for health endpoint visibility
-    import('@/lib/chat/chat-metrics').then(({ recordClassifierFallback }) => {
-      recordClassifierFallback();
-    }).catch(() => {});
+    // @audit-NEW-3-batched (audit 2026-06-20): mirror the fix applied to the
+    // tool-call-tracker site. `void` prefix silences ESLint
+    // no-floating-promises; outer `.catch` covers module-load failure.
+    // requestId is NOT in scope here (classifyRequest runs BEFORE requestId
+    // is set at L419) so closure capture doesn't apply — body stays silent
+    // because a counter increment is observability-grade telemetry.
+    void import('@/lib/chat/chat-metrics')
+      .then(({ recordClassifierFallback }) => {
+        recordClassifierFallback();
+      })
+      .catch((err) => chatLogger.warn('recordClassifierFallback failed', {}, { error: String(err) }));
 
     let isCodeRequest = false;
     if (STRONG_CODE_PATTERN.test(content)) {
@@ -484,7 +476,15 @@ export async function POST(request: NextRequest) {
 
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
-  const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+  // NEW-1 (latency mask; ~15-40ms/request): fire body parse concurrently with
+  // auth. rawBodyPromise resolves in the background while the sync chain below
+  // (userId, isAuthenticated, rateLimitIdentifier, checkRateLimit) runs; consumed
+  // at L484. Safe — rate-limit early-return at L458-L464 doesn't leak the promise
+  // (request.json() can only resolve/throw once; Node gracefully completes the
+  // unconsumed promise without re-parsing).
+  const authPromise = resolveRequestAuth(request, { allowAnonymous: true });
+  const rawBodyPromise = request.json().catch(() => null);
+  const authResult = await authPromise;
   const userId = authResult.userId || 'anonymous';
 
   chatLogger.debug('Anonymous request (no auth token/session)', { requestId, userId }, {
@@ -530,11 +530,11 @@ export async function POST(request: NextRequest) {
   let actualModel = '';
 
   try {
-    const rawBody = await request.json();
+    const rawBody = await rawBodyPromise;
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
-    chatLogger.debug('[ROUTE] Raw body keys:', Object.keys(rawBody));
+    chatLogger.debug('[ROUTE] Raw body keys:', rawBody ? Object.keys(rawBody) : null);
     chatLogger.debug('[ROUTE] Parsed result:', { status: parseResult.success ? 'success' : parseResult.error?.message });
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
@@ -752,10 +752,21 @@ export async function POST(request: NextRequest) {
       provider,
       model,
       processedMessages,
-      stream
+      stream,
     );
 
-    // Validate provider and model with caching to avoid repeated lookups
+    // Chat-hang-fix #2: pre-stream boundary #1 — operator diagnostic log
+    // emitted right after the request-start DB write resolves. Used to
+    // determine which boundary the chat route crosses last when a hang
+    // symptom appears. fire-and-forget INFO (chat-metrics level) so it
+    // shows up at the user's `LOG_LEVEL=info` without per-request opt-in.
+    chatLogger.info('[CHAT-ROUTE] boundary: post-logRequestStart', {
+      requestId,
+      elapsedMs: Date.now() - requestStartTime,
+      ...getBrokerDiagnostics(),
+    });
+
+      // Validate provider and model with caching to avoid repeated lookups
     // Cache validation results for 30 seconds to reduce overhead
     const validationCacheKey = `${provider}:${model}`;
     const cachedValidation = validationCache.get(validationCacheKey);
@@ -895,13 +906,26 @@ export async function POST(request: NextRequest) {
 
     // O(1) Session File Tracking: Track file references incrementally as messages flow
     // This avoids re-scanning messages with regex on every context generation
-    try {
-      const { trackSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      await trackSessionFiles(resolvedConversationId, processedMessages);
-    } catch (error: any) {
-      // Don't fail the request if tracking fails
-      chatLogger.debug('Session file tracking failed (non-critical)', { error: error.message });
-    }
+    //
+    // @audit-NEW-3-batched (latency mask; ~10-25ms/request): drop the `await` so trackSessionFiles
+    // runs in the background while the LLM call setup proceeds. File-tracking is
+    // observability-grade telemetry — losing-then-retried is acceptable. Two
+    // defense-in-depth niceties from the original try/catch:
+    //   1. New `.catch` is chained on the OUTER import promise (not just the
+    //      inner trackSessionFiles), so a partial-deploy / module-load failure
+    //      also lands in the debug log instead of becoming an UnhandledRejection.
+    //   2. We capture `requestId` into a closure-local BEFORE the void chain so
+    //      the .catch hander still has correlation after the response has
+    //      finalized and AsyncLocalStorage scope is gone.
+    // The `void` prefix documents fire-and-forget intent and silences ESLint's
+    // `@typescript-eslint/no-floating-promises`. Mirror: tool-call-tracker (L1462).
+    const trackingReqId = requestId;
+    void import('@/lib/virtual-filesystem/session-file-tracker')
+      .then(({ trackSessionFiles }) => trackSessionFiles(resolvedConversationId, processedMessages))
+      .catch((error: any) => {
+        // Don't fail the request if tracking fails
+        chatLogger.debug('Session file tracking failed (non-critical)', { requestId: trackingReqId, error: error.message });
+      });
 
     const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
@@ -929,11 +953,82 @@ export async function POST(request: NextRequest) {
     // SECURITY: Use persistent anonymous session ID from cookie if available
     // Sanitize to prevent path traversal attacks (e.g., ".." or "/" in cookie value)
     // Use resolveFilesystemOwner for consistent anonymous session handling
-    const ownerResolution = await resolveFilesystemOwner(request);
-    const filesystemOwnerId = ownerResolution.ownerId;
-    anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
+    //
+    // NEW-2 (audit 2026-07-07, doc/async-parallelization-opportunities.md
+    // §NEW-2, latency mask; ~30-50ms/request typical, ~50-150ms/request on
+    // cache-miss / cold-cache paths): pre-fire `denialContextPromise` +
+    // `mem0ResultPromise` HERE, BEFORE the owner + classify await resolves.
+    // Their DB I/O now overlaps with classifyRequest's ML wallclock
+    // (~50-150ms) — typical savings is min(T_denied_DB_read, T_mem0_HTTP_round_trip),
+    // whichever of the two partners finishes first while classify is still running.
+    //
+    // Pre-audit, deny + mem0 Promises were assigned AFTER the await, so they
+    // could not begin their work until `filesystemOwnerId` was extracted from
+    // `ownerResolution` — closing the door on a tighter overlap with the
+    // classifier. The dependency is preserved here by chaining on
+    // `ownerPromise`: each partner Promise doesn't actually START its DB / HTTP
+    // call until ownerPromise settles, but the Promise object IS created here
+    // so V8 dispatches the .then callback the moment ownerPromise resolves
+    // (typically 5-20ms after the start) — overlapping with the rest of
+    // classifyRequest's ML work.
+    //
+    // Safe per dependency analysis: getRecentDenials is a DB read that
+    // accepts (conversationId: string, limit: number) — pure I/O with no
+    // synchronous pre-flight on userId. mem0Search is a remote HTTP call to
+    // `https://api.mem0.ai/v1/memories/search/` that accepts
+    // {userId: string, query: string, ...} — same shape, no sync pre-flight.
+    // Both functions tolerate userId being bound late (via .then closure on
+    // ownerResolution). The existing prevention proxies are preserved:
+    //   - mem0 .catch → graceful fallback to {success:false, results:[]}
+    //   - mem0 30s in-memory TTL cache (cache hit ~0ms; cold cache pays
+    //     the full TLS-conncect cost the first time)
+    //   - mem0 circuit breaker (OPEN ⇒ isMem0Configured()=false ⇒ the .then
+    //     branch is gated off; mem0 wallclock cost is then ~0)
+    //   - deny DB→in-memory fallback via `denialHistoryByConversation` Map
+    //   - anonSessionIdToSet still captured after the await
+    //   - filesystemOwnerId still extracted from ownerResolution.ownerId
+    const ownerPromise = resolveFilesystemOwner(request);
+    const classificationPromise = classifyRequest(messages, attachedFilesystemFiles);
+    const denialContextPromise = ownerPromise.then((o) =>
+      filesystemEditSessionService.getRecentDenials(
+        `${o.ownerId}$${resolvedConversationId}`,
+        4,
+      ),
+    ).catch(() => {
+      chatLogger.debug('Failed to fetch denial context (non-critical)', { requestId });
+      return [] as Array<{ pattern: string; reason: string }>;
+    });
+    // NEW-2 closure-narrowing fix (tsc): capture the typeof-narrowed query
+    // string BEFORE the .then so the `string` type survives across the
+    // closure boundary. TypeScript's control-flow narrowing on the
+    // surrounding ternary does NOT propagate into the .then callback —
+    // inside the closure, `lastUserMessage.content` reverts to the full
+    // `string | ContentPart[]` union, which fails the `query: string`
+    // contract of `mem0Search`. Hoisting the narrowing into a const
+    // preserves it for the lifetime of the closure.
+    const mem0QueryText = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
+    const mem0ResultPromise = isMem0Configured() && mem0QueryText
+      ? ownerPromise.then((o) =>
+          mem0Search({
+            query: mem0QueryText,
+            userId: o.ownerId,
+            limit: 5,
+            // Tighter threshold + filter for chat hot path; keeps noise out
+            threshold: 0.4,
+          }).catch((memError: any) => {
+            chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
+            return { success: false, results: [] };
+          }),
+        ).catch(() => {
+          chatLogger.debug('Mem0 search skipped (owner resolution failed)', { requestId });
+          return { success: false, results: [] };
+        })
+      : Promise.resolve({ success: false, results: [] });
 
-    // Calculate these BEFORE parallel execution since they're dependencies
+    // Calculate these BEFORE the await — they're dependencies for the
+    // downstream 5-way Promise.all branches (buildWorkspaceSessionContext +
+    // buildHybridWorkspaceContext both bind shouldUseContextPackFinal
+    // at construction time).
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
       processedMessages,
       attachedFilesystemFiles,
@@ -945,14 +1040,50 @@ export async function POST(request: NextRequest) {
       applyFileEditsFlag: filesystemContext?.applyFileEdits,
     });
     const useContextPack = shouldUseContextPack(messages);
-    // Use multi-factor task classifier instead of regex-based detection
-    // IMPORTANT: classify on original messages (user's actual input), not processedMessages
-    // which has system prompts, workspace context, memory, etc. prepended
-    const classification = await classifyRequest(messages, attachedFilesystemFiles);
+
+    // Tier 1 #2 (audit 2026-06-20, Top 5 Quick Win, ~5-20ms/request): fire
+    // `resolveFilesystemOwner(request)` concurrently with `classifyRequest(...)`
+    // so the auth-derived setup chain (~5-20ms) overlaps with the ML-bound
+    // classifier (~50-150ms). Saves the smaller of the two (typically the
+    // owner-resolution time) per request.
+    //
+    // Combined with NEW-2 above, the four independent async ops (owner,
+    // classify, deny, mem0) are now ALL scheduled at construction time and
+    // PA-resolved together via the bottom Promise.all. The deny + mem0
+    // chains effectively become a fan-out extension of the owner resolve
+    // — T_deny and T_mem0 overlap with T_classify (and with each other).
+    // anonymousSessionIdToSet still captured after this await; the downstream
+    // 5-way Promise.all consumes the same denialContextPromise / mem0ResultPromise
+    // objects — no consumer-side shape change.
+    const [ownerResolution, classification] = await Promise.all([
+      ownerPromise,
+      classificationPromise,
+    ]);
+    const filesystemOwnerId = ownerResolution.ownerId;
+    anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
+
     const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
-    
+
+    // Tier 1 #1 (latency mask; ~50-300ms/request): hoist v1PromptSuffix async
+    // computation into the existing Promise.all below as a 5th branch. The async
+    // wrapper ONLY depends on `body.presetKey` + `body.responseDepth` /
+    // `expertiseLevel` / etc. — all of which are available at Promise.all
+    // construction time. Downstream consumer (the `if (v1PromptSuffix)` block
+    // that mutates contextualMessages + emits telemetry) runs sequentially
+    // AFTER Promise.all resolves as before; only the async work shifts.
+    const v1PromptParams: PromptParameters = {
+      responseDepth: body.responseDepth as any,
+      expertiseLevel: body.expertiseLevel as any,
+      reasoningMode: body.reasoningMode as any,
+      tone: body.tone as any,
+      creativityLevel: body.creativityLevel as any,
+      citationStrictness: body.citationStrictness as any,
+      outputFormat: body.outputFormat as any,
+      selfCorrection: body.selfCorrection as any,
+    };
+
     // PARALLEL EXECUTION: Run independent async operations concurrently
     // This reduces latency by 40-60% by not waiting for each operation sequentially
     const userPrompt = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
@@ -973,12 +1104,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const [denialContext, workspaceSessionContext, mem0Result, hybridContext] = await Promise.all([
+    // Chat-hang-fix #2: pre-stream boundary #2 — operator diagnostic log
+    // emitted right after the 5-way Promise.all (denialContext,
+    // workspaceSessionContext, mem0Result, hybridContext, v1PromptSuffix)
+    // resolves. Combined with boundary #1 above, the delta between the two
+    // narrows the hang to one of: filesystem edit denials DB read,
+    // workspace-session-context build, mem0 HTTP call, hybrid AST retrieval,
+    // or V1 prompt-modifier composition.
+    const fiveWayStartMs = Date.now();
+    const [denialContext, workspaceSessionContext, mem0Result, hybridContext, v1PromptSuffix] = await Promise.all([
       // Get recent filesystem edit denials
-      filesystemEditSessionService.getRecentDenials(
-        `${filesystemOwnerId}$${resolvedConversationId}`,
-        4,
-      ),
+      denialContextPromise,
       // Build workspace session context (only if filesystem edits are enabled)
       enableFilesystemEdits
         ? buildWorkspaceSessionContext(filesystemOwnerId, scopePathForHybrid, {
@@ -990,18 +1126,7 @@ export async function POST(request: NextRequest) {
       // NOTE: We deliberately do NOT scope by sessionId on search — we want
       // cross-thread recall (user preferences, past decisions). The current
       // thread's history is already in the prompt anyway.
-      isMem0Configured() && typeof lastUserMessage?.content === 'string'
-        ? mem0Search({
-            query: lastUserMessage.content,
-            userId: filesystemOwnerId,
-            limit: 5,
-            // Tighter threshold + filter for chat hot path; keeps noise out
-            threshold: 0.4,
-          }).catch((memError: any) => {
-            chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
-            return { success: false, results: [] };
-          })
-        : Promise.resolve({ success: false, results: [] }),
+      mem0ResultPromise,
       // Hybrid retrieval: AST-based symbol retrieval with smart-context fallback
       enableFilesystemEdits && userPrompt
         ? buildHybridWorkspaceContext(filesystemOwnerId, scopePathForHybrid, {
@@ -1010,7 +1135,29 @@ export async function POST(request: NextRequest) {
             maxTokens: body.maxTokens,
           })
         : Promise.resolve(''),
+      // 5th branch (Tier 1 #1): resolve V1 prompt modifiers concurrently with
+      // the context-builders so the ML/preset-composition latency overlaps
+      // with DB I/O. Always resolves to either the suffix string or '' so the
+      // downstream `if (v1PromptSuffix)` consumer sees the same shape.
+      (async (): Promise<string> => {
+        if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+          const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+          return await applyPromptModifiers({ ...preset, ...v1PromptParams });
+        } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
+          return await applyPromptModifiers(v1PromptParams);
+        }
+        return '';
+      })(),
     ]);
+    // Chat-hang-fix #2: companion log to boundary #2 above — reports the
+    // total wall-clock for the 5-way fan-out so a single root cause
+    // dominating the latency is visible in run.log.
+    chatLogger.info('[CHAT-ROUTE] boundary: post-5way-promise-all', {
+      requestId,
+      elapsedMs: Date.now() - requestStartTime,
+      fiveWayDurationMs: Date.now() - fiveWayStartMs,
+      ...getBrokerDiagnostics(),
+    });
 
     // Build memory context from mem0 results
     let memoryContext = '';
@@ -1030,25 +1177,9 @@ export async function POST(request: NextRequest) {
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
-    // This injects prompt parameters (depth, expertise, tone, etc.) into the V1 path
-    // by appending a system message suffix to the message array
-    const v1PromptParams: PromptParameters = {
-      responseDepth: body.responseDepth as any,
-      expertiseLevel: body.expertiseLevel as any,
-      reasoningMode: body.reasoningMode as any,
-      tone: body.tone as any,
-      creativityLevel: body.creativityLevel as any,
-      citationStrictness: body.citationStrictness as any,
-      outputFormat: body.outputFormat as any,
-      selfCorrection: body.selfCorrection as any,
-    };
-    let v1PromptSuffix = '';
-    if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
-      const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
-      v1PromptSuffix = await applyPromptModifiers({ ...preset, ...v1PromptParams });
-    } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
-      v1PromptSuffix = await applyPromptModifiers(v1PromptParams);
-    }
+    // The async work (applyPromptModifiers) is now resolved INSIDE the 5-way
+    // Promise.all above; here we only consume the already-resolved string and
+    // append it to contextualMessages + emit telemetry. (Tier 1 #1 refactor.)
     if (v1PromptSuffix) {
       // Append as system message — the LLM provider will prepend it to existing system messages
       contextualMessages.push({ role: 'system', content: v1PromptSuffix });
@@ -1352,6 +1483,114 @@ FORMAT RULES:
 
     const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
 
+    // Route-level stall backstop. `agentTurnAbort` is fired by the stall
+    // watchdog inside the streaming `start()` (idle-based — reset on every
+    // SSE emit) when the agent turn produces NO output for
+    // CHAT_ROUTE_STALL_TIMEOUT_MS. Merging it with `request.signal` means a
+    // user-initiated stop OR a watchdog timeout both propagate down through
+    // `config.abortSignal` into the LLM HTTP call, and the route also races
+    // the awaited `processUnifiedAgentRequest` against the watchdog so the
+    // response is freed even if the underlying SDK/provider ignores the abort.
+    const agentTurnAbort = new AbortController();
+    const agentTurnSignal: AbortSignal = request.signal
+      ? AbortSignal.any([request.signal, agentTurnAbort.signal])
+      : agentTurnAbort.signal;
+
+    // Chat-hang-fix #3 — HOISTED route-level stall watchdog.
+    //
+    // The watchdog was previously nested inside the streaming branch's
+    // ReadableStream.start(controller), which meant it only protected the
+    // useUnifiedAgentStream path. The non-streaming fallback
+    // (await processUnifiedAgentRequest(config)) and the v1-agent-loop
+    // branch (await createAgentLoop(...)) had NO watchdog and could hang
+    // indefinitely. After hoist, the SAME stallPromise is wired into all
+    // three awaited call sites, and the SAME absolute hard cap
+    // (ROUTE_MAX_TURN_MS) bounds any single agent turn regardless of which
+    // dispatch branch the route resolves to.
+    //
+    // Closure-captured state is intentionally module-private to POST() so
+    // a request's watchdog cannot leak across concurrent requests.
+    const stallStartTime = Date.now();
+    let lastProgressAt = stallStartTime;
+    const PROGRESS_EVENT_TYPES = new Set<unknown>([
+      SSE_EVENT_TYPES.TOKEN,
+      SSE_EVENT_TYPES.TOOL_INVOCATION,
+    ]);
+    // Rejects when the watchdog fires so the route stops awaiting any
+    // processUnifiedAgentRequest / createAgentLoop call, even if the
+    // underlying SDK/provider never settles its promise (e.g. ignores
+    // the abort signal).
+    let stallReject: ((err: Error) => void) | null = null;
+    const stallPromise = new Promise<never>((_, reject) => {
+      stallReject = reject;
+    });
+    // Avoid an unhandled-rejection warning in the normal (no-stall)
+    // path: the watchdog is cleared in every branch's finally, so this
+    // promise simply stays pending; the noop catch is defensive.
+    stallPromise.catch(() => { /* observed via Promise.race */ });
+    // No-progress idle ceiling (default 60s): fires when no token/tool
+    // output has arrived for this long. Only relevant for the streaming
+    // branch (non-streaming doesn't bump lastProgressAt because there's
+    // no client-visible SSE stream); the max-turn cap below catches
+    // those cases unconditionally.
+    const ROUTE_STALL_TIMEOUT_MS = parseInt(
+      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '60000',
+      10,
+    );
+    // Absolute hard cap (default 120s): an unconditional upper bound on
+    // a single agent turn, applied to ALL branches. This is the
+    // guaranteed backstop — including the v1-agent-loop branch whose
+    // createAgentLoop(...) call previously had no watchdog at all.
+    const ROUTE_MAX_TURN_MS = parseInt(
+      process.env.CHAT_ROUTE_MAX_TURN_MS || '120000',
+      10,
+    );
+    // SSE-bridge: the streaming branch's start(controller) overrides
+    // this with the real SSE-error emitter; non-streaming / v1-agent-loop
+    // branches leave it as a no-op so fireStall doesn't error trying to
+    // enqueue onto a non-existent stream. The no-op default is INTENTIONAL
+    // (not dead code) — it's the only safe value before start(controller)
+    // has had a chance to run.
+    let emitSseError: (message: string) => void = () => { /* not streaming */ };
+    const fireStall = (reason: string, detail: Record<string, unknown>) => {
+      if (agentTurnAbort.signal.aborted) return;
+      chatLogger.error(
+        '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+        { requestId, reason, ...detail },
+      );
+      const stallErr = new Error(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
+      try { emitSseError(stallErr.message); } catch { /* best-effort */ }
+      // Cancel the in-flight LLM HTTP call (signal is already forwarded
+      // through config.abortSignal → runV1Api / runV2Native / v2-cli).
+      try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
+      // Free the response even if the inner promise never settles.
+      stallReject?.(stallErr);
+    };
+    // When the abort signal fires, reject the stall promise immediately
+    // so all three awaited call sites unblock (instead of hanging
+    // forever waiting for a Promise.race winner that never settles).
+    const rejectOnAbort = () => {
+      if (!stallReject) return;
+      const abortErr = new Error('Chat route aborted');
+      try { emitSseError(abortErr.message); } catch { /* best-effort */ }
+      stallReject(abortErr);
+      stallReject = null;
+    };
+    // Handle abort signal that fires after listener is attached.
+    agentTurnAbort.signal.addEventListener('abort', rejectOnAbort, { once: true });
+    // Handle case where signal was ALREADY aborted before listener.
+    if (agentTurnAbort.signal.aborted) rejectOnAbort();
+    const stallWatchdog = setInterval(() => {
+      if (agentTurnAbort.signal.aborted) return;
+      const noProgressMs = Date.now() - lastProgressAt;
+      const turnMs = Date.now() - stallStartTime;
+      if (turnMs >= ROUTE_MAX_TURN_MS) {
+        fireStall('max-turn', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
+      } else if (noProgressMs >= ROUTE_STALL_TIMEOUT_MS) {
+        fireStall('no-progress', { idleMs: noProgressMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS });
+      }
+    }, Math.min(ROUTE_STALL_TIMEOUT_MS, ROUTE_MAX_TURN_MS, 15000));
+
 const config: UnifiedAgentConfig = {
       userMessage: task,  // User message only — NOT the filesystem context
       userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
@@ -1364,6 +1603,17 @@ const config: UnifiedAgentConfig = {
       maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
       temperature,
       maxTokens,
+      // Forward a COMBINED abort signal so the orchestration pipeline
+      // (processUnifiedAgentRequest → runV1Api / runV2Native /
+      // coordinateConcurrentFallback) can `if (signal?.aborted)` and
+      // end the chain-walk on user-initiated stop OR on the route-level
+      // stall watchdog (see `agentTurnAbort` below). Without this, the
+      // user has no way to interrupt a stalling fallback chain that
+      // walks 7+ providers × 30s silence each (~4 min total). The
+      // watchdog's controller is merged here so a fired watchdog truly
+      // cancels the in-flight LLM HTTP request. See the abortSignal
+      // JSDoc on UnifiedAgentConfig for the per-mode wiring status.
+      abortSignal: agentTurnSignal,
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,
@@ -1383,7 +1633,116 @@ const config: UnifiedAgentConfig = {
       })(),
     };
 
-    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
+    // Race MCP tool loading against a timeout + abort signal. Mcporter's
+    // runtime.listTools can hang indefinitely on unreachable HTTP MCP
+    // servers (Node.js fetch has no default timeout). When the timeout
+    // fires or the client disconnects, we log a warning and proceed with
+    // an empty tool set rather than blocking the entire chat response.
+    // MCP tools timeout: Two-tier decoupled ceiling.
+    //
+    // Tier 1 — AbortSignal (MCP_TOOLS_TIMEOUT_MS, default 1000ms):
+    //   Passed into getMCPToolsForAI_SDK so Phase 2 ops (getRemoteMCPTools,
+    //   getArcadeToolDefinitions, getComposioMCPTools, buildMem0Tools) abort
+    //   their in-flight work and degrade to empty slots. This is the fast
+    //   path — a dead TCP socket gets killed at ~1s instead of the 15-30s
+    //   connect timeout.
+    //
+    // Tier 2 — route-level Promise.race ceiling (MCP_TOOLS_TIMEOUT_MS + 3000ms):
+    //   Safety net in case the abort-signal unwinding itself races the route
+    //   boundary. Gives Phase 2 time to catch the abort, return empty slots,
+    //   and let getMCPToolsForAI_SDK return whatever Phase 1 tools (VFS,
+    //   provider, bash, etc.) it already assembled. Without this padding,
+    //   both timers fire at the same wallclock time and the route's setTimeout
+    //   always wins — discarding Phase 1 tools that completed in ~50ms.
+    const MCP_TOOLS_TIMEOUT_MS = parseInt(
+      process.env.CHAT_MCP_TOOLS_TIMEOUT_MS || '1000',
+      10,
+    );
+    const MCP_TOOLS_ROUTE_TIMEOUT_MS = MCP_TOOLS_TIMEOUT_MS + 3000;
+    // Tier 1: abort signal for Phase 2 internal degradation.
+    const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
+    // Boundary #4 timestamp — measured AT try-entry so duration includes
+    // both the getMCPToolsForAI_SDK() call AND any timeout-noise (5s
+    // ceiling or 2s bootstrap-mcp abort-mirror). Reported in the
+    // boundary: post-mcp-race log below.
+    const mcpRaceStartMs = Date.now();
+    let tools: Awaited<ReturnType<typeof getMCPToolsForAI_SDK>> = [];
+    // Boundary #4 outcome classifier — captured ABOVE the try so the
+    // post-catch log can read it. Holds the reject reason (err.message)
+    // when the race fails; null on success. Empty success (race resolved
+    // with []) is detected via `tools.length === 0` AFTER the try/catch.
+    let mcpRaceError: { message?: string } | null = null;
+    try {
+      const mcpRace: Promise<any>[] = [
+        getMCPToolsForAI_SDK(authenticatedUserId, task, mcpAbortSignal),
+        // Tier 2: safety-net ceiling — padded so the Tier-1 abort signal
+        // fires first, Phase 2 degrades, and getMCPToolsForAI_SDK returns
+        // Phase 1 tools before this timer rejects the race.
+        new Promise<never>((_, reject) => {
+          setTimeout(
+            () => reject(new Error(`MCP tools route timeout after ${MCP_TOOLS_ROUTE_TIMEOUT_MS}ms (abort signal ${MCP_TOOLS_TIMEOUT_MS}ms)`)),
+            MCP_TOOLS_ROUTE_TIMEOUT_MS,
+          );
+        }),
+      ];
+      if (request.signal) {
+        mcpRace.push(new Promise<never>((_, reject) => {
+          if (request.signal!.aborted) reject(new Error('Request aborted while loading MCP tools'));
+          else request.signal!.addEventListener('abort', () => reject(new Error('Request aborted while loading MCP tools')), { once: true });
+        }));
+      }
+      tools = await Promise.race(mcpRace);
+    } catch (err: any) {
+      chatLogger.warn('[CHAT-ROUTE] MCP tools unavailable — continuing without them', {
+        requestId,
+        error: err.message,
+      });
+      tools = [];
+      mcpRaceError = err;
+    }
+    // Chat-hang-fix #4 boundary #4 — in-between anchor for the next
+    // hang report. Captures mcpRaceDurationMs (the ceiling/timeout of
+    // THIS block only) + the final toolsCount so a 30s+ delta between
+    // post-5way-promise-all (boundary #2) and pre-processUnifiedAgentRequest
+    // (boundary #3) is attribute-able to MCP vs downstream by reading
+    // elapsedMs - mcpRaceDurationMs = (everything else). Emitted AFTER the
+    // try/catch closes so the log fires whether the race resolved, timed
+    // out via MCP_TOOLS_TIMEOUT_MS (5s), or rejected via request.signal.
+    // Chat-hang-fix #4 boundary #4 (rev 2) — outcome classifier combined
+    // with the in-between anchor log. `toolsOutcome` condenses the
+    // (tools.length + err.message) pair into a grep-able literal so
+    // operators don't have to regex-parse err.message to classify:
+    //   - 'success'    race resolved with >=1 tool
+    //   - 'empty'      race resolved with 0 tools (success but empty)
+    //   - 'timed_out'  race rejected by MCP_TOOLS_TIMEOUT_MS ceiling
+    //   - 'aborted'    race rejected by request.signal abort
+    //   - 'empty'      fallback for race-rejected-by-other-reason
+    let toolsOutcome: 'success' | 'timed_out' | 'aborted' | 'empty';
+    if (mcpRaceError) {
+      const msg = mcpRaceError.message || '';
+      if (/timed out after/i.test(msg)) {
+        toolsOutcome = 'timed_out';
+      } else if (/aborted/i.test(msg)) {
+        toolsOutcome = 'aborted';
+      } else {
+        // Race was rejected but not by the two well-known signals (e.g.
+        // getMCPToolsForAI_SDK threw its own error). Post-catch tools=[]
+        // still applies, so classify as 'empty' rather than introducing
+        // a 5th outcome class for a one-off.
+        toolsOutcome = 'empty';
+      }
+    } else {
+      toolsOutcome = tools.length === 0 ? 'empty' : 'success';
+    }
+    chatLogger.info('[CHAT-ROUTE] boundary: post-mcp-race', {
+      requestId,
+      elapsedMs: Date.now() - requestStartTime,
+      mcpRaceDurationMs: Date.now() - mcpRaceStartMs,
+      toolsCount: tools.length,
+      toolsOutcome,
+      // RuntimeBroker degraded state + CAS cache size (O(1) reads, no I/O).
+      ...getBrokerDiagnostics(),
+    });
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,
@@ -1405,7 +1764,28 @@ const config: UnifiedAgentConfig = {
     if (useUnifiedAgentStream) {
       const streamBody = new ReadableStream({
           async start(controller) {
-            const emit = createSSEEmitter(controller);
+            const rawEmit = createSSEEmitter(controller);
+
+            // Chat-hang-fix #3 — streaming branch SSE-bridge override.
+            // The hoisted watchdog state (lastProgressAt,
+            // PROGRESS_EVENT_TYPES, ROUTE_STALL_TIMEOUT_MS,
+            // ROUTE_MAX_TURN_MS, fireStall, rejectOnAbort,
+            // stallWatchdog) is owned by the OUTER try block of POST().
+            // This start(controller) callback only owns:
+            //   1) emitSseError override: wires the hoisted no-op
+            //      into the real SSE-error emitter so fireStall's
+            //      SSE emit reaches the client when watchdog fires.
+            //   2) Local `emit` wrapper: bumps the hoisted
+            //      lastProgressAt for TOKEN / TOOL_INVOCATION events
+            //   so the no-progress idle ceiling can fire correctly.
+            emitSseError = (message: string): void => {
+              try { rawEmit(SSE_EVENT_TYPES.ERROR, { message }); } catch { /* best-effort */ }
+            };
+            const emit: typeof rawEmit = (eventType, payload) => {
+              if (PROGRESS_EVENT_TYPES.has(eventType)) lastProgressAt = Date.now();
+              return rawEmit(eventType, payload);
+            };
+
             const processingSteps: Array<{
               step: string;
               status: 'started' | 'completed' | 'failed';
@@ -1468,26 +1848,38 @@ const config: UnifiedAgentConfig = {
                 // Track tool call success/failure in telemetry for model ranking
                 // Uses generated toolCallId for deduplication
                 if (toolName) {
-                  import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-                    toolCallTracker.recordToolCall({
-                      model: actualModel,
-                      provider: actualProvider,
-                      toolName,
-                      success: result?.success !== false,
-                      error: result?.error,
-                      timestamp: Date.now(),
-                      conversationId,
-                      toolCallId: `agent-${toolName}-${Date.now()}`,
+                  // @audit-NEW-3-batched (audit 2026-06-20): mirror the trackSessionFiles
+                  // fix at L857-L879 for the outer-import rejection + ALS scope
+                  // teardown after response finalize. The onToolExecution callback
+                  // sometimes fires AFTER the SSE stream ends — snapshotting
+                  // requestId into a closure-local BEFORE the void chain keeps
+                  // correlation even when chatLogger's ALS scope is gone.
+                  const toolTelemetryReqId = requestId;
+                  void import('@/lib/tools/tool-call-tracker')
+                    .then(({ toolCallTracker }) => {
+                      toolCallTracker.recordToolCall({
+                        model: actualModel,
+                        provider: actualProvider,
+                        toolName,
+                        success: result?.success !== false,
+                        error: result?.error,
+                        timestamp: Date.now(),
+                        conversationId,
+                        toolCallId: `agent-${toolName}-${Date.now()}`,
+                      });
+                    })
+                    .catch((error: any) => {
+                      chatLogger.debug('Tool call telemetry failed (non-critical)', { requestId: toolTelemetryReqId, error: error.message });
                     });
-                  }).catch(() => {});
                 }
               };
 
               // Server-side continuation loop: re-invoke the LLM with the
-              // continuation prompt as the next user message when shouldAutoContinue
-              // returns continue: true. Tracks continuationsSoFar across iterations
-              // via the module-level continuationCounters Map. Accumulates content,
-              // steps, and fileEdits across iterations. Emits SSE events for each
+              // continuation prompt as the next user message when decideAutoContinue
+              // returns continue: true. Counter management is handled internally by
+              // the helper (requestId-keyed Map in auto-continue-helper.ts).
+              // Accumulates content, steps, and fileEdits across iterations. Emits
+              // SSE events for each
               // iteration so the client sees real-time streaming for the continuation.
               let currentConfig = config;
               let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>> | undefined;
@@ -1501,6 +1893,35 @@ const config: UnifiedAgentConfig = {
               const accumulatedFileEdits: any[] = [];
               const accumulatedEditCount = { applied: 0, extracted: 0 };
 
+    /**
+     * @audit-A2-splice-stub: future migration target. Currently no-op (only
+     * logs intent). Once Stage 2/3 promote this to a real helper, the
+     * call-site marker immediately before `} while (false);` becomes the
+     * canonical migration entry. See plan-act-verify Q3
+     * @audit-A2-stitch for the recurrence intent.
+     */
+    
+// @audit-Stage3-process-caller-typed-DEFERRED-pending-helper-migration:
+// processUnifiedAgentRequest(currentConfig) at L1501 below is the singular Stage 3
+// target. The runAutoContinueLoop helper stub was REMOVED in this turn because the
+// prior declaration had an orphan second decl (syntax catastrophe). The current
+// loop uses inline `decideAutoContinue(...)` directly + the `autoDecision.continue`
+// gate; a future Stage 3 retype can re-introduce runAutoContinueLoop with a
+// single-function declaration + `decide: (state) => Promise<ContinueDecision>`
+// signature. Until then, do-while(false) + sole-break gate at L1706-bound band
+// preserves the single-shot semantics.
+
+// @audit-phantom-L2053: L2053 is a drift target (NOT canonical Stage 2 surface).
+//   Canonical Stage 2 = do-while(false) band L1475..L1712 (gate at L1706 in this file).
+//   Drift points into orchestration block L2045..L2065 (executeWithOrchestrationMode);
+//   rotated under post-drift comment insertions (@audit-A2-splice-stub, @audit-Q2-lift,
+//   the Stage 3 marker block above).
+//   Pair: @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
+
+              // Server-side continuation gate.
+              // do/while(false) runs ONCE unless `break;` (sole, at L1706) exits mid-body.
+              // `iteration++` (L1698) advances each turn; bound is LLM_AGENT_TOOLS_MAX_ITERATIONS (env, default 10).
+              // Migration note: when swapping to a real while-loop, preserve the cap + the autoDecision.continue gate so chain-bound semantics do not regress.
               do {
                 // Reset per-iteration state in place. The factory's returned
                 // handler reads/writes `streamState` by reference, so the same
@@ -1527,11 +1948,71 @@ const config: UnifiedAgentConfig = {
                 );
 
                 // Call the LLM
-                result = await processUnifiedAgentRequest(currentConfig);
+// @audit-Stage3-process-caller-typed-APPLIED:
+// processUnifiedAgentRequest(currentConfig) at L1501 is the Stage 3 retype target.
+// Status: APPLIED in this turn (suffix promoted from
+//   `-DEFERRED-pending-Stage0-1-collision` → `-APPLIED`).
+//
+// currentConfig type anchor (verbatim, post-retype):
+//   `UnifiedAgentConfig` — imported from '@/lib/orchestra/unified-agent-service'
+//   (see import line at L36: `import { processUnifiedAgentRequest,
+//   type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';`).
+//   Declared in route.ts:  `const config: UnifiedAgentConfig = { ... };` (L1306)
+//   Re-aliased as:         `let currentConfig = config;` (L1444) — typed
+//                          via assignment inference, retains the
+//                          UnifiedAgentConfig canon type from L1306.
+//
+// Resolution surface (now applied — cascade Q1-Q5 closure):
+//   * `continue: AutoContinueDecision extends ContinueDecisionBase` (helper side)
+//   * `decideAutoContinue` returns the typed surface; consumers reading
+//     `autoDecision.continue / autoDecision.reason` see the canonical fields
+//     (no cast required).
+//   * Stage 0/1 collision (ContinueDecision name dedup) was resolved in
+//     the prior turn: `ContinueDecisionBase` + `ContinueDecision` + `ContinuationDecision`
+//     derive aliases live in llm-continuation.ts; auto-continue-helper.ts
+//     re-exports them as single-source-of-truth.
+//   * Dormant `AutoContinueInput.iteration?` field was dropped in this turn
+//     (cascade Q2 cleanup — never read by decideAutoContinue body).
+//
+// Pair: @audit-phantom-L2053 in route.ts (canonical Stage 2 band reference).
+//        @audit-phantom-L4593 in unified-agent-service.ts:1 (parallel phantom fix).
+                chatLogger.info('[CHAT-ROUTE] boundary: pre-processUnifiedAgentRequest (v1 streaming)', {
+                  requestId,
+                  iteration,
+                  elapsedMs: Date.now() - requestStartTime,
+                  ...getBrokerDiagnostics(),
+                });
+                result = await Promise.race([
+                  processUnifiedAgentRequest(currentConfig),
+                  stallPromise,
+                ]);
+                // Bug-fix #2: surface the post-await response shape at INFO level so
+                // future silent-stream regressions are visible in production without
+                // toggling LOG_LEVEL=debug. When result.response is non-string the
+                // route's emit paths ALL coerce to '[object Object]' (operator-
+                // precedence bug at L1889) and the user sees a stream with zero
+                // content chunks despite 27.7s of pre-Response setup.
+                chatLogger.info('[CHAT-ROUTE] processUnifiedAgentRequest returned', {
+                  requestId,
+                  responseType: typeof result.response,
+                  responseShapeKey: shapeKeyOf(result.response),
+                  responseLen: serializableTextLength(result.response),
+                  bufferLen: streamState.buffer.length,
+                  elapsedMs: Date.now() - requestStartTime,
+                });
                 sendStep(`Iteration ${iteration + 1}`, result.success ? 'completed' : 'failed');
 
-                // Accumulate this iteration's result
-                const iterContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '');
+                // Accumulate this iteration's result.
+                // (route-layer catch-all — Layer 3 of 3 per content-stringifier.ts JSDoc)
+                //
+                // Defense-in-depth: route the buffer+result.response concat
+                // through explicit type-narrowed variables. Non-string shapes
+                // (e.g. {role, parts:[…]} MessageContent, ContentPart arrays)
+                // are coerced via stringifyMessageContent — never fall through
+                // to `'[object Object]'`. Cheap O(n).
+                const bufferText = typeof streamState.buffer === 'string' ? streamState.buffer : '';
+                const responseText = typeof result.response === 'string' ? result.response : stringifyMessageContent(result.response);
+                const iterContent = bufferText + responseText;
                 if (result.steps) accumulatedSteps.push(...result.steps);
 
                 // Flush holdback chars
@@ -1615,106 +2096,173 @@ const config: UnifiedAgentConfig = {
                 }
 
                 // Auto-continue check: should we re-invoke the LLM?
-                const previousContinuations = continuationCounters.get(requestId) ?? 0;
-                const continuationDecision = shouldAutoContinue({
+                // Uses the shared decideAutoContinue helper with the richer
+                // needsMoreTurnsDetector as the advanced detector (OR-composition:
+                // preserves the fileEdits check while adding 15+ signals across
+                // 4 factor groups). The helper handles counter management and
+                // max-continuations enforcement internally.
+                // Boundary invariant: result.response is the latest post-processUnifiedAgentRequest
+                // view; iterContent is the cumulative streamed state (streamState.buffer + result.response).
+                // They are equal when streamState.buffer is empty (i.e. immediately after a flush),
+                // but diverge while the buffer holds holdback chars. Consumers reading autoDecision:
+                //   - input.responseText (= iterContent) -> use for "total assistant content so far"
+                //   - input.result.response             -> use for "latest post-processUnifiedAgentRequest view"
+                // Runtime divergence diagnostic (warn-only) so audit logs surface the divergence
+                // rather than silently treating the two as interchangeable.
+                if (
+                  streamState.buffer &&
+                  typeof result.response === 'string' &&
+                  // Q3: normalization polish — tolerate trailing-newline / em-dash /
+                  // NFC-vs-NFD byte-only differences. OR semantics so we still log
+                  // when either raw OR trimmed-endsWith fails; the two new payload
+                  // fields below (iterContentRawEndsWith + iterContentTrimmedEnds)
+                  // let downstream log-search post-filter divergence-kind.
+                  // Q1: defense parity — the parent guard checks `typeof result.response === 'string'`,
+                  // but a future tool-output path may pass non-string `iterContent`.
+                  // Without this guard, `iterContent.endsWith` would throw
+                  // `TypeError: Cannot read property 'endsWith' of undefined`. Mirror
+                  // the surrounding response-guard shape; mechanical insertion.
+                  ((typeof iterContent === 'string' && !iterContent.endsWith(result.response)) || !iterContent.trimEnd().endsWith(result.response.trimEnd()))
+                ) {
+                  chatLogger.info('[AUTO-CONTINUE] boundary divergence: iterContent != result.response', {
+                    requestId,
+                    bufferLen: streamState.buffer.length,
+                    iterContentLen: iterContent.length,
+                    iterations: iteration,
+                  // Q3 fix: type-narrowed `typeof === 'string'` defensive so
+                  // the diagnostic block survives a non-string `result.response`
+                  // (currently the parent's `iterContent.endsWith(result.response)`
+                  // guard saves it, but the guard is implicit and a future
+                  // refactor could regress). The previous `?.length ?? 0` was
+                  // partial-truth on arrays (returns element count, not 0);
+                  // this narrowing collapses all non-string paths to a clean 0.
+                  resultResponseLen:
+                    typeof result.response === 'string'
+                      ? result.response.length
+                      : 0,
+                  // Q3 separate payload fields — see comment on the predicate above.
+                  iterContentRawEndsWith: iterContent.endsWith(result.response),
+                  // Q2 fallback: defensive `?? ''` keeps the endsWith contract
+                  // stable when result.response is non-string at this log point.
+                  iterContentTrimmedEnds: iterContent.trimEnd().endsWith(result.response ?? ''),
+                  // Q1 fix: runtime-survival ternary so the comment's "fallback
+                  // to generateSecureId() if @types/node misses" promise is
+                  // actually implemented. Next.js edge runtime or future
+                  // browser/Worker bundling will silently break the unconditional
+                  // `crypto.randomUUID()` call otherwise.
+                  // Q2 rename: `_id` → `_event_id` to match the actual per-hit
+                  // semantics (a NEW UUID is minted EVERY time this boundary
+                  // divergence fires — it is NOT the request ID). Downstream
+                  // log-search tooling that joins on this field should treat
+                  // it as one event-record-per-fire, not one per-request.
+                  boundary_divergence_event_id: crypto?.randomUUID?.() ?? generateSecureId('bdiv'),
+                  });
+                }
+                const autoDecision = decideAutoContinue({
+                  requestId,
                   routing: result.metadata?.routing,
-                  steps: (result.steps ?? []).map((s: any) => ({
+                  steps: (result.steps ?? []).map((s) => ({
                     toolName: s.toolName,
                     args: normalizeStepArgs(s.args),
                   })),
                   responseText: iterContent,
-                  continuationsSoFar: previousContinuations,
-                });
-                // Bug #86 (Pass-6) — wire the detector-override helper. The
-                // helper forwards real `result.fileEdits ?? []` so the
-                // edits-mismatch signal can actually fire. Coalesce with
-                // `?? { force: false }` so the default path is unchanged.
-                const detectorOverride = maybeDetectorContinuation(
+                  // ARCH-001 Flag 1 (Pickup): `UnifiedAgentResult` now subsumes
+                  // `AutoContinueResultData` — the 3 helper-derived fields
+                  // (`errors`/`toolFailures`/`incompleteSignals`) are optional
+                  // on both, so the upstream cast hop is no longer required.
+                  // Runtime identical: `decideAutoContinue`'s `_enrichResultData`
+                  // populates the 3 arrays from `steps` + `responseText` BEFORE
+                  // the detectors run, so detectors see a fully-shaped
+                  // `AutoContinueResultData` regardless of the caller's
+                  // pre-population status. Mirror site: unified-agent-service.ts:1712.
                   result,
-                  continuationDecision,
-                  chatLogger,
-                ) ?? { force: false }
+                  advancedDetectorFn: needsMoreTurnsDetector,
+                });
 
-                if ((continuationDecision.continue || detectorOverride.force) && iteration < MAX_CONTINUATIONS - 1) {
-                  // Signal continuation
-                  continuationCounters.set(requestId, continuationDecision.continuationsSoFar);
+                // Hoisted (dedup): shared between the [AUTO-CONTINUE] log payload
+                // (computed before the `if (autoDecision.continue)` branch so the
+                // empty-follow-up audit field stays a forward-precise metric, not
+                // an inferred-from-responseLength approximation) and the
+                // conversationHistory assistant-message append below.
+                const previousAssistantContent = typeof result.response === 'string'
+                  ? result.response
+                  : (iterContent || '');
+                // Single source of truth: lives next to its only consumer so it is not
+                // computed on no-continue iterations. If a future out-of-branch
+                // telemetry needs it, hoist + add a JSDoc anchoring the invariant.
+                const isPreviousAssistantEmpty =
+                  previousAssistantContent.length === 0 ||
+                  previousAssistantContent.trim() === '';
+                if (autoDecision.continue) {
                   chatLogger.info('[AUTO-CONTINUE] Re-invoking LLM', {
                     requestId,
                     iteration: iteration + 1,
-                    reason: continuationDecision.reason,
-                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                    reason: autoDecision.reason,
+                    forceSignal: autoDecision.forceSignal,
+                    advancedDetectorForce: autoDecision.forcedBy === 'advanced',
+                    continuationsSoFar: autoDecision.continuationsSoFar,
+                    nextResponseEmpty: isPreviousAssistantEmpty,
                   });
-                  // Emit a marker event so the client knows a continuation is happening
+                  emit(SSE_EVENT_TYPES.AUTO_CONTINUE, {
+                    requestId,
+                    iteration: iteration + 1,
+                    reason: autoDecision.reason,
+                    continuationsSoFar: autoDecision.continuationsSoFar,
+                  });
                   emit(SSE_EVENT_TYPES.STEP, {
                     type: 'continuation',
                     iteration: iteration + 1,
-                    reason: continuationDecision.reason,
-                    prompt: continuationDecision.continuationPrompt.slice(0, 200),
+                    reason: autoDecision.reason,
+                    prompt: (autoDecision.continuationPrompt ?? '').slice(0, 200),
                     timestamp: Date.now(),
                   });
-                  // Build the next config with the continuation prompt as a new user message
-                  const previousAssistantContent = typeof result.response === 'string'
-                    ? result.response
-                    : (iterContent || '');
                   currentConfig = {
                     ...currentConfig,
                     conversationHistory: [
+
+          /*
+           * @audit-A2-migration-ready: runAutoContinueLoop helper available
+           * at function scope above (see helper docblock). Future Stage 2/3
+           * migration will replace the entire iteration+decision body with:
+           *   await runAutoContinueLoop(
+           *     { requestId, iteration, maxIterations: 10 },
+           *     { decide: decideAutoContinue },
+           *   );
+           * Until then, the do/while(false) shape preserves the single-shot
+           * by-break bound here.
+           */
                       ...(currentConfig.conversationHistory || []),
                       { role: 'assistant', content: previousAssistantContent },
-                      { role: 'user', content: continuationDecision.continuationPrompt },
+                      { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
                     ],
                   };
                   iteration++;
                 } else {
-                  // No continuation needed (or max reached). Break out of loop.
-                  // Surface the decision in result.metadata so the client sees it
-                  // in the DONE event. This replaces the previous post-loop
-                  // auto-continue block (which was dead-weight — the loop is the
-                  // single source of truth for the decision).
                   result.metadata = result.metadata || {};
                   result.metadata.continuationDecision = {
-                    continue: continuationDecision.continue,
-                    reason: continuationDecision.reason,
-                    continuationsSoFar: continuationDecision.continuationsSoFar,
+                    continue: autoDecision.continue,
+                    reason: autoDecision.reason,
+                    continuationsSoFar: autoDecision.continuationsSoFar,
                   };
-                  if (continuationDecision.continue) {
-                    // Full prompt stored server-side only; the client can request
-                    // it via a follow-up endpoint if needed.
-                    result.metadata.continuationPrompt = continuationDecision.continuationPrompt;
-                  }
-                  if (continuationDecision.continue || continuationDecision.reason === 'max_continuations_reached') {
-                    // Max reached (continue: true) or explicit max-reached signal
-                    // (continue: false) — clean up the counter either way to
-                    // prevent memory leaks.
-                    continuationCounters.delete(requestId);
-                  }
                   break;
                 }
-              } while (iteration < MAX_CONTINUATIONS);
-
-              // Build the final accumulated result for the DONE event
-              if (accumulatedFileEdits.length > 0) {
-                // UnifiedAgentResult.fileEdits is typed as FileEdit[]; assign the
-                // accumulated array directly (any[] is assignable to FileEdit[]).
-                // The `applied`/`extracted` counts are surfaced via result.metadata
-                // (see appliedEditCount/extractedEditCount below) so the SSE DONE
-                // event still carries the summary the client needs.
-                result.fileEdits = accumulatedFileEdits;
-                result.metadata = result.metadata || {};
-                result.metadata.appliedEditCount = accumulatedEditCount.applied;
-                result.metadata.extractedEditCount = accumulatedEditCount.extracted;
-                result.metadata.iterationCount = iteration + 1;
-              }
-              if (accumulatedSteps.length > 0) {
-                result.steps = accumulatedSteps;
-              }
+              } while (false);
               // Post-loop: extract any final edits from the LAST iteration's buffer
               // and apply session naming detection. The loop already handled VFS
               // writes and step accumulation; this block runs once after the loop.
               const finalEdits = extractIncrementalFileEdits(streamState.buffer, streamState.parser);
 
               // SESSION NAMING: Detect if this is a new single-folder workspace
-              const responseContent = streamState.buffer + (typeof result.response === 'string' ? result.response : '') || '';
+              // (route-layer catch-all — Layer 3 of 3 per content-stringifier.ts JSDoc)
+              //
+              // Defense-in-depth: route the buffer+result.response concat
+              // through explicit type-narrowed variables. Non-string shapes
+              // (e.g. {role, parts:[…]} MessageContent, ContentPart arrays)
+              // are coerced via stringifyMessageContent — never fall through
+              // to `'[object Object]'`. Cheap O(n).
+              const bufferText = typeof streamState.buffer === 'string' ? streamState.buffer : '';
+              const responseText = typeof result.response === 'string' ? result.response : stringifyMessageContent(result.response);
+              const responseContent = bufferText + responseText;
               try {
                 const { detectSingleFolderFromResponse, sessionNameExists } = await import('@/lib/session/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
@@ -1771,6 +2319,11 @@ const config: UnifiedAgentConfig = {
               // single-iteration requests where the loop's per-iteration VFS write
               // may not catch edits that arrived after the last iteration boundary.
               if (finalEdits.length > 0 && filesystemOwnerId) {
+                result.fileEdits = accumulatedFileEdits;
+                result.metadata = result.metadata || {};
+                result.metadata.appliedEditCount = accumulatedEditCount.applied;
+                result.metadata.extractedEditCount = accumulatedEditCount.extracted;
+                result.metadata.iterationCount = iteration + 1;
                 try {
                   const appliedEdits = await applyFilesystemEditsFromResponse({
                     ownerId: filesystemOwnerId,
@@ -1878,7 +2431,7 @@ const config: UnifiedAgentConfig = {
               streamState.parser.unclosedPositions.clear();
             } catch (error: any) {
               // Clean up the continuation counter on error so it doesn't leak.
-              continuationCounters.delete(requestId);
+              clearContinuationCount(requestId);
               // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
               if (streamState.buffer.trim().length > 0) {
                 try {
@@ -1920,8 +2473,21 @@ const config: UnifiedAgentConfig = {
               streamState.parser.emittedEdits.clear();
               streamState.parser.unclosedPositions.clear();
             } finally {
+              clearInterval(stallWatchdog);
               controller.close();
             }
+          },
+          // The runtime's cancel() transitions this stream to "closed"
+          // automatically per the WHATWG Streams spec — no explicit
+          // controller.close() needed (and the controller is the start()
+          // parameter, not in scope in cancel() anyway). We just record
+          // the disconnect as signal-class telemetry. Note: closing the
+          // SSE pipe makes the client see [DONE] immediately.
+          cancel(reason?: unknown) {
+            chatLogger.info('SSE stream cancelled by client disconnect', {
+              requestId,
+              reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
+            });
           },
         });
 
@@ -1993,13 +2559,19 @@ const config: UnifiedAgentConfig = {
 
                 controller.close();
                 // Clean up the continuation counter on success so it doesn't leak.
-                continuationCounters.delete(requestId);
+                clearContinuationCount(requestId);
               } catch (error: any) {
                 enqueue('error', { message: error.message });
                 controller.close();
                 // Clean up the continuation counter on error so it doesn't leak.
-                continuationCounters.delete(requestId);
+                clearContinuationCount(requestId);
               }
+            },
+            cancel(reason?: unknown) {
+              chatLogger.info('SSE stream cancelled by client disconnect', {
+                requestId,
+                reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
+              });
             },
           });
 
@@ -2020,7 +2592,31 @@ const config: UnifiedAgentConfig = {
       chatLogger.debug('[ROUTE-DEBUG] About to call processUnifiedAgentRequest', { agentExecutionEngine: AGENT_EXECUTION_ENGINE });
       chatLogger.debug('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call', { enableFilesystemEdits });
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
-        const result = await processUnifiedAgentRequest(config);
+        // Chat-hang-fix #2: pre-stream boundary #3 (non-streaming/v1-fallback
+        // branch). Pair with boundary #1 (post-logRequestStart) and boundary
+        // #2 (post-5way-promise-all). Together they localize which phase
+        // crossed last in a hang report: logRequestStart DB write, the 5-way
+        // promise.all (denials / wsCtx / mem0 / hybrid / v1Prompt), or the
+        // processUnifiedAgentRequest call itself. Engine label matches the
+        // v1-streaming branch's "Calling processUnifiedAgentRequest (v1
+        // streaming)" entry so a log-search can group both pre-call entries
+        // by phase regardless of branch.
+        chatLogger.info('[CHAT-ROUTE] boundary: pre-processUnifiedAgentRequest (v1 non-streaming)', {
+          requestId,
+          elapsedMs: Date.now() - requestStartTime,
+          agentExecutionEngine: AGENT_EXECUTION_ENGINE,
+          ...getBrokerDiagnostics(),
+        });
+        // Chat-hang-fix #3 — non-streaming branch stall wiring.
+        let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>>;
+        try {
+          result = await Promise.race([
+            processUnifiedAgentRequest(config),
+            stallPromise,
+          ]);
+        } finally {
+          clearInterval(stallWatchdog);
+        }
         chatLogger.debug('[ROUTE-DEBUG] processUnifiedAgentRequest returned', { resultSuccess: result.success, hasResponse: !!result.response });
 
         // GUARANTEED debug field — always appears if this code path is reached
@@ -2380,7 +2976,14 @@ const config: UnifiedAgentConfig = {
 
           let sandboxSession: Awaited<ReturnType<typeof sandboxBridge.getOrCreateSession>> | null = null;
           if (authenticatedUserId && executionPolicy !== 'local-safe') {
-            sandboxSession = await sandboxBridge.getOrCreateSession(authenticatedUserId);
+            // Gap-fix: thread the full ownerResolution (not just filesystemOwnerId)
+      // so the bridge has access to the auth source / isAuthenticated /
+      // anonSessionId for source-aware sandboxing decisions.
+      sandboxSession = await sandboxBridge.getOrCreateSession(
+        authenticatedUserId,
+        undefined,
+        ownerResolution,
+      );
           }
 
           chatLogger.info('Executing v1 agentic tools', { requestId, userId: effectiveAgentUserId }, {
@@ -2399,11 +3002,11 @@ const config: UnifiedAgentConfig = {
             {
               sandboxId: sandboxSession?.sandboxId,
               sandboxProvider: sandboxSession?.sandboxId
-                ? sandboxBridge.inferProviderFromSandboxId(sandboxSession.sandboxId) || undefined
+                ? (sandboxBridge.inferProviderFromSandboxId(sandboxSession.sandboxId) || undefined)
                 : undefined,
               workspacePath: sandboxSession?.workspacePath || requestedScopePath,
             },
-            actualModel, // Pass user's selected model
+            actualModel, // user-selected model
           );
 
           // Check if agent supports streaming (ToolLoopAgent integration)
@@ -2432,6 +3035,13 @@ const config: UnifiedAgentConfig = {
               agentToolResults = await Promise.race([agentPromise, timeoutPromise]) as any;
             } finally {
               if (agentTimeoutId) clearTimeout(agentTimeoutId);
+              // Chat-hang-fix #3 polish: clear the hoisted route-level
+              // watchdog here too. The executeTask timeoutPromise is
+              // the localized ceiling for the v1-agent-loop branch;
+              // once it resolves/rejects, this is the canonical point
+              // to release the global stallWatchdog interval so it
+              // doesn't outlive the request.
+              clearInterval(stallWatchdog);
             }
 
             chatLogger.info('Agent tools execution completed', { requestId }, {
@@ -3375,7 +3985,7 @@ const config: UnifiedAgentConfig = {
                           requestId: streamRequestId,
                           path: 'streaming',
                         },
-                      }).catch(() => {});
+                      }).catch((err) => chatLogger.warn('mem0 store failed (streaming path)', { requestId: streamRequestId }, { error: String(err) }));
                     }
 
                     break; // Exit loop when complete
@@ -3498,7 +4108,7 @@ const config: UnifiedAgentConfig = {
                   actualModel,
                   (completedToolCalls.length > 0 ? completedToolCalls : undefined) as any,
                   streamState.buffer.length,
-                ).catch(() => {});
+                ).catch((err) => chatLogger.warn('logRequestComplete failed (LLM stream)', { requestId: streamRequestId }, { error: String(err) }));
 
                 cleanup();
               } catch (streamError) {
@@ -3517,9 +4127,10 @@ const config: UnifiedAgentConfig = {
                 controller.close();
               }
             },
-            cancel() {
+            cancel(reason?: unknown) {
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.warn('LLM stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+              chatLogger.info('SSE stream cancelled by client disconnect', { requestId: streamRequestId }, {
+                reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
                 chunkCount,
                 latencyMs: streamDuration,
               });
@@ -3868,7 +4479,7 @@ const config: UnifiedAgentConfig = {
                   actualModel,
                   undefined, // ToolLoopAgent tools tracked separately
                   finalContent?.length || 0,
-                ).catch(() => {}); // fire-and-forget — don't block stream
+                ).catch((err) => chatLogger.warn('logRequestComplete failed (ToolLoopAgent)', { requestId: streamRequestId }, { error: String(err) }));
 
                 // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
                 if (isMem0Configured()) {
@@ -3880,7 +4491,7 @@ const config: UnifiedAgentConfig = {
                       requestId: streamRequestId,
                       path: 'tool-loop',
                     },
-                  }).catch(() => {});
+                  }).catch((err) => chatLogger.warn('mem0 store failed (tool-loop path)', { requestId: streamRequestId }, { error: String(err) }));
                 }
 
                 // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
@@ -3966,9 +4577,10 @@ const config: UnifiedAgentConfig = {
                 cleanup();
               }
             },
-            cancel() {
+            cancel(reason?: unknown) {
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+              chatLogger.info('SSE stream cancelled by client disconnect', { requestId: streamRequestId }, {
+                reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
                 chunkCount,
                 latencyMs: streamDuration,
               });
@@ -4302,7 +4914,7 @@ const config: UnifiedAgentConfig = {
                     requestId: streamRequestId,
                     path: 'fallback-streaming',
                   },
-                }).catch(() => {});
+                }).catch((err) => chatLogger.warn('mem0 store failed (fallback-streaming)', { requestId: streamRequestId }, { error: String(err) }));
               }
 
               // Log provider latency for observability
@@ -4325,7 +4937,7 @@ const config: UnifiedAgentConfig = {
                 actualModel,
                 undefined, // Tool calls tracked separately in agentic path
                 clientResponse.content?.length || 0,
-              ).catch(() => {}); // fire-and-forget — don't block stream
+              ).catch((err) => chatLogger.warn('logRequestComplete failed (fallback-streaming)', { requestId: streamRequestId }, { error: String(err) }));
 
               if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
                 streamClosed = true;
@@ -4385,13 +4997,14 @@ const config: UnifiedAgentConfig = {
               cleanup();
             }
           },
-          cancel() {
+          cancel(reason?: unknown) {
             if (!streamClosed) {
               streamClosed = true;
               cleanup();
             }
             const streamDuration = Date.now() - streamStartTime;
-            chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
+            chatLogger.info('SSE stream cancelled by client disconnect', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
+              reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
               chunkCount,
               latencyMs: streamDuration,
             });
@@ -4438,7 +5051,7 @@ const config: UnifiedAgentConfig = {
         actualModel,
         undefined, // No tool calls in non-streaming path
         clientResponse.content?.length || 0,
-      ).catch(() => {}); // fire-and-forget
+      ).catch((err) => chatLogger.warn('logRequestComplete failed (non-streaming)', { requestId }, { error: String(err) }));
 
       // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
       // This runs after the response is sent to not delay the client
@@ -4452,7 +5065,7 @@ const config: UnifiedAgentConfig = {
             requestId,
             path: 'non-streaming',
           },
-        }).catch(() => {});
+        }).catch((err) => chatLogger.warn('mem0 store failed (non-streaming)', { requestId }, { error: String(err) }));
       }
 
       const responseStatus = clientResponse.success ? 200 : 500;
@@ -4825,10 +5438,24 @@ async function handleGatewayStreaming(params: {
         }
       } catch (error) {
         chatLogger.error('Stream error', { requestId }, { error: String(error) });
+        // Send SSE error event BEFORE controller.error() so the client receives
+        // a structured error (matching the V2 path at line ~4712). Without this,
+        // the client only sees a raw stream rejection via controller.error() with
+        // no event: error payload, making it harder to show a user-facing message.
+        try {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ message: errMsg, canRetry: true })}\n\n`));
+        } catch {
+          // best-effort — stream may already be closing
+        }
         controller.error(error);
-      } finally {
-        controller.close();
       }
+    },
+    cancel(reason?: unknown) {
+      chatLogger.info('SSE stream cancelled by client disconnect', {
+        requestId,
+        reason: typeof reason === 'string' ? reason : (reason instanceof Error ? reason.message : String(reason)),
+      });
     },
   });
 

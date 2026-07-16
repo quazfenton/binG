@@ -10,6 +10,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getGalleryStats } from '@/lib/image-generation/ai-art-gallery';
 import { createLogger } from '@/lib/utils/logger';
 
+export const dynamic = 'force-dynamic';
+
 const logger = createLogger('API:AIArt:Stats');
 
 export async function GET() {

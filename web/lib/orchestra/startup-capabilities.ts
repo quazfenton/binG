@@ -21,6 +21,7 @@ export interface StartupCapabilities {
   mastraWorkflows: boolean;// Explicitly enabled via env
   desktop: boolean;         // Running in Tauri desktop app
   v1Api: boolean;         // Cloud LLM APIs available
+  webSearch: boolean;       // Bug #6: web_search available (Nullclaw container or SearXNG/DuckDuckGo)
 }
 
 // Cache for startup capabilities (computed once at startup)
@@ -103,6 +104,12 @@ export function getStartupCapabilities(): StartupCapabilities {
   const providerKey = llmProvider ? process.env[`${llmProvider.toUpperCase()}_API_KEY`] : undefined;
   const v1Api = !!providerKey || !!process.env.OPENROUTER_API_KEY;
 
+  // Bug #6: web_search availability — check if Nullclaw has a container or
+  // if SearXNG/DuckDuckGo is configured. If none, the tool will be omitted
+  // from the registry so the LLM never selects it (prevents 3 consecutive
+  // "No Nullclaw container" failures that crash the orchestrator).
+  const webSearch = !!process.env.NULLCLAW_URL || !!process.env.SEARXNG_URL || !!process.env.DUCKDUCKGO_API_KEY;
+
   // Log startup capabilities for observability
   agentLog.startupCheck('v2Native', v2Native, { llmProvider });
   agentLog.startupCheck('v2Containerized', v2Containerized, { sandboxProvider });
@@ -116,6 +123,7 @@ export function getStartupCapabilities(): StartupCapabilities {
   agentLog.startupCheck('mastraWorkflows', mastraWorkflows);
   agentLog.startupCheck('desktop', desktop);
   agentLog.startupCheck('v1Api', v1Api, { llmProvider });
+  agentLog.startupCheck('webSearch', webSearch, { hasNullclawUrl: !!process.env.NULLCLAW_URL, hasSearXNG: !!process.env.SEARXNG_URL, hasDdg: !!process.env.DUCKDUCKGO_API_KEY });
 
   _cachedCapabilities = {
     v2Native,
@@ -126,6 +134,7 @@ export function getStartupCapabilities(): StartupCapabilities {
     mastraWorkflows,
     desktop,
     v1Api,
+    webSearch,
   };
 
   return _cachedCapabilities;

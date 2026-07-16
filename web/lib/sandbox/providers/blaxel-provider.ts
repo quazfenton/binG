@@ -33,7 +33,7 @@ import type {
 } from './sandbox-provider'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { blaxelAsyncManager, verifyWebhookFromRequest } from './blaxel-async'
-import { getDatabase } from '@/lib/database/connection'
+import { getDatabase } from '@/lib/database/connection-shim';
 import { encryptSecret, decryptSecret, generateSecureSecret } from '@/lib/utils/crypto'
 import { createLogger } from '@/lib/utils/logger';
 

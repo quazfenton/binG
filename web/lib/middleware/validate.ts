@@ -40,6 +40,30 @@ export function validateRequest<T extends ZodSchema>(schema: T) {
       try {
         // Parse and validate body
         const body = await req.json().catch(() => null);
+
+        // SEV-4 (audit) — return a typed 400 when the body is null instead of
+        // letting ZodError propagate. `req.json()` returns `null` when:
+        //   - the body is the JSON literal `null`
+        //   - the body is missing (no Content-Type or empty body)
+        //   - req.json() throws on malformed JSON and the catch returns null
+        // Without this, `schema.parse(null)` throws ZodError("Expected object,
+        // received null") which the catch below logs as a warn but technically
+        // still returns a 400. The fix makes the 400 deterministic, the message
+        // meaningful (instead of generic "Validation failed"), and removes
+        // the noise from the Middleware:Validation logger.
+        if (body === null) {
+          logger.warn('Request validation failed: null body', {
+            errors: [{ field: 'root', message: 'Request body is null, missing, or invalid JSON', code: 'invalid_body_null' }],
+          });
+          return NextResponse.json(
+            {
+              error: 'invalid_body',
+              details: [{ field: 'root', message: 'Request body is null, missing, or invalid JSON', code: 'invalid_body_null' }],
+            },
+            { status: 400 }
+          );
+        }
+
         const validatedBody = schema.parse(body);
 
         // Parse query parameters

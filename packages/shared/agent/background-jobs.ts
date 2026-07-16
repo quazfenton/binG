@@ -90,6 +90,7 @@ export class BackgroundExecutor extends EventEmitter {
 
     // Create execution loop
     const executeLoop = async () => {
+      let consecutiveFailures = 0;
       while (job.status === 'running') {
         try {
           const startTime = Date.now();
@@ -116,17 +117,25 @@ export class BackgroundExecutor extends EventEmitter {
             exitCode: result.exitCode,
           } as JobExecutionResult);
 
+          consecutiveFailures = 0;
+
         } catch (error: any) {
           job.lastError = error;
           this.emit('error', { jobId, sandboxId, error });
           
           // Log error but continue the loop
-          log.error(`Background job ${jobId} error:`, error.message);
+          log.error(`Background job ${jobId} error:`, error);
+          consecutiveFailures++;
         }
 
-        // Wait for next interval
+        // Wait for next interval with exponential backoff on failure
         if (job.status === 'running') {
-          await this.sleep(job.interval);
+          let waitMs = job.interval;
+          if (consecutiveFailures > 0) {
+            const backoff = Math.min(5000 * Math.pow(2, consecutiveFailures - 1), 300000);
+            waitMs = Math.max(waitMs, backoff);
+          }
+          await this.sleep(waitMs, () => job.status !== 'running');
         }
       }
     };
@@ -209,6 +218,7 @@ export class BackgroundExecutor extends EventEmitter {
 
     // Restart the execution loop
     const executeLoop = async () => {
+      let consecutiveFailures = 0;
       while (job.status === 'running') {
         try {
           let result: { stdout: string; stderr: string; exitCode: number | null };
@@ -235,13 +245,21 @@ export class BackgroundExecutor extends EventEmitter {
             exitCode: result.exitCode,
           });
 
+          consecutiveFailures = 0;
+
         } catch (error: any) {
           job.lastError = error;
           this.emit('error', { jobId, sandboxId: job.sandboxId, error });
+          consecutiveFailures++;
         }
 
         if (job.status === 'running') {
-          await this.sleep(job.interval);
+          let waitMs = job.interval;
+          if (consecutiveFailures > 0) {
+            const backoff = Math.min(5000 * Math.pow(2, consecutiveFailures - 1), 300000);
+            waitMs = Math.max(waitMs, backoff);
+          }
+          await this.sleep(waitMs, () => job.status !== 'running');
         }
       }
     };
@@ -341,9 +359,34 @@ export class BackgroundExecutor extends EventEmitter {
         resolve(value);
       };
 
+      // SIGTERM/SIGKILL graduated escalation — each kill-level attaches a
+      // scope-local close handler via `.once` (NOT `.on`) so the listener
+      // auto-removes after firing. This closes the leak window the prior
+      // codereview flagged: many short-lived processes accumulating stale
+      // `.on` listeners on the EventEmitter. The main `proc.on('close')`
+      // below (the source-of-truth handler) still settles the promise; the
+      // graduated handlers here only clear inner escalation timers and emit
+      // a more descriptive stderr when SIGTERM is ignored. The `resolved`
+      // flag in `settle` makes any duplicate settle call a no-op.
       const timer = setTimeout(() => {
         try { proc.kill('SIGTERM'); } catch { /* may already be dead */ }
-        settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+        // If SIGTERM is ignored, escalate to SIGKILL after a grace period.
+        const sigkillTimer = setTimeout(() => {
+          try { proc.kill('SIGKILL'); } catch { /* may already be dead */ }
+          // Hard timeout: if even SIGKILL doesn't close the process, settle
+          // anyway to prevent the promise from hanging indefinitely.
+          const hardTimeout = setTimeout(() => {
+            settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (forced)`, exitCode: null });
+          }, 5000);
+          proc.once('close', () => {
+            clearTimeout(hardTimeout);
+            settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout (escalated)`, exitCode: null });
+          });
+        }, 5000);
+        proc.once('close', () => {
+          clearTimeout(sigkillTimer);
+          settle({ stdout: '', stderr: `Process killed: exceeded ${timeoutMs}ms timeout`, exitCode: null });
+        });
       }, timeoutMs);
 
       let stdout = '';
@@ -359,7 +402,7 @@ export class BackgroundExecutor extends EventEmitter {
 
       proc.on('close', (exitCode: number | null) => {
         clearTimeout(timer);
-        settle({ stdout, stderr, exitCode });
+        if (!resolved) settle({ stdout, stderr, exitCode });
       });
 
       proc.on('error', (error: Error) => {
@@ -372,8 +415,17 @@ export class BackgroundExecutor extends EventEmitter {
   /**
    * Sleep helper
    */
-  private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+  private sleep(ms: number, abortCheck?: () => boolean): Promise<void> {
+    return new Promise(resolve => {
+      const start = Date.now();
+      const poll = () => {
+        if (abortCheck?.() ?? false) { resolve(); return; }
+        const elapsed = Date.now() - start;
+        if (elapsed >= ms) { resolve(); return; }
+        setTimeout(poll, Math.min(200, ms - elapsed));
+      };
+      setTimeout(poll, Math.min(200, ms));
+    });
   }
 }
 

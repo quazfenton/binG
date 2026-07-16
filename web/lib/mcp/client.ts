@@ -100,9 +100,23 @@ class NodeEventSource {
   CLOSED = 2;
   readyState: number = 0;
 
-  constructor(url: string) {
+  constructor(url: string, options?: { signal?: AbortSignal }) {
     this.url = url;
     this.controller = new AbortController();
+    // Chat-hang-fix #4: mirror an external AbortSignal onto the internal
+    // controller so a caller-provided `AbortSignal.timeout(2000)` (or any
+    // caller-owned signal) fast-aborts the underlying `fetch(...)`. We only
+    // LISTEN on the external signal — we don't mutate it — so the caller's
+    // own observers still fire normally. Manual mirror (vs AbortSignal.any)
+    // is portable across Node ≥16 without depending on Node ≥20.3 API.
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        // Already aborted at construction — propagate immediately.
+        this.controller.abort();
+      } else {
+        options.signal.addEventListener('abort', () => this.controller.abort(), { once: true });
+      }
+    }
     this.connect();
   }
 
@@ -744,7 +758,23 @@ export class MCPClient extends EventEmitter {
         const eventSource: any =
           typeof EventSource !== 'undefined'
             ? new EventSource(url.toString())
-            : new NodeEventSource(url.toString());
+            : new NodeEventSource(url.toString(), { signal: this.config.signal });
+        // Chat-hang-fix #4 PR-3: the browser EventSource mirror was
+        // REMOVED in this revision. A naive mirror calling
+        // `eventSource.close()` on signal abort would also kill the
+        // stream AFTER a successful 1s connect — breaking the
+        // follow-up listTools() call for the common case of a healthy
+        // 1.5s gateway responding within the 2s AbortSignal.timeout.
+        // bootstrap-mcp.ts runs server-side in Node.js (no DOM
+        // EventSource), so the NodeEventSource branch above is the
+        // only transport that actually runs here — and its constructor
+        // mirror (lib/mcp/client.ts: NodeEventSource options.signal)
+        // is sufficient: on connect failure it aborts the internal
+        // fetch(); on connect success the internal controller's
+        // post-onopen abort only closes the long-lived SSE body
+        // reader (quietly drained by the while-true loop) without
+        // breaking ssePost()'s own separate 10s AbortController
+        // used for listTools / callTool.
 
         let isConnected = false;
         eventSource.onopen = () => {

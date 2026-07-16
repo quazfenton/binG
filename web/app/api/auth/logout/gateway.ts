@@ -72,6 +72,15 @@ export async function POST(request: NextRequest) {
       authCache.invalidateAllForUser(String(authResult2.user.id));
     }
 
+    // Only set Secure when the actual connection is HTTPS (checked via
+    // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+    // seen by the server). This allows Secure to work correctly through the
+    // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+    // on plain HTTP localhost (dev, CI, local preview of production build).
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const actualProtocol = request.nextUrl.protocol;
+    const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
     // Clear session cookie
     const response = NextResponse.json({
       success: true,
@@ -80,7 +89,7 @@ export async function POST(request: NextRequest) {
 
     response.cookies.set('session_id', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isSecureConnection,
       sameSite: 'strict',
       maxAge: 0 // Expire immediately
     });

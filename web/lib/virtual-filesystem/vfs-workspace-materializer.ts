@@ -28,7 +28,7 @@ const MAX_SYNC_FILE_SIZE = 5 * 1024 * 1024;
 // Database access — uses the same SQLite connection as the VFS service
 function getDb() {
    
-  const { getDatabase } = require('@/lib/database/connection');
+  const { getDatabase } = require('@/lib/database/connection-shim');
   return getDatabase();
 }
 

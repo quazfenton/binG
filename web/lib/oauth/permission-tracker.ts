@@ -9,7 +9,7 @@
  * This integrates with Composio/Arcade/Nango for tool authorization.
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 
 export type PermissionLevel = 'read' | 'write' | 'full';
 export type ServiceType = 'gmail' | 'drive' | 'calendar' | 'contacts' | 'docs' | 'sheets' | 'slides' | 'tasks' | 'keep' | 'photos' | 'youtube' | 'maps' | 'custom';

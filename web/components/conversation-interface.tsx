@@ -1643,11 +1643,11 @@ export default function ConversationInterface() {
                 model: 'gpt-4o-mini',
                 maxTokens: 4000,
                 temperature: 0,
-                // Send the stable session folder name so the server reuses the
-                // existing workspace/sessions/${simpleSessionFolder} folder instead
-                // of calling generateSessionName() and creating a new folder
-                // (000 -> 002 -> 003 -> ...) on every prompt.
-                conversationId: simpleSessionFolder,
+                // Send the session folder name matching the current filesystem
+                // scope so the server reuses the correct workspace/sessions/...
+                // folder. When a detected folder name is active, use that;
+                // otherwise fall back to the raw session folder.
+                conversationId: detectedFolderName || simpleSessionFolder,
               }),
             });
             if (!response.ok) return '';

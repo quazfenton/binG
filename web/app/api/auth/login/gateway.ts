@@ -19,7 +19,15 @@ const MFA_FAIL_CLOSED_LOGOUT_TIMEOUT_MS = 1000;
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON body' },
+        { status: 400 },
+      );
+    }
     const { email, password } = body;
 
     // Validate required fields
@@ -93,7 +101,7 @@ export async function POST(request: NextRequest) {
     let mfaEnabled = false;
     if (result.user?.id) {
       try {
-        const { getDatabase } = require('@/lib/database/connection');
+        const { getDatabase } = require('@/lib/database/connection-shim');
         const db = getDatabase();
         if (db) {
           const mfaRecord = db.prepare(
@@ -217,12 +225,19 @@ export async function POST(request: NextRequest) {
       token: result.token
     });
 
+    // Only set Secure when the actual connection is HTTPS (checked via
+    // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+    // seen by the server). This allows Secure to work correctly through the
+    // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+    // on plain HTTP localhost (dev, CI, local preview of production build).
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const actualProtocol = request.nextUrl.protocol;
+    const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
     if (result.sessionId) {
       response.cookies.set('session_id', result.sessionId, {
         httpOnly: true,
-        // MED-3 fix: Also secure in staging — any non-dev environment should use Secure flag
-        // to prevent cookies from being sent over HTTP. Check x-forwarded-proto as fallback.
-        secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
+        secure: isSecureConnection,
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60, // 7 days
         path: '/',
@@ -234,8 +249,7 @@ export async function POST(request: NextRequest) {
     if (result.token) {
       response.cookies.set('auth-token', result.token, {
         httpOnly: true,
-        // MED-3 fix: Secure in production AND staging
-        secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
+        secure: isSecureConnection,
         sameSite: 'lax',
         maxAge: 60 * 60, // 1 hour — matches JWT TTL
         path: '/',
@@ -250,7 +264,7 @@ export async function POST(request: NextRequest) {
     // fall back to their old anonymous workspace identity
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: (process.env.NODE_ENV as string) === 'production' || (process.env.NODE_ENV as string) === 'staging',
+      secure: isSecureConnection,
       sameSite: 'lax',
       maxAge: 0,
       path: '/',

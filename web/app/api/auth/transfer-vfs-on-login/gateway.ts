@@ -68,14 +68,29 @@ export async function POST(request: NextRequest) {
     // this explicit override over the cookie, so we pass it through the
     // options parameter instead of cloning the request to inject a fake
     // cookie header.
-    // `.json()` throws on non-JSON or empty bodies; the `.catch` collapses
-    // the throw path to "no body" so the cookie-only fallback applies. The
-    // outer try/catch isn't needed for rejection handling but is kept to
-    // guard against synchronous throws from the property access below.
     let bodyAnonymousSessionId: string | undefined;
-    const body = await request.json().catch(() => ({}));
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      // Malformed JSON — return 400 so clients can distinguish this from a
+      // successful cookie-only path (which uses an empty or omitted body).
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON body' },
+        { status: 400 },
+      );
+    }
     if (body && typeof body === 'object' && typeof (body as any).anonymousSessionId === 'string') {
-      bodyAnonymousSessionId = (body as any).anonymousSessionId;
+      // Validate format: must match the expected anon session ID shape
+      // (13-digit timestamp + underscore/hyphen + random tail, 6+ chars).
+      // Reject crafted/short values that could be used to probe for other
+      // users' anonymous workspaces. The cookie on follow-up requests is
+      // the authoritative source; this body override is only a best-effort
+      // fallback for cookie-rotation edge cases.
+      const raw = (body as any).anonymousSessionId;
+      if (/^\d{13}[_-][A-Za-z0-9_-]{6,}$/.test(raw)) {
+        bodyAnonymousSessionId = raw;
+      }
     }
 
     const result = await transferVFSOnLogin(
@@ -90,6 +105,15 @@ export async function POST(request: NextRequest) {
       transferredFiles: result.transferredFiles,
     });
 
+    // Only set Secure when the actual connection is HTTPS (checked via
+    // x-forwarded-proto from the upstream proxy/worker, or the raw protocol
+    // seen by the server). This allows Secure to work correctly through the
+    // Cloudflare Worker → Caddy → backend chain while never rejecting cookies
+    // on plain HTTP localhost (dev, CI, local preview of production build).
+    const forwardedProto = request.headers.get('x-forwarded-proto');
+    const actualProtocol = request.nextUrl.protocol;
+    const isSecureConnection = forwardedProto === 'https' || actualProtocol === 'https:';
+
     const response = NextResponse.json({
       success: true,
       transferredFiles: result.transferredFiles,
@@ -100,7 +124,7 @@ export async function POST(request: NextRequest) {
     // /api/auth/register/gateway.ts for the non-fallback transfer path.
     response.cookies.set('anon-session-id', '', {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isSecureConnection,
       sameSite: 'lax',
       maxAge: 0,
       path: '/',

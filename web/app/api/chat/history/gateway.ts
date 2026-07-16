@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase, DatabaseOperations } from '@/lib/database/connection';
+import { getDatabase, DatabaseOperations } from '@/lib/database/connection-shim';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { checkRateLimit } from '@/lib/middleware/rate-limit';
 

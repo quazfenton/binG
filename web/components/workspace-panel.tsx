@@ -1365,8 +1365,23 @@ export function WorkspacePanel() {
           version: snapshot?.version || 1,
           files: snapshot?.files || [],
         });
-      } catch (error) {
-        logger.error('Failed to fetch VFS snapshot:', error);
+      } catch (error: any) {
+        // P0 fix: downgrade the EXPECTED-once-per-mount case where the
+        // gateway returns WORKSPACE_NOT_READY for anonymous owners whose
+        // workspace is still being eagerly initialized. Without this
+        // branch every page load printed an error to the dev console
+        // even though the gateway is correcting itself on the next
+        // request. Match on the error message — the thrown Error from
+        // useVirtualFilesystem's request() only carries .message (the
+        // `errorCode` field lives on the API payload, not the throw).
+        if (error?.message?.includes('not yet initialized')) {
+          logger.warn(
+            'Failed to fetch VFS snapshot (workspace initializing; will retry on next event):',
+            error?.message || error,
+          );
+        } else {
+          logger.error('Failed to fetch VFS snapshot:', error);
+        }
       }
     };
     fetchSnapshot();

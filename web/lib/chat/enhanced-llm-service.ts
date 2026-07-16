@@ -12,10 +12,10 @@
  */
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
-import { wireFinishReasonSteer, incompleteConfidenceThreshold } from '../orchestra/steer-service';
+import { wireFinishReasonSteer, wireFCGateZeroCallsSteer, emitFCGateZeroCallsLog, incompleteConfidenceThreshold } from '../orchestra/steer-service';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from '../providers/llm-providers';
 import { PROVIDER_FALLBACK_CHAINS, getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
-import { coordinateConcurrentFallback } from './llm-fallback-coordinator';
+import { coordinateConcurrentFallback, type StreamHandle } from './llm-fallback-coordinator';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
@@ -28,11 +28,168 @@ import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
 import { chatRequestLogger } from './chat-request-logger';
-import { isCLIProvider } from './vercel-ai-streaming';
+import { isCLIProvider, streamWithVercelAI } from './vercel-ai-streaming';
 import { recordRateLimitError } from '../providers/model-ranker';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 import { classifyFailure, FailureType, TUNNEL_DNS_ERROR } from '@/lib/errors/failure-classifier';
-import { is530Blacklisted, handleProviderError } from '@/lib/orchestra/provider-530-tracker';
+import { is530Blacklisted, record530ErrorIfApplicable } from '@/lib/orchestra/provider-530-tracker';
+// PR-W -- DRY helper consumed at the success-return reset pair.
+import { maybeResetBothTrackers } from '@/lib/orchestra/provider-530-tracker';
+// PR-E: success-side reset for the 5xx-blacklist tracker; parallels maybeReset530OnSuccess.
+
+// PR-E: opt-in wire-up so 5xx server errors (parallel to 530 origin-unreachable) are tracked via
+// record5xxErrorIfApplicable (5xx tracker) and record530ErrorIfApplicable
+// (530 tracker) fire in tandem — pure record-or-noop helpers that NEVER
+// cross-wipe each other's counter. Single source of truth at line 730.
+import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from '@/lib/orchestra/provider-server-error-tracker';
+
+/**
+ * PR-S2 (Stage 3 R2 lock target) — the success-path `clearTimeout` re-arm
+ * inside `firstChunkEnvelope`'s generator (the three lines beneath
+ * `if (first.done) return;`) is what prevents R2 from re-emerging under
+ * any future DRY cleanup that removes it as "redundant with finally".
+ *
+ * The factory below was LIFTED out of `streamWithConcurrentFallback`'s
+ * closure so the R2 regression test (PR-S commit 061a4f5a) can exercise
+ * the success-path re-arm independently of the concurrent-fallback
+ * pipeline. The lock document lives under
+ * web/__tests__/chat/enhanced-llm-service-envelope.test.ts.
+ */
+export interface WrapAsHandleEnv {
+  /** Vercel-AI stream options that get spread into `streamWithVercelAI(...)`. */
+  rest: any;
+  /** Caller's high-level options; `options.model` is used for cross-provider model resolution. */
+  options: { model: string; provider?: string; [k: string]: any };
+  /** Optional findCompatibleModel function; resolves a model the fallback provider's catalog can serve. */
+  findCompatibleModelFn?: (requestedModel: string, availableModels: string[]) => string | null;
+  /** Test seam: override the parsed `LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS` env var (defaults to 25000ms). */
+  firstChunkTimeoutMsOverride?: number;
+}
+
+/**
+ * PR-S2 (Stage 3 R2 defense-in-depth) — factory that returns the SAME `wrapAsHandle`
+ * callable the production `streamWithConcurrentFallback` uses. The closure-local
+ * details are identical to the in-place definition that lived at this site before;
+ * only the closure-scope variables (`rest`, `options`, `findCompatibleModelFn`)
+ * are now passed explicitly to keep the factory testable in isolation.
+ */
+export const wrapAsHandleForConcurrentFallback = (
+  env: WrapAsHandleEnv,
+): ((providerOverride?: string) => Promise<{
+  // NOTE: typed as `unknown` (not `StreamingResponse`) because the inner
+  // envelope yields Vercel AI SDK chunks (`TextStreamPart<TTools>`), not
+  // the `StreamingResponse` shape. The call site in
+  // `streamWithConcurrentFallback` casts to `StreamHandle<StreamingResponse>`
+  // since the concurrent-fallback coordinator only races on first-emission
+  // and never inspects chunk content. Keeping the factory honest avoids
+  // baking a type mismatch into the public contract.
+  gen: AsyncGenerator<unknown>;
+  abort: () => void;
+}>) => {
+  const { rest, options, findCompatibleModelFn, firstChunkTimeoutMsOverride } = env;
+  // PR-Z2 (NaN-guarded parseInt): a typo env-var
+  // (e.g. LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS=abc) MUST NOT silently fall through
+  // to setTimeout(0), which would abort the upstream envelope on the FIRST tick.
+  const _rawFirstChunkMs = firstChunkTimeoutMsOverride ?? parseInt(
+    process.env.LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS ?? '25000', 10,
+  );
+  const firstChunkTimeoutMs =
+    Number.isFinite(_rawFirstChunkMs) && _rawFirstChunkMs > 0
+      ? _rawFirstChunkMs
+      : 25000;
+
+  return (providerOverride?: string) => {
+    const controller = new AbortController();
+    const mergedSignal = rest.signal
+      ? AbortSignal.any([rest.signal, controller.signal])
+      : controller.signal;
+    // Cross-provider model resolution: pick a model ID the fallback
+    // provider's catalog can actually serve. Without this, a stalled
+    // primary can launch a fallback with an unsupported model ID and
+    // fail immediately. When no resolver is provided (tests or
+    // external callers), fall through to `options.model`.
+    const modelForHandle = providerOverride && findCompatibleModelFn
+      ? findCompatibleModelFn(
+          options.model,
+          ((PROVIDERS as any)[providerOverride]?.models || []).map((m: any) =>
+            typeof m === 'string' ? m : m.id,
+          ),
+        ) || options.model
+      : options.model;
+    const upstreamGen = streamWithVercelAI({
+      ...rest,
+      ...(providerOverride
+        ? { provider: providerOverride, model: modelForHandle }
+        : {}),
+      signal: mergedSignal,
+      speculativeFallbackMs: 0,
+    } as any);
+    // PR-Z — clearable first-chunk envelope. Race a setTimeout against
+    // the FIRST `.next()` resolution on the underlying iterator.
+    const upstreamIter = upstreamGen[Symbol.asyncIterator]();
+    let firstChunkTimer: NodeJS.Timeout | undefined = setTimeout(
+      () => controller.abort(new Error(
+        `Upstream first-chunk timeout exceeded (${firstChunkTimeoutMs}ms)`,
+      )),
+      firstChunkTimeoutMs,
+    );
+    // Typed as `unknown` (was `any` before) because the envelope yields
+    // Vercel AI SDK chunks, not `StreamingResponse`. The call site in
+    // `streamWithConcurrentFallback` handles the cast.
+    const firstChunkEnvelope: AsyncGenerator<unknown> = (async function* () {
+      try {
+        const first = await upstreamIter.next();
+        // PR-S2 (Stage 3 R2 fix) -- RE-INSTATE the success-path timer clear
+        // that PR-Z2 / Z-5 (LOW DRY) removed. The PR-Z2 rationale was:
+        //   "the finally clause below clears firstChunkTimer regardless
+        //    of completion path, so the inline clear here is redundant."
+        // That reasoning collapsed two distinct lifecycle windows:
+        //   (a) generator completion (return / throw) -- where the
+        //       finally fires and clears the timer,
+        //   (b) the post-first-chunk drain loop -- where the generator
+        //       is alive (yielding chunks) and the timer is still armed.
+        // The PR-Z2 fix conflates (a) and (b): the finally only runs
+        // on (a), while the generator's lifetime extends WELL PAST
+        // firstChunkTimeoutMs during a healthy-but-slow stream
+        // (e.g. anthropic / openrouter TTFT 2s + 30s inter-chunk gap).
+        // With the timer UNDISARMED after first-chunk arrival, the
+        // firstChunkTimeoutMs deadline elapses while the envelope is
+        // suspended on `await upstreamIter.next()` -- the timer fires,
+        // controller.abort propagates through the merged signal, and
+        // the suspended await throws AbortError -- silently cutting off
+        // an entirely healthy stream mid-drain.
+        //
+        // === LOCK TARGET — DO NOT REMOVE THE CLEAR-ON-SUCCESS BLOCK ===
+        // Removing the 3 lines immediately below `if (first.done) return;`
+        // re-introduces R2. The regression test at
+        // web/__tests__/chat/enhanced-llm-service-envelope.test.ts
+        // catches this exact removal — DO NOT edit without updating
+        // the test.
+        // =================================================================
+        if (first.done) return;
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
+        yield first.value;
+        while (true) {
+          const next = await upstreamIter.next();
+          if (next.done) return;
+          yield next.value;
+        }
+      } finally {
+        if (firstChunkTimer !== undefined) {
+          clearTimeout(firstChunkTimer);
+          firstChunkTimer = undefined;
+        }
+      }
+    })();
+    return Promise.resolve({
+      gen: firstChunkEnvelope,
+      abort: () => controller.abort(),
+    });
+  };
+};
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -423,14 +580,30 @@ export class EnhancedLLMService {
     let contextPackBundle = '';
     if (contextPack && userId && conversationId) {
       try {
-        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+        // #54 NEW-1 followup-d (2026-07-07, ~3-12ms/chat-call): sequential
+        // dynamic-imports collapsed into `Promise.all([import(a),
+        // import(b).catch(() => null)])`. Both ESM imports fire in
+        // parallel; `session-file-tracker` falls back to null so the
+        // original graceful-degradation path (`recentFiles = []`) is
+        // preserved on module-load failure. Downstream `getSessionFiles`
+        // is a sync call wrapped in optional-chaining + nullish-coalesce
+        // to skip the lookup entirely when the module is unavailable,
+        // then caught by the same `chatLogger.debug` fallback as the
+        // prior sequential code. Full structural-safety rationale +
+        // apply-cite: docs/async-parallelization-opportunities.md#54.
+        const [
+          { generateSmartContext },
+          sessionFileTrackerMod,
+        ] = await Promise.all([
+          import('@/lib/virtual-filesystem/smart-context'),
+          import('@/lib/virtual-filesystem/session-file-tracker').catch(() => null),
+        ]);
         const rootPath = normalizeSessionId(conversationId) || '/';
-        
+
         // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
         let recentFiles: string[] = [];
         try {
-          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-          recentFiles = getSessionFiles(conversationId, 10); // O(1) lookup
+          recentFiles = sessionFileTrackerMod?.getSessionFiles(conversationId, 10) ?? [];
         } catch (error: any) {
           chatLogger.debug('Session file lookup failed', { error: error.message });
         }
@@ -659,7 +832,12 @@ export class EnhancedLLMService {
         if (fallbackChain.length > 0) {
           for (const fallbackProvider of fallbackChain) {
             // FIX: Skip providers blacklisted for 2+ consecutive 530 errors
-            if (is530Blacklisted(fallbackProvider)) {
+            if (is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider)) {
+                // PR-E: 5xx-blacklist iteration skip (paired with 530 skip). The provider
+                // is excluded from the chain regardless of whether the cause was origin-unreachable
+                // (530/1016/tunnel-DNS) or generic 5xx (500/502/503/504).
+                // is530Blacklisted(...) || isServerErrorBlacklisted(...) share the same iteration-step
+                // fallback: skip and move to the next provider in the chain.
               chatLogger.warn('530 BLACKLISTED in enhanced-llm-service, skipping fallback', { fallbackProvider });
               continue;
             }
@@ -727,7 +905,14 @@ export class EnhancedLLMService {
               return await postProcessToolCalls(response);
         } catch (fallbackError: any) {
           fallbackAttempted = true;
-          handleProviderError(fallbackProvider, fallbackError);
+          // PR-E + PR-H: both trackers fire here in parallel — pure
+          // record-or-noop, NEVER cross-wipe each other's Map. Non-
+          // matching error signatures (4xx, 5xx-mismatch, 530-mismatch)
+          // leave both counters untouched; only the corresponding
+          // success-path helpers decrement them on a successful
+          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,
@@ -803,14 +988,28 @@ export class EnhancedLLMService {
     let contextPackBundle = '';
     if (contextPack && request.userId && request.conversationId) {
       try {
-        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+        // #55 NEW-1 followup-d (2026-07-07, ~3-12ms/stream-call): sequential
+        // dynamic-imports collapsed into `Promise.all([import(a),
+        // import(b).catch(() => null)])`. Twin of #54 chat-side refactor
+        // with the streaming identifiers (`request.conversationId || ''`,
+        // `chatLogger.debug('... failed (streaming)', ...)`). Same
+        // `.catch` + optional-chaining pattern preserves the graceful-
+        // degradation path on module-load failure. Full structural-
+        // safety rationale + apply-cite:
+        // docs/async-parallelization-opportunities.md#55.
+        const [
+          { generateSmartContext },
+          sessionFileTrackerMod,
+        ] = await Promise.all([
+          import('@/lib/virtual-filesystem/smart-context'),
+          import('@/lib/virtual-filesystem/session-file-tracker').catch(() => null),
+        ]);
         const rootPath = normalizeSessionId(request.conversationId) || '/';
-        
+
         // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
         let recentFiles: string[] = [];
         try {
-          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-          recentFiles = getSessionFiles(request.conversationId || '', 10); // O(1) lookup
+          recentFiles = sessionFileTrackerMod?.getSessionFiles(request.conversationId || '', 10) ?? [];
         } catch (error: any) {
           chatLogger.debug('Session file lookup failed (streaming)', { error: error.message });
         }
@@ -1120,15 +1319,13 @@ export class EnhancedLLMService {
         // (truly aborts the in-flight HTTP request so API credits aren't
         // wasted). Pass concurrentFallbackMs: 0 to fall back to the legacy
         // in-place speculative fallback inside streamWithVercelAI.
+        // Pass the class-bound findCompatibleModel as the second argument
+        // so the concurrent fallback coordinator can resolve a model ID
+        // the fallback provider's catalog can actually serve.
         const baseStream = streamWithConcurrentFallback({
           ...({
             provider: vercelProvider,
             model: llmRequest.model || 'default',
-            // Pass the class-bound findCompatibleModel so the fallback
-            // handle resolves a model ID the fallback provider can serve.
-            // findCompatibleModelFn is not in VercelStreamOptions, so we
-            // spread through a cast object.
-            findCompatibleModelFn: this.findCompatibleModel.bind(this),
           } as any),
           messages: processedMessages,
           system: systemPrompt || undefined,
@@ -1144,7 +1341,7 @@ export class EnhancedLLMService {
           // Pass abort signal and timeout for cancellation support
           signal: request.signal,
           timeoutMs: request.timeoutMs || 90000,
-        });
+        }, this.findCompatibleModel.bind(this));
 
         // Chain: streamWithAutoContinue detects continuation needs,
         // streamWithServerAutoRePrompt actually re-calls LLM with tool results
@@ -1214,21 +1411,23 @@ export class EnhancedLLMService {
       // This mirrors the behavior of generateResponse() which tries every fallback in the chain
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
       
-      // First pass: try healthy providers
+      // First pass: try healthy providers, skipping blacklisted ones
       let availableFallbacks = fallbacks.filter(fallbackProvider => {
         const hasConfig = !!this.getProviderConfigForRequest(fallbackProvider, requestId);
         const isHealthy = this.isProviderHealthy(fallbackProvider);
         const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
-        if (!hasConfig || !isHealthy || !supportsStream) {
+        const isBlacklisted = is530Blacklisted(fallbackProvider) || isServerErrorBlacklisted(fallbackProvider);
+        if (!hasConfig || !isHealthy || !supportsStream || isBlacklisted) {
           chatLogger.debug('Streaming fallback excluded provider', {
             requestId,
             provider: fallbackProvider,
             hasConfig,
             isHealthy,
             supportsStreaming: supportsStream,
+            isBlacklisted,
           });
         }
-        return hasConfig && isHealthy && supportsStream;
+        return hasConfig && isHealthy && supportsStream && !isBlacklisted;
       });
 
       // SAFETY NET: If no healthy providers available, try ALL configured providers as a last resort
@@ -1348,6 +1547,9 @@ export class EnhancedLLMService {
             latencyMs: fallbackLatency,
             error: errorMsg,
           });
+          // Record error for blacklist tracking (mirrors non-streaming fallback)
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
           fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
           lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
           // Continue to next fallback in chain
@@ -1432,6 +1634,14 @@ export class EnhancedLLMService {
         tokensUsed: response.tokensUsed,
         finishReason: response.finishReason,
       });
+      // PR-C: clear the 530-blacklist counter on success (default OFF flag — no-op when disabled).
+      // PR-E: pair the 5xx success-reset alongside the 530-reset. Both tracks
+      // are independently blacklisted and independently recoverable; a provider
+      // that succeeds a 5xx-storm caller could clear both, while a provider that
+      // recovered from a 530 tunnel-DNS event should NOT be affected by an
+      // unrelated 5xx blacklist.
+      // PR-W -- single-call both-trackers reset (replaces the manual pair).
+      maybeResetBothTrackers(provider);
       return response;
     } catch (error) {
       const type = classifyFailure(error);
@@ -1621,12 +1831,43 @@ export class EnhancedLLMService {
 
     try {
       let result: any;
+      // Bug #69 helper-input scoping: `tools` is block-scoped inside the
+      // opencode-cli branch below (it's `let tools: LLMToolDefinition[] = []`
+      // inside the `if (provider === 'opencode-cli')` block). The FC-GATE-0-calls
+      // detector runs AFTER this if/elseif/else chain. Hoist the tool count to
+      // outer scope so the detector can read it without triggering a TDZ /
+      // ReferenceError on the block-scoped variable. The pi branch doesn't
+      // build tools (its native binary-spawn path), so it leaves toolsCount==0
+      // and the FC-GATE detector short-circuits — acceptable since pi has its
+      // own observable failure modes.
+      let toolsCount = 0;
 
       if (provider === 'opencode-cli') {
-        // Check if opencode binary is available
-        const { findOpencodeBinarySync } = await import('../drivers/opencode/find-opencode-binary');
+        // #57 NEW-1 followup-d (2026-07-07, ~2-15ms/cold-start win on
+        // opencode-CLI provider): sequential dynamic-imports collapsed
+        // into `Promise.all([import(find-opencode-binary),
+        // import(opencode-cli).catch(() => null)])`. Both ESM imports
+        // fan-out concurrently; the provider-module import falls back
+        // to null via `.catch()` to PRESERVE the original "skip 2nd
+        // provider-import when binary missing" semantics for users who
+        // never installed the binary (no regression in the no-binary
+        // path). Early-return guard extended to also bail when
+        // `opencodeCliMod` is null (module-load failure). Helper
+        // async-ness: `findOpencodeBinarySync` = sync,
+        // `OpencodeV2Provider` = class ctor (sync). Full structural-
+        // safety rationale + apply-cite:
+        // docs/async-parallelization-opportunities.md#57.
+        const [
+          { findOpencodeBinarySync },
+          opencodeCliMod,
+        ] = await Promise.all([
+          import('../drivers/opencode/find-opencode-binary'),
+          import('../sandbox/spawn/opencode-cli').catch(() => null),
+        ]);
+
+        // Check if opencode binary + provider module are available
         const binaryPath = findOpencodeBinarySync();
-        if (!binaryPath) {
+        if (!binaryPath || !opencodeCliMod) {
           chatLogger.error('[CLI-PROVIDER] opencode binary not found', { requestId });
           yield {
             content: 'OpenCode CLI binary not found. Please install it with: npm install -g opencode-ai',
@@ -1637,9 +1878,12 @@ export class EnhancedLLMService {
           };
           return;
         }
-
-        // Import and use OpencodeV2Provider
-        const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
+        // Re-extract OpencodeV2Provider from the consumed module slot
+        // (the Promise.all destructure upstream gives us `opencodeCliMod`,
+        // not a bare-named `{ OpencodeV2Provider }`; this re-extract is
+        // type-safe because the early-return guard above narrowed
+        // `opencodeCliMod` to non-null).
+        const { OpencodeV2Provider } = opencodeCliMod;
         const providerInstance = new OpencodeV2Provider({
           session: {
             userId,
@@ -1713,6 +1957,10 @@ export class EnhancedLLMService {
                requestId,
                toolCount: tools.length,
              });
+             // Bug #69: hoist the tool count to outer scope (see declaration
+             // before the if/elseif/else chain) so the FC-GATE-0-calls detector
+             // — which lives after the chain ends — can read it.
+             toolsCount = tools.length;
            } catch (toolErr: any) {
               chatLogger.warn('[CLI-PROVIDER] Failed to build tools for opencode-cli', {
                 requestId,
@@ -1752,10 +2000,31 @@ export class EnhancedLLMService {
           });
         } else if (provider === 'pi') {
 
-        // Check if pi binary is available
-        const { findPiBinarySync } = await import('../drivers/agent-bins/find-pi-binary');
+        // #56 NEW-1 followup-d (2026-07-07, ~2-15ms/cold-start win on
+        // pi CLI provider): sequential dynamic-imports collapsed into
+        // `Promise.all([import(find-pi-binary),
+        // import(pi-cli-session).catch(() => null)])`. Both ESM imports
+        // fan-out concurrently; the provider-module import falls back
+        // to null via `.catch()` to PRESERVE the original "skip 2nd
+        // provider-import when binary missing" semantics for users who
+        // never installed the pi binary (no regression in the no-binary
+        // path). Early-return guard extended to also bail when
+        // `piCliMod` is null (module-load failure). Helper async-ness:
+        // `findPiBinarySync` = sync, `createCliPiSession` = async
+        // (export async function; called AFTER the early-return guard).
+        // Full structural-safety rationale + apply-cite:
+        // docs/async-parallelization-opportunities.md#56.
+        const [
+          { findPiBinarySync },
+          piCliMod,
+        ] = await Promise.all([
+          import('../drivers/agent-bins/find-pi-binary'),
+          import('../drivers/pi/pi-cli-session').catch(() => null),
+        ]);
+
+        // Check if pi binary + provider module are available
         const binaryPath = findPiBinarySync();
-        if (!binaryPath) {
+        if (!binaryPath || !piCliMod) {
           chatLogger.error('[CLI-PROVIDER] pi binary not found', { requestId });
           yield {
             content: 'Pi CLI binary not found. Please install it.',
@@ -1769,15 +2038,19 @@ export class EnhancedLLMService {
 
         // Use the actual LLM provider from request.model, or default to 'anthropic'
         // The 'pi' provider is a CLI wrapper that delegates to an actual LLM provider
-        const actualLlmProvider = request.model && request.model !== 'local' 
+        const actualLlmProvider = request.model && request.model !== 'local'
           ? request.model.split('/')[0]  // Extract provider from model like 'anthropic/claude-3.5'
           : 'anthropic';  // Default to anthropic if no model specified
-        
-        const { createCliPiSession } = await import('../drivers/pi/pi-cli-session');
         
         // Wrap createCliPiSession in try-catch to handle initialization failures
         let session: any;
         try {
+          // Re-extract createCliPiSession from the consumed module slot
+          // (the Promise.all destructure upstream gives us `piCliMod`,
+          // not a bare-named `{ createCliPiSession }`; this re-extract is
+          // type-safe because the early-return guard above narrowed
+          // `piCliMod` to non-null).
+          const { createCliPiSession } = piCliMod;
           session = await createCliPiSession({
             cwd: request.scopePath || process.cwd(),
             mode: 'local',
@@ -1871,26 +2144,52 @@ export class EnhancedLLMService {
         steps: result.steps?.length || 0,
       });
 
-      // Bug A/B: if finishReason:'stop' with 0 tool calls and the model is
-      // known to misbehave (mistral-large-latest, qwen3.5-122b-a10b), inject
-      // a steer hint via wireFinishReasonSteer so the model self-corrects on
-      // retry. Best-effort — a steer failure must never break the stream.
+      // Bug #69 (Pass-5 #69 regression cycle fix): the prior detector at this
+      // site called wireFinishReasonSteer with availableTools hardcoded to 0,
+      // which short-circuited the inner guard (`availableTools > 0`) and
+      // produced NO steer prompt — the FC-GATE-0-calls failure mode went
+      // unflagged and unsteered in the run.log audit. The replacement uses
+      // wireFCGateZeroCallsSteer (which CAN detect the FC-GATE condition
+      // with availableTools > 0) and emits the [FC-GATE-ZERO-CALLS] structured
+      // marker distinct from the legacy [STEER] finishReason stop line —
+      // run.log greppers can now spot the FC-GATE failure mode specifically.
+      // Detection is no longer scoped to mistral-large/qwen3.5 — ANY model can
+      // hit this when FC-GATE passes Phase 1 but the model emits text instead
+      // of tool calls. The steer path short-circuits the fallback chain: the
+      // steer prompt goes into the NEXT turn rather than triggering a
+      // provider retry (which would burn credits on a model that already
+      // demonstrated FC-GATE capability).
       const toolCallsDone = (result.steps || []).reduce(
         (n, s) => n + ((s as any).toolCalls || []).length, 0
       );
-      if (toolCallsDone === 0 && (model?.includes('mistral-large') || model?.includes('qwen3.5'))) {
-        try {
-          const hint = wireFinishReasonSteer({
-            finishReason: 'stop',
-            availableTools: 0,
+      // Bug #69 outer-scope read: previously referenced `Array.isArray(tools)`
+      // here, but `tools` is block-scoped to the `if (provider === 'opencode-cli')`
+      // branch above. Read from the hoisted `toolsCount` instead.
+      const availableTools = toolsCount;
+      try {
+        const detection = wireFCGateZeroCallsSteer({
+          toolCallsDone,
+          availableTools,
+          responseText: result.response || '',
+          finishReason: 'stop',
+          provider,
+          model,
+        });
+        if (detection.detected) {
+          // Pass-8 seam-cleanup followup (b): delegate the structured warn
+          // to the single-sourced helper exported from steer-service.ts.
+          // The marker string + field naming is owned by steer-service so
+          // the bug-69 test exercises the same code path as production.
+          emitFCGateZeroCallsLog({
             provider,
             model,
-            responseText: result.response || '',
+            availableTools,
             toolCallsDone,
+            responseLength: (result.response || '').length,
+            steerLength: detection.steer?.length || 0,
           });
-          if (hint) chatLogger.warn('[STEER] finishReason stop with 0 tool calls', { hint, model, provider });
-        } catch { /* steer helper failure is non-fatal */ }
-      }
+        }
+      } catch { /* steer helper failure is non-fatal */ }
 
       yield {
         content: result.response || '',
@@ -2533,7 +2832,6 @@ declare global {
 
 export const enhancedLLMService = globalThis.__enhancedLLMService__ ?? (globalThis.__enhancedLLMService__ = new EnhancedLLMService());
 
-
 /**
  * Concurrent-fallback wrapper around streamWithVercelAI.
  *
@@ -2584,51 +2882,60 @@ export async function* streamWithConcurrentFallback(
     return;
   }
 
-  // Helper: wrap streamWithVercelAI in a StreamHandle with an abort handle.
-  const wrapAsHandle = (providerOverride?: string) => {
-    const controller = new AbortController();
-    const mergedSignal = rest.signal
-      ? AbortSignal.any([rest.signal, controller.signal])
-      : controller.signal;
-    // Cross-provider model resolution: if the caller passed a
-    // findCompatibleModel function (EnhancedLLMService does this), use
-    // it to pick a model ID that the fallback provider's catalog can
-    // actually serve. Without this, a stalled primary can launch a
-    // fallback with an unsupported model ID and fail immediately,
-    // turning the rescue into a no-op on exactly the cross-provider
-    // case this feature exists for. When no resolver is provided
-    // (e.g. from tests or external callers), fall through to the
-    // original model ID.
-    const modelForHandle = providerOverride && findCompatibleModelFn
-      ? findCompatibleModelFn(
-          options.model,
-          ((PROVIDERS as any)[providerOverride]?.models || []).map((m: any) =>
-            typeof m === 'string' ? m : m.id,
-          ),
-        ) || options.model
-      : options.model;
-    const gen = streamWithVercelAI({
-      ...rest,
-      ...(providerOverride
-        ? { provider: providerOverride, model: modelForHandle }
-        : {}),
-      signal: mergedSignal,
-      speculativeFallbackMs: 0,
-    } as any);
-    return Promise.resolve({
-      gen,
-      abort: () => controller.abort(),
-    });
-  };
+  // PR-Z — first-chunk upstream timeout. The Vercel AI SDK's internal
+  // `firstTokenTimeoutMs` (default 30s via LLM_STREAM_FIRST_TOKEN_TIMEOUT_MS
+  // in vercel-ai-streaming.ts:516) fires AFTER the silenceMs (20s) has
+  // already started the chain-walk in `coordinateConcurrentFallback`. On
+  // a Mistral hang (TCP/DNS) with no first chunk, both timers race and
+  // the auto-controlled cleanup can bleed past 60s before any abort
+  // propagates to the chain-walk's `signal?.aborted` check. Layer a
+  // CLEARABLE first-chunk envelope around `streamWithVercelAI` so the
+  // upstream controller aborts at `firstChunkTimeoutMs` regardless of
+  // which internal timer fires. The envelope's `try/finally` clears the
+  // timer on first success so long healthy streams (TTFT > 15s) are
+  // unaffected. Default 25s covers any real provider's worst-case
+  // cold-start while bounding the Mistral hang to O(silenceMs +
+  // firstChunkTimeoutMs) wall-clock — well within the 120s route-level
+  // stall watchdog (route layer's hard ceiling).
+  // PR-Z2 (Stage 2 follow-up): NaN-guarded parseInt so a typo env-var
+  // (e.g. LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS=abc) cannot silently fall through
+  // to setTimeout(0), which would abort the upstream envelope on the FIRST tick.
+  const _rawFirstChunkMs = parseInt(
+    process.env.LLM_STREAM_FIRST_CHUNK_TIMEOUT_MS ?? '25000', 10,
+  );
+  const firstChunkTimeoutMs =
+    Number.isFinite(_rawFirstChunkMs) && _rawFirstChunkMs > 0
+      ? _rawFirstChunkMs
+      : 25000;
 
-  yield* coordinateConcurrentFallback({
+  // Helper: wrap streamWithVercelAI in a StreamHandle with an abort handle.
+  // PR-S2 factory delegation: production caller delegates to the module-level
+  // `wrapAsHandleForConcurrentFallback` factory. The result is a closure that
+  // is byte-for-byte identical to the previous closure-local definition; only
+  // the closure-scope variables (`rest`, `options`, `findCompatibleModelFn`)
+  // are now passed as explicit parameters. The factory's JSDoc + the LOCK
+  // TARGET comment (3 lines under `if (first.done) return;`) is the single
+  // source of truth for R2's success-path clearTimeout re-arm semantics.
+  const wrapAsHandle = wrapAsHandleForConcurrentFallback({
+    rest,
+    options,
+    findCompatibleModelFn,
+  });
+
+  // Cast factories to `StreamHandle<StreamingResponse>`: the concurrent-fallback
+  // coordinator only races on first-emission and never inspects chunk content,
+  // so the `unknown` chunk type from `wrapAsHandleForConcurrentFallback` is
+  // safe to treat as `StreamingResponse` at this boundary. The cast is
+  // localized to the call site rather than baked into the factory's public
+  // contract (which would be a type lie — the envelope yields Vercel chunks).
+  yield* coordinateConcurrentFallback<StreamingResponse>({
     primaryProvider: options.provider,
     model: options.model,
     fallbackChain,
     silenceMs: concurrentFallbackMs,
     signal: options.signal,
     requestId: `ellm-${Date.now()}`,
-    createPrimaryStream: () => wrapAsHandle(),
-    createFallbackStream: (fbProvider) => wrapAsHandle(fbProvider),
+    createPrimaryStream: () => wrapAsHandle() as unknown as Promise<StreamHandle<StreamingResponse>>,
+    createFallbackStream: (fbProvider) => wrapAsHandle(fbProvider) as unknown as Promise<StreamHandle<StreamingResponse>>,
   });
 }

@@ -46,6 +46,11 @@ import { createLogger } from '@/lib/utils/logger';
 // bing/web/lib/virtual-filesystem/id-normalization.ts Bug #26 hot-fix for
 // the full rationale).
 import { extractSessionIdFromOwnerId } from '@/lib/virtual-filesystem/id-normalization';
+// Pass-8 seam-cleanup followup (b): emitFCGateZeroCallsLog uses chatLogger
+// as the single source of truth for the [FC-GATE-ZERO-CALLS] structured run.log
+// marker. chat-logger is a leaf module (no transitive dep back to steer-service),
+// so this import is acyclic.
+import { chatLogger } from '@/lib/chat/chat-logger';
 
 const logger = createLogger('SteerService');
 
@@ -188,6 +193,23 @@ export type SteerTrigger =
         /** True when the orchestrator hit its budget cap (most common case). */
         budgetExhausted: boolean;
         suggestion: string;
+      };
+    }
+  | {
+      // Bug #69 (Pass-5 #69 regression cycle fix): the FC-GATE-0-calls failure
+      // mode — distinct from generic missing_tool_call. Emitted when tools
+      // ARE available (FC-GATE passed Phase 1) but the model chose to emit
+      // plain text instead of tool calls (finishReason='stop' or undefined,
+      // 0 tool_calls, responseText non-empty, availableTools > 0). Distinguish
+      // so [STEER] prompts can say "FC-GATE passed earlier, do NOT fall back
+      // to plain text" rather than the generic missing_tool_call body.
+      kind: 'fc_gate_no_call';
+      detail: {
+        availableTools: number;
+        provider?: string;
+        model?: string;
+        finishReason?: string;
+        responseLength: number;
       };
     };
 
@@ -340,6 +362,27 @@ function renderBody(trigger: SteerTrigger): string {
         `The previous response is DEGRADED — do NOT continue the multi-step plan that failed. ` +
         `${suggestion}`;
     }
+
+    case 'fc_gate_no_call': {
+      // Bug #69 steer prompt — distinct from missing_tool_call because the
+      // failure mode is different: tools ARE available (FC-GATE passed Phase
+      // 1) but the model chose text-mode anyway. The prompt must tell the
+      // model "FC-GATE passed earlier" so it does NOT re-enter plain-text
+      // mode on retry. Distinct from orchestration_fallback (that fires on
+      // orchestrator degradation); both can coexist but steer differently.
+      // Note: the LLM-friendly canonical name for the failure mode is
+      // "FC-GATE Phase 2 text-mode fallback" (per Pass-6 #82 audit) — using
+      // the colloquial "plain-text mode" can collapse it with the generic
+      // missing_tool_call case from the LLM's perspective.
+      const { availableTools, provider, model, finishReason, responseLength } = trigger.detail;
+      const src = provider && model ? ` from ${provider}/${model}` : '';
+      const reason = finishReason ? ` (finishReason="${finishReason}")` : '';
+      return `Your previous response${src}${reason} stopped with 0 tool calls despite ${availableTools} tools being available (responseLength=${responseLength} chars). ` +
+        `FC-GATE Phase 1 passed earlier in this session — your model supports function calling. ` +
+        `Do NOT take the FC-GATE Phase 2 text-mode fallback; pick the most appropriate of the ${availableTools} tools ` +
+        `and invoke it explicitly on your next turn. ` +
+        `If no tool fits the current task, say so in one sentence so the orchestrator can re-route.`;
+    }
   }
 }
 
@@ -473,10 +516,37 @@ export function steerFromFinishReason(input: {
       detail: { provider, model, finishReason },
     };
   }
+  // Pass-8 seam-cleanup followup (a): unify the "tools available, zero tool
+  // calls, non-empty response" branch so it emits `fc_gate_no_call` (NOT the
+  // legacy `missing_tool_call`). Rationale: this branch fires AFTER the
+  // `empty_completion` guard above, which means the model returned TEXT
+  // despite having tool support — the exact FC-GATE-0-calls failure mode
+  // already handled by wireFCGateZeroCallsSteer at L890+. Two prefixes for
+  // the same condition produced two [STEER] prompts (one was short and
+  // generic, the other FC-GATE-specific). Routed to the canonical variant;
+  // `responseLength: responseText.length` is REQUIRED by the fc_gate_no_call
+  // detail shape (existing renderBody at L322+ prints it in the prompt body).
+  //
+  // INTENTIONAL WIDER LENIENCY (vs wireFCGateZeroCallsSteer): this stream-time
+  // finishReason→trigger mapper deliberately does NOT gate on
+  // `finishReason === 'stop' || undefined`. The legacy missing_tool_call
+  // variant was equally permissive (matched any finishReason for the
+  // no-calls branch), and rerouting 1:1 to fc_gate_no_call preserves the
+  // original semantics. wireFCGateZeroCallsSteer's tighter gate (only
+  // 'stop' or undefined) is appropriate for the orchestrator's
+  // post-stream-with-CLI-binary reconciliation path where finishReason is
+  // a controlled post-completion snapshot. Two failure-mode detectors
+  // will sometimes overlap; that is by design.
   if (availableTools > 0 && toolCallsDone === 0) {
     return {
-      kind: 'missing_tool_call',
-      detail: { availableTools, provider, model, finishReason },
+      kind: 'fc_gate_no_call',
+      detail: {
+        availableTools,
+        provider,
+        model,
+        finishReason,
+        responseLength: responseText.length,
+      },
     };
   }
   return null;
@@ -724,6 +794,7 @@ export const ALL_STEER_TRIGGER_KINDS: readonly SteerTriggerKind[] = [
   'tool_name_alias_rewrite',
   'loop_abort',
   'orchestration_fallback',
+  'fc_gate_no_call', // Bug #69 (Pass-5 #69 regression cycle fix — distinct from missing_tool_call)
 ] as const;
 
 // ============================================================================
@@ -811,6 +882,59 @@ export function wireFinishReasonSteer(input: {
   if (!trigger) return null;
   steerMetrics.recordFire(trigger.kind);
   return buildSteerPrompt(trigger);
+}
+
+/**
+ * Bug #69 (Pass-5 #69 regression cycle fix): detect the FC-GATE-0-calls
+ * failure mode specifically — distinct from generic missing_tool_call.
+ *
+ * Conditions: the model stopped (finishReason='stop' OR undefined) with
+ * TEXT content emitted (responseText.length > 0) AND 0 tool calls were
+ * made DESPITE tools being available (availableTools > 0). This is NOT
+ * a missing-tool scenario (tools exist, FC-GATE confirmed) — it is the
+ * model falling back to plain text mid-turn after FC-GATE passed Phase 1.
+ *
+ * The orchestrator should:
+ *   1. Emit `chatLogger.warn('[FC-GATE-ZERO-CALLS] ...', structuredFields)`
+ *      so run.log greppers see the FC-GATE failure mode specifically
+ *      (distinct from the older [STEER] finishReason stop marker).
+ *   2. Inject the returned steer prompt into the next turn, NOT re-run the
+ *      fallback chain — the model already demonstrated it can handle FC-GATE,
+ *      so a different provider will likely hit the same failure mode with
+ *      worse latency. The steer path is the cheaper fix.
+ *
+ * Returns `null` (steer: null) when the conditions are not met so callers
+ * can short-circuit without a try/throw dance.
+ */
+export function wireFCGateZeroCallsSteer(input: {
+  toolCallsDone: number;
+  availableTools: number;
+  responseText: string;
+  finishReason?: string;
+  provider?: string;
+  model?: string;
+}): { detected: boolean; steer: string | null } {
+  const { toolCallsDone, availableTools, responseText, finishReason, provider, model } = input;
+  const isFCGateZeroCalls =
+    toolCallsDone === 0 &&
+    availableTools > 0 &&
+    (finishReason === 'stop' || finishReason === undefined) &&
+    responseText.trim().length > 0;
+  if (!isFCGateZeroCalls) {
+    return { detected: false, steer: null };
+  }
+  const trigger: SteerTrigger = {
+    kind: 'fc_gate_no_call',
+    detail: {
+      availableTools,
+      provider,
+      model,
+      finishReason,
+      responseLength: responseText.length,
+    },
+  };
+  steerMetrics.recordFire('fc_gate_no_call');
+  return { detected: true, steer: buildSteerPrompt(trigger) };
 }
 
 /**
@@ -991,8 +1115,10 @@ export const incompleteConfidenceThreshold = {
 // categorizeAbortReason() inspects the last N failed tool calls and picks
 // the dominant failure mode:
 //   - binary_missing    — all N failures are ENOENT for the same binary
-//   - tool_failing   — all N failures are capability_not_found / alias_rewrite
-//   - timeout           — all N failures are idle_timeout / TIMEOUT-TTFT
+//   - tool_failing      — dominant pattern is the same tool failing repeatedly
+//                         (not ENOENT — tool exists but results are broken)
+//   - mixed             — failures span 2+ distinct categories (e.g. one ENOENT
+//                         + one timeout + one not_found)
 //   - unknown           — anything else (mixed, or unclassifiable)
 //
 // wireLoopAbortSteer() builds the [STEER] prompt + a structured abort
@@ -1248,9 +1374,120 @@ export function wireFileEditRejectionSteer(input: {
     `Common fixes: paths must look like "src/app.ts" (no CSS values, no template literals, no HTML); ` +
     `fenced blocks need non-empty content; ` +
     `do not re-emit the same path twice - combine into one edit.`,
-  );
+  );const prompt = `[STEER] ${lines.join(' ')}`;
+steerMetrics.recordFire('dropped_text_mode_edit');
+return prompt;
+}
 
-  const prompt = `[STEER] ${lines.join(' ')}`;
-  steerMetrics.recordFire('dropped_text_mode_edit');
+// ---------------------------------------------------------------------------
+// Bug #113 (Pass-8): wireMissingRequiredArgsSteer
+// ---------------------------------------------------------------------------
+/**
+ * Inject a precise [STEER] prompt naming the EXACT missing required fields when
+ * the LLM calls a tool with empty/missing required args.
+ *
+ * Why a dedicated helper (vs. reusing `wireToolResultFalseSteer`):
+ *   - `wireToolResultFalseSteer` signals "the tool result failed"; here we
+ *     signal "your tool call was malformed — you omitted required fields"
+ *     BEFORE the call is dispatched. Different lifecycle, different steer.
+ *   - The prompt names the specific missing fields + (optionally) lists the
+ *     available fields the model can use, so the LLM can self-correct on the
+ *     next turn without guessing.
+ *
+ * @param toolName — the tool the LLM called (e.g. `'file.write'`).
+ * @param missingFields — non-empty list of required fields the LLM omitted.
+ * @param availableFields — optional list of the tool's valid field names; if
+ *   provided, the steer lists them so the model doesn't have to guess.
+ * @param schemaHint — optional handler-specific hint (e.g. "path must start
+ *   with '/sessions/'" or "use ISO-8601 timestamps"). Appended verbatim.
+ *
+ * Returns an empty string if `missingFields` is empty (caller decides whether
+ * the empty case is a real "no missing fields" or just "no argument validator
+ * fired"). Records the fire in the existing `missing_tool_call` metric
+ * bucket so dashboards can count this without adding a new union variant.
+ */
+export function wireMissingRequiredArgsSteer(input: {
+  toolName: string;
+  missingFields: readonly string[];
+  availableFields?: readonly string[];
+  schemaHint?: string;
+}): string {
+  const { toolName, missingFields, availableFields, schemaHint } = input;
+  if (!Array.isArray(missingFields) || missingFields.length === 0) return '';
+  if (typeof toolName !== 'string' || toolName.length === 0) return '';
+
+  const fieldsList = missingFields.join(', ');
+  const available =
+    Array.isArray(availableFields) && availableFields.length > 0
+      ? ` Available fields for ${toolName}: ${availableFields.join(', ')}.`
+      : '';
+  const hint = typeof schemaHint === 'string' && schemaHint.length > 0 ? ` ${schemaHint}` : '';
+
+  const prompt =
+    `[STEER] Tool "${toolName}" was called without required field(s): ${fieldsList}.${available} ` +
+    `Re-call ${toolName} with ALL required fields populated. Do NOT retry without filling these in.${hint}`;
+
+  // Record under existing `missing_tool_call` bucket so metric dashboards and
+  // existing tests pick it up. Aligns with neighbour helpers
+  // (wireToolResultFalseSteer, wireLoopAbortSteer) which also recordFire unguarded.
+  steerMetrics.recordFire('missing_tool_call');
+
+  // Adoption is deferred to the next seam: the closest caller is
+  // `bing/web/lib/chat/vercel-ai-streaming.ts` L~2647-2653 where the existing
+  // `_recoveryHint` for `INVALID_ARGS` code emits only a generic message. To
+  // finish the audit-#113 ask end-to-end we need that site to surface the
+  // missing-fields list (via `validateToolArgs`) and call this helper alongside
+  // the existing `_recoveryHint` assignment. Keeping the helper stand-alone
+  // here so the diff is tight and the unit tests are independent of the
+  // vercel-ai-streaming validator refactor.
+
   return prompt;
+}
+
+// ============================================================================
+// Pass-8 seam-cleanup followup (b): emitFCGateZeroCallsLog
+// ============================================================================
+/**
+ * Emit the [FC-GATE-ZERO-CALLS] structured warn as the single source of truth
+ * for the FC-GATE-0-calls failure mode. Production call site
+ * (`bing/web/lib/chat/enhanced-llm-service.ts` L1905-1930 inside
+ * streamWithCLIBinary) and tests
+ * (`bing/web/__tests__/bug-69-fc-gate-zero-calls.test.ts`) both invoke this
+ * helper, so any change to the marker string or field naming propagates in
+ * lockstep — no risk of the test and production drifting apart.
+ *
+ * Behaviour: pure side-effect log. Never throws (chatLogger.warn does not
+ * throw). The marker `[FC-GATE-ZERO-CALLS]` is the grep-anchor that run.log
+ * FC-GATE failure mode detectors key on; distinct from the legacy
+ * `[STEER] finishReason stop` marker so greppers can disambiguate.
+ *
+ * @param fields.provider — provider name (e.g. 'mistral').
+ * @param fields.model — model name (e.g. 'mistral-small-latest').
+ * @param fields.availableTools — total tools the model could have called.
+ * @param fields.toolCallsDone — count actually invoked (the bug is when 0).
+ * @param fields.responseLength — chars of model response text. Required so
+ *   run.log filters can sanity-check "0 tool calls despite N chars of text".
+ * @param fields.steerLength — chars of the [STEER] prompt that was injected.
+ *   Required so the audit can correlate the warn with the steer length
+ *   (sentinel: 0 means bug regression — the steer helper returned null).
+ */
+export function emitFCGateZeroCallsLog(fields: {
+  provider?: string;
+  model?: string;
+  availableTools: number;
+  toolCallsDone: number;
+  responseLength: number;
+  steerLength: number;
+}): void {
+  chatLogger.warn(
+    '[FC-GATE-ZERO-CALLS] LLM stopped with 0 tool calls despite tools available',
+    {
+      provider: fields.provider,
+      model: fields.model,
+      availableTools: fields.availableTools,
+      toolCallsDone: fields.toolCallsDone,
+      responseLength: fields.responseLength,
+      steerLength: fields.steerLength,
+    },
+  );
 }

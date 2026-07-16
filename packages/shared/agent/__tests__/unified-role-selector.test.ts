@@ -441,8 +441,12 @@ describe('normalizeAndValidateRole', () => {
     }
   });
 
-  it('returns valid:false for unknown role', () => {
-    const result = normalizeAndValidateRole('nonexistent_role_xyz', 'test task');
+  // SEV-13: passing mode='all' restores the pre-SEV-12 broad-union contract
+  // (full 76-union acceptance, message containing 'not recognized' and
+  // 'Available roles include'). MCP role_selection + unit-test callers use
+  // this path explicitly.
+  it('returns valid:false for unknown role (mode=all)', () => {
+    const result = normalizeAndValidateRole('nonexistent_role_xyz', 'test task', { mode: 'all' });
     expect(result.valid).toBe(false);
     if (!result.valid) {
       expect(result.roleAdopted).toBe('nonexistent_role_xyz');
@@ -462,8 +466,10 @@ describe('normalizeAndValidateRole', () => {
     }
   });
 
-  it('returns valid:true for supplementary role', () => {
-    const result = normalizeAndValidateRole('mlEngineer', 'Train a model');
+  // SEV-13: mlEngineer is in the supplementary set (76-union) but NOT in
+  // the 9-ID choose-role menu. Pass mode='all' to accept the broader union.
+  it('returns valid:true for supplementary role (mode=all)', () => {
+    const result = normalizeAndValidateRole('mlEngineer', 'Train a model', { mode: 'all' });
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(result.roleAdopted).toBe('mlEngineer');
@@ -472,8 +478,10 @@ describe('normalizeAndValidateRole', () => {
     }
   });
 
-  it('returns valid:true for general domain role', () => {
-    const result = normalizeAndValidateRole('legalAnalyst', 'Review this contract');
+  // SEV-13: legalAnalyst is in general-v1 (76-union) but NOT in the 9-ID
+  // choose-role menu. mode='all' preserves the broader acceptance contract.
+  it('returns valid:true for general domain role (mode=all)', () => {
+    const result = normalizeAndValidateRole('legalAnalyst', 'Review this contract', { mode: 'all' });
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(result.roleAdopted).toBe('legalAnalyst');
@@ -482,8 +490,10 @@ describe('normalizeAndValidateRole', () => {
     }
   });
 
-  it('returns valid:true for general-v2 role', () => {
-    const result = normalizeAndValidateRole('chef', 'Create a recipe');
+  // SEV-13: chef is in general-v2 (76-union) but NOT in the 9-ID menu.
+  // mode='all' preserves the broader acceptance contract.
+  it('returns valid:true for general-v2 role (mode=all)', () => {
+    const result = normalizeAndValidateRole('chef', 'Create a recipe', { mode: 'all' });
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(result.roleAdopted).toBe('chef');
@@ -492,8 +502,10 @@ describe('normalizeAndValidateRole', () => {
     }
   });
 
-  it('returns valid:true for general-v4 role', () => {
-    const result = normalizeAndValidateRole('scientist', 'Run an experiment');
+  // SEV-13: scientist is in general-v4 (76-union) but NOT in the 9-ID menu.
+  // mode='all' preserves the broader acceptance contract.
+  it('returns valid:true for general-v4 role (mode=all)', () => {
+    const result = normalizeAndValidateRole('scientist', 'Run an experiment', { mode: 'all' });
     expect(result.valid).toBe(true);
     if (result.valid) {
       expect(result.roleAdopted).toBe('scientist');
@@ -556,6 +568,64 @@ describe('normalizeAndValidateRole', () => {
       expect(result.roleAdopted).toBe('architect');
       // Prompt should exist even without filesystem edits
       expect(result.rolePrompt.length).toBeGreaterThan(50);
+    }
+  });
+
+  // ── SEV-13 mode-aware default tests ───────────────────────────────────
+  //
+  // These guard against regressions in the mode='choose' (default) narrow:
+  //   • unknown roles reject with menu-specific message
+  //   • broad-union roles (e.g. supplementary / general* IDs not in the
+  //     9-ID menu) reject with menu-specific message + broader-union hint
+  //   • core roles still validate (they're in BOTH the menu and the union)
+  it('returns valid:false for unknown role with default mode=choose', () => {
+    // Pre-SEV-13: this would have rejected with 'not recognized' message.
+    // Post-SEV-13 default ('choose'): rejection uses the menu-specific
+    // 'not available in the current choose-role menu' message instead.
+    const result = normalizeAndValidateRole('nonexistent_role_xyz', 'test task');
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.roleAdopted).toBe('nonexistent_role_xyz');
+      expect(result.message).toContain('not available in the current choose-role menu');
+      expect(result.message).toContain('Choose from one of');
+    }
+  });
+
+  it('returns valid:false when broad-union role passed to default mode=choose', () => {
+    // mlEngineer is in the supplementary 76-union but NOT in the 9-ID choose
+    // menu. With the default 'choose' mode this is rejected. SEV-13
+    // LLM-retry-leak guard: the rejection message is intentionally the
+    // simple "use one of: {available}" form — no broader-union hint or
+    // `{ mode: 'all' }` projection, both of which would otherwise leak
+    // back to the LLM via `chooseRoleCapability.execute()` and trigger an
+    // infinite retry loop on the same rejected role.
+    const result = normalizeAndValidateRole('mlEngineer', 'Train a model');
+    expect(result.valid).toBe(false);
+    if (!result.valid) {
+      expect(result.roleAdopted).toBe('mlEngineer');
+      expect(result.message).toContain('not available in the current choose-role menu');
+      expect(result.message).toContain('Choose from one of');
+      // Rejection message MUST NOT mention mode (would be unactionable
+      // for the LLM because `choose_role` schema has no mode field).
+      expect(result.message).not.toContain('mode:');
+      expect(result.message).not.toContain('broader 76-role union');
+    }
+  });
+
+  it('returns valid:true for known core role across both modes (mixed-mode coverage)', () => {
+    // Core roles (coder, debugger, architect, reviewer, etc.) are in BOTH
+    // the 9-ID choose-role menu AND the 76-union. They must validate under
+    // any mode — this guards against a future regression that accidentally
+    // divides the two membership sources.
+    const resultChoose = normalizeAndValidateRole('architect', 'Design the system');
+    expect(resultChoose.valid).toBe(true);
+    if (resultChoose.valid) {
+      expect(resultChoose.roleSource).toBe('core');
+    }
+    const resultAll = normalizeAndValidateRole('architect', 'Design the system', { mode: 'all' });
+    expect(resultAll.valid).toBe(true);
+    if (resultAll.valid) {
+      expect(resultAll.roleSource).toBe('core');
     }
   });
 });

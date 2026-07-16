@@ -23,12 +23,29 @@
  */
 
 import type BetterSqlite3 from 'better-sqlite3'
+// SEV-12 (2026-06-18 fix): bare global `require` is NOT defined in pure ESM
+// (package.json `"type": "module"`). The module-load
+// `require('../../database/connection-shim')` below therefore threw
+// `ReferenceError: require is not defined`, classified as `unknown` and
+// silently degrading terminal-session persistence to the in-memory store.
+// Mirror the createRequire pattern already used in connection.ts (line 22)
+// and connection-shim.ts so the require() resolves under strict ESM.
+import { createRequire } from 'node:module'
+const require = createRequire(import.meta.url)
 import { createLogger } from '../../utils/logger'
 import { getSandboxProvider, type SandboxProviderType } from '../../sandbox/providers'
 import { quotaManager } from '../../management/quota-manager'
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider'
 import { secureRandomId } from '@/lib/utils/crypto-random'
 import { workspaceSessionGraph } from '@/lib/workspace/workspace-session-graph'
+// Reuse the SQLite failure taxonomy from session-store.ts (classifySqliteFailure)
+// and the 3-shape unwrap helper from the LEAF module lib/database/unwrap-default-export.
+// The two were previously co-imported from session-store, but the import there
+// created a circular dep that crashed `pnpm run dev` (see 2026-06-18 run.log —
+// `ReferenceError: Cannot access 'getDatabase' before initialization`). The leaf
+// module breaks the cycle AND is TDZ-defensive on shape-C property access.
+import { classifySqliteFailure } from '@/lib/database/sqlite-failure'
+import { unwrapDefaultExport } from '../../database/unwrap-default-export'
 
 const logger = createLogger('Terminal:SessionManager')
 
@@ -122,10 +139,37 @@ const MAX_SESSIONS_PER_USER = parseInt(process.env.MAX_TERMINAL_SESSIONS_PER_USE
 // at bundle time to the correct file.  It only fails in raw Node [eval] context
 // where the cwd is the project root instead of the file's directory.  The
 // fallback use of in-memory store is acceptable for that environment.
+//
+// BUG FIX (3-shape ladder, mirrors storage/session-store.ts):
+// connection.ts exports BOTH `export function getDatabase()` AND
+// `export default getDatabase`. Next.js / turbopack can flatten that to one
+// of three observable shapes on the require() side:
+//
+//   Shape A (CJS-hoisted)        : typeof mod === 'function'                   → mod itself callable
+//   Shape B (ESM-wrapped)        : { default: fn, getDatabase: fn, __esModule } → mod.default callable
+//   Shape C (named-only flatten) : { getDatabase: fn, ... } (no `default`)      → mod.getDatabase callable
+//                                  ← the case the dev-server log actually shows:
+//                                  typeof conn=object, conn.default=undefined
+//
+// Earlier unwraps only handled A and B and threw on Shape C — producing the
+// `kind: 'interop-mismatch', reason: 'getDatabase is not a function'` warn.
+// Delegate to the shared 3-shape helper unwrapDefaultExport(...)
+// (single source of truth across session-store, terminal-session-manager,
+// and jwt × 3 sites) rather than re-implementing the ladder inline.
+// The helper is now in a leaf module so that this initialization cannot
+// re-import session-store and create a module-resolution cycle.
 try {
-  const dbModule = require('../../database/connection');
-  const getDatabase = (dbModule.default || dbModule) as unknown as () => BetterSqlite3.Database;
-  db = getDatabase()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dbModule: any = require('../../database/connection-shim');
+  const getDatabase = unwrapDefaultExport<() => BetterSqlite3.Database>(dbModule);
+  if (typeof getDatabase !== 'function') {
+    throw new TypeError(
+      `getDatabase is not a function: database/connection-shim did not export a callable default ` +
+      `(typeof dbModule=${typeof dbModule}, dbModule.default=${typeof dbModule?.default}, dbModule.getDatabase=${typeof dbModule?.getDatabase}). ` +
+      `This is a CJS/ESM interop mismatch, not a better-sqlite3 binding issue.`,
+    );
+  }
+  db = getDatabase();
 
   // Create terminal_sessions table
   db.exec(`
@@ -195,7 +239,13 @@ try {
   logger.info('Using SQLite for terminal session persistence')
 } catch (error: any) {
   useSqlite = false
-  logger.warn('SQLite unavailable, using in-memory store:', error.message)
+  // Surface WHY the SQLite path failed (arch mismatch, libc missing, hoisted
+  // CJS-default interop, etc.) instead of a single-bit message that hides the
+  // root cause. Mirrors storage/session-store.ts's classification.
+  logger.warn(
+    'SQLite unavailable, using in-memory store:',
+    classifySqliteFailure(error),
+  )
 }
 
 // Periodic cleanup

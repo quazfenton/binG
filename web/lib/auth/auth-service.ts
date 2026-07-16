@@ -3,8 +3,8 @@ export const runtime = 'nodejs';
 
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { getDatabase } from '@/lib/database/connection';
-import { DatabaseOperations } from '../database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
+import { DatabaseOperations } from '../database/connection-shim';
 import { generateToken, blacklistToken, isTokenExpiringSoon } from './jwt';
 import { authCache } from './auth-cache';
 import { createLogger } from '../utils/logger';
@@ -417,18 +417,45 @@ export class AuthService {
         return { success: false, error: passwordValidation.error };
       }
 
-      // Check if email already exists
-      const emailExists = await this.checkEmailExists(credentials.email);
+      // #51 NEW-1 followup-d (2026-07-07, ~5-15ms/auth-signup): sequential
+      // email + username existence SELECTs collapsed into `Promise.all`.
+      // Verdict table rationale: independent DB field reads (different
+      // rows, different indices), no shared transaction or write-state
+      // between them. auth/Platform structural read-only semantics
+      // confirmed safe — both branches map to a static `error` string and
+      // `success: false` return, no shared mutation, no shared connection
+      // (sign-up is pre-user-creation, no JWT to refresh).
+      //
+      // GUARD PRESERVATION — the second SELECT's conditional
+      // `if (credentials.username)` truthy check is preserved via a
+      // Promise.resolve(false) short-circuit slot, so the parallel fan-out
+      // never invokes `checkUsernameExists(undefined)` (which would either
+      // throw or query for an undefined row — the safe short-circuit
+      // preserves the original semantics).
+      //
+      // SEMANTIC EQUIVALENCE — the original short-circuit-on-first-conflict
+      // is preserved by checking both booleans AFTER Promise.all resolves;
+      // if both exist (rare but possible), the email-first precedence
+      // matches the original sequential prioritization (email-conflict
+      // raised before username-conflict).
+      //
+      // ACCEPTED TRADE-OFF — `Promise.all` will fire both DB acquires
+      // concurrently; a first-query rejection will surface alongside
+      // (rather than hide) the second-query error. The second query is
+      // wasted work in the rejection case but the user-facing error
+      // message and stack are unchanged from the original sequential
+      // behavior. Monitoring will see N+1 DB errors instead of N on
+      // first-query failure — acceptable for the ~5-15ms/auth-signup win.
+      const [emailExists, usernameExists] = await Promise.all([
+        this.checkEmailExists(credentials.email),
+        credentials.username ? this.checkUsernameExists(credentials.username) : Promise.resolve(false),
+      ]);
+
       if (emailExists) {
         return { success: false, error: 'Email already registered' };
       }
-
-      // Check if username already exists (if provided)
-      if (credentials.username) {
-        const usernameExists = await this.checkUsernameExists(credentials.username);
-        if (usernameExists) {
-          return { success: false, error: 'Username already taken' };
-        }
+      if (usernameExists) {
+        return { success: false, error: 'Username already taken' };
       }
 
       // Hash password

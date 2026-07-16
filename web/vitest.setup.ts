@@ -24,7 +24,7 @@ vi.mock('@bing/shared/FS/index', () => ({
 // Reset mock database singleton before each test to ensure clean state
 // This is a workaround for Vitest module caching
 try {
-  const { resetMockDatabase } = require('./lib/database/connection');
+  const { resetMockDatabase } = require('./lib/database/connection-shim');
   if (typeof resetMockDatabase === 'function') {
     resetMockDatabase();
   }

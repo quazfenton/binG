@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server';
 
 import { createLogger } from '@/lib/utils/logger';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
-import { isDatabaseAvailable } from '@/lib/database/connection';
+import { isDatabaseAvailable } from '@/lib/database/connection-shim';
 
 const logger = createLogger('Auth:TransferAnonVFS');
 
@@ -213,6 +213,12 @@ async function tryDbFallback(params: {
     });
     return 0;
   }
+
+  // Bug #3 fix (Pass-6 audit): defensive guard MOVED here from tryTransfer where
+  // it was dead code (out of scope — recentAnonOwnerIds is only declared inside
+  // this tryDbFallback). Normalise any null/undefined entries from a mock or
+  // future code path into an empty array BEFORE the candidate filter below runs.
+  recentAnonOwnerIds = recentAnonOwnerIds.filter((x): x is string => x != null);
 
   // Scope to ownerIds whose session-id portion starts with the same
   // timestamp prefix as the cookie. ownerId format is "anon:<sessionId>"

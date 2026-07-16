@@ -421,22 +421,36 @@ export async function getProviderHealth(): Promise<
 
   const circuitStates = getCircuitBreakerStates();
 
-  for (const [name, config] of Object.entries(providerConfigs)) {
-    try {
-      const available = await config.isAvailable();
-      const circuitState = circuitStates[name];
-      
-      health[name as ProviderName] = { 
-        available,
-        circuitState: circuitState?.state,
-        circuitFailures: circuitState?.failures,
-      };
-    } catch (error) {
-      health[name as ProviderName] = {
-        available: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      };
-    }
+  // NEW-C2 (doc/async-parallelization-opportunities.md §NEW-1 followup-c):
+  // Fan out per-provider `isAvailable()` calls in PA so the wallclock is
+  // max-of-N rather than sum-of-N. Each provider's try/catch returns
+  // { available: false, error } on failure, preserving the existing
+  // semantic-isolation contract: a single failing provider does not deny
+  // health results for the healthy siblings. The pre-fetched
+  // circuitStates lookup is read inside the map callback (sync map
+  // access, no I/O). Health-dashboard-only footprint per the doc —
+  // ~1-5ms saved per call (3 providers × microtask hop + env-var reads).
+  const healthEntries = await Promise.all(
+    Object.entries(providerConfigs).map(async ([name, config]) => {
+      try {
+        const available = await config.isAvailable();
+        const circuitState = circuitStates[name];
+
+        return [name, { 
+          available,
+          circuitState: circuitState?.state,
+          circuitFailures: circuitState?.failures,
+        }] as const;
+      } catch (error) {
+        return [name, {
+          available: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }] as const;
+      }
+    })
+  );
+  for (const [name, entry] of healthEntries) {
+    health[name as ProviderName] = entry;
   }
 
   return health;

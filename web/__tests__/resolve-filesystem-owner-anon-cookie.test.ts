@@ -334,10 +334,10 @@ describe('resolveFilesystemOwner + withAnonSessionCookie — anon cookie stabili
     });
     const owner = await resolveFilesystemOwner(req);
 
-    // The ownerId should NOT contain the attacker-controlled value
-    expect(owner.ownerId).not.toContain('attacker');
-    // Should be derived from the cookie (with 'anon:' prefix)
+    // The ownerId must be derived strictly from the cookie, not the header
     expect(owner.ownerId).toBe(`anon:${existingCookie}`);
+    // Verify the attacker-controlled value is completely absent from the output
+    expect(owner.ownerId).not.toContain(maliciousHeader);
     // The response should NOT issue a new cookie (the existing one wins)
     const response = withAnonSessionCookie(NextResponse.json({ ok: true }), owner);
     const cookieValue = getAnonCookie(response as NextResponse);

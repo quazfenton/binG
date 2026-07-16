@@ -12,7 +12,7 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { generateText, tool as aiTool, type Tool, type ModelMessage } from 'ai';
+import { generateText, stepCountIs, tool as aiTool, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import { normalizeSchemaForAI } from '../tool-schema';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
@@ -42,6 +42,21 @@ export function isModelSchemaError(error: unknown): boolean {
     message.includes('ModelMessage[]') ||
     message.includes('messages do not match')
   );
+}
+
+/**
+ * Check if an error is an AI SDK "Invalid JSON response" error.
+ * This occurs when the provider returns a non-JSON response (HTML error page,
+ * empty body, malformed payload) instead of valid JSON. These errors are
+ * thrown by the AI SDK's provider layer (inside generateText) and are NOT
+ * schema validation errors, but retrying + plain-text fallback is still
+ * the correct recovery path.
+ */
+function isInvalidJsonError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = (error as any).message;
+  if (typeof message !== 'string') return false;
+  return message.includes('Invalid JSON');
 }
 
 /**
@@ -117,11 +132,17 @@ function buildToolResult(
   toolName: string,
   args: Record<string, any>,
   rawResult: any,
-  error?: Error
+  error?: Error | ToolError
 ): ToolResult {
   if (error) {
-    const errMsg = error.message || 'Unknown error';
-    const structuredError: ToolError = classifyToolError(toolName, errMsg, rawResult);
+    // SEV-12 pre-existing tsc TS2345 (`Argument of type 'ToolError' is not assignable to parameter of type 'Error'`) fix:
+    // callers (e.g. validateAndNormalizeArgs in this file at the tool-validation error path) now hand us a structured ToolError;
+    // preserve it directly via discriminant (`.type` is a string field on ToolError) instead of re-classifying.
+    // Runtime behavior unchanged for callers passing a raw Error — classifyToolError still derives from .message.
+    const structuredError: ToolError =
+      typeof (error as ToolError).type === 'string'
+        ? (error as ToolError)
+        : classifyToolError(toolName, (error as Error).message || 'Unknown error', rawResult);
     return {
       success: false,
       toolName,
@@ -576,14 +597,6 @@ export class PlanActVerifyOrchestrator {
         this.sdkTools[toolName] = aiTool({
           description: toolDef.description || `Execute ${toolName}`,
           inputSchema: normalizedSchema,
-          execute: async (args: Record<string, unknown>) => {
-            try {
-              return await config.executeTool(toolName, args);
-            } catch (error: any) {
-              log.error(`Tool ${toolName} execution failed`, { error: error.message });
-              throw error;
-            }
-          },
         } as any);
       }
 
@@ -594,12 +607,22 @@ export class PlanActVerifyOrchestrator {
     // history and consumed upstream by route.ts to force the selected role.
     this.sdkTools['choose_role'] = aiTool({
       description: 'Switch the current expert role/persona to better handle task complexity, domain, or failure recovery.',
-      parameters: z.object({
-        role: z.string().describe('The target expert role to adopt (e.g., debugger, architect, reviewer, tester, researcher, coder).'),
-        reason: z.string().describe('Reasoning for the role switch (e.g., handling high-complexity refactor, debugging error loops).'),
-        recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages for failure-context bias.'),
-      }),
-      execute: async ({ role, reason, recentFailures }: { role: string; reason: string; recentFailures?: string[] }) => {
+      // Bug #2 fix (audit-C2): AI SDK v6 requires `inputSchema` (not `parameters`).
+      // Other tools in this file (search, replace_in_file, file_read, etc.) route
+      // through `normalizeSchemaForAI(z.object(...))` for the same reason; choose_role
+      // was the lone holdout using `parameters:` directly. Without this, the SDK
+      // emits a schema-validation warning at register time and downstream type
+      // narrowing in execute() loses the inferred arg shape.
+      inputSchema: normalizeSchemaForAI(z.object({
+        role: z.string().describe(
+          'The target expert role to adopt — must be one of the 9 canonical IDs from CHOOSE_ROLE_DIRECTIVE in system-prompts-dynamic.ts: ' +
+          'coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier. ' +
+          'Pair `reason` with one of the 3 lineage concepts: complexity, domain, or failure recovery.',
+        ),
+        reason: z.string().optional().describe('Reasoning for the role switch — must invoke one of the 3 lineage concepts: complexity (e.g. high-complexity refactor), domain (e.g. domain expertise shift to specialist), or failure recovery (e.g. debugging error loops, multi-step read-only stalls).'),
+        recentFailures: z.array(z.string()).optional().describe('Recent tool execution error messages — the failure-recovery lineage slice. Provide when reason invokes failure recovery.'),
+      })) as Record<string, unknown>,
+      execute: async ({ role, reason, recentFailures }: { role: string; reason?: string; recentFailures?: string[] }) => {
         const result = normalizeAndValidateRole(role, reason || '', { recentFailures });
         return {
           success: result.valid,
@@ -683,7 +706,7 @@ export class PlanActVerifyOrchestrator {
               if (validation.error) {
                 yield { type: 'tool_error', tool: call.name, error: validation.error };
                 // Still record the attempt in history so the model sees the validation failure
-                toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: validation.error });
+                toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, undefined, validation.error) }); // Bug #6 fix (symmetric): route validation-error through buildToolResult so all three push sites (L703, L717, L728) emit the same ToolResult envelope.
                 // Even validation failures represent activity — reset idle timer
                 controller.recordActivity();
                 continue; // Skip this tool, continue with remaining tools
@@ -697,7 +720,7 @@ export class PlanActVerifyOrchestrator {
               yield { type: 'tool_result', tool: call.name, result: structuredResult };
 
               // Record result for conversation history threading
-              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result });
+              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, result, undefined) }); // Bug #6 fix (symmetric): route success through buildToolResult too so both branches produce the same ToolResult shape; LLM sees a consistent schema regardless of success vs. error.
 
               // Track files modified by writeFile/applyDiff for verification
               if ((call.name === 'writeFile' || call.name === 'applyDiff') && normalizedArgs?.path) {
@@ -708,7 +731,15 @@ export class PlanActVerifyOrchestrator {
               const structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
               yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
               // Record the error result so the model can see what went wrong
-              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: { success: false, error: error.message } });
+              toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: structuredResult }); // Bug #6 fix: route error through buildToolResult for consistent ToolResult shape
+              // Bug #14: When a search tool fails, inject a skip-search directive
+              // so the LLM doesn't retry the same broken tool in subsequent steps.
+              const isSearchTool = call.name === 'web_search' || call.name === 'web.search' || call.name === 'nullclaw:search';
+              if (isSearchTool) {
+                pendingVerificationFeedback = (pendingVerificationFeedback || '') +
+                  `\nSearch tool "${call.name}" failed and is unavailable. ` +
+                  `Skip search for the remainder of this plan and proceed with file/workspace tools only.`;
+              }
               // Errors are still activity — don't let error handling trigger idle timeout
               controller.recordActivity();
             }
@@ -860,10 +891,53 @@ Use workspace_graph to understand current workspace state before planning:
 - workspace_graph_diagnostic: Trace service issues to root causes.
 - workspace_graph_find_process: Search for processes by command pattern.
 
+IMPORTANT: Do NOT require web_search as a prerequisite step. web_search may be unavailable
+or may fail transiently. If search is needed, make it OPTIONAL and ensure the plan can
+succeed even if the search step fails. Prefer direct file/workspace tools over search.
+If a search step fails during execution, skip it and proceed with file operations.
+
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
     const response = await this.callLLM(planPrompt, history || []);
     try {
-      const parsed = JSON.parse(response.text.match(/\[[\s\S]*\]/)?.[0] || '[]');
+      // Bug #7 fix: walk the string to find the FIRST balanced `[...]` array
+      // before parsing. The previous greedy regex `[\s\S]*` matched up to the
+      // LAST closing bracket in the response — so a JSON-then-prose response
+      // like `[{"action":"a"}]\n\nSome explanation text` parses the explanation
+      // prose too, throwing on the JSON guard. Bracket-walk gives a robust
+      // first-matched-array extraction; we keep a bounded lazy regex as a
+      // fallback for text-mode LLMs that emit only the bare array.
+      const text = response.text;
+      let parsed = [];
+      let depth = 0;
+      let start = -1;
+      let matchedBalanced = false;
+      let inString = false;
+      let stringQuote = '';
+      for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+          // Inside a string literal: brackets are content, only matching quote exits.
+          if (ch === '\\') { i++; continue; } // skip escaped char (relies on for-loop's i++ to land us past the escape)
+          if (ch === stringQuote) { inString = false; stringQuote = ''; }
+          continue;
+        }
+        // Outside a string: brackets are real delimiters, quotes open a string.
+        if (ch === '"' || ch === "'" || ch === '`') { inString = true; stringQuote = ch; continue; }
+        if (ch === '[') { if (depth === 0) start = i; depth++; }
+        else if (ch === ']') {
+          depth--;
+          if (depth === 0 && start !== -1) {
+            const candidate = text.slice(start, i + 1);
+            try { const decoded = JSON.parse(candidate); if (Array.isArray(decoded)) { parsed = decoded; matchedBalanced = true; } break; }
+            catch { start = -1; }
+          }
+        }
+      }
+      if (!matchedBalanced) {
+        const fallbackCandidate = text.match(/\[[\s\S]*?\]/)?.[0] || '[]';
+        try { const decoded = JSON.parse(fallbackCandidate); if (Array.isArray(decoded)) parsed = decoded; }
+        catch { /* last-resort empty fallback handled below */ }
+      }
       return parsed.length ? parsed : [{ action: task }];
     } catch {
       return [{ action: task }];
@@ -927,12 +1001,12 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
             '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
             'Use these tools to inspect and verify workspace health before and after making changes.',
-          // Note: AI SDK v6 removed `maxSteps` from generateText options (it is
-          // ignored at runtime and fails the type check). Multi-step execution
-          // is handled by this orchestrator's own plan-step loop, so a single
-          // generation per call is intentional here.
           maxOutputTokens: 4000,
           temperature: 0.2,
+          // NOTE: stopWhen intentionally omitted. The orchestrator's own loop
+          // (lines 687-726) already handles tool execution via executeToolWithHealing.
+          // Setting stopWhen would make generateText auto-execute tools internally
+          // AND then the orchestrator re-executes them — doubling every side effect.
         });
 
         // Extract tool calls from the result
@@ -943,7 +1017,15 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         })) || [];
 
         return {
-          text: result.text || '',
+          // Bug #119 (Pass-8 audit) — defensive completion-shape guard.
+          // AI SDK v6 should always return `text: string`, but a malformed
+          // provider response can occasionally yield undefined/null here.
+          // Without this guard we silently coerce to `''` and lose the
+          // signal. The shared package cannot import `bing/web/lib/chat/
+          // chat-metrics` (cross-package boundary), so we log a warn
+          // marker here; the vercel-ai-streaming.ts path bumps the
+          // chat-metrics counter via `tryParseToolArgs` (sister fix).
+          text: typeof result.text === 'string' ? result.text : _invalidJsonFallback('orchestration.callLLM.happy-path', result.text),
           toolCalls,
           usage: result.usage || { totalTokens: 0 },
         };
@@ -956,7 +1038,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         // and no tool_calls, or a system-role message appearing AFTER an
         // assistant turn (which newer providers reject). Re-sanitize the
         // history (idempotent for already-clean messages) and retry once.
-        if (isModelSchemaError(error) && attempt < MAX_ATTEMPTS - 1) {
+        if ((isModelSchemaError(error) || isInvalidJsonError(error)) && attempt < MAX_ATTEMPTS - 1) {
           log.warn(
             'callLLM: schema validation error, sanitizing history and retrying',
             { provider, model, error: error.message },
@@ -976,9 +1058,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     // system prompt and the user's prompt as a bare message. This
     // sacrifices tool-calling ability but ensures the user gets a
     // response instead of a crash.
-    if (isModelSchemaError(lastError)) {
+    if (isModelSchemaError(lastError) || isInvalidJsonError(lastError)) {
       log.warn(
-        'callLLM: both retries failed with schema errors, falling back to plain-text call',
+        'callLLM: both retries failed with schema/JSON errors, falling back to plain-text call',
         { provider, model, error: lastError?.message },
       );
 
@@ -997,7 +1079,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         log.info('callLLM: plain-text fallback succeeded', { provider, model });
 
         return {
-          text: fallbackResult.text || '',
+          // Bug #119 (Pass-8 audit) — defensive completion-shape guard,
+          // see callLLM happy-path for rationale.
+          text: typeof fallbackResult.text === 'string' ? fallbackResult.text : _invalidJsonFallback('orchestration.callLLM.plain-text-fallback', fallbackResult.text),
           toolCalls: [],
           usage: fallbackResult.usage || { totalTokens: 0 },
         };
@@ -1017,8 +1101,10 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
   }
 
   private async executeToolWithHealing(name: string, args: any) {
-    // Basic self-healing wrapper
-    const maxRetries = 2;
+    // Bug #14: Search tools that fail once won't succeed on retry (no backend
+    // availability changes mid-request). Skip retries for known-unavailable tools.
+    const isSearchTool = name === 'web_search' || name === 'web.search' || name === 'nullclaw:search';
+    const maxRetries = isSearchTool ? 0 : 2;
     let attempt = 0;
     const toolCallId = `orch-${name}-${Date.now()}`;
 
@@ -1094,3 +1180,21 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
 /** @deprecated Use PlanActVerifyOrchestrator instead */
 export const AgentOrchestrator = PlanActVerifyOrchestrator;
+
+
+/**
+ * Bug #119 (Pass-8 audit) — defensive completion-shape helper for the
+ * shared `orchestration` package. Returns a structured empty-text marker
+ * while logging a `[INVALID-JSON-FALLBACK]` warn so operators can grep
+ * run.log. This counter does NOT bump `chatMetrics.invalidJsonFallbacks`
+ * because the shared package cannot import `bing/web/lib/chat/chat-metrics`
+ * (cross-package boundary). The streaming-layer sister site
+ * `vercel-ai-streaming.ts` _does_ bump the counter via `tryParseToolArgs`.
+ */
+function _invalidJsonFallback(source: string, value: unknown): string {
+  log.warn(
+    '[INVALID-JSON-FALLBACK] orchestration completion shape unexpected — treating as empty text',
+    { source, observedType: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value },
+  );
+  return '';
+}

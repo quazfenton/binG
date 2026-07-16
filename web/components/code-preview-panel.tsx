@@ -69,7 +69,7 @@ import {
 } from "@/lib/previews/live-preview-offloading";
 import { createLogger } from '@/lib/utils/logger';
 
-const logger = createLogger('UI:CodePreviewPanel');;
+const logger = createLogger('UI:CodePreviewPanel');
 // Import Preview Error Boundary
 import { PreviewErrorBoundary } from "./preview-error-boundary";
 

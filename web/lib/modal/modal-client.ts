@@ -8,6 +8,7 @@
  *   const modal = new ModalClient(process.env.MODAL_API_URL!);
  *   const result = await modal.executeAgent({ userMessage: '...', ... });
  */
+import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
 
 export interface AgentExecuteRequest {
   userMessage: string;
@@ -94,7 +95,17 @@ export class ModalClient {
     };
 
     const response = await this.post<AgentExecuteResponse>('/api/agent/execute', body);
-    return response;
+    // Defense-in-depth: coerce `response.response` to a string at the
+    // wire boundary. The TS contract declares `response: string`, but at
+    // runtime the Modal backend at `/api/agent/execute` may return a
+    // non-string shape (ContentPart array, `{role, parts, content}` object,
+    // etc.). `stringifyMessageContent` covers all observed shapes and
+    // degrades gracefully to `''` instead of `'[object Object]'`. See
+    // lib/chat/content-stringifier.ts for the typed contract surface.
+    return {
+      ...response,
+      response: stringifyMessageContent(response.response),
+    };
   }
 
   /**
@@ -326,7 +337,12 @@ export class ModalClient {
 
       return {
         success: true,
-        response: fullResponse,
+        // `fullResponse` is accumulated locally as a string in the SSE
+        // chunk-handler (see `case 'token':` above), so the TS-cast is
+        // already a string. Route it through `stringifyMessageContent`
+        // anyway for parity with the JSON path — defense against a future
+        // SSE event where `content` is non-string.
+        response: stringifyMessageContent(fullResponse),
         model,
         provider,
         tokensUsed,
@@ -337,7 +353,8 @@ export class ModalClient {
       const durationMs = Date.now() - startTime;
       return {
         success: false,
-        response: fullResponse,
+        // Same coercion as the success path.
+        response: stringifyMessageContent(fullResponse),
         model,
         provider,
         tokensUsed,

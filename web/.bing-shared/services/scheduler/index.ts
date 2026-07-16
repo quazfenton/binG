@@ -27,6 +27,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { Queue, Worker, type Job } from 'bullmq'
 import Redis from 'ioredis'
+import { EventTriggerManager } from './trigger-manager'
+import { isCurrentlyIdle, parseTimeOfDay } from './utils/idle-window'
+import type { EventTriggerConfig, IdleWindowConfig, TriggerStatus } from './types'
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -40,8 +43,19 @@ const BACKGROUND_WORKER_URL =
   process.env.BACKGROUND_WORKER_URL || 'http://background:3006'
 const GATEWAY_URL = process.env.GATEWAY_URL || 'http://gateway:3002'
 
+// Idle-window defaults (env-overridable). Used if the Redis idle-config
+// key is unset — see IDLE_CONFIG_KEY above.
+const IDLE_DEFAULT: IdleWindowConfig = {
+  enabled: process.env.IDLE_WINDOW_ENABLED === '1',
+  startTime: process.env.IDLE_WINDOW_START || '23:00',
+  endTime: process.env.IDLE_WINDOW_END || '07:00',
+  timezone: process.env.IDLE_WINDOW_TZ || 'UTC',
+}
+
 const QUEUE_NAME = 'scheduled-tasks'
 const TASKS_HASH = 'scheduler:tasks'
+const IDLE_CONFIG_KEY = 'scheduler:idle-config'
+const TRIGGER_LAST_FIRE_PREFIX = 'scheduler:trigger-last-fire:'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +69,7 @@ export type ScheduledTaskType =
   | 'sandbox-cleanup'
   | 'health-check'
   | 'custom'
+  | 'event-handler'
 
 export interface ScheduledTask {
   id: string
@@ -79,6 +94,13 @@ export interface ScheduledTask {
   timeout?: number
   ownerId?: string
   tags?: string[]
+  /**
+   * Brainstorm step 7: when type === 'event-handler', the payload MUST
+   * contain an `eventTrigger: EventTriggerConfig` describing which source
+   * (new-git-changes | marker-in-history) and which target path feeds
+   * into this task. See `./types.ts` for the config shape.
+   */
+  eventTrigger?: EventTriggerConfig
 }
 
 interface TaskExecutionResult {
@@ -98,10 +120,17 @@ class SchedulerService {
   private worker!: Worker
   private tasks: Map<string, ScheduledTask> = new Map()
   public initialized = false
+  /** Event-driven triggers (brainstorm step 7). Created in the constructor. */
+  public triggerManager!: EventTriggerManager
+  /** Idle-window config (brainstorm step 7). Loaded from Redis in initialize(). */
+  private idleConfig: IdleWindowConfig = { ...IDLE_DEFAULT }
 
   constructor() {
     this.redis = new Redis(REDIS_URL)
     this.queue = new Queue(QUEUE_NAME, { connection: new Redis(REDIS_URL) })
+    // The trigger manager is built lazily in `initialize()` once the
+    // `tasks` map is populated, because it needs `listTasks()` to
+    // reconcile its watcher set.
   }
 
   async initialize(): Promise<void> {
@@ -119,6 +148,40 @@ class SchedulerService {
     }
 
     console.log(`[Scheduler] Loaded ${this.tasks.size} persisted tasks`)
+
+    // Restore the idle-window config (brainstorm step 7) from Redis,
+    // falling back to env defaults if unset or malformed.
+    await this.loadIdleConfig()
+
+    // Wire up the EventTriggerManager now that we have a populated
+    // task list. It owns its own watchers (chokidar / poll-tailing)
+    // and enqueues onto the existing BullMQ queue via `enqueueTrigger`,
+    // so event-driven jobs share the same worker + rate limiter as
+    // cron jobs (brainstorm step 7 spec: "wire into the existing
+    // scheduler queue").
+    this.triggerManager = new EventTriggerManager(
+      {
+        listTasks: () =>
+          Array.from(this.tasks.values()).map((t) => ({
+            id: t.id,
+            type: t.type,
+            payload: { eventTrigger: t.eventTrigger },
+            enabled: t.enabled,
+          })),
+        enqueueTrigger: (taskId, triggerPayload) =>
+          this.enqueueTrigger(taskId, triggerPayload),
+      },
+      (msg, ...rest) => console.log(msg, ...rest),
+    )
+    this.triggerManager.setIdleConfig(this.idleConfig)
+    await this.triggerManager.syncTriggers(
+      Array.from(this.tasks.values()).map((t) => ({
+        id: t.id,
+        type: t.type,
+        payload: { eventTrigger: t.eventTrigger },
+        enabled: t.enabled,
+      })),
+    )
 
     // Re-register enabled tasks as BullMQ repeatable jobs
     for (const task of this.tasks.values()) {
@@ -142,12 +205,26 @@ class SchedulerService {
           `[Scheduler] Executing task "${task.name}" (${task.type}) id=${taskId}`,
         )
 
-        const result = await this.executeTask(task)
+        // Brainstorm step 7: when an event trigger enqueued this job
+        // (via `enqueueTrigger`), it attached the trigger context to
+        // `job.data`. Merge it into the task's payload so the handler
+        // sees what fired it. Cron-driven jobs have no triggerPayload
+        // and fall through unchanged.
+        const triggerPayload: Record<string, any> | undefined = job.data?.triggerPayload
+        const effectiveTask: ScheduledTask = triggerPayload
+          ? { ...task, payload: { ...task.payload, ...triggerPayload } }
+          : task
+
+        const result = await this.executeTask(effectiveTask)
 
         // Update task metadata
         task.lastRunAt = Date.now()
         task.runCount++
         task.lastResult = result
+        if (triggerPayload) {
+          ;(task as any).lastTriggerSource = job.data?.triggerSource ?? 'unknown'
+          ;(task as any).lastTriggerAt = Date.now()
+        }
         await this.persistTask(task)
 
         return result
@@ -436,12 +513,18 @@ class SchedulerService {
       timeout: input.timeout,
       ownerId: input.ownerId,
       tags: input.tags,
+      eventTrigger: input.eventTrigger,
     }
 
     await this.persistTask(task)
 
     if (task.enabled) {
       await this.registerRepeatable(task)
+    }
+
+    // Brainstorm step 7: reconcile event watchers after every CRUD.
+    if (this.triggerManager) {
+      await this.triggerManager.syncTriggers(this.listTasks())
     }
 
     console.log(
@@ -476,6 +559,12 @@ class SchedulerService {
     }
 
     await this.persistTask(task)
+
+    // Brainstorm step 7: reconcile event watchers after every CRUD.
+    if (this.triggerManager) {
+      await this.triggerManager.syncTriggers(this.listTasks())
+    }
+
     console.log(`[Scheduler] Updated task ${taskId}`)
     return task
   }
@@ -486,6 +575,12 @@ class SchedulerService {
 
     await this.unregisterRepeatable(task)
     await this.deletePersistedTask(taskId)
+
+    // Brainstorm step 7: stop any event watcher associated with this task.
+    if (this.triggerManager) {
+      await this.triggerManager.syncTriggers(this.listTasks())
+    }
+
     console.log(`[Scheduler] Deleted task ${taskId}`)
     return true
   }
@@ -498,16 +593,34 @@ class SchedulerService {
     return Array.from(this.tasks.values())
   }
 
-  async triggerTask(taskId: string): Promise<TaskExecutionResult | null> {
+  async triggerTask(
+    taskId: string,
+    overridePayload?: Record<string, any>,
+  ): Promise<TaskExecutionResult | null> {
     const task = this.tasks.get(taskId)
     if (!task) return null
 
-    console.log(`[Scheduler] Manually triggering task "${task.name}"`)
-    const result = await this.executeTask(task)
+    console.log(`[Scheduler] Triggering task "${task.name}" (${task.type})`)
+
+    // Brainstorm step 7: when an event trigger fires, the
+    // EventTriggerManager passes a payload describing what happened
+    // (git diff stat, marker content, etc.). Swap it in for the
+    // handler's input while keeping the rest of the task config.
+    const effectiveTask: ScheduledTask = overridePayload
+      ? { ...task, payload: { ...task.payload, ...overridePayload } }
+      : task
+
+    const result = await this.executeTask(effectiveTask)
 
     task.lastRunAt = Date.now()
     task.runCount++
     task.lastResult = result
+    if (overridePayload) {
+      // Record the trigger source for the operator-visible history.
+      ;(task as any).lastTriggerSource =
+        (overridePayload as any).triggerSource ?? 'unknown'
+      ;(task as any).lastTriggerAt = Date.now()
+    }
     await this.persistTask(task)
 
     return result
@@ -529,6 +642,7 @@ class SchedulerService {
       delayed: number
       repeatableJobs: number
     }
+    triggerStatus?: TriggerStatus
   }> {
     const tasks = this.listTasks()
     const tasksByType: Record<string, number> = {}
@@ -561,13 +675,133 @@ class SchedulerService {
         delayed,
         repeatableJobs: repeatables.length,
       },
+      // Brainstorm step 7: surface live event-trigger state alongside the
+      // existing queue stats. Operators can see which watchers are
+      // running, when they last fired, and whether the idle window is
+      // currently suppressing them.
+      triggerStatus: this.triggerManager ? this.triggerManager.getStatus() : undefined,
     }
+  }
+
+  // -- idle-window config (brainstorm step 7) -------------------------------
+
+  /**
+   * Read the persisted idle-window config from Redis. Falls back to
+   * IDLE_DEFAULT if unset or malformed. Validates the parsed times.
+   */
+  async loadIdleConfig(): Promise<IdleWindowConfig> {
+    try {
+      const raw = await this.redis.get(IDLE_CONFIG_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<IdleWindowConfig>
+        // Validate the time strings — bad data should fall back, not crash.
+        parseTimeOfDay(parsed.startTime || '')
+        parseTimeOfDay(parsed.endTime || '')
+        this.idleConfig = {
+          enabled: !!parsed.enabled,
+          startTime: parsed.startTime || IDLE_DEFAULT.startTime,
+          endTime: parsed.endTime || IDLE_DEFAULT.endTime,
+          timezone: parsed.timezone || IDLE_DEFAULT.timezone,
+        }
+      } else {
+        this.idleConfig = { ...IDLE_DEFAULT }
+      }
+    } catch (err: any) {
+      console.warn(`[Scheduler] Failed to load idle config: ${err.message} — using defaults`)
+      this.idleConfig = { ...IDLE_DEFAULT }
+    }
+    if (this.triggerManager) {
+      this.triggerManager.setIdleConfig(this.idleConfig)
+    }
+    return this.getIdleConfig()
+  }
+
+  getIdleConfig(): IdleWindowConfig {
+    return { ...this.idleConfig }
+  }
+
+  isCurrentlyIdle(): boolean {
+    return isCurrentlyIdle(this.idleConfig)
+  }
+
+  /**
+   * Persist a new idle-window config. Validates the times, then writes
+   * to Redis and applies it to the live trigger manager. Returns the
+   * stored config.
+   */
+  async setIdleConfig(config: IdleWindowConfig): Promise<IdleWindowConfig> {
+    parseTimeOfDay(config.startTime)
+    parseTimeOfDay(config.endTime)
+    this.idleConfig = { ...config }
+    await this.redis.set(IDLE_CONFIG_KEY, JSON.stringify(this.idleConfig))
+    if (this.triggerManager) {
+      this.triggerManager.setIdleConfig(this.idleConfig)
+    }
+    return this.getIdleConfig()
+  }
+
+  // -- event-trigger status (brainstorm step 7) -----------------------------
+
+  getTriggerStatus(): TriggerStatus | undefined {
+    return this.triggerManager ? this.triggerManager.getStatus() : undefined
+  }
+
+  async syncTriggers(): Promise<TriggerStatus> {
+    if (!this.triggerManager) {
+      throw new Error('[Scheduler] trigger manager not initialized')
+    }
+    await this.triggerManager.syncTriggers(this.listTasks())
+    return this.triggerManager.getStatus()
+  }
+
+  /**
+   * Enqueue an event-triggered execution onto the same BullMQ queue
+   * that cron jobs use (brainstorm step 7 spec: "enqueue a job when
+   * diff is non-empty" / "Wire into the existing scheduler queue").
+   * Each fire gets a unique jobId so it doesn't dedup against the
+   * cron-driven repeatable job for the same task.
+   */
+  async enqueueTrigger(
+    taskId: string,
+    triggerPayload: Record<string, any>,
+  ): Promise<string | null> {
+    const task = this.tasks.get(taskId)
+    if (!task) {
+      console.warn(`[Scheduler] enqueueTrigger: task ${taskId} not found`)
+      return null
+    }
+    const jobId = `trigger-${taskId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const job = await this.queue.add(
+      taskId,
+      {
+        taskId,
+        triggerSource: triggerPayload?.triggerSource ?? 'unknown',
+        triggerPayload,
+        triggerTimestamp: triggerPayload?.triggerTimestamp ?? Date.now(),
+      },
+      {
+        jobId,
+        attempts: task.maxRetries ?? 2,
+        ...(task.timeout ? { timeout: task.timeout } : {}),
+      },
+    )
+    return job.id ?? jobId
   }
 
   // -- shutdown -------------------------------------------------------------
 
   async shutdown(): Promise<void> {
     console.log('[Scheduler] Shutting down…')
+    // Brainstorm step 7: stop the event watchers FIRST so they don't try
+    // to enqueue onto a closed queue. The trigger manager's stop is
+    // idempotent and safe to call before/after the worker is closed.
+    if (this.triggerManager) {
+      try {
+        await this.triggerManager.shutdown()
+      } catch (err: any) {
+        console.warn(`[Scheduler] trigger manager shutdown error: ${err.message}`)
+      }
+    }
     await this.worker?.close()
     await this.queue?.close()
     await this.redis?.quit()
@@ -627,6 +861,56 @@ const server = createServer(async (req, res) => {
   if (url === '/stats' && method === 'GET') {
     const stats = await schedulerService.getStats()
     return json(res, 200, stats)
+  }
+
+  // --- Brainstorm step 7: event-driven trigger HTTP surface -------------
+
+  // GET /config/idle-window
+  if (url === '/config/idle-window' && method === 'GET') {
+    return json(res, 200, {
+      idleConfig: schedulerService.getIdleConfig(),
+      isCurrentlyIdle: schedulerService.isCurrentlyIdle(),
+    })
+  }
+
+  // PUT /config/idle-window
+  if (url === '/config/idle-window' && method === 'PUT') {
+    try {
+      const body = JSON.parse(await readBody(req))
+      if (!body || typeof body !== 'object') {
+        return json(res, 400, { error: 'body must be a JSON object' })
+      }
+      const merged = {
+        ...schedulerService.getIdleConfig(),
+        ...body,
+      }
+      const updated = await schedulerService.setIdleConfig(merged)
+      return json(res, 200, {
+        idleConfig: updated,
+        isCurrentlyIdle: schedulerService.isCurrentlyIdle(),
+      })
+    } catch (error: any) {
+      return json(res, 400, { error: error.message })
+    }
+  }
+
+  // GET /triggers/status
+  if (url === '/triggers/status' && method === 'GET') {
+    const status = schedulerService.getTriggerStatus()
+    if (!status) {
+      return json(res, 503, { error: 'trigger manager not initialized' })
+    }
+    return json(res, 200, status)
+  }
+
+  // POST /triggers/sync — re-reconcile watchers with the current task list
+  if (url === '/triggers/sync' && method === 'POST') {
+    try {
+      const status = await schedulerService.syncTriggers()
+      return json(res, 200, status)
+    } catch (error: any) {
+      return json(res, 500, { error: error.message })
+    }
   }
 
   // GET /tasks

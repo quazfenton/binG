@@ -23,7 +23,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { EventEmitter } from 'events';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { virtualPidRegistry } from './virtual-pid-registry';
 import { workspaceServiceManager, type WorkspaceService, type ServiceStatus } from './workspace-service-manager';
 import { workspacePreviewRegistry, type WorkspacePreview, type PreviewStatus } from './workspace-preview-registry';
@@ -410,7 +410,7 @@ export async function cleanupWorkspaceRuntimeState(workspaceId: string, userId: 
       await workspaceJobManager.clearWorkspace(workspaceId);
 
       // Clear workspace_env from DB
-      const db = (await import('@/lib/database/connection')).getDatabase();
+      const db = (await import('@/lib/database/connection-shim')).getDatabase();
       if (db) {
         db.prepare('DELETE FROM workspace_env WHERE workspace_id = ?').run(workspaceId);
         db.prepare('DELETE FROM workspace_processes WHERE workspace_id = ?').run(workspaceId);

@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { authManager } from '@/lib/auth/auth';
 
 /**

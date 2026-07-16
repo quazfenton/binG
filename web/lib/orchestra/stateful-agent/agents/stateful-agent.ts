@@ -1,5 +1,8 @@
 import { getVercelModel } from '../../../chat/vercel-ai-streaming';
 import { streamText, generateText, stepCountIs, type Tool as CoreTool, Output } from 'ai';
+// Audit-Q7: per-step early-exit soft gate via decideAutoContinue (above the
+// stepCountIs hard cap) — see stopWhen wrapper at L~1570 for the wiring.
+import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/context/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
@@ -847,7 +850,7 @@ Respond with valid JSON matching this schema:
         status: 'pending' as const,
       };
 
-      log.info('[StatefulAgent] Task decomposition complete:', this.taskGraph.tasks.length, 'tasks');
+      log.info(`[StatefulAgent] Task decomposition complete: ${this.taskGraph.tasks.length} tasks`);
     } catch (error: any) {
       log.warn('[StatefulAgent] Task decomposition failed, using simple plan:', error.message);
       // Fallback to single task
@@ -1134,6 +1137,54 @@ Use 'createFile' for new files.`;
    * @public - Exposed for LangGraph integration
    */
   public async runSelfHealingPhase(errors: any[]) {
+    // Audit-Q7 self-heal soft-gate (Tier-1 audit candidate): decide via the
+    // typed helper at the explicit state-machine transition. The detector
+    // (`needsMoreTurnsDetector`) can override the retryCount<maxAttempts gate
+    // when the LLM shows clear recovery progress, and the per-requestId
+    // continuation-pressure counter is reset at phase-end.
+    //
+    // Mappings per request:
+    //   - result   <- errors (function param — natural input; feeds
+    //                needsMoreTurnsDetector's failure-cascade signal path)
+    //   - routing  <- this.retryCount / this.maxSelfHealAttempts
+    //                (drives the `continue` boolean via parsedRouting.routing.continue
+    //                 passthrough, exercising the canonical path)
+    //   - cleanup  <- clearContinuationCount(this.sessionId) post-decision
+    //                (phase-end semantics — distinct from Edit C's per-step
+    //                 stopWhen gate where counter persistence is the intent)
+    const autoDecision = decideAutoContinue({
+      requestId: this.sessionId || `self-heal-${this.retryCount}`,
+      advancedDetectorFn: needsMoreTurnsDetector,
+      routing: {
+        continue: this.retryCount < this.maxSelfHealAttempts,
+        primaryRole: 'self-healer',
+        explicitContinue: this.retryCount < this.maxSelfHealAttempts,
+        planSteps: (errors.length > 0
+          ? [{ action: 'recover' as const, errorsCount: errors.length, attempt: this.retryCount, maxAttempts: this.maxSelfHealAttempts }]
+          : [{ action: 'recover' as const, attempt: this.retryCount, maxAttempts: this.maxSelfHealAttempts }]),
+      },
+      steps: [],
+      responseText: '',
+      result: { errors: errors as AutoContinueResultData['errors'] } as AutoContinueResultData,
+    });
+    // Phase-end cleanup: releases per-requestId continuation-pressure counter
+    // by removing the keyed entry from `_continuationCounters` so it cannot
+    // accumulate against the next phase. Wrapped in try/catch + log.warn —
+    // surface real counter-cleanup failures instead of silent swallow.
+    try {
+      clearContinuationCount(this.sessionId);
+    } catch (err) {
+      log.warn('[StatefulAgent] clearContinuationCount failed at self-heal phase-end', {
+        sessionId: this.sessionId, error: String(err),
+      });
+    }
+    if (!autoDecision.continue) {
+      log.info('[StatefulAgent] Self-heal soft-gate tripped; aborting self-heal cycle', {
+        reason: autoDecision.reason, requestId: this.sessionId,
+      });
+      return this.getState();
+    }
+
     if (errors.length === 0) {
       return this.getState();
     }
@@ -1567,7 +1618,72 @@ export async function* runStatefulAgentStreaming(
     system: systemPrompt,
     messages: sanitizedMessages,
     tools: toolDefs,
-    stopWhen: stepCountIs(maxSteps),
+    // Audit-Q7 per-step early-exit SOFT gate (above the hard stepCountIs cap).
+        // stopWhen fires AFTER each streamText step returns, BEFORE the next step
+        // begins — exactly the user's spec: per-step signals gate stepCountIs so
+        // a `needs_more_turns` / `empty_after_tools` / `read_then_stall` detector
+        // firing overrides the cap, while the stepCountIs guardrail remains the
+        // hard ceiling for runaway loops.
+        stopWhen: async ({ steps }) => {
+          const latest = steps[steps.length - 1] || {};
+          const latestText =
+            (Array.isArray(latest.content)
+              ? latest.content
+                  .filter((p: any) => p && p.type === 'text')
+                  .map((p: any) => p.text || '')
+                  .join('')
+              : '') ||
+            latest.text ||
+            '';
+          const latestToolCalls: any[] = Array.isArray(latest.toolCalls) ? latest.toolCalls : [];
+          const latestToolResults: any[] = Array.isArray(latest.toolResults) ? latest.toolResults : [];
+          const autoDecision = decideAutoContinue({
+            requestId: this.sessionId || `stateful-${steps.length}`,
+            advancedDetectorFn: needsMoreTurnsDetector,
+            routing: {
+              continue: true,                 // explicit let-it-continue UNLESS detector overrides
+              primaryRole: 'stateful-agent',
+              explicitContinue: true,
+              planSteps: (latestToolCalls.length > 0
+                ? [{ action: 'has-tool-calls' as const, toolCount: latestToolCalls.length }]
+                : []),
+            },
+            steps: latestToolCalls.map((tc: any) => ({
+              toolName: tc?.toolName || tc?.function?.name || 'unknown',
+              args: tc?.args || tc?.input || {},
+            })),
+            responseText: latestText,
+            result: {
+              response: latestText,
+              success: true,
+              steps,
+              stepCount: steps.length,
+              maxSteps,
+              toolResults: latestToolResults,
+            } as unknown as AutoContinueResultData,
+          });
+          if (!autoDecision.continue) {
+            // Soft gate hit: abort. Clear the per-requestId counter so the next
+            // session starts clean. Hard stepCountIs cap below still applies.
+            try {
+              clearContinuationCount(this.sessionId);
+            } catch (err) {
+              // Surface real errors instead of swallowing — the soft gate firing is
+              // observable, so a counter-cleanup failure should be observable too.
+              log.warn('[StatefulAgent] clearContinuationCount failed on soft-gate early-exit', {
+                sessionId: this.sessionId, error: String(err),
+              });
+            }
+            return true;
+          }
+          // Fall through to the hard stepCountIs cap for runaway-loop protection.
+          // Do NOT clearContinuationCount here: the per-requestId counter must persist
+          // across steps so the MAX_CONTINUATIONS env-tunable cap can accumulate
+          // pressure across iterations when the soft gate is overridden by `force: true`
+          // detector signals. Cleanup happens at session-finalize time upstream in
+          // unified-agent-service.ts (requestId is keyed to `this.sessionId`).
+          return stepCountIs(maxSteps)({ steps });
+        },
     onChunk: ({ chunk }) => {
       if (chunk.type === 'text-delta' && (chunk as any).textDelta) {
         options?.onChunk?.((chunk as any).textDelta);

@@ -129,6 +129,23 @@ export interface ValidateAndNormalizeOptions {
   enableFilesystemEdits?: boolean;
   /** Recent failure / error messages (≥2 biases toward debugger in auto-detect). */
   recentFailures?: string[];
+  /**
+   * SEV-13 (mode-aware validation, followup to the SEV-12 polish):
+   *   'choose' (default) — strict 9-ID menu check (CHOOSE_ROLE_MENU
+   *     ∩ SYSTEM_PROMPTS keys). `choose-role-tool.ts` uses this so the
+   *     LLM is told only IDs that actually compose.
+   *   'all' — full 76-union check (`getAllRoleIds()`). Use when the
+   *     caller composes any role (MCP role_selection, internal-orchestrator
+   *     calls that bypass the LLM-facing tool, unit tests of the broad-union
+   *     contract). Without this escape hatch, the SEV-12 narrowing would
+   *     break every non-choose-role caller written against the older
+   *     76-union contract.
+   *
+   * Default is 'choose' to preserve the SEV-12 invariant for LLM-facing
+   * callers; pass `{ mode: 'all' }` explicitly when broad-union acceptance
+   * is intended.
+   */
+  mode?: 'choose' | 'all';
 }
 
 /**
@@ -794,7 +811,7 @@ export function composeUnifiedRolePrompt(
       prompt = composeRoleWithTools(role as AgentRole, {
         availableTools: opts.availableTools || [],
         extras: opts.extras?.map((s, i) => ({ id: `extra.${i}`, template: s })),
-      });
+      }) ?? '';
     } else {
       // Non-core sets are raw strings today (no section decomposition).
       // Uses module-level getRawPrompt helper instead of duplicating switch logic.
@@ -810,7 +827,9 @@ export function composeUnifiedRolePrompt(
     }
 
     return prompt;
-  } catch {      // Best-effort fallback: raw prompt from whichever set the role came from.
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[unified-role-selector] composePrompt failed, falling back to raw prompt', { error: err instanceof Error ? err.message : String(err) });
     return getRawPrompt(role as UnifiedRole, source);
   }
 }
@@ -870,15 +889,103 @@ export function selectAndComposeSystemPrompt(
 // ============================================================================
 
 /**
+ * SEV-13 polish / followup to the SEV-12 fix:
+ *
+ * SEV-12 (audit chain 2026-06-18) introduced the canonical 9-ID choose-role
+ * menu + drift-safe intersection-with-SYSTEM_PROMPTS helper here in shared,
+ * so both `lib/chat/tools/choose-role-tool.ts` (Zod describe) and
+ * `normalizeAndValidateRole` consume the same source. That fix accidentally
+ * narrowed `normalizeAndValidateRole` to the 9-ID menu, breaking callers
+ * (MCP role_selection, unit tests of the broad-union contract,
+ * internal-orchestrator calls that bypass the LLM-facing tool) which still
+ * expect to validate against the full 76-union (`getAllRoleIds()`).
+ *
+ * Fix architecture (SEV-13):
+ *   - `ValidateAndNormalizeOptions.mode`: new `'choose' | 'all'` switch on
+ *     `normalizeAndValidateRole`'s options.
+ *       • 'choose' (default) — strict menu check (CHOOSE_ROLE_MENU ∩
+ *         SYSTEM_PROMPTS keys). Used by choose-role-tool and any other
+ *         LLM-facing entrypoint so the LLM is told only IDs that actually
+ *         compose.
+ *       • 'all' — full 76-union check (`getAllRoleIds()`). Used by callers
+ *         that compose any role (MCP role_selection, internal orchestrate
+ *         paths, broad-union contract tests).
+ *   - `getAvailableChooseRoles()` (unchanged) — still the source for the
+ *     Zod describe() in choose-role-tool, and still throws in production
+ *     on drift.
+ *   - `normalizeAndValidateRole` — first validation tier is now mode-aware;
+ *     the tier-2 76-union fallback is restored as the 'all' mode path so
+ *     MCP/test callers behave as they did before SEV-12.
+ */
+
+/** The 9 canonical role IDs advertised to LLMs in the choose_role Zod schema. */
+export const CHOOSE_ROLE_MENU: readonly string[] = [
+  'coder',
+  'reviewer',
+  'planner',
+  'architect',
+  'researcher',
+  'debugger',
+  'specialist',
+  'orchestrator',
+  'simplifier',
+] as const;
+
+/**
+ * Compute the safe set of choose-role IDs: the canonical 9-ID menu
+ * filtered against `Object.keys(SYSTEM_PROMPTS)` so missing-from-canonical
+ * IDs are silently filtered out before they reach `selectAndComposeSystemPrompt`.
+ *
+ * One-shot module-load computation, exported so callers (choose-role-tool,
+ * pickRoleFromContext callers, etc.) read from the same source. Production
+ * keeps the throw from the prior drift-check invariant; non-production
+ * emits a single console.warn describing the missing IDs so operators can
+ * fix upstream without bricking the dev boot.
+ *
+ * Audit chain: SEV-12 polish to the choose-role-tool.ts SEV-12 softening.
+ */
+export function getAvailableChooseRoles(): readonly string[] {
+  const missingIds = CHOOSE_ROLE_MENU.filter(
+    (id) => !(ALL_CORE_KEYS as readonly string[]).includes(id),
+  );
+  if (missingIds.length === 0) {
+    return CHOOSE_ROLE_MENU;
+  }
+  const isProd = process.env.NODE_ENV === 'production';
+  const message =
+    `[unified-role-selector] drift detected: choose-role menu IDs [${missingIds.join(', ')}] ` +
+    `are missing from canonical SYSTEM_PROMPTS (${ALL_CORE_KEYS.length} canonical keys, ` +
+    `${CHOOSE_ROLE_MENU.length} advertised choose-roles). ` +
+    `Either rename the role upstream in packages/shared/agent/system-prompts.ts, ` +
+    `or update the IDs in CHOOSE_ROLE_MENU above.`;
+  if (isProd) {
+    throw new Error(message);
+  }
+  // eslint-disable-next-line no-console
+  console.warn(message + ' [unified-role-selector] Continuing in dev mode; missing IDs will be filtered from the choose-role menu.');
+  return CHOOSE_ROLE_MENU.filter((id) => !missingIds.includes(id));
+}
+
+/**
  * Validate a role string and, if valid, compose its system prompt.
  *
  * Consolidates the duplicated trim → isEmpty → isValid → compose pipeline
  * that previously lived independently in the MCP role_selection handler and
  * the AI SDK choose_role tool.
  *
+ * SEV-13: validation is now mode-aware (see `ValidateAndNormalizeOptions.mode`).
+ *   • `mode === 'choose'` (default): first validation tier checks membership
+ *     in `getAvailableChooseRoles()` (the 9-ID menu ∩ SYSTEM_PROMPTS keys).
+ *     This is what `choose-role-tool.ts` uses, so the LLM-facing Zod describe
+ *     and the runtime validator cannot drift apart.
+ *   • `mode === 'all'`: first validation tier checks membership in the full
+ *     76-union (`getAllRoleIds()`). Used by MCP role_selection, internal
+ *     orchestrate paths, and any caller that needs to accept supplementary
+ *     / general / general-v2-v4 roles.
+ *
  * @param rawRole       The raw role string from the caller (e.g. `args.role`).
  * @param taskDescription  Description/reason for the role switch.
- * @param options       Optional overrides for availableTools, maxLength, etc.
+ * @param options       Optional overrides for availableTools, maxLength, mode.
  */
 export function normalizeAndValidateRole(
   rawRole: string,
@@ -886,6 +993,10 @@ export function normalizeAndValidateRole(
   options?: ValidateAndNormalizeOptions,
 ): ValidateAndNormalizeResult {
   const trimmedRole = (rawRole || '').trim();
+  // SEV-13: default to 'choose' so LLM-facing callers (choose-role-tool,
+  // orchestrator's built-in choose_role tool) keep the SEV-12 invariant
+  // unless a caller explicitly opts into broad-union acceptance.
+  const mode = options?.mode ?? 'choose';
 
   if (!trimmedRole) {
     return {
@@ -895,15 +1006,47 @@ export function normalizeAndValidateRole(
     };
   }
 
-  const validRoles = getAllRoleIds();
-  const isValidRole = validRoles.includes(trimmedRole as UnifiedRole);
-  if (!isValidRole) {
-    return {
-      valid: false,
-      roleAdopted: trimmedRole,
-      message: `Role "${trimmedRole}" is not recognized. Available roles include: ${validRoles.slice(0, 20).join(', ')}${validRoles.length > 20 ? ', ...and more' : ''}.`,
-    };
-  }
+  // ── SEV-13 mode-aware first validation tier ─────────────────────────
+  if (mode === 'all') {
+    // Tier-1 (broad union): MCP role_selection + internal orchestrate
+    // paths accept any role in the full 76-union. Error message mirrors
+    // the pre-SEV-12 contract so existing test assertions hold.
+    const broadRoles = getAllRoleIds();
+    if (!broadRoles.includes(trimmedRole as UnifiedRole)) {
+      const sample = broadRoles.slice(0, 9).join(', ');
+      return {
+        valid: false,
+        roleAdopted: trimmedRole,
+        message:
+          `Role "${trimmedRole}" is not recognized. ` +
+          `Available roles include: ${sample}, ... ` +
+          `(total ${broadRoles.length} IDs across core, supplementary, and general* prompt sets).`,
+      };
+    }
+    // mode='all' accepted — fall through to composition.
+  } else {
+      // Tier-1 (choose-menu, default): LLM-facing choose_role tool sees only
+      // IDs that are both in the 9-ID menu AND in canonical SYSTEM_PROMPTS —
+      // so we cannot route to a `SYSTEM_PROMPTS[missing]` undefined access.
+      //
+      // SEV-13 LLM-retry-leak guard: the rejection message is intentionally
+      // the simple "use one of: {available}" form with NO actionable
+      // projection (no mention of the broader 76-union, no `{ mode: 'all' }`
+      // escape hatch). Such a hint would leak through `result.message` to
+      // the LLM via `chooseRoleCapability.execute()` return — and the
+      // choose_role Zod schema has no `mode` field, so the LLM cannot act
+      // on it, yielding an infinite retry loop on the same rejected role.
+      const availableChooseRoles = getAvailableChooseRoles();
+      if (!(availableChooseRoles as readonly string[]).includes(trimmedRole)) {
+        return {
+          valid: false,
+          roleAdopted: trimmedRole,
+          message:
+            `Role "${trimmedRole}" is not available in the current choose-role menu. ` +
+            `Choose from one of: ${availableChooseRoles.join(', ')}.`,
+        };
+      }
+    }
 
   try {
     const result = selectAndComposeSystemPrompt(

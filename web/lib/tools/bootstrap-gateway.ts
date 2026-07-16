@@ -32,16 +32,12 @@ export async function registerGatewayTools(): Promise<number> {
   }
 
   try {
-    const toolManager = getToolManager();
-    const { createMCPGateway } = await import('../mcp/mcp-gateway');
-
-    const gateway = createMCPGateway({ servers: [{ name: 'gateway', url: gatewayUrl }] });
-    // Gateway connects and retrieves tools, then we register them with the tool manager
-    const tools = await gateway.listTools();
-    count = tools.length;
-    // Note: actual registration would require toolManager.registerTool() or similar
-
-    logger.info(`Registered ${count} tools from MCP gateway at ${gatewayUrl}`);
+    // @deprecated — MCP gateway bootstrap is handled by bootstrap-mcp.ts
+    // which has proper timeouts (2s abort signal + transport-error short-circuit),
+    // exponential backoff retry, and actual tool registration via registry.registerTool().
+    // This file is a no-op placeholder kept for backward compatibility with the
+    // caller in bootstrap.ts — prefer bootstrap-mcp.ts for any new gateway logic.
+    logger.debug('MCP gateway configured at %s (deferred to bootstrap-mcp.ts)', gatewayUrl);
   } catch (error: any) {
     logger.debug('Failed to register MCP gateway tools (optional infrastructure)', error.message);
   }

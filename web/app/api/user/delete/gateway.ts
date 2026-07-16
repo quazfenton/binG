@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { constraintMonitor } from '@/lib/observability/constraint-violation-monitor';
 import { orphanedRecordCleaner, OrphanedRecordInfo } from '@/lib/database/orphaned-record-cleaner';
 import { csrfCheckOrReject } from '@/lib/auth/csrf';

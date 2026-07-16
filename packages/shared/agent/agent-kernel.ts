@@ -890,7 +890,9 @@ export class AgentKernel extends EventEmitter {
       }
       const taskType = payload.taskType || 'automate';
       const description = payload.description || agent.config.goal;
-      const params = payload.params || {};
+      const params = (typeof payload.params === 'object' && payload.params !== null && !Array.isArray(payload.params) && !(payload.params instanceof Date) && !(payload.params instanceof RegExp))
+        ? payload.params
+        : {};
 
       const result = await executeNullclawTask(
         taskType as 'message' | 'browse' | 'automate' | 'api' | 'schedule',

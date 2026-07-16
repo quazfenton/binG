@@ -86,18 +86,41 @@ interface SnapshotCacheEntry {
   timestamp: number;
 }
 
-const snapshotCache = new Map<string, SnapshotCacheEntry>();
-const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
-const inFlightRequests = new Map<string, Promise<any>>();
+// P0 fix: hoist the in-memory caches onto `globalThis` so multiple React
+// trees (CodePreviewPanel, TerminalPanel, WorkspacePanel — each of which
+// calls useVirtualFilesystem()) share a SINGLE in-flight request map.
+// Previously every panel held its own module-scope Map, producing 7–8
+// concurrent snapshot requests in 4 s for the same (ownerId, path) key.
+// globalThis on the browser === window and is process-isolated, so all
+// trees in one tab see the same cache.
+declare global {
+  var __useVfsSnapshotCache__: Map<string, SnapshotCacheEntry> | undefined;
+  var __useVfsListCache__: Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }> | undefined;
+  var __useVfsInFlightRequests__: Map<string, Promise<any>> | undefined;
+  var __useVfsLastApiCallTime__: Map<string, number> | undefined;
+  var __useVfsLastGlobalVfsCall__: number | undefined;
+}
+
+const snapshotCache: Map<string, SnapshotCacheEntry> =
+  globalThis.__useVfsSnapshotCache__ ??
+  (globalThis.__useVfsSnapshotCache__ = new Map<string, SnapshotCacheEntry>());
+const listCache: Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }> =
+  globalThis.__useVfsListCache__ ??
+  (globalThis.__useVfsListCache__ = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>());
+const inFlightRequests: Map<string, Promise<any>> =
+  globalThis.__useVfsInFlightRequests__ ??
+  (globalThis.__useVfsInFlightRequests__ = new Map<string, Promise<any>>());
 const SNAPSHOT_CACHE_TTL_MS = 10000;  // 10 seconds for snapshots (was 5s) - reduced polling
 const LIST_CACHE_TTL_MS = 8000;      // 8 seconds for directory listings (was 3s) - reduced polling
 const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
-const lastApiCallTime = new Map<string, number>();
+const lastApiCallTime: Map<string, number> =
+  globalThis.__useVfsLastApiCallTime__ ??
+  (globalThis.__useVfsLastApiCallTime__ = new Map<string, number>());
 const API_CALL_DEBOUNCE_MS = 100; // Reduced for faster response - mainly for GET requests
 const REQUEST_COOLDOWN_MS = 50;  // Minimal cooldown for faster response
-let lastGlobalVfsCall = 0;
+let lastGlobalVfsCall: number = globalThis.__useVfsLastGlobalVfsCall__ ?? 0;
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -215,16 +238,74 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
 /**
  * Detect anonymous owner IDs to avoid unnecessary VFS clearing.
  * Anonymous sessions carry no persistent sensitive data.
+ *
+ * Recognized prefixes (order is for readability only — `anon:` doesn't share
+ * a prefix with any legacy variant since the colon is unique, so the order
+ * of the boolean OR has no functional effect. Listed first since it's the
+ * canonical format produced by `resolveAnonymousOwnerId`):
+ *   - `anon:`           — canonical format produced by `resolveAnonymousOwnerId`
+ *                          and the `anon$sessionNum` composite-session branch
+ *   - `anon_`           — legacy format (normalized to `anon:` on read)
+ *   - `anon-`, `anon$`  — other legacy delimiters still in circulation
+ *   - `anonymous`       — bare literal (kept for backward compat)
+ *   - `anonymous-`, `anonymous$` — other legacy delimiters
+ *
+ * Exported (not module-private) so the regression test in
+ * `__tests__/use-virtual-filesystem.test.ts` can lock in the recognition
+ * contract — a previous regression in this predicate caused anonymous
+ * owners to be misclassified as authenticated, breaking the
+ * session-switch clearing logic in the OPFS init useEffect.
  */
-function isAnonOwner(id: string): boolean {
+export function isAnonOwner(id: string): boolean {
   return (
     id === 'anonymous' ||
     id === 'anon' ||
+    id.startsWith('anon:') ||
+    id.startsWith('anon_') ||
     id.startsWith('anon-') ||
     id.startsWith('anonymous-') ||
     id.startsWith('anon$') ||
     id.startsWith('anonymous$')
   );
+}
+
+/**
+ * Resolves a stable, unique anonymous ownerId for the current browser session.
+ *
+ * SECURITY: This is the ultimate partition key for unauthenticated users.
+ * Two different browser sessions navigating to the same URL path (e.g.
+ * /chat/004) MUST get different ownerIds — otherwise they'd read/write
+ * each other's VFS files (Critical Bug #2: IDOR via getOwnerId).
+ *
+ * The returned value is always prefixed with `anon:` to match the server's
+ * `resolveFilesystemOwner` format. A stable UUID is generated on first call
+ * and persisted to localStorage so subsequent calls within the same browser
+ * return the same ownerId (stable across reloads, unique across browsers).
+ *
+ * Backward compat: existing localStorage values stored without the `anon:`
+ * prefix (raw UUIDs, or the legacy `anon_xxx` format) are normalized on read.
+ */
+export function resolveAnonymousOwnerId(
+  storage: Pick<Storage, 'getItem' | 'setItem'> = typeof localStorage !== 'undefined'
+    ? localStorage
+    : { getItem: () => null, setItem: () => {} },
+): string {
+  const STORAGE_KEY = 'anonymous_session_id';
+  const existing = storage.getItem(STORAGE_KEY);
+  if (existing) {
+    // Normalize to `anon:<value>` format regardless of how it was stored.
+    if (existing.startsWith('anon:')) return existing;
+    if (existing.startsWith('anon_')) return existing.replace(/^anon_/, 'anon:');
+    return `anon:${existing}`;
+  }
+  // Generate a new unique ID. crypto.randomUUID is available in all modern
+  // browsers and Node 19+; fall back to a random string for older runtimes.
+  const newId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  storage.setItem(STORAGE_KEY, newId);
+  return `anon:${newId}`;
 }
 
 export function useVirtualFilesystem(
@@ -337,29 +418,25 @@ export function useVirtualFilesystem(
       if (userIdPart && userIdPart !== 'anon') return userIdPart;
     }
 
-    // Priority 3: Derive from scoped path
-    const derived = deriveSessionIdFromPath(initialPath);
-    if (derived) return derived;
-
-    // Priority 4: Fall back to anonymous session ID
-    const anonSessionId = getOrCreateAnonymousSessionId();
-    
-    // CRITICAL FIX: Normalize 'anon_timestamp_random' format to 'anon:timestamp_random'
-    // to match the backend's resolveFilesystemOwner which uses 'anon:' prefix with colon.
-    // This fixes the issue where files written to 'anon:12345_abc' couldn't be read
-    // because the client was querying 'anon_12345_abc' instead.
-    if (anonSessionId.startsWith('anon_')) {
-      // 'anon_timestamp_random' -> 'anon:timestamp_random'
-      return anonSessionId.replace(/^anon_/, 'anon:');
-    }
-    
-    // Handle already normalized format or other formats
-    return anonSessionId;
+    // Priority 3: Generate a stable, unique anonymous ownerId.
+    // CRITICAL (Bug #2 fix): this MUST return an `anon:<unique>` format so
+    // that (a) the VFS database partitions anonymous users correctly,
+    // (b) two different browser sessions on the same URL path (e.g.
+    // /chat/004) get DISTINCT ownerIds and can't see each other's files,
+    // and (c) isAnonOwner() returns true (it checks for the 'anon:' prefix).
+    // The previous Priority 3 returned deriveSessionIdFromPath(initialPath)
+    // directly — a raw session number like "004" — which was the IDOR
+    // vector (two browsers on /chat/004 both got ownerId="004" and shared
+    // the same VFS partition). This also fixes the spurious IDB wipe
+    // (High Bug #3) as a side-effect: isAnonOwner() now correctly
+    // recognizes the returned ownerId as anonymous.
+    return resolveAnonymousOwnerId();
   }, [options?.userId, options?.compositeSessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(resolvedInitialPath);
   const currentPathRef = useRef(currentPath);
   const initialPathRef = useRef(resolvedInitialPath);
+  const pendingDisableRef = useRef<Promise<void> | null>(null);
   const [nodes, setNodes] = useState<VirtualFilesystemNode[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -450,17 +527,28 @@ export function useVirtualFilesystem(
       }
       localStorage.setItem(LAST_OPFS_KEY, opfsOwnerId);
 
-      // Enable OPFS - will sync from server for the new user's workspace
-      opfsAdapter.enable(opfsOwnerId).then(() => {
+      // Chain: await any pending disable (from previous effect cleanup) before
+      // enabling. This prevents a race where core.close() from disable() and
+      // core.initialize() from enable() overlap, which causes IndexedDB/OPFS
+      // tab crashes in Firefox when the ownerId changes on login.
+      const doEnable = async () => {
+        if (pendingDisableRef.current) {
+          await pendingDisableRef.current;
+          pendingDisableRef.current = null;
+        }
+        await opfsAdapter.enable(opfsOwnerId);
         log('OPFS enabled successfully for owner:', opfsOwnerId);
-      }).catch(err => {
+      };
+      doEnable().catch(err => {
         logWarn('OPFS initialization failed, falling back to server-only:', err?.message || err);
       });
     }
 
     return () => {
       if (useOPFS) {
-        opfsAdapter.disable().catch(console.error);
+        // Store the disable promise so the next effect run can await it before
+        // enabling — prevents the core.close() / core.initialize() race.
+        pendingDisableRef.current = opfsAdapter.disable().catch(console.error);
       }
     };
   }, [useOPFS, logWarn, options?.userId, options?.compositeSessionId, getOwnerId]);
@@ -757,7 +845,7 @@ export function useVirtualFilesystem(
       log(`request: cooldown active for ${method}, waiting ${waitTime}ms`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
-    lastGlobalVfsCall = Date.now();
+    lastGlobalVfsCall = globalThis.__useVfsLastGlobalVfsCall__ = Date.now();
     
     // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
     if (method === 'GET') {

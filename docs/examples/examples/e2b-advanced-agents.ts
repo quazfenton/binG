@@ -1,24 +1,38 @@
 /**
  * E2B Advanced Agent Examples
- * 
+ *
  * Examples demonstrating Amp and Codex integration with E2B sandboxes
- * 
+ *
  * @see https://e2b.dev/docs/agents/amp
  * @see https://e2b.dev/docs/agents/codex
+ *
+ * SEV-12 sweep: 9 Sandbox.create sites use the SEV-12 (a) pattern mirror —
+ * narrow-and-cast `(Sandbox.create as any)` to suppress the TS2345 mismatch
+ * caused by dual `@e2b/code-interpreter` installs (root + web/node_modules).
+ * These are docs examples (not built for production); the cast is the
+ * minimal-diff fix consistent with the round-7 (a)/(b) widening pattern.
+ * Runtime behavior unchanged; the returned sandbox is duck-compatible
+ * with the helper API consumer below.
  */
 
 import { Sandbox } from '@e2b/code-interpreter'
 import { createAmpService, createCodexService, CodexSchemas } from '@/lib/sandbox/providers'
 
+// SEV-12 cast at module level: same-instance Sandbox.create call across the
+// 9 example sites below benefits from a single cast at the imported class.
+// Equivalent to per-site `(Sandbox.create as any)` at each call site, but
+// reduces the diff footprint from 9 edits to 1 line.
+const SandboxCreate = Sandbox.create as any
+
 // ==================== Amp Examples ====================
 
 /**
  * Example 1: Basic Amp Execution
- * 
+ *
  * Run Amp coding agent with a simple prompt
  */
 async function basicAmpExample() {
-  const sandbox = await Sandbox.create('amp', {
+  const sandbox = await SandboxCreate('amp', {
     envs: {
       AMP_API_KEY: process.env.AMP_API_KEY!,
     },
@@ -42,11 +56,11 @@ async function basicAmpExample() {
 
 /**
  * Example 2: Amp with Streaming JSON
- * 
+ *
  * Stream Amp events in real-time for monitoring
  */
 async function ampStreamingExample() {
-  const sandbox = await Sandbox.create('amp', {
+  const sandbox = await SandboxCreate('amp', {
     envs: {
       AMP_API_KEY: process.env.AMP_API_KEY!,
     },
@@ -90,11 +104,11 @@ async function ampStreamingExample() {
 
 /**
  * Example 3: Amp Thread Management
- * 
+ *
  * Continue conversations with follow-up tasks
  */
 async function ampThreadExample() {
-  const sandbox = await Sandbox.create('amp', {
+  const sandbox = await SandboxCreate('amp', {
     envs: {
       AMP_API_KEY: process.env.AMP_API_KEY!,
     },
@@ -143,11 +157,11 @@ async function ampThreadExample() {
 
 /**
  * Example 4: Basic Codex Execution
- * 
+ *
  * Run OpenAI Codex with auto-approval
  */
 async function basicCodexExample() {
-  const sandbox = await Sandbox.create('codex', {
+  const sandbox = await SandboxCreate('codex', {
     envs: {
       CODEX_API_KEY: process.env.CODEX_API_KEY!,
     },
@@ -172,11 +186,11 @@ async function basicCodexExample() {
 
 /**
  * Example 5: Codex with Schema-Validated Output
- * 
+ *
  * Get structured JSON output for security review
  */
 async function codexSchemaExample() {
-  const sandbox = await Sandbox.create('codex', {
+  const sandbox = await SandboxCreate('codex', {
     envs: {
       CODEX_API_KEY: process.env.CODEX_API_KEY!,
     },
@@ -216,11 +230,11 @@ async function codexSchemaExample() {
 
 /**
  * Example 6: Codex with Image Input
- * 
+ *
  * Implement UI from design mockup
  */
 async function codexImageExample() {
-  const sandbox = await Sandbox.create('codex', {
+  const sandbox = await SandboxCreate('codex', {
     envs: {
       CODEX_API_KEY: process.env.CODEX_API_KEY!,
     },
@@ -261,11 +275,11 @@ async function codexImageExample() {
 
 /**
  * Example 7: Codex Streaming Events
- * 
+ *
  * Monitor Codex execution in real-time
  */
 async function codexStreamingExample() {
-  const sandbox = await Sandbox.create('codex', {
+  const sandbox = await SandboxCreate('codex', {
     envs: {
       CODEX_API_KEY: process.env.CODEX_API_KEY!,
     },
@@ -315,17 +329,17 @@ async function codexStreamingExample() {
 
 /**
  * Example 8: Multi-Agent Workflow (Amp + Codex)
- * 
+ *
  * Use Amp for planning, Codex for implementation
  */
 async function multiAgentExample() {
   // Create sandboxes for both agents
-  const ampSandbox = await Sandbox.create('amp', {
+  const ampSandbox = await SandboxCreate('amp', {
     envs: { AMP_API_KEY: process.env.AMP_API_KEY! },
     timeoutMs: 600000,
   })
 
-  const codexSandbox = await Sandbox.create('codex', {
+  const codexSandbox = await SandboxCreate('codex', {
     envs: { CODEX_API_KEY: process.env.CODEX_API_KEY! },
     timeoutMs: 600000,
   })

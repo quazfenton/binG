@@ -147,7 +147,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     pool: 'forks', // Required for AsyncLocalStorage support (toolContextStore)
-    include: ['**/__tests__/**/*.test.ts', '**/*.test.ts'],
+    include: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx', '**/*.test.ts', '**/*.test.tsx'],
     exclude: [
       '**/node_modules/**',
       '**/deprecated/**',
@@ -168,7 +168,15 @@ export default defineConfig({
       // Server Component, which breaks vitest tests that import modules
       // that reference it (directly or transitively).
       'server-only': path.resolve(__dirname, '__mocks__/server-only.ts'),
+      // Bug-#T12 (Vitest-Audit): declare BOTH '@' and '@/' alias keys so
+      // tests written as `import x from '@/lib/foo'` resolve correctly at
+      // vitest runtime. Without the '@/' form, vite's underlying vite-esbuild
+      // module resolver tolerates @ as a prefix match but produces subtly
+      // wrong paths for the slash-stripping case (e.g. @/lib/chat/... in
+      // auto-continue-helper.test.ts). Both keys are needed and harmless
+      // when both map to the same directory.
       '@': path.resolve(__dirname, './'),
+      '@/': path.resolve(__dirname, './'),
       '@/app': path.resolve(__dirname, './app'),
       '@bing/platform': path.resolve(__dirname, '../packages/platform/src'),
       '@bing/platform/env': path.resolve(__dirname, '../packages/platform/src/env.ts'),

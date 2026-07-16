@@ -5,7 +5,21 @@ import type {
   SandboxCreateConfig,
 } from "./sandbox-provider";
 import * as path from "node:path";
+import { createRequire } from "node:module";
 import { SandboxSecurityManager } from "../security-manager";
+
+// SEV-12 (2026-06-18 fix): bare global `require` is NOT defined in pure ESM
+// (project has `"type": "module"`; this file is loaded by dev server under
+// strict ESM). Mirror the connection.ts / connection-shim.ts pattern: derive
+// require from createRequire(import.meta.url) so we can still lazily load
+// `@runloop/api-client` from inside the *sync* RunloopProvider constructor.
+// We deliberately do NOT use `await import(...)` here — that would force the
+// constructor signature to be async (TS / ESLint forbid), which would
+// cascade into every caller's `.new RunloopProvider()` site. The safe
+// alternative is createRequire + try/catch (preserves the existing warn-on-
+// failure semantics) — see SEV-11 migration notes in
+// lib/database/backup/resilience-layer.ts.for the async-loop variant.
+const require = createRequire(import.meta.url);
 
 const WORKSPACE_DIR = "/home/user/workspace";
 const MAX_COMMAND_TIMEOUT = 120;

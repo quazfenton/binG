@@ -18,21 +18,23 @@ export async function POST(request: NextRequest) {
   const csrfReject = csrfCheckOrReject(request);
   if (csrfReject) return csrfReject;
 
-  // Require authentication
-  const authResult = await verifyAuth(request);
-  if (!authResult.success || !authResult.userId) {
-    return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
-  }
-
   try {
-    const body = await request.json();
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(request) + request.json() pair to
+    // mask wallclock. Pre-PA CSRF gate stays BEFORE this PA. Note: the outer catch
+    // here does NOT reference authResult (unlike mfa/disable), so no let-lift needed.
+    // ~2-5ms saved per request on the auth+body overlap window.
+    const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ success: false, error: 'Authentication required' }, { status: 401 });
+    }
     const { code } = body;
 
     if (!code || typeof code !== 'string') {
       return NextResponse.json({ success: false, error: 'Verification code is required' }, { status: 400 });
     }
 
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       return NextResponse.json({ success: false, error: 'Database not available' }, { status: 500 });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { getToolServiceForPlatform } from '@/lib/oauth/provider-map';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 

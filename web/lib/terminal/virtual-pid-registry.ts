@@ -31,7 +31,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 
 const logger = createLogger('VirtualPidRegistry');
 

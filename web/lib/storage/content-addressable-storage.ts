@@ -46,10 +46,10 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, renameSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, renameSync, promises as fsp } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { execSchemaFile } from '@/lib/database/schema';
 import { compress, decompress, isCompressed } from '@/lib/utils/compression';
 import { createLogger } from '@/lib/utils/logger';
@@ -128,7 +128,16 @@ export class ContentAddressableStorage {
 
   // Cache tracking
   private currentCacheSize = 0;
+  // Bug #4 followup: file count maintained incrementally on every write/unlink,
+  // so getStats() (and any other count-based surface) can read the count
+  // from memory in O(1) without re-scanning the cache dir.
+  private currentCacheCount = 0;
   private cacheSizeValid = false;
+  // Bug #4 fix: debounce flag for the async disk-aware enforcement task.
+  // Coalesces multiple writes in the same event-loop tick into a single
+  // enforcement pass, and lets the write hot path return immediately
+  // without waiting for fs operations.
+  private enforcementScheduled = false;
 
   // GC scheduling
   private gcTimer: ReturnType<typeof setInterval> | null = null;
@@ -454,6 +463,11 @@ export class ContentAddressableStorage {
         try {
           unlinkSync(localPath);
           freedBytes += size;
+          // Bug #4 fix: decrement the in-memory counter to keep it in sync.
+          // The statSync cost is acceptable here because GC is the slow
+          // path (not the write hot path).
+          this.currentCacheSize = Math.max(0, this.currentCacheSize - size);
+          this.currentCacheCount = Math.max(0, this.currentCacheCount - 1);
         } catch {
           // May be in use
         }
@@ -579,77 +593,127 @@ export class ContentAddressableStorage {
       const dataToWrite = this.shouldCompress(content) ? compress(content) : content;
       writeFileSync(cachePath, dataToWrite);
 
-      // Enforce cache size limit + trigger memory-pressure GC if needed.
-      // Merged into a single scan to avoid double readdirSync+statSync.
-      this.enforceCacheSize();
+      // Bug #4 fix: maintain the size counter incrementally so the hot
+      // path doesn't need a sync readdirSync+statSync over the entire
+      // cache dir. The actual disk-aware enforcement runs in a debounced
+      // async task (see scheduleAsyncEnforcement below).
+      this.currentCacheSize += dataToWrite.length;
+      this.currentCacheCount++;
+
+      // Schedule the async enforcement (debounced via setImmediate). Multiple
+      // writes in the same tick coalesce into a single enforcement pass and
+      // the hot path returns immediately without waiting for fs operations.
+      this.scheduleAsyncEnforcement();
     } catch (error: any) {
       logger.warn('Failed to write to local cache', { hash, error: error.message });
     }
   }
 
   /**
-   * Evict least-recently-accessed blobs from local cache if over limit, and
-   * trigger a memory-pressure garbage collection run if the cache is approaching
-   * the configured threshold. Both operations share a single readdirSync+statSync
-   * scan to avoid redundant I/O on the hot write path.
+   * Bug #4 fix: schedule the async disk-aware enforcement task. Debounced
+   * via `setImmediate` so multiple writes in the same event-loop tick
+   * coalesce into a single enforcement pass, and the write hot path returns
+   * immediately without waiting for fs operations. Errors are logged but
+   * never thrown (best-effort enforcement).
    */
-  private enforceCacheSize(): void {
+  private scheduleAsyncEnforcement(): void {
+    if (this.enforcementScheduled) return;
+    this.enforcementScheduled = true;
+    setImmediate(() => {
+      this.enforcementScheduled = false;
+      this.enforceCacheSizeAsync().catch((error: any) => {
+        logger.warn('Async cache enforcement failed', { error: error?.message });
+      });
+    });
+  }
+
+  /**
+   * Bug #4 fix: async replacement for the old sync `enforceCacheSize`.
+   * Uses the in-memory `currentCacheSize` counter for the size check (no
+   * disk scan on the hot path); only does the readdirSync+statSync disk
+   * scan when the counter actually exceeds the limit. Triggered via
+   * `scheduleAsyncEnforcement()` (debounced) from `writeToLocalCache`.
+   */
+  private async enforceCacheSizeAsync(): Promise<void> {
     const maxBytes = this.config.cacheSizeMb * 1024 * 1024;
 
+    // Hot path: in-memory check, no disk I/O
+    if (this.currentCacheSize > maxBytes) {
+      // Over limit — need to do the disk scan to find oldest files
+      await this.evictOldestFilesAsync();
+    }
+
+    // Memory-pressure check (cheap, uses the in-memory counter)
+    this.maybeTriggerMemoryPressureGC();
+  }
+
+  /**
+   * Bug #4 fix: the old sync eviction logic, moved to async + decrementing
+   * the in-memory counter as files are unlinked. Only called when the
+   * in-memory counter exceeds the configured size limit, so the disk scan
+   * is the slow path (not the hot path).
+   */
+  private async evictOldestFilesAsync(): Promise<void> {
     try {
-      const entries = readdirSync(this.config.cacheDir)
-        .map(name => {
+      const entries = await fsp.readdir(this.config.cacheDir);
+      const statEntries: Array<{ name: string; size: number; atimeMs: number }> = [];
+      for (const name of entries) {
+        try {
           const fullPath = join(this.config.cacheDir, name);
-          try {
-            const stat = statSync(fullPath);
-            return { name, size: stat.size, atimeMs: stat.atimeMs };
-          } catch {
-            return null;
-          }
-        })
-        .filter(Boolean) as Array<{ name: string; size: number; atimeMs: number }>;
-
-      let totalSize = entries.reduce((sum, e) => sum + e.size, 0);
-
-      // ── Cache eviction: evict oldest when over the size limit ──────────────
-      if (totalSize > maxBytes) {
-        // Sort by access time (oldest first) and evict until under limit (with 10% headroom)
-        const ordered = entries.sort((a, b) => a.atimeMs - b.atimeMs);
-        const targetSize = Math.floor(maxBytes * 0.9);
-
-        for (const entry of ordered) {
-          if (totalSize <= targetSize) break;
-          try {
-            unlinkSync(join(this.config.cacheDir, entry.name));
-            totalSize -= entry.size;
-          } catch {
-            // Concurrent access — skip
-          }
+          const stat = await fsp.stat(fullPath);
+          statEntries.push({ name, size: stat.size, atimeMs: stat.atimeMs });
+        } catch {
+          // File disappeared or inaccessible — skip
         }
       }
 
-      // ── Memory-pressure GC: fire if approaching threshold ─────────────────
-      const thresholdPct = this.config.gcMemoryPressureThreshold;
-      if (thresholdPct > 0) {
-        const usagePct = maxBytes > 0 ? (totalSize / maxBytes) * 100 : 0;
-        if (usagePct >= thresholdPct) {
-          // Fire-and-forget async GC with a shorter maxAge (1h) for pressure.
-          this.garbageCollect(1).then(result => {
-            if (result.removed > 0) {
-              logger.info('Memory-pressure GC triggered', {
-                usagePct: Math.round(usagePct),
-                thresholdPct,
-                removed: result.removed,
-                freedBytes: result.freedBytes,
-              });
-            }
-          }).catch((error: any) => {
-            logger.warn('Memory-pressure GC failed', { error: error.message });
+      // Sort by access time (oldest first) and evict until under limit (with 10% headroom)
+      const ordered = statEntries.sort((a, b) => a.atimeMs - b.atimeMs);
+      const targetSize = Math.floor((this.config.cacheSizeMb * 1024 * 1024) * 0.9);
+
+      for (const entry of ordered) {
+        if (this.currentCacheSize <= targetSize) break;
+        try {
+          await fsp.unlink(join(this.config.cacheDir, entry.name));
+          // Decrement the in-memory counter to match the actual unlink.
+          // Clamp at 0 to defend against transient drift (e.g. external
+          // file deletion without going through the API).
+          this.currentCacheSize = Math.max(0, this.currentCacheSize - entry.size);
+        } catch {
+          // Concurrent access — skip
+        }
+      }
+    } catch (error: any) {
+      logger.warn('Async cache eviction failed', { error: error?.message });
+    }
+  }
+
+  /**
+   * Bug #4 fix: extracted from the old `enforceCacheSize` so the async
+   * version can call it without duplicating logic. Uses the in-memory
+   * counter — no disk scan needed. Fire-and-forget `garbageCollect(1)`
+   * with a 1-hour cutoff for memory pressure.
+   */
+  private maybeTriggerMemoryPressureGC(): void {
+    const maxBytes = this.config.cacheSizeMb * 1024 * 1024;
+    const thresholdPct = this.config.gcMemoryPressureThreshold;
+    if (thresholdPct <= 0 || maxBytes <= 0) return;
+
+    const usagePct = (this.currentCacheSize / maxBytes) * 100;
+    if (usagePct >= thresholdPct) {
+      // Fire-and-forget async GC with a shorter maxAge (1h) for pressure.
+      this.garbageCollect(1).then((result) => {
+        if (result.removed > 0) {
+          logger.info('Memory-pressure GC triggered', {
+            usagePct: Math.round(usagePct),
+            thresholdPct,
+            removed: result.removed,
+            freedBytes: result.freedBytes,
           });
         }
-      }
-    } catch {
-      // Non-fatal — cache eviction best-effort
+      }).catch((error: any) => {
+        logger.warn('Memory-pressure GC failed', { error: error?.message });
+      });
     }
   }
 
@@ -907,20 +971,35 @@ export class ContentAddressableStorage {
       totalCompressedSize = null;
     }
 
-    // Local cache stats
-    let localCacheSize = 0;
-    let localCacheCount = 0;
-    try {
-      if (existsSync(this.config.cacheDir)) {
-        const entries = readdirSync(this.config.cacheDir);
-        localCacheCount = entries.length;
+    // Local cache stats — Bug #4 followup: read from the in-memory counters
+    // maintained incrementally on every write/unlink. The fallback to an
+    // async readdir only fires on a fresh instance (before the first write
+    // has populated the counter) or after a process restart that loses the
+    // in-memory state. In steady state this is O(1) with zero disk I/O.
+    let localCacheSize = this.currentCacheSize;
+    let localCacheCount = this.currentCacheCount;
+    if (!this.cacheSizeValid) {
+      try {
+        const entries = await fsp.readdir(this.config.cacheDir);
+        let seededSize = 0;
         for (const entry of entries) {
           try {
-            localCacheSize += statSync(join(this.config.cacheDir, entry)).size;
+            const st = await fsp.stat(join(this.config.cacheDir, entry));
+            seededSize += st.size;
           } catch { /* skip */ }
         }
+        localCacheSize = seededSize;
+        localCacheCount = entries.length;
+        // Seed the in-memory counters so subsequent getStats() calls are
+        // O(1) without re-scanning. From this point the write/unlink paths
+        // maintain them incrementally.
+        this.currentCacheSize = seededSize;
+        this.currentCacheCount = entries.length;
+        this.cacheSizeValid = true;
+      } catch {
+        // Cache dir doesn't exist or unreadable — leave defaults at 0.
       }
-    } catch { /* skip */ }
+    }
 
     return {
       totalBlobs,
@@ -932,6 +1011,17 @@ export class ContentAddressableStorage {
       localCacheCount,
       r2Enabled: this.config.r2Enabled,
     };
+  }
+
+  /**
+   * Get the current in-memory cache size in bytes. O(1) read, no disk I/O.
+   * Maintained incrementally on every write/unlink since the Bug #4 fix
+   * (see scheduleAsyncEnforcement for the disk-aware eviction path). May
+   * drift on a fresh instance or after a process restart that hasn't yet
+   * called getStats() to seed the counter — that's an accepted followup.
+   */
+  getCurrentCacheSize(): number {
+    return this.currentCacheSize;
   }
 
   /**

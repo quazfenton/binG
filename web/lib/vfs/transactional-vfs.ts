@@ -398,8 +398,33 @@ export class Transaction {
     this.snapshot = await takeSnapshot(this.ownerId, this.edits.map((e) => e.path));
 
     // Open GitBackedVFS batch mode so all writes coalesce into a single commit.
+    // Defensive guard (Pass-X chat-loop bug): under HMR/circular-dep the
+    // cached `gitVFSInstances` Map at git-backed-vfs.ts:717 can transiently
+    // resolve to a detached instance that no longer exposes class-immutable
+    // methods. We heal-on-miss in `getGitBackedVFSForOwner` (the primary
+    // root-cause fix), but also tolerate the method-missing case here so
+    // the chat-API WARN per turn is suppressed even if a future HMR change
+    // re-introduces detachment. Trade-off: writes fall through to per-write
+    // auto-commit (no batched commit) when the guard fires.
     const gitVFS = virtualFilesystem.forOwner(this.ownerId);
-    gitVFS.enableBatchMode(this.ownerId);
+    if (typeof gitVFS?.enableBatchMode === 'function') {
+      gitVFS.enableBatchMode(this.ownerId);
+    } else {
+      logger.warn(
+        withDetectionTerms(
+          `[VFS:TX ${this.id}] gitVFS.enableBatchMode unavailable; skipping batch pre-open`,
+          DETECTION_TERMS.mismatch,
+          DETECTION_TERMS.drift,
+        ),
+        {
+          txId: this.id,
+          ownerId: this.ownerId,
+          hasGitVFS: !!gitVFS,
+          hasMethod: gitVFS ? typeof (gitVFS as { enableBatchMode?: unknown }).enableBatchMode : 'n/a',
+          hmr: true,
+        },
+      );
+    }
 
     const results: TransactionResult['results'] = [];
     let committed = 0;
@@ -448,7 +473,14 @@ export class Transaction {
         }
       }
       // Flush batch — single shadow commit for the whole transaction.
-      const flushResult = await gitVFS.flushBatch();
+      // Defensive guard (Pass-X chat-loop bug): if gitVFS or flushBatch was
+      // lost under HMR, treat the flush as a successful no-op (no batch was
+      // opened, so there's nothing to flush). Per-write auto-commit still
+      // produced the underlying writes — we just don't get a single
+      // composite shadow commit.
+      const flushResult = typeof gitVFS?.flushBatch === 'function'
+        ? await gitVFS.flushBatch()
+        : { success: true as const };
       if (!flushResult.success) {
         await this.rollback();
         return {
@@ -457,17 +489,23 @@ export class Transaction {
           failed: failed + 1,
           results: [
             ...results,
-            { path: '<flush>', success: false, error: flushResult.error ?? 'flush failed' },
+            { path: '<flush>', success: false, error: ('error' in flushResult ? flushResult.error : undefined) ?? 'flush failed' },
           ],
           duration: Date.now() - startTime,
         };
       }
     } finally {
       // Safety: ensure batch mode is exited even on unexpected throws.
-      try {
-        gitVFS.disableBatchMode();
-      } catch {
-        /* no-op — disableBatchMode is idempotent */
+      // Defensive guard (Pass-X chat-loop bug): same heal-on-miss tolerance
+      // as the pre-open site. If the GitBackedVFS instance lacks
+      // disableBatchMode after HMR, skip silently rather than throwing
+      // out of the `finally` block (which would mask the original error).
+      if (typeof gitVFS?.disableBatchMode === 'function') {
+        try {
+          gitVFS.disableBatchMode();
+        } catch {
+          /* no-op — disableBatchMode is idempotent */
+        }
       }
     }
 
@@ -503,9 +541,29 @@ export class Transaction {
     this.state = 'rolling-back';
 
     // Exit batch mode first so the rollback writes don't get coalesced.
+    // Defensive guard (Pass-X chat-loop bug): rollback path must NOT throw
+    // on HMR-detached GitBackedVFS — that would abort the rollback half-way
+    // through and leave the workspace in a partial state. Same heal-on-miss
+    // tolerance as the commit path.
     try {
       const gitVFS = virtualFilesystem.forOwner(this.ownerId);
-      gitVFS.disableBatchMode();
+      if (typeof gitVFS?.disableBatchMode === 'function') {
+        gitVFS.disableBatchMode();
+      } else {
+        logger.warn(
+          withDetectionTerms(
+            `[VFS:TX ${this.id}] gitVFS.disableBatchMode unavailable during rollback; skipping batch exit`,
+            DETECTION_TERMS.mismatch,
+            DETECTION_TERMS.drift,
+          ),
+          {
+            txId: this.id,
+            ownerId: this.ownerId,
+            hasGitVFS: !!gitVFS,
+            hmr: true,
+          },
+        );
+      }
     } catch (err: any) {
       logger.warn(`[VFS:TX ${this.id}] disableBatchMode failed during rollback`, {
         error: err?.message,
@@ -518,22 +576,33 @@ export class Transaction {
       return;
     }
 
-    for (const file of this.snapshot.files) {
-      try {
-        if (file.created) {
-          // File was created by this transaction — remove it on rollback.
-          // deletePath is tolerant: a missing file is not an error.
-          await virtualFilesystem.deletePath(this.ownerId, file.path);
-        } else {
-          await virtualFilesystem.writeFile(this.ownerId, file.path, file.content);
+    // Tier 3 #24 refactor (Coordination Brief 2026-06-20): parallel rollback
+    // via Promise.all. Each entry is independent (no cross-file deps), saves
+    // ∝N write latency. Per-file try/catch preserved → logger.error in each
+    // callback so a single failed restore doesn't abort the rest. State
+    // transition to 'rolled-back' happens AFTER await Promise.all resolves,
+    // matching the original sequencing.
+    // NOTE: per audit Meta #2, files.length is user-controlled. Same follow-up
+    // recommendation as `takeSnapshot` — wrap in a `p-limit(10)` cap (or
+    // Semaphore from async-mutex) in a Tier-3 batch PR.
+    await Promise.all(
+      this.snapshot.files.map(async (file) => {
+        try {
+          if (file.created) {
+            // File was created by this transaction — remove it on rollback.
+            // deletePath is tolerant: a missing file is not an error.
+            await virtualFilesystem.deletePath(this.ownerId, file.path);
+          } else {
+            await virtualFilesystem.writeFile(this.ownerId, file.path, file.content);
+          }
+        } catch (err: any) {
+          logger.error(`[VFS:TX ${this.id}] Rollback failed for ${file.path}`, {
+            error: err?.message,
+            created: file.created,
+          });
         }
-      } catch (err: any) {
-        logger.error(`[VFS:TX ${this.id}] Rollback failed for ${file.path}`, {
-          error: err?.message,
-          created: file.created,
-        });
-      }
-    }
+      }),
+    );
 
     this.state = 'rolled-back';
   }
@@ -556,17 +625,21 @@ async function takeSnapshot(
   paths: string[],
 ): Promise<TransactionSnapshot> {
   const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
-  const files: TransactionSnapshot['files'] = [];
-  for (const p of paths) {
-    try {
-      const f = await virtualFilesystem.readFile(ownerId, p);
-      files.push({ path: f.path, content: f.content, version: f.version, created: false });
-    } catch {
-      // File doesn't exist yet — mark as `created: true` so rollback
-      // will deletePath it instead of writing empty content.
-      files.push({ path: p, content: '', version: 0, created: true });
-    }
-  }
+  // Tier 3 #23 refactor (Coordination Brief 2026-06-20): parallelize reads via
+  // Promise.all. Order is preserved (V8 resolves in registration order), so the
+  // resulting `files` array stays in `paths` order. Per-callback .then().catch()
+  // preserves the original "file missing → {created: true}" fallback semantics.
+  // NOTE: per audit Meta #2, paths.length is user-controlled (drives a chat-LLM
+  // agent's edits per turn). Consider wrapping `Promise.all` in a `p-limit(10)`
+  // cap (or `Semaphore` from async-mutex, already a direct dep) in a follow-up
+  // PR that batches the same cap across all Tier 3 sites.
+  const files: TransactionSnapshot['files'] = await Promise.all(
+    paths.map((p) =>
+      virtualFilesystem.readFile(ownerId, p)
+        .then((f) => ({ path: f.path, content: f.content, version: f.version, created: false }))
+        .catch(() => ({ path: p, content: '', version: 0, created: true })),
+    ),
+  );
   return { workspaceVersion, files };
 }
 

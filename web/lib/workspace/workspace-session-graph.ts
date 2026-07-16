@@ -115,7 +115,7 @@ export class WorkspaceSessionGraph {
     if (this.initialized && this.db) return;
 
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       this.db = getDatabase();
       if (!this.db) return;
 

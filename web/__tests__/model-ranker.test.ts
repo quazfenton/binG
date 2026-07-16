@@ -11,7 +11,7 @@
  * are mocked before import so those side effects resolve cleanly.
  */
 
-import { vi, describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { vi, describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 
 // ============================================================================
 // Mock database-dependent modules before importing model-ranker
@@ -37,6 +37,8 @@ import {
   scoreModel,
   refreshModelTelemetryCache,
   stopRefreshingModelTelemetryCache,
+  getRetryModel,
+  recordRateLimitError,
 } from '../lib/providers/model-ranker';
 import { chatRequestLogger } from '../lib/chat/chat-request-logger';
 import { toolCallTracker } from '../lib/tools/tool-call-tracker';
@@ -255,5 +257,175 @@ describe('stopRefreshingModelTelemetryCache', () => {
     // Calling this in beforeAll already prevents the interval from firing,
     // but verify it doesn't throw even if called again.
     expect(() => stopRefreshingModelTelemetryCache()).not.toThrow();
+  });
+});
+
+describe('getRetryModel — graceful degraded fallback', () => {
+  // Track env mutations so we cleanly restore them around the test.
+  const SAVED_OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+  const SAVED_DEFAULT_PROVIDER = process.env.DEFAULT_PROVIDER;
+  const SAVED_DEFAULT_MODEL = process.env.DEFAULT_MODEL;
+
+  afterAll(() => {
+    if (SAVED_OPENAI_API_KEY === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = SAVED_OPENAI_API_KEY;
+    if (SAVED_DEFAULT_PROVIDER === undefined) delete process.env.DEFAULT_PROVIDER;
+    else process.env.DEFAULT_PROVIDER = SAVED_DEFAULT_PROVIDER;
+    if (SAVED_DEFAULT_MODEL === undefined) delete process.env.DEFAULT_MODEL;
+    else process.env.DEFAULT_MODEL = SAVED_DEFAULT_MODEL;
+  });
+
+  beforeEach(() => {
+    // Remove override env vars before each test so each case starts from a
+    // clean slate. Tests that need the override set it themselves in a
+    // try/finally so on assertion failure the env state is still restored.
+    delete process.env.DEFAULT_PROVIDER;
+    delete process.env.DEFAULT_MODEL;
+  });
+
+  it('returns a degraded fallback when every configured candidate is rate-limited', async () => {
+    // Step 1 — Provide at least one API key so findDegradedFallback has
+    // something to pick. Without this the provider list filters to empty and
+    // we never exercise the degraded-return branch.
+    process.env.OPENAI_API_KEY = 'sk-test-key-for-degraded-fallback';
+
+    // Step 2 — Force every openai model into circuit-breaker-tripped state so
+    // `getModelForRotation()` returns null (no openai candidate survives)
+    // AND the priority walk earlier in the function reaches its terminal
+    // null-return. Tripping = 3 consecutive `recordRateLimitError` calls per
+    // model raises consecutive429Count >= RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD.
+    const openaiModels = [
+      'gpt-5-mini',
+      'gpt-4',
+      'gpt-4-turbo',
+      'gpt-4o',
+      'gpt-4o-mini',
+      'gpt-3.5-turbo',
+      'gpt-3.5-turbo-instruct',
+    ];
+    for (const m of openaiModels) {
+      for (let i = 0; i < 3; i++) recordRateLimitError('openai', m);
+    }
+
+    // Step 3 — Empty telemetry rows so the priority walk through stats fails.
+    vi.mocked(chatRequestLogger.getModelPerformance).mockResolvedValue([]);
+    vi.mocked(toolCallTracker.getModelToolStats).mockResolvedValue([]);
+
+    // Step 4 — Invoke getRetryModel. With stats=[] AND all openai models
+    // rate-limited AND no other provider configured, the priority walk
+    // exhausts and the new degraded-fallback branch should fire.
+    const result = await getRetryModel({
+      failedModel: 'gpt-5-mini',
+      failedProvider: 'openai',
+    });
+
+    // Step 5 — Assertions on the graceful degraded pick.
+    expect(result).not.toBeNull();
+    expect(result?.provider).toBe('openai');
+    expect(result?.model).toBeTruthy();
+    expect(result?.degraded).toBe(true);
+    expect(result?.failureRate).toBe(1);
+    expect(result?.successRate).toBe(0);
+    expect(result?.totalCalls).toBe(0);
+    expect(result?.score).toBe(Infinity);
+    expect(result?.rank).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('honors DEFAULT_PROVIDER + DEFAULT_MODEL env override when both are set and the override pair is valid', async () => {
+    // Auto-discovery would normally pick openai's first model (`gpt-5-mini`)
+    // because OPENAI_API_KEY is the only key set. With the env override pair
+    // pinning `openai:gpt-4o-mini`, that exact pair should be returned.
+    process.env.OPENAI_API_KEY = 'sk-test-key-for-degraded-fallback';
+    process.env['DEFAULT_PROVIDER'] = 'openai';
+    process.env['DEFAULT_MODEL'] = 'gpt-4o-mini';
+
+    try {
+      // Trip every openai model into circuit-breaker state so auto
+      // discovery's `getModelForRotation()` returns null and ONLY the env
+      // override path can satisfy the request.
+      const openaiModels = [
+        'gpt-5-mini',
+        'gpt-4',
+        'gpt-4-turbo',
+        'gpt-4o',
+        'gpt-4o-mini',
+        'gpt-3.5-turbo',
+        'gpt-3.5-turbo-instruct',
+      ];
+      for (const m of openaiModels) {
+        for (let i = 0; i < 3; i++) recordRateLimitError('openai', m);
+      }
+
+      vi.mocked(chatRequestLogger.getModelPerformance).mockResolvedValue([]);
+      vi.mocked(toolCallTracker.getModelToolStats).mockResolvedValue([]);
+
+      const result = await getRetryModel({
+        failedModel: 'gpt-5-mini',
+        failedProvider: 'openai',
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.provider).toBe('openai');
+      // Env override wins: 'gpt-4o-mini' instead of auto-discovery default.
+      expect(result?.model).toBe('gpt-4o-mini');
+      expect(result?.degraded).toBe(true);
+      expect(result?.failureRate).toBe(1);
+      expect(result?.score).toBe(Infinity);
+      expect(result?.rank).toBe(Number.MAX_SAFE_INTEGER);
+    } finally {
+      // Restore env. afterAll also enforces this, but finally gives
+      // best-effort cleanup even if the test assertion above fails.
+      delete process.env['DEFAULT_PROVIDER'];
+      delete process.env['DEFAULT_MODEL'];
+    }
+  });
+
+  it('still returns null when no provider is configured (truly unrecoverable)', async () => {
+    // Strip API keys so isProviderConfiguredForTelemetry returns false for
+    // every provider AND no env override is set (override requires a
+    // configured provider anyway). findDegradedFallback then returns null,
+    // and the safe null-return branch fires.
+    const savedEnv: Record<string, string | undefined> = {};
+    for (const k of [
+      'OPENAI_API_KEY',
+      'ANTHROPIC_API_KEY',
+      'GOOGLE_API_KEY',
+      'MISTRAL_API_KEY',
+      'OPENROUTER_API_KEY',
+      'CHUTES_API_KEY',
+      'PORTKEY_API_KEY',
+      'GITHUB_MODELS_API_KEY',
+      'NVIDIA_API_KEY',
+      'GROQ_API_KEY',
+      'TOGETHER_API_KEY',
+      'FIREWORKS_API_KEY',
+      'DEEPINFRA_API_KEY',
+      'ZEN_API_KEY',
+      'COHERE_API_KEY',
+      'AIHUBMIX_API_KEY',
+      'CLOUDFLARE_API_KEY',
+      'LIVEKIT_API_KEY',
+      'POLLINATIONS_API_KEY',
+      'CHATANYWHERE_API_KEY',
+      'NINEROUTER_API_KEY',
+      'QUAZ_API_KEY',
+    ]) {
+      savedEnv[k] = process.env[k];
+      delete process.env[k];
+    }
+
+    try {
+      vi.mocked(chatRequestLogger.getModelPerformance).mockResolvedValue([]);
+      const result = await getRetryModel({
+        failedModel: 'gpt-5-mini',
+        failedProvider: 'openai',
+      });
+      expect(result).toBeNull();
+    } finally {
+      // Restore env.
+      for (const [k, v] of Object.entries(savedEnv)) {
+        if (v !== undefined) process.env[k] = v;
+      }
+    }
   });
 });

@@ -2,6 +2,52 @@
 
 All notable changes made in this session are documented below.
 
+## [Unreleased] — BUGS2.md Fixes (22 bugs reviewed, 15 fixed/confirmed-fixed)
+
+### Critical Fixes
+- **Bug #1/#22: Multi-iteration auto-continuation loop in v1-api-with-tools** — Replaced single-shot `shouldAutoContinue` call with a multi-iteration `while` loop using `decideAutoContinue` (shared with `chat/route.ts`). The v1-api path now auto-continues up to `MAX_V1_CONTINUATIONS` (default 3) iterations instead of stopping after 1 tool call.
+  - `web/lib/orchestra/unified-agent-service.ts` — New loop block at ~line 4560, imports `decideAutoContinue`/`clearContinuationCount` from `auto-continue-helper.ts`.
+- **CRITICAL: Resolved git merge conflict in `web/app/api/chat/route.ts`** — The auto-continue loop body at line 1706 had residual merge-conflict artifacts (duplicate `detectorOverride` declaration, broken `emit()` call, missing `while` clause). Resolved with correct merged code including proper `emit`, `currentConfig` update, `iteration++`, and `while(false)` close.
+
+### High-Priority Fixes
+- **Bug #3: FC-GATE Phase 2 runs unnecessarily after successful tool calls** — Added `anyToolCallSucceeded` guard: Phase 2 text-mode fallback is now skipped when ANY Phase 1 tool call succeeded. Previously, Phase 2 always ran for models with `supportsFC === undefined`, wasting 30-92s and causing duplicate writes.
+  - `web/lib/chat/vercel-ai-streaming.ts` — `triggerFallback` condition now gated by `!anyToolCallSucceeded`.
+- **Bug #5: 429 rate-limit errors not propagated to circuit breaker** — `vercel-ai-streaming.ts` now records 429 errors in the per-provider circuit breaker (in addition to model-ranker), so the `unified-agent-service.ts` fallback chain skips 429'd providers on subsequent requests.
+  - `web/lib/chat/vercel-ai-streaming.ts` — Added `circuitBreakerManager.getBreaker(provider).recordFailure(...)` on 429.
+- **Bug #6: web_search registered without container availability check** — Two-part fix:
+  1. `web/lib/tools/bootstrap/bootstrap-nullclaw.ts` — `nullclaw:search` tool now only registered when `hasContainer` is true (checks `NULLCLAW_URL` env and `getReadyContainerCount()`).
+  2. `web/lib/orchestra/startup-capabilities.ts` — Added `webSearch: boolean` capability that checks `NULLCLAW_URL`/`SEARXNG_URL`/`DUCKDUCKGO_API_KEY`.
+- **Bug #7: WORKSPACE_NOT_READY infinite spam loop** — Added `__vfsInitDone__` globalThis flag per ownerId. Once a workspace is successfully initialized, all subsequent snapshot requests skip the WORKSPACE_NOT_READY path entirely, returning success with 0 files instead.
+  - `web/app/api/filesystem/snapshot/gateway.ts` — `initDoneKey` check at top of anonymous-owner block.
+- **Bug #10: [STEER] helpers not wired in v1-api-with-tools path** — Added `steerFromFinishReason` + `buildSteerPrompt` calls to the v1-api completion handler. Previously these only fired in the `chat/route.ts` SSE path. Now empty completions and missing-tool-call patterns inject actionable [STEER] guidance.
+  - `web/lib/orchestra/unified-agent-service.ts` — Import + call site at ~line 4527.
+- **Bug #4: userID stays `anon:` after login** — Invalidated anonymous auth cache entries on successful JWT/session authentication so the VFS owner resolution upgrades from `anon:TIMESTAMP` to the real userId.
+  - `web/lib/auth/request-auth.ts` — `authCache.delete(anonCacheKey)` on JWT auth success (line 135) and session auth success (line 153).
+
+### Medium-Priority Fixes
+- **Bug #8: 251 duplicate singleton re-initializations on hot-reload** — Extended `globalThis` singleton pattern to the sandbox provider registry.
+  - `web/lib/sandbox/providers/index.ts` — `providerRegistry` and init flag persisted on `globalThis.__sandboxProviderRegistry__` / `__sandboxProvidersInited__`.
+- **Bug #9: 0-byte project-name files from text-mode extraction** — Added `isLikelyProjectName()` guard to `file-diff-utils.ts`. Paths with no extension AND no directory separator AND empty content are filtered before dedup. (Already fixed in `file-edit-parser.ts` via `guardProjectName`.)
+  - `web/lib/chat/file-diff-utils.ts` — `isLikelyProjectName()` + filter at return.
+- **Bug #18: choose_role never invoked by any model** — Improved tool description with concrete usage examples ("call choose_role role='architect' to plan", "call choose_role role='debugger' to investigate", etc.) and explicit role list.
+  - `web/lib/chat/tools/choose-role-tool.ts` — New description.
+- **Bug #19: Parser extracts file paths from `success: false` JSON** — Broadened the skip condition: any JSON block with `success === false` is now skipped (previously only skipped when BOTH `success: false` AND `type: "tool_result"`).
+  - `web/lib/chat/file-edit-parser.ts` — Line 1028: `if (record['success'] === false) continue;`
+- **Bug #20: Session cross-contamination (wrong session folder)** — Added cross-session path rewriting in the v1-api text-mode extraction. If an extracted path references a different session folder (e.g. `workspace/sessions/001/...` when current session is `002`), the path is rewritten to use the current session.
+  - `web/lib/orchestra/unified-agent-service.ts` — Session-match regex + rewrite at ~line 4000.
+
+### Already Fixed (confirmed, no action needed)
+- **Bug #2** — `planSteps.length >= 2` forces `continue: true` in `first-response-routing.ts:230`. ✓
+- **Bug #13** — Phase 2 wall-clock budget with `AbortController` + `AbortSignal.any()` in `vercel-ai-streaming.ts:2940-3034`. ✓
+- **Bug #15** — `dedupByPathFirstWins` in `file-edit-parser.ts:3559`. ✓
+- **Bug #17** — `TEXT_STALL_STEER_MS = 60000` for active text vs `STALL_STEER_MS = 30000` for silence. ✓
+- **Bug #21** — Phase 1 time-budget check at `unified-agent-service.ts:3757-3786`. ✓
+
+### Not Addressed (requires deeper architectural work)
+- **Bug #11** — `single_write_then_stop` heuristic in `llm-continuation.ts` is too broad (fires for any single write, even intentional stops). Pre-existing test failures at `llm-continuation.test.ts`. Needs scope-aware completeness check.
+- **Bug #12** — Session-scoped provider cache exists (`getLastWorkingProvider`) but the chat-route path doesn't always pass `conversationId` for lookup. Needs tracing through the full dispatch chain.
+- **Bug #14** — Orchestrator 100% fallback rate depends on Bug #6 fix (now applied) but also requires the orchestrator's plan to NOT require web_search as prerequisite. The `plan-act-verify.ts` doesn't hardcode web_search (tools come from `config.tools`), so Bug #6 fix should address this.
+
 ## [Unreleased] — Nocturne Scraper Updates
 
 ### Added

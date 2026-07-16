@@ -171,7 +171,7 @@ export class WorkspaceGraphService extends EventEmitter {
   private initHistory(): void {
     if (this.historyInitialized && this.historyDb) return;
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       this.historyDb = getDatabase();
       if (!this.historyDb) return;
 

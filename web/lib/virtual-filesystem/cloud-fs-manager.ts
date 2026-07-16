@@ -225,29 +225,37 @@ class CloudFSManager {
       
       const result = await this.activeHandle.listDirectory(path);
       if (result.success) {
-        const entries = result.output.split('\n').filter(Boolean);
-        
-        for (const entry of entries) {
-          const isDir = entry.startsWith('d');
-          const entryPath = `${path}/${entry.replace(/^[d-]\s+/, '')}`;
-          
-          if (isDir) {
-            // Recursively get files from subdirectory
-            const subFiles = await this.getSnapshot(sessionId, entryPath);
-            files.push(...subFiles.files);
-          } else {
-            // Get file content
-            const fileResult = await this.activeHandle.readFile(entryPath);
-            if (fileResult.success) {
-              files.push({
-                path: entryPath,
-                content: fileResult.output,
-                size: fileResult.output.length,
-                lastModified: new Date(),
-              });
+        const entries = result.output.split('\n').filter(Boolean);        // NEW-1 followup-d at `lib/virtual-filesystem/cloud-fs-manager.ts` (getSnapshot, L230-L251);
+        // Tier 3 #43 — parallelize per-entry file-read / recursive snapshot via Promise.all.
+        // Each entry is independent (separate readFile or recursive getSnapshot call).
+        // files.push(...subFiles.files) is order-agnostic (only the union matters; consumers
+        // don't depend on snapshot iteration order). Subdirectory recursion becomes "all subdirs
+        // at this depth in parallel" instead of depth-first; result is the same union of files.
+        // ∝N entries per directory — typical workspace snapshot has 10-200 entries per directory.
+        // No new dependencies.
+        await Promise.all(
+          entries.map(async (entry) => {
+            const isDir = entry.startsWith('d');
+            const entryPath = `${path}/${entry.replace(/^[d-]\s+/, '')}`;
+
+            if (isDir) {
+              // Recursively get files from subdirectory (now parallel — siblings resolve in parallel)
+              const subFiles = await this.getSnapshot(sessionId, entryPath);
+              files.push(...subFiles.files);
+            } else {
+              // Get file content
+              const fileResult = await this.activeHandle.readFile(entryPath);
+              if (fileResult.success) {
+                files.push({
+                  path: entryPath,
+                  content: fileResult.output,
+                  size: fileResult.output.length,
+                  lastModified: new Date(),
+                });
+              }
             }
-          }
-        }
+          }),
+        );
       }
 
       const snapshot: CloudFSSnapshot = {
@@ -365,12 +373,29 @@ class CloudFSManager {
       let totalSize = 0;
       const successfulPaths: string[] = [];
 
-      for (const file of files) {
-        const result = await this.activeHandle.writeFile(file.path, file.content);
-        if (result.success) {
+      // NEW-1 followup-d at `lib/virtual-filesystem/cloud-fs-manager.ts` (syncToCloud, L369-L385);
+      // Tier 3 #42 — parallelize per-file writeFile via Promise.all + per-file try/catch.
+      // Each file is independent (separate cloud writeFile call), saves ∝N write wallclock.
+      // The synced/totalSize counters and successfulPaths array are accumulated by a post-
+      // resolution reduce over the resolved file-or-null values; final values match the
+      // sequential baseline. The downstream cache-invalidation loop at L382-L391 consumes
+      // successfulPaths AFTER Promise.all resolves, so cache cleanup is unaffected. ∝N
+      // files per sync — typical workspace has 20-500 files. No new dependencies.
+      const syncResults42 = await Promise.all(
+        files.map(async (file) => {
+          try {
+            const result = await this.activeHandle.writeFile(file.path, file.content);
+            return result.success ? file : null;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const written of syncResults42) {
+        if (written) {
           synced++;
-          totalSize += file.content.length;
-          successfulPaths.push(file.path);
+          totalSize += written.content.length;
+          successfulPaths.push(written.path);
         }
       }
 

@@ -17,7 +17,7 @@
  * and flushed on the next successful write. Never blocks the request.
  */
 
-import type { R2Bucket } from '@cloudflare/workers-types';
+import type { R2Bucket, ExecutionContext } from '@cloudflare/workers-types';
 
 export interface TraceEntry {
   ts: string;
@@ -129,26 +129,35 @@ export class TraceLog {
   /**
    * Write a trace entry to R2 (async, non-blocking) and also console.log.
    * On R2 failure, buffers the line for the next flush.
+   *
+   * When ctx is provided the R2 write promise is passed to ctx.waitUntil()
+   * so it survives past the fetch handler returning and the isolate being
+   * frozen. Without this the R2 put almost never completes for traces that
+   * fire late in the request lifecycle (e.g. response status lines).
    */
-  write(entry: TraceEntry): void {
+  write(entry: TraceEntry, ctx?: ExecutionContext): void {
     const line = JSON.stringify(entry);
 
     // Always log to console — feeds Cloudflare tail / Logpush
     console.log(`[TRACE] ${line}`);
 
-    // Write to R2 if available
-    this.writeToR2(line);
+    // Write to R2 if available — capture the promise so ctx can keep it alive
+    const promise = this.writeToR2(line);
+    if (ctx) {
+      ctx.waitUntil(promise);
+    }
   }
 
   private async writeToR2(line: string): Promise<void> {
     if (!this.bucket) return;
 
     try {
-      // First, flush any buffered entries from a previous R2 outage
+      // First, flush any buffered entries from a previous R2 outage.
+      // The outer ctx.waitUntil keeps the entire writeToR2 promise alive
+      // so the flush also completes (or re-buffers safely).
       if (this.buffer.size > 0 && !this.flushScheduled) {
         this.flushScheduled = true;
-        // Fire-and-forget flush — doesn't block the current request
-        this.flushBuffer().finally(() => { this.flushScheduled = false; });
+        await this.flushBuffer().finally(() => { this.flushScheduled = false; });
       }
 
       // Write the current line

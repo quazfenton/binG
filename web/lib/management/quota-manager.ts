@@ -8,7 +8,7 @@
  * Regular LLM chat requests are NOT tracked.
  */
 
-import { getDatabase } from '@/lib/database/connection';
+import { getDatabase } from '@/lib/database/connection-shim';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { createLogger } from '@/lib/utils/logger'

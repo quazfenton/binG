@@ -324,6 +324,18 @@ const DEFAULT_CONFIG: RuntimeBrokerConfig = {
 export class RuntimeBroker {
   private config: RuntimeBrokerConfig;
   private initialized = false;
+  // Single-flight guard for concurrent .initialize() calls during the
+  // await window — symmetric with ContentAddressableStorage's
+  // `initPromise` pattern. Prevents two simultaneous callers from each
+  // passing the post-completion `if (this.initialized)` check and both
+  // running the init body (which would emit duplicate 'Runtime Broker
+  // initialized (Phase 8)' logs under dev-mode HMR churn).
+  private initPromise: Promise<void> | null = null;
+  // Captured failure from initializeInternal() when init throws and the
+  // singleton enters degraded mode. Null on a clean init. Exposed via
+  // getInitError() so callers can detect degraded state without parsing
+  // log lines.
+  private initError: Error | null = null;
 
   constructor(config?: Partial<RuntimeBrokerConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -331,11 +343,56 @@ export class RuntimeBroker {
 
   /**
    * Initialize the broker (no-op for now — providers are lazily resolved).
+   * Safe to call multiple times concurrently — only the first call runs
+   * the init body; subsequent callers await the same Promise.
    */
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    logger.info('Runtime Broker initialized (Phase 8)');
-    this.initialized = true;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = this.initializeInternal();
+    return this.initPromise;
+  }
+
+  private async initializeInternal(): Promise<void> {
+    // Degraded-mode behavior (mirrors ContentAddressableStorage's
+    // initializeInternal): if a future real init step fails (quota-warmup,
+    // registry pre-fetch, etc.) we don't deadlock the singleton — we log
+    // the failure and still mark `initialized = true` so subsequent
+    // callers don't replay the failed init. Keeping the body inside
+    // try/catch from day one is cheaper than refactoring when the first
+    // throwable init step is added.
+    try {
+      // Dev-mode HMR re-evaluates this module on every cycle, which would
+      // emit a duplicate 'Runtime Broker initialized (Phase 8)' line on
+      // every refresh — operator-noise at default log levels. Keep the
+      // info-level message for first-time production boot (when NEXT_DEV
+      // is unset), downgrade to debug in dev so it only surfaces when
+      // LOG_LEVEL=debug is explicitly configured.
+      if (!process.env.NEXT_DEV) {
+        logger.info('Runtime Broker initialized (Phase 8)');
+      } else {
+        logger.debug('Runtime Broker initialized (Phase 8)');
+      }
+      this.initialized = true;
+    } catch (error: any) {
+      logger.error('Failed to initialize Runtime Broker', error);
+      // Surface the failure programmatically — callers can poll
+      // getInitError() to detect degraded state without parsing logs.
+      this.initError = error instanceof Error ? error : new Error(String(error));
+      // Don't throw — operate in degraded mode.
+      this.initialized = true;
+    }
+  }
+
+  /**
+   * Returns the error that caused initializeInternal() to enter degraded
+   * mode, or null if init completed cleanly. Use this to detect whether
+   * the singleton is operating in a degraded state without parsing log
+   * output. Always returns null until .initialize() has been awaited.
+   */
+  getInitError(): Error | null {
+    return this.initError;
   }
 
   // ========================================================================
@@ -811,24 +868,36 @@ export class RuntimeBroker {
 }
 
 // ============================================================================
-// Singleton
+// Singleton (HMR-safe via globalThis)
 // ============================================================================
 
-let _runtimeBroker: RuntimeBroker | null = null;
-
-/**
- * Get or create the Runtime Broker singleton.
- */
-export function getRuntimeBroker(config?: Partial<RuntimeBrokerConfig>): RuntimeBroker {
-  if (!_runtimeBroker) {
-    _runtimeBroker = new RuntimeBroker(config);
-  }
-  return _runtimeBroker;
+// Type-safe singleton storage on globalThis so the instance survives Next.js
+// dev-mode HMR re-evaluations of this module. Without this, every HMR cycle
+// rebuilds `let _runtimeBroker`, recreating the class instance and re-firing
+// `initialize()` → duplicate 'Runtime Broker initialized' logs on every
+// refresh. Mirrors the `__sandboxOrchestratorInited` pattern in
+// `sandbox-orchestrator.ts`, but uses a `declare global` augmentation for
+// type safety instead of `as any`.
+declare global {
+  // eslint-disable-next-line no-var
+  var __runtimeBroker: RuntimeBroker | undefined;
 }
 
 /**
- * Reset the singleton (for testing).
+ * Get or create the Runtime Broker singleton. The instance lives on
+ * `globalThis` so it survives HMR module re-evaluation.
+ */
+export function getRuntimeBroker(config?: Partial<RuntimeBrokerConfig>): RuntimeBroker {
+  if (!globalThis.__runtimeBroker) {
+    globalThis.__runtimeBroker = new RuntimeBroker(config);
+  }
+  return globalThis.__runtimeBroker;
+}
+
+/**
+ * Reset the singleton (for testing). Clears `globalThis.__runtimeBroker`
+ * so the next `getRuntimeBroker()` call constructs a fresh instance.
  */
 export function resetRuntimeBroker(): void {
-  _runtimeBroker = null;
+  globalThis.__runtimeBroker = undefined;
 }

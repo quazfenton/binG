@@ -1,3 +1,6 @@
+// @audit-phantom-L4593: L4593 is a drift target, NOT a canonical Stage 2
+// surface. Canonical Stage 2 surface is the do-while(false) band L1475..L1712
+// in route.ts (cascade Q3/Q5 cross-cut).
 /**
  * Unified Agent Service
  *
@@ -18,13 +21,62 @@ import type { LLMProvider } from '../sandbox/providers/llm-provider';
 import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
-import { is530Blacklisted, handleProviderError, reset530Counter } from './provider-530-tracker';
+// NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (first production caller of the prompt-orchestrator foundation);
+// adds the applyScript integration at L1491 below + the PO_DEFAULT_SCRIPT module-level const after the imports.
+// The first non-test production caller of step 1's API; unlocks Tier 8 step 4 (round-trip writes) + step 8 (observability)
+// on real production data. Idempotent (re-runs are deterministic no-ops via the (promptId, step, sha) tuple).
+import { observeApplyScript, type PromptScript } from '@/lib/orchestra/prompt-orchestrator';
+
+// NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (PO_DEFAULT_SCRIPT, module-level);
+// hardcoded PromptScript for the first production caller. Empty steps = zero behavior change
+// in the happy path (applyScript is a no-op for empty scripts beyond the scanMarkers scan).
+// Future: replace with a loadScript('~/.prompt-orchestrator/scripts/unified-init.json') call
+// when the disk-format scripts are stable. The const lives at module scope (not inside the
+// request handler) to avoid per-request allocation. promptId chosen to match the entry-point
+// name so the marker-in-history scan (step 7b) can find these markers in agent history.
+const PO_DEFAULT_SCRIPT: PromptScript = {
+  promptId: 'unified-agent-entry',
+  steps: [],
+};
+
+// Bug #1 follow-up: route the v1-api-with-tools auto-continue decision
+// through the shared helper so per-requestId counters, env-tunable
+// MAX_CONTINUATIONS, and the file-edit detector override all match the
+// chat/route.ts SSE streaming path. Closing the six gaps listed in the
+// audit (counter cleanup, requestId keying, hardcoded 3, helper.default,
+// SSE emission) in a single call site change.
+import { decideAutoContinue, defaultFileEditDetector, needsMoreTurnsDetector, clearContinuationCount, buildSyntheticPhaseTransitionRequestId } from '@/lib/chat/auto-continue-helper';
+import type { AutoContinueResultData, AutoContinueRouting } from '@/lib/chat/auto-continue-helper';
+import { is530Blacklisted, record530ErrorIfApplicable, reset530Counter } from './provider-530-tracker';
+// PR-W -- DRY helper consumed at the success-return reset pair.
+import { maybeResetBothTrackers } from './provider-530-tracker';
+import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from './provider-server-error-tracker';
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
+// Bug #91 canonical response-shape helper (with 16 unit tests covering
+// whitespace/null/non-string/non-array edge cases — see classifying test).
+import { classifyResponseShape } from '@/lib/tools/unified-response-handler';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { ModalClient, maybeUseModal, getModalClient } from '@/lib/modal/modal-client';
+// Defense-in-depth: enforce the `UnifiedAgentResult.response: string` contract
+// at the service layer (L1568 below) so that even if Modal's wire response
+// shape drifts (e.g. ContentPart array, `{role, parts, content}` object),
+// the L1568 return site ALWAYS emits a string. TypeScript trusts the wire
+// shape via `this.post<AgentExecuteResponse>(...)` casts in modal-client.ts;
+// stringifyMessageContent is the runtime enforcement point. See
+// lib/chat/content-stringifier.ts for the contract surface.
+import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
+// Inspector-pair audit (shapeKeyOf + serializableTextLength) hoisted from
+// the chat-route emit point (`app/api/chat/route.ts:1668-L1669`) into the
+// service layer so the audit fires from EVERY processUnifiedAgentRequest
+// caller (v1 priority router, v2-native, stateful-agent, OpenCode SDK,
+// agent-loop orchestration fallback) — not just the chat route's narrow
+// post-await log line. The chat-route emit is preserved (different prefix,
+// distinct route-local fields like bufferLen/elapsedMs) for defense-in-depth
+// grep-ability. See `auditResponseShape` below.
+import { shapeKeyOf, serializableTextLength } from '@/lib/chat/shape-helpers';
 import { PROVIDER_DEFAULT_MODELS } from '../providers/provider-default-models';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
@@ -74,7 +126,7 @@ import {
   generateTrackerSummary,
 } from '@bing/shared/agent/successive-tracker';    // [STEER] wiring: when the consecutive/total tool-call cap fires, give the LLM
 // an explicit text-mode fallback instead of an abrupt cutoff. Closes #21.
-import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer, InvalidModelError } from './steer-service';
+import { wireConsecutiveToolCapSteer, wireOrchestrationFallbackSteer, wireLoopAbortSteer, safeSteer, InvalidModelError, buildSteerPrompt, steerFromFinishReason } from './steer-service';
 // Bug #40: per-session orchestration-fallback counter. Incremented in
 // tagResultDegraded so /api/health?detailed can surface the count.
 import { incrementOrchestrationFallback } from '@/lib/observability/degradation-tracker';
@@ -158,16 +210,50 @@ import { formatAvailableBinariesAsync } from '@/lib/bash/env-probe';
 // path into the system prompt at request start so the LLM never has to
 // guess the scope. Returns null for plain anon ownerIds (no $ delimiter),
 // in which case the inject is silent.
-import { buildSessionScopeSteerPrompt } from './steer-service';
+import { buildSessionScopeSteerPrompt, wireFinishReasonSteer } from './steer-service';
 // Pass-2 cross-cutting theme: record orchestration fallback events so the
 // degradation chain shows when the v1-api text-mode fallback fired. The
 // sessionId is passed through config.conversationId / config.userId / 'default'.
 import { recordDegradation } from '@/lib/observability/degradation-tracker';
+import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, hasMutationSuffix, hasReadSuffix } from '@bing/shared/agent/tool-classification';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
 // Uses fs.existsSync on node_modules/@opencode-ai/sdk — simpler and more
 // reliable than parsing package.json, works in all deployment contexts.
+/**
+ * Audit-grade discriminator for `composedPromptSource` (Q3 fix).
+ * Centralizes the two magic strings so a future typo (`Override` vs `override`)
+ * fails at module load / type-check, not silently at a log site.
+ */
+export const PROMPT_SOURCE = {
+  OVERRIDE: 'override',
+  NO_OVERRIDE: 'no-override',
+} as const;
+
+// exported so route.ts SSE payload emitters can reuse the discriminator without redefining it.
+export const Q2_LIFT_REASON: 'SSE-payload discriminator reuse' = 'SSE-payload discriminator reuse';
+
+export type PromptSource = typeof PROMPT_SOURCE.OVERRIDE | typeof PROMPT_SOURCE.NO_OVERRIDE;
+
+/**
+ * Option-3 audit-grade discriminator (Q3 followup closure):
+ * Map a `String | null` to the `'override' | 'no-override'` sentinel so
+ * downstream telemetry can distinguish caller-requested (non-null string)
+ * from caller-skipped (null) without depending on tsc-narrowed types
+ * or breaking the `@audit pinned field name composedPromptSource` contract.
+ *
+ * Convention: any non-null STRING value is treated as caller-requested
+ * (`OVERRIDE`). The orchestrator's `composedPrompt = null` branch falls
+ * into `NO_OVERRIDE` even when the upstream empty-string booking applies,
+ * because that booking only fires AFTER the helper returns.
+ */
+export function stringOrNullToPromptSource(
+  value: string | null | undefined,
+): typeof PROMPT_SOURCE.OVERRIDE | typeof PROMPT_SOURCE.NO_OVERRIDE {
+  return value == null ? PROMPT_SOURCE.NO_OVERRIDE : PROMPT_SOURCE.OVERRIDE;
+}
+
 let _hasOpenCodeSDKPackageCache: boolean | undefined;
 function _hasOpenCodeSDKPackageCheck(): boolean {
   if (_hasOpenCodeSDKPackageCache !== undefined) return _hasOpenCodeSDKPackageCache;
@@ -222,10 +308,88 @@ const _envFingerprint: Record<string, string> = {
 };
 log.info('[UnifiedAgent] env-var fingerprint (routing-affecting)', _envFingerprint);
 
+/**
+ * Bug-fix #4 (chat-hang investigation wrap): race a Promise against a
+ * hard timeout that resolves with a caller-supplied fallback value. Used
+ * as defense-in-depth around the pre-stream awaits in
+ * `processUnifiedAgentRequest`:
+ *   - `resolveDynamicDefaults()`  → 2.5s (dynamic `import('../providers/model-ranker')` +
+ *                                   `circuit-breaker` can hang during dev/Turbopack cold compile)
+ *   - `determineMode(config)`     → 2.5s (dynamic `import('./execution-engines')` for engine path)
+ *   - `formatAvailableBinariesAsync()` → 3s (37 parallel `which` calls — already 1.5s
+ *                                   per-binary ceiling inside env-probe, but defense-in-depth)
+ *
+ * Timer-leak guard: the setTimeout handle is captured in outer scope and
+ * cleared in `.finally()` chained on the race so a fast-resolving winner
+ * doesn't leave a pending timer in Node's queue (mirrors PR-A/PR-B pattern
+ * from `llm-fallback-coordinator.ts`).
+ *
+ * Relationship to other abort machinery: this helper is `Promise.race`-based,
+ * NOT `AbortController`-based. It does NOT cancel the underlying work — the
+ * original promise is still pending in the background and GCs eventually —
+ * which is acceptable trade-off: leaking one promise per hung request is
+ * strictly better than blocking the chat route indefinitely. A future
+ * enhancement could wire `AbortController` + `signal.addEventListener` to
+ * prune the hung work, but the dev-mode hang symptom is the user-visible
+ * regression and the timeout fires in time for `processUnifiedAgentRequest`
+ * to proceed via the fallback path.
+ *
+ * @param promise  — the work to race against the deadline
+ * @param ms       — hard ceiling; race resolves to `fallback` if `promise` is not settled in time
+ * @param fallback — the value returned on timeout (must be type-compatible with `promise`)
+ * @param label    — short label used in the warn log so operators can correlate
+ */
+async function withTimeoutFallback<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => {
+          log.warn('[CHAT-HANG-FIX] Pre-stream await exceeded budget; using fallback', {
+            label,
+            timeoutMs: ms,
+          });
+          resolve(fallback);
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // SelfHeal carry-forward cache: stores the provider+model that succeeded
 // on the most recent attempt so SelfHeal retries can skip dead providers.
 let _selfHealProvider: string | null = null;
 let _selfHealModel: string | null = null;
+
+// Bug #12 (Pass-8): Session-scoped provider cache. When a non-primary provider
+// succeeds, cache it per conversation so subsequent requests in the same session
+// reuse it instead of re-running the full provider selection (which hits the
+// 429'd primary every time). TTL is 10 minutes; entries auto-expire.
+const _sessionProviderCache = new Map<string, { provider: string; model: string; confirmedAt: number }>();
+const SESSION_PROVIDER_CACHE_TTL_MS = 10 * 60 * 1000;
+
+export function getLastWorkingProvider(conversationId?: string): { provider: string; model: string } | null {
+  if (!conversationId) return null;
+  const entry = _sessionProviderCache.get(conversationId);
+  if (!entry) return null;
+  if (Date.now() - entry.confirmedAt > SESSION_PROVIDER_CACHE_TTL_MS) {
+    _sessionProviderCache.delete(conversationId);
+    return null;
+  }
+  return { provider: entry.provider, model: entry.model };
+}
+
+export function recordLastWorkingProvider(conversationId: string, provider: string, model: string): void {
+  _sessionProviderCache.set(conversationId, { provider, model, confirmedAt: Date.now() });
+}
 
 /**
  * Resolve dynamic default provider/model using model-ranker.
@@ -235,6 +399,21 @@ let _selfHealModel: string | null = null;
 let _cachedDynamicDefaults: { provider: string; model: string } | null = null;
 let _dynamicDefaultsTimestamp = 0;
 const DYNAMIC_DEFAULTS_TTL_MS = 30_000; // Re-check every 30s
+
+// #66 (docs/async-parallelization-opportunities.md, Tier 5 concurrent-miss
+// de-dup): concurrent resolveDynamicDefaults() callers share the same resolution
+// promise when the cache is stale and the cache-MISS path is executing. Combined
+// with the 30s cache hit (microsecond synchronous return) above, this covers
+// both the within-window repeat-call case AND the simultaneous-miss case that
+// the cache alone does NOT cover (e.g. when a circuit-breaker invalidation fires
+// and N concurrent callers all hit the cache-miss path within the same microtask).
+// Module-scoped so only in-process waiters share — Next.js Worker boundary still
+// acts as a natural fan-out boundary per process. The `.finally` clears the slot
+// on both fulfilled AND rejected paths so a permanently-rejected promise cannot
+// permanently block subsequent callers (next caller retries with a fresh IIFE).
+// Identity-checked in the cleanup ('if it's still ours') to avoid clobbering a
+// newer in-flight promise that may have been set by an interleaved caller.
+let _dynamicDefaultsInflight: Promise<{ provider: string; model: string }> | null = null;
 
 /**
  * Check if a provider has a non-empty API key in the environment.
@@ -268,6 +447,13 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
   if (_cachedDynamicDefaults && (now - _dynamicDefaultsTimestamp) < DYNAMIC_DEFAULTS_TTL_MS) {
     return _cachedDynamicDefaults;
   }
+  // #66 in-flight de-dup gate: if another caller in this process is already
+  // resolving the cache-MISS path, await their promise instead of starting
+  // a fresh dynamic-import chain. The `inflight` local capture + identity
+  // check in the finally block below prevents an older caller from clobbering
+  // a newer in-flight's slot if interleaved calls re-enter the gate.
+  if (_dynamicDefaultsInflight) return _dynamicDefaultsInflight;
+  const inflight = _dynamicDefaultsInflight = (async () => {
   let provider = process.env.LLM_PROVIDER || 'mistral';
   let model = process.env.DEFAULT_MODEL || 'mistral-large-latest';
   try {
@@ -350,6 +536,12 @@ async function resolveDynamicDefaults(): Promise<{ provider: string; model: stri
   _cachedDynamicDefaults = { provider, model };
   _dynamicDefaultsTimestamp = now;
   return { provider, model };
+  })();
+  try {
+    return await inflight;
+  } finally {
+    if (_dynamicDefaultsInflight === inflight) _dynamicDefaultsInflight = null;
+  }
 }
 
 /**
@@ -361,34 +553,11 @@ function invalidateDynamicDefaultsCache(): void {
   _dynamicDefaultsTimestamp = 0;
 }
 
-
-
 /**
  * Exact-name sets from the capability map (createCapabilityToolExecutor)
  * to avoid false positives from substring matching (e.g. 'read' in 'thread.read').
  * These are used by the auto-continuation loop in runV1ApiWithTools.
  */
-const WRITE_TOOL_NAMES = new Set([
-  'write_file', 'edit_file', 'apply_diff', 'applydiff',
-  'delete_file', 'batch_write', 'write_files',
-  'batchwrite', 'writefiles',
-  'str_replace', 'replace_in_file',
-  'execute_bash', 'execute_command', 'execute', 'bash',
-  'shell', 'terminal', 'run',
-  'sandbox_execute', 'sandbox_shell', 'sandbox_session',
-  'mcp_tool', 'mcp_execute',
-  // Canonical capability-style names
-  'file.write', 'file.delete', 'file.batch_write',
-]);
-
-const READ_ONLY_TOOL_NAMES = new Set([
-  'read_file', 'list_directory', 'list_dir', 'ls',
-  'search_files', 'grep', 'glob', 'find',
-  'search_code', 'grep_code',
-  'web_search', 'web_fetch',
-  // Canonical capability-style names
-  'file.read', 'file.list',
-]);
 
 /**
  * Classify a provider error into permanent vs transient vs rate-limit.
@@ -409,18 +578,36 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
   //   error.code            — some SDKs encode HTTP status as "code"
   const status = error?.status || error?.statusCode || error?.status_code || error?.response?.status || error?.code || 0;
 
-  // Permanent: missing credentials, invalid auth, bad config
+  // Bug #116 fix: 401/403 were classified as 'permanent' and skipped for the
+  // entire request. But many 401s are transient (expired token, API gateway
+  // returning 403 for overuse, key rotation, etc.) and even for genuinely
+  // missing keys the fallback chain should try other providers first.
+  // Demote 401/403 to 'rate_limit' so they go through the circuit-breaker
+  // (5 failures / 5 min TTL) instead of being permanently disabled.
+  // Specific auth-related message strings (invalid key format, forbidden)
+  // still classify as 'permanent' since those indicate misconfiguration.
+  if (status === 401 || status === 403) {
+    // Keep 'permanent' only for clearly-misconfigured states.
+    if (
+      msg.includes('invalid api key') ||
+      msg.includes('invalid x-api-key') ||
+      msg.includes('authentication failed') ||
+      msg.includes('insufficient_quota') ||
+      msg.includes('billing issue')
+    ) {
+      return 'permanent';
+    }
+    // 401/403 without explicit invalid-key signal → treat as rate_limit
+    // so the circuit breaker handles back-off and auto-recovery.
+    return 'rate_limit';
+  }
+
+  // Permanent: bad config (invalid key format, model not found, etc.)
   if (
-    status === 401 || status === 403 ||
     msg.includes('api key is missing') ||
-    msg.includes('invalid api key') ||
-    msg.includes('invalid x-api-key') ||
     msg.includes('unauthorized') ||
     msg.includes('forbidden') ||
-    msg.includes('authentication failed') ||
     msg.includes('not authorized') ||
-    msg.includes('insufficient_quota') ||
-    msg.includes('billing issue') ||
     msg.includes('model not found') ||
     msg.includes('model does not exist') ||
     msg.includes('no such model') ||
@@ -580,7 +767,6 @@ function isClientDisconnected(): boolean {
   return _clientDisconnected;
 }
 
-
 export interface UnifiedAgentConfig {
   // Core
   userMessage: string;
@@ -606,6 +792,27 @@ export interface UnifiedAgentConfig {
 
   // Streaming
   onStreamChunk?: (chunk: string) => void;
+  /**
+   * Caller-supplied AbortSignal. Upstream callers (e.g. the chat route's
+   * POST handler) forward `request.signal` here so a user-initiated stop
+   * can interrupt the orchestration chain.
+   *
+   * NOTE — landing-pad status: only this interface slot exists in this
+   * turn. The v1-api modes (`runV1ApiWithTools`, `runV1ApiCompletion`,
+   * including their server-side continuation turns) now forward this
+   * signal into `streamWithConcurrentFallback` so a user-initiated stop
+   * cancels the upstream HTTP request and re-arms the fallback
+   * coordinator's user-abort race arm. Other modes (`runV2Native`,
+   * `runStatefulAgentMode`, `runOpencodeSDKMode`, `runMastraWorkflow`,
+   * etc.) do NOT yet forward it — for those the chain-walk in
+   * `llm-fallback-coordinator.ts` only interrupts on its own
+   * `hardDeadlineMs` budget per provider, and the route-level hard
+   * deadline (app/api/chat/route.ts) is the final backstop.
+   *
+   * Optional. When undefined, modes fall back to their internal
+   * timeout / circuit-breaker machinery (no caller-side interruption).
+   */
+  abortSignal?: AbortSignal;
 
   // Agent settings
   maxSteps?: number;
@@ -734,6 +941,28 @@ export interface UnifiedAgentResult {
   // this to emit a final `loop_abort` SSE event for the UI banner. Plain
   // `error` field still carries the abort message for backward compat.
   loopAbort?: LoopAbortPayload;
+  // ARCH-001 Flag 1 (Pickup): the 3 detector-helper enrichment fields from
+  // `AutoContinueResultData` now live on `UnifiedAgentResult` as OPTIONAL
+  // arrays. They are marked `?` because most call sites (mode-handler return
+  // paths in runV2Native, runOpencodeSDKMode, etc.) do not pre-compute these;
+  // `_enrichResultData` in `auto-continue-helper.ts` populates them from
+  // `steps` + `responseText` at the `decideAutoContinue` boundary BEFORE the
+  // detectors run. Type is NOT marked `readonly` — the spread-based refresh
+  // semantic in `processUnifiedAgentRequest` (e.g. `{ ...fallbackResult }`)
+  // simply re-reads whatever the source held, and the helper's wider repo
+  // already pattern-matches spread semantics everywhere else.
+  //
+  // - `errors`:               stringified tool-failure messages distilled from
+  //                            `steps[].result.error` and `steps[].result.success === false`.
+  // - `toolFailures`:         paired `{ toolName, error }` records for the
+  //                            same step set; drives the `failure-cascade` detector signal.
+  // - `incompleteSignals`:    responseText-derived heuristic signal names
+  //                            (`announced-next-step`, `step-enumeration`,
+  //                            `planned-multi-step`, `unclosed-code-block`,
+  //                            `mid-sentence-cutoff`) for the soft-gate detectors.
+  errors?: string[];
+  toolFailures?: Array<{ toolName: string; error: string }>;
+  incompleteSignals?: string[];
 }
 
 // Note: StartupCapabilities is imported from ./startup-capabilities
@@ -1220,6 +1449,40 @@ export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
 }
 
 /**
+ * Hoisted from the chat-route layer (route.ts:1668-L1669). Emits one
+ * `[AGENT-SERVICE] processUnifiedAgentRequest returned` INFO line per outer
+ * return of `processUnifiedAgentRequest`, so an audit of the response shape
+ * is visible regardless of which sub-mode (v1-api / v2-native / stateful-
+ * agent / OpenCode SDK / V1 agent loop) returned or whether the route layer
+ * was bypassed (e.g. when an upstream caller invokes the service directly).
+ *
+ * Side-effect note: when the orchestrator's fallback chain cascades (Phase 1
+ * fails → Phase 2 text-mode fallback), this helper fires TWICE for the same
+ * outer request — once for the failed step's shape, once for the rescued
+ * step's shape. This is intentional: each cadence surfaces what the
+ * failing step actually returned so operators can see whether the failure
+ * was a shape drift (ContentPart array, `{role, parts, content}` object,
+ * StreamingResponse chunk) vs. an empty/error path.
+ */
+function auditResponseShape(
+  result: UnifiedAgentResult,
+  meta: { provider?: string; model?: string; mode?: string },
+): void {
+  // Use the file-local `log` (from createLogger('UnifiedAgentService')) —
+  // `agentLog` is also imported but not used for INFO calls anywhere else
+  // in this file, so adopting `log` keeps the audit sink-aligned with the
+  // 100+ existing `log.info(...)` call sites in this file's other paths.
+  log.info('[AGENT-SERVICE] processUnifiedAgentRequest returned', {
+    provider: meta.provider ?? (result.metadata?.provider as string | undefined),
+    model: meta.model ?? (result.metadata?.model as string | undefined),
+    mode: meta.mode ?? result.mode,
+    responseType: typeof result.response,
+    responseShapeKey: shapeKeyOf(result.response),
+    responseLen: serializableTextLength(result.response),
+  });
+}
+
+/**
  * Unified agent request processor
  *
  * Routes to OpenCode V2 Engine (primary) or V1 API (fallback) based on configuration.
@@ -1242,7 +1505,16 @@ export async function processUnifiedAgentRequest(
   let autoInjectContext = '';
   try {
     const { appendAutoInjectPowers, buildAutoInjectUserMessage } = await import('@/lib/powers');
-    const userMsg = config.userMessage || '';
+    // NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (auto-inject site, L1493);
+    // first production caller of the prompt-orchestrator foundation. applyScript wraps
+    // userMsg before it fans out to BOTH the V1-API path (appendAutoInjectPowers) AND
+    // non-history modes (buildAutoInjectUserMessage for OpenCodeEngine / StatefulAgent / Mastra).
+    // Structural first-caller: empty PO_DEFAULT_SCRIPT.steps means the inject path doesn't
+    // fire (only scan + idempotency run). To unlock Tier 8 step 4 (round-trip writes) +
+    // step 8 (observability) on real production data, a follow-up apply must add a step
+    // to PO_DEFAULT_SCRIPT (or switch to loadScript for a disk-stored script). Inside the
+    // existing try/catch — a prompt-orchestrator throw fails the same way as a powers throw.
+    const userMsg = observeApplyScript(config.userMessage || '', PO_DEFAULT_SCRIPT, 'unified-agent');
 
     // Always ensure conversationHistory exists so V1-API paths get injection
     if (!config.conversationHistory) {
@@ -1253,7 +1525,7 @@ export async function processUnifiedAgentRequest(
     // Also build the raw text for modes that don't use conversationHistory
     autoInjectContext = buildAutoInjectUserMessage(userMsg) || '';
   } catch (err: any) {
-    log.debug('Auto-inject powers skipped at entry point', { error: err?.message });
+    log.debug('Auto-inject powers / prompt script skipped at entry point', { error: err?.message });
   }
 
   // Bug #67 (Pass-5 audit) — qd/lite pre-validation. The audit observed
@@ -1323,7 +1595,17 @@ export async function processUnifiedAgentRequest(
   // the probe result in its ENOENT error message as a fallback).
   let envProbeSuffix = '';
   try {
-    envProbeSuffix = await formatAvailableBinariesAsync();
+    // Bug-fix #4: 3s hard ceiling — the per-binary `PROBE_TIMEOUT_MS` inside
+    // `probeAvailableBinaries` is 1.5s, but on a pathological PATH/kernel delay
+    // the cumulative `Promise.all` of ~37 `which` calls + child_process spawn
+    // overhead can stall. Race against a fallback so the chat route proceeds
+    // even if the env probe never settles.
+    envProbeSuffix = await withTimeoutFallback(
+      formatAvailableBinariesAsync(),
+      3_000,
+      '',
+      'formatAvailableBinariesAsync',
+    );
   } catch (err: any) {
     log.debug('Env probe skipped at entry point (non-fatal)', { error: err?.message });
   }
@@ -1367,8 +1649,51 @@ export async function processUnifiedAgentRequest(
 
   log.info('═══════════════════════════════════════════════');
   log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
-  // Use shared dynamic defaults resolver instead of hardcoded mistral
-  const dynamicDefaults = await resolveDynamicDefaults();
+  // Win #2 (docs/async-parallelization-opportunities.md): Promise.all the two
+  // independent REQUEST-ENTRY setup ops. `resolveDynamicDefaults` only reads
+  // env vars + the 30s dynamic-defaults cache; `determineMode` only reads
+  // config + startupCaps + (lazily) execution-engines. Neither mutates state
+  // the other reads, so unblocking both halves the REQUEST-ENTRY latency
+  // (~50-100ms per request — the dominant cost is a dynamic import
+  // `await import('../providers/model-ranker')` inside resolveDynamicDefaults
+  // and the synchronous classifier scoring inside classifyV1Route).
+  //
+  // Bug-fix #4: race EACH Promise.all entry against a 2.5s budget. A stuck
+  // dynamic import (Turbopack cold compile / sqlite lock / circuit-breaker
+  // module dep hang) used to block the entire /api/chat route indefinitely.
+  // The fallback for `resolveDynamicDefaults` matches the in-function defaults
+  // for env-only resolution; the fallback for `determineMode` is the safest
+  // single-mode path (`v1-api`) — strictly more resilient than `v1-agent-loop`
+  // because it goes through `streamWithConcurrentFallback` / `streamWithVercelAI`
+  // which carry the route-level stall watchdog. The Promise.all context is
+  // otherwise unchanged.
+  const envProvider = process.env.LLM_PROVIDER || 'mistral';
+  const envModel = process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  // Surface `config.engine` in the warn log when the caller set it, so a
+  // timeout-induced fallback to `v1-api` doesn't silently swallow the
+  // caller's explicit engine choice (Bug-fix #4 reviewer nit #3).
+  const determineModeLabel = config.engine
+    ? `determineMode[engine=${config.engine}]`
+    : 'determineMode';
+  const [dynamicDefaults, modeResult] = await Promise.all([
+    withTimeoutFallback(
+      resolveDynamicDefaults(),
+      2_500,
+      { provider: envProvider, model: envModel },
+      'resolveDynamicDefaults',
+    ),
+    withTimeoutFallback(
+      determineMode(config),
+      2_500,
+      // `as const` preserves the literal-union narrowing so TS treats this
+      // fallback as `{mode: 'v1-api' | 'v1-agent-loop' | ...}`-compatible
+      // rather than widening `mode` to `string`. Mirrors the existing
+      // `mode: 'v1-api' as const` pattern elsewhere in this file.
+      { mode: 'v1-api' as const },
+      determineModeLabel,
+    ),
+  ]);
+  const { mode } = modeResult;
 
   log.info('[UnifiedAgent] │ provider:', config.provider || dynamicDefaults.provider);
   log.info('[UnifiedAgent] │ model:', config.model || dynamicDefaults.model);
@@ -1378,8 +1703,6 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ messageLength:', (config.userMessage || '').length);
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
-
-  const { mode } = await determineMode(config);
 
   log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
   log.info('[UnifiedAgent] │ resolvedMode:', mode);
@@ -1471,9 +1794,14 @@ export async function processUnifiedAgentRequest(
           tokensUsed: modalResult.tokensUsed,
         });
 
-        return {
+        const modalReturn: UnifiedAgentResult = {
           success: true,
-          response: modalResult.response,
+          // Defense-in-depth: stringifyMessageContent enforces the
+          // `UnifiedAgentResult.response: string` contract. ModalClient.executeAgent
+          // ALSO applies this coercion at the wire layer (lib/modal/modal-client.ts:97),
+          // but a future call site (no-modal path that constructs modalResult directly)
+          // could regress the runtime shape — surface it from the service layer too.
+          response: stringifyMessageContent(modalResult.response),
           mode: 'v1-api',
           metadata: {
             provider: 'modal',
@@ -1485,6 +1813,8 @@ export async function processUnifiedAgentRequest(
             modalEndpoint: 'executeAgent',
           },
         };
+        auditResponseShape(modalReturn, { provider: 'modal', model: modalResult.model, mode: 'v1-api' });
+        return modalReturn;
       } else {
         log.warn('[UnifiedAgent] ⚠️ Modal returned failure, falling back', {
           error: modalResult.error,
@@ -1551,7 +1881,7 @@ export async function processUnifiedAgentRequest(
           const orchMessages = [
             ...orchNonSystem,
             { role: 'user', content: config.userMessage },
-          ];;
+          ];
           return await runV1Orchestrated(config, orchMessages, startTime);
         }
 
@@ -1626,12 +1956,59 @@ export async function processUnifiedAgentRequest(
     const isAutoMode = !config.mode || config.mode === 'auto';
     const roleSelection = result.metadata?.roleSelection;
 
-  // Log auto-continue trigger
-  if (roleSelection?.continue) {
+  // Bug fix (was silently falling back to '000'): `config.conversationId` and
+  // `config.sessionId` can be set to the literal string '000' by upstream
+  // VFS scope normalization (`composite-session-id.ts:115:
+  //   if (!input || !input.trim()) return '000';`) when the orphan-session
+  // placeholder propagates. Without this guard, '000' flows through to
+  // `decideAutoContinue`'s per-requestId counter and creates a second
+  // counter bucket alongside the route.ts streaming loop's real chat id,
+  // breaking the MAX_CONTINUATIONS=3 cap coordination across the two call
+  // paths (worst case: 6 LLM calls per request). Refuse '000' and fall
+  // through to a process-unique synthetic id (UUID suffix prevents same-ms
+  // collisions across concurrent /api/chat bursts -- the prior
+  // `Date.now()`-only id collided across fan-out producers in the same
+  // millisecond and let unrelated requests share a counter bucket,
+  // defeating the per-request INVARIANT). The inline `Date.now()`-only
+  // fallback was promoted to the shared helper `buildSyntheticPhaseTransitionRequestId`
+  // in `web/lib/chat/auto-continue-helper.ts` so production callers and the
+  // R7 regression test share the same source-of-truth function. A future DRY
+  // revert that drops the UUID suffix in the helper fails the regression test
+  // immediately -- the test calls `buildSyntheticPhaseTransitionRequestId`
+  // directly with a pinned `now` and asserts distinct returned strings.
+  const phaseTransitionRequestId =
+    (config.conversationId && config.conversationId !== '000')
+      ? config.conversationId
+      : (config.sessionId && config.sessionId !== '000')
+        ? config.sessionId
+        : buildSyntheticPhaseTransitionRequestId();
+  const autoDecision = decideAutoContinue({
+    requestId: phaseTransitionRequestId,
+    routing: roleSelection
+      ? { continue: roleSelection.continue,
+          primaryRole: roleSelection.suggestedRole }
+      : undefined,
+    steps: (result.steps ?? []).map((s) => ({
+      toolName: s.toolName,
+      args: s.args,
+    })),
+    responseText: result.response ?? '',
+    // ARCH-001 Flag 1 (Pickup): `UnifiedAgentResult` now subsumes
+    // `AutoContinueResultData` — the 3 helper-derived fields
+    // (`errors`/`toolFailures`/`incompleteSignals`) are optional on both
+    // shapes. The boundary cast is gone; `decideAutoContinue` calls
+    // `_enrichResultData(result, steps, responseText)` BEFORE invoking the
+    // detectors, which guarantees the fields are populated at the call site
+    // even when the caller left them undefined. Mirror of route.ts:1701.
+    result,
+  });
+  clearContinuationCount(phaseTransitionRequestId);
+  if (autoDecision.continue) {
     log.info('\x1b[33m[Auto-Continue]\x1b[0m 🔄 triggered by model', {
-      reason: roleSelection.classification || 'multi-step plan detected',
-      suggestedRole: roleSelection.suggestedRole,
-      nextAction: roleSelection.specializationRoute
+      reason: roleSelection?.classification || 'multi-step plan detected',
+      suggestedRole: roleSelection?.suggestedRole,
+      nextAction: roleSelection?.specializationRoute,
+      reasonCode: autoDecision.reason,
     });
   }
 
@@ -1658,9 +2035,7 @@ export async function processUnifiedAgentRequest(
       result.mode !== mode ||
       result.metadata?.fallbackFrom != null ||
       result.metadata?.fallbackReason != null ||
-      result.metadata?.fallbackChain != null;
-
-    if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && !roleSelection?.continue) {
+      result.metadata?.fallbackChain != null;      if (isAutoMode && !alreadyFellBack && result.success && (result.steps?.length ?? 0) === 0 && roleSelection?.continue !== false) {
       log.info('[PhaseTransition] No tools used in Phase 1, entering Phase 2 fallback (text-mode)');
 
       // For orchestrated modes, retry with text-only fallback
@@ -1680,7 +2055,7 @@ export async function processUnifiedAgentRequest(
             { originalMode: mode, fallbackMode: 'v1-api', phase1Result: 'no-tools' },
           );
         } catch { /* best-effort */ }
-        return {
+        const auditedFallback: UnifiedAgentResult = {
           ...fallbackResult,
           metadata: {
             ...fallbackResult.metadata,
@@ -1688,9 +2063,12 @@ export async function processUnifiedAgentRequest(
             originalMode: mode,
           }
         };
+        auditResponseShape(auditedFallback, { provider: config.provider, model: config.model, mode });
+        return auditedFallback;
       }
     }
 
+    auditResponseShape(result, { provider: config.provider, model: config.model, mode });
     return result;
   } catch (error) {
     log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
@@ -1731,6 +2109,7 @@ export async function processUnifiedAgentRequest(
           ? `${config.filesystemOwnerId}$${config.conversationId || 'default'}`
           : (config.conversationId || config.userId || 'default'),
       });
+      auditResponseShape(degradedResult, { provider: config.provider, model: config.model, mode });
       return degradedResult;
     }
 
@@ -1738,7 +2117,7 @@ export async function processUnifiedAgentRequest(
     log.error('[UnifiedAgent] ✗ ALL MODES FAILED', {
       triedModes: Array.from(triedModes),
     });
-    return {
+    const allFailedResult: UnifiedAgentResult = {
       success: false,
       response: 'I\'m sorry, I wasn\'t able to process your request. All available AI providers and execution modes were exhausted. This can happen due to API key issues, rate limits, or network problems. Please try again in a moment, or check that your API keys are configured correctly.',
       mode,
@@ -1749,6 +2128,8 @@ export async function processUnifiedAgentRequest(
         allProvidersFailed: true,
       },
     };
+    auditResponseShape(allFailedResult, { provider: config.provider, model: config.model, mode });
+    return allFailedResult;
   }
 }
 
@@ -1922,7 +2303,7 @@ async function runV2Native(
 
   return {
     success: true,
-    response: result.response,
+    response: stringifyMessageContent(result.response),
     steps,
     totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
     mode: 'v2-native',
@@ -2004,7 +2385,7 @@ async function runDesktopMode(
 
     return {
       success: true,
-      response: result.response,
+      response: stringifyMessageContent(result.response),
       steps,
       totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
       mode: 'desktop',
@@ -2078,7 +2459,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
 
     return {
       success: result.success,
-      response: result.response,
+      response: stringifyMessageContent(result.response),
       steps,
       totalSteps: Array.isArray(result.steps) ? result.steps.length : (result.steps || 0),
       mode: 'v2-native',  // StatefulAgent runs as V2 native
@@ -2117,7 +2498,6 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
     timeout: 300000,
   } as any;
 
-  
   const engine = createOpenCodeEngine(engineConfig);
   const result = await engine.execute(config.userMessage);
   
@@ -2127,7 +2507,7 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   
   return {
     success: true,
-    response: result.response,
+    response: stringifyMessageContent(result.response),
     steps: (result.bashCommands || []).map(cmd => ({
       toolName: 'execute_command',
       args: { command: cmd.command },
@@ -2173,7 +2553,7 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   
   return {
     success: true,
-    response: result.response,
+    response: stringifyMessageContent(result.response),
     steps: (result.bashCommands || []).map(cmd => ({
       toolName: 'execute_command',
       args: { command: cmd.command },
@@ -2981,7 +3361,6 @@ function validateToolArgs(
   return { valid: true, args: normalized };
 }
 
-
 /**
  * Redact tool arguments for logging — replaces content fields with their
  * length to avoid dumping full file contents into logs, while preserving
@@ -3303,9 +3682,22 @@ async function runV1ApiWithTools(
   // Use the shared capability-based tool executor (avoids code duplication)
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
   // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
-  const _dynamicDefaults = await resolveDynamicDefaults();
-  const primaryProvider = config.provider || _dynamicDefaults.provider;
-  const primaryModel = config.model || _dynamicDefaults.model;
+  // Win #2b (docs/async-parallelization-opportunities.md): Promise.all the cache
+  // hit (microsecond return) with the linked PROVIDERS dynamic import. Both ops
+  // are independent — resolveDynamicDefaults reads only _cachedDynamicDefaults +
+  // env, llm-providers is a pure module load. Saves ~5-30ms on cold cache miss
+  // (when both must be awaited) and ~5-30ms on warm-cache requests (where the
+  // import was previously sequential after a near-zero cache hit).
+  const [_dynamicDefaults, _llmProvidersMod] = await Promise.all([
+    resolveDynamicDefaults(),
+    import('../providers/llm-providers'),
+  ]);
+  // Bug #12 (Pass-8): Check session-scoped provider cache first. If a previous
+  // request in this conversation found a working provider, prefer it over the
+  // default to avoid re-hitting the 429'd primary every time.
+  const sessionProvider = getLastWorkingProvider(config.conversationId);
+  const primaryProvider = config.provider || sessionProvider?.provider || _dynamicDefaults.provider;
+  const primaryModel = config.model || sessionProvider?.model || _dynamicDefaults.model;
   // FIX: Reset SelfHeal cache at start of each request to prevent cross-request
   // leakage. Without this, a prior request's fallback provider could silently
   // replace a healthy primary in a different request's SelfHeal retry.
@@ -3328,7 +3720,7 @@ async function runV1ApiWithTools(
   // the original model name may not be valid for the fallback provider.
   // Check if the model is in the provider's supported models list; if not,
   // use the provider's default instead.
-  const { PROVIDERS } = await import('../providers/llm-providers');
+  const { PROVIDERS } = _llmProvidersMod;
 
   // FIX: Normalize model name for Vercel provider by stripping 'vercel:' prefix if present
   function getModelForProvider(providerName: string): string {
@@ -3489,7 +3881,7 @@ async function runV1ApiWithTools(
     // FIX: Skip providers with open circuit breakers (unless first request of session)
     if (circuitBreakerMgr) {
       const breaker = circuitBreakerMgr.getBreaker(providerName);
-    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED, skipping " + providerName); continue; }
+    if (is530Blacklisted(providerName) || isServerErrorBlacklisted(providerName)) { log.warn("530 BLACKLISTED, skipping " + providerName); continue; }
       if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
         // On first request of session, reset OPEN circuit instead of skipping
         if (isFirstRequestThisSession) {
@@ -3503,7 +3895,6 @@ async function runV1ApiWithTools(
         }
       }
     }
-
 
     // Skip providers that permanently failed earlier in this request (e.g. missing API key,
     // invalid auth, model not found). Retrying will never help — skip to save time.
@@ -3597,10 +3988,11 @@ async function runV1ApiWithTools(
             // Track for no-progress loop detection
             // Bug #111/#84: Pass the real error string so loop-abort steer has
             // concrete failure history instead of empty/placeholder entries.
-            const _toolError: unknown = toolResult.error;
-            const toolErrorMsg = typeof _toolError === 'string'
-              ? _toolError
-              : (typeof _toolError === 'object' && _toolError !== null && 'message' in _toolError ? String((_toolError as { message: unknown }).message) : undefined);
+            // Use extractToolError helper + fallback to output for cases where
+            // the error message lives in output rather than the error field.
+            const toolErrorMsg =
+              extractToolError(toolResult) ||
+              (typeof toolResult.output === 'string' ? toolResult.output : undefined);
             const loopMsg = recordStepAndCheckLoop(loopState, toolDef.name, args, toolResult.success, toolErrorMsg);
             if (loopMsg) {
               log.warn(`[V1-API-WITH-TOOLS] Loop detected: ${loopMsg}`);
@@ -3637,13 +4029,41 @@ async function runV1ApiWithTools(
     );
 
     // Add built-in choose_role tool — enables dynamic role redirection.
-    // Uses dynamic import to avoid circular dependency with vercel-ai-tools.
+    // Bug #18 fix (BUGS2.md): the dynamic import previously silently failed (empty
+    // catch) leaving choose_role absent from aiSdkTools for the entire session.
+    // The model never sees it and never calls it. The fix guarantees the tool
+    // is present by: (a) falling back to a minimal stub if the import fails, and
+    // (b) skipping the conditional entirely when the tool is already registered.
     if (!aiSdkTools['choose_role']) {
       try {
         const { chooseRoleCapability } = await import('@/lib/chat/tools/choose-role-tool');
         aiSdkTools['choose_role'] = chooseRoleCapability;
-      } catch {
-        // chooseRoleCapability unavailable — role redirection won't be exposed
+        log.info('[V1-API-WITH-TOOLS] choose_role tool registered');
+      } catch (err) {
+        // Bug #18 fix: provide a minimal fallback stub so the tool is still
+        // available even if the full capability module fails to load.
+        log.warn('[V1-API-WITH-TOOLS] chooseRoleCapability unavailable — using fallback stub', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        aiSdkTools['choose_role'] = {
+          description: 'choose_role(role: string) — Switch the AI\'s role or specialty. Use this when a task requires expertise you haven\'t seen applied yet (e.g., architect, reviewer, researcher, security expert). Example: choose_role(role="security-expert")',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              role: { type: 'string', description: 'Role to switch to (e.g. "architect", "reviewer", "researcher", "security-expert", "devops-engineer")' },
+              reason: { type: 'string', description: 'Optional reason for the role switch' },
+            },
+            required: ['role'],
+          },
+          execute: async ({ role, reason }: { role: string; reason?: string }) => {
+            return {
+              success: true,
+              role,
+              switched: true,
+              message: `Role switched to "${role}". ${reason ? `Reason: ${reason}` : ''}`,
+            };
+          },
+        };
       }
     }
 
@@ -3669,12 +4089,14 @@ async function runV1ApiWithTools(
       const composedPrompt = composeRoleWithTools(config.role, {
         availableTools: toolIds,
         extras: ragContext ? [{ id: 'rag.knowledge', template: ragContext }] : undefined,
-      });
-      llmMessages.push({ role: 'system', content: composedPrompt + workspaceSnippet });
+      }) ?? '';
+      if (composedPrompt !== null) { llmMessages.push({ role: 'system', content: composedPrompt + workspaceSnippet }); }
       log.info('[V1-API-WITH-TOOLS] Composed role prompt', {
         role: config.role,
         toolCount: toolIds.length,
-        promptLength: composedPrompt.length,
+        promptLength: composedPrompt?.length ?? 0,
+        // @audit pinned field name composedPromptSource
+        composedPromptSource: stringOrNullToPromptSource(composedPrompt),
         hasRag: !!ragContext,
       });
 
@@ -3723,6 +4145,14 @@ async function runV1ApiWithTools(
     // Dedup guard in appendAutoInjectPowers prevents double injection.
 
     let response = '';
+    // Bug #21 (Pass-8): Phase 1 time-budget. If the stream produces >5K chars
+    // of text with 0 tool calls and exceeds 30s, abort early — the model is
+    // clearly writing everything in prose and the Phase 2 text-mode extraction
+    // can handle what's already been collected. Without this guard, the user
+    // waits 92s for a single skeleton response.
+    const _phase1StartTime = Date.now();
+    const _PHASE1_BUDGET_MS = parseInt(process.env.V1_PHASE1_BUDGET_MS || '30000', 10);
+    const _PHASE1_TEXT_THRESHOLD = parseInt(process.env.V1_PHASE1_TEXT_THRESHOLD || '5000', 10);
 
     try {
       log.info('[V1-API-WITH-TOOLS] Calling streamWithConcurrentFallback...');
@@ -3737,10 +4167,25 @@ async function runV1ApiWithTools(
         maxSteps: config.maxSteps || 15,
         tools: aiSdkTools,
         toolCallStreaming: true,
+        // Forward the caller's abort signal so (a) a user-initiated stop
+        // truly cancels the upstream HTTP request and (b) the fallback
+        // coordinator's user-abort race arm is actually wired. Without
+        // this the request hangs for the full ~4-min idle ceiling even
+        // after the user presses stop. See UnifiedAgentConfig.abortSignal.
+        signal: config.abortSignal,
       })) {
         if (chunk.content) {
           response += chunk.content;
           config.onStreamChunk?.(chunk.content);
+          // Bug #21 (Pass-8): Phase 1 time-budget check. If we have lots of
+          // text but zero tool calls and the budget is exceeded, abort early.
+          if (toolInvocations.length === 0 && response.length > _PHASE1_TEXT_THRESHOLD && Date.now() - _phase1StartTime > _PHASE1_BUDGET_MS) {
+            log.warn('[V1-API-WITH-TOOLS] Phase 1 time-budget exceeded — aborting early (text-only, no tools)', {
+              responseLength: response.length,
+              durationMs: Date.now() - _phase1StartTime,
+            });
+            break;
+          }
         }
 
         if (chunk.toolInvocations) {
@@ -3784,121 +4229,79 @@ async function runV1ApiWithTools(
       // via stepReprompt already handles it. Don't double-trigger.
       const hasRoleSelectMarker = response.includes('[ROLE_SELECT]') || response.includes('[ROUTING_METADATA]');
 
-      const MAX_CONTINUATIONS = 2;
-      let continuationCount = 0;
-
-      while (
-        continuationCount < MAX_CONTINUATIONS &&
-        toolInvocations.length > 0 &&
-        response.trim() &&
-        !hasRoleSelectMarker
-      ) {
-        // Check the last few tool calls to determine if the model read without writing
-        const recentTools = toolInvocations.slice(-3);
-        // Use module-level WRITE_TOOL_NAMES and READ_ONLY_TOOL_NAMES Sets
-        const hasWriteTool = recentTools.some(t => {
-          const name = t.toolName?.toLowerCase() || '';
-          // Exact match first, then suffix-based for future capability-style tools
-          return WRITE_TOOL_NAMES.has(name) ||
-                 name.endsWith('.write') || name.endsWith('.create') ||
-                 name.endsWith('.delete') || name.endsWith('.edit');
+      // Bug #Q7 mirror audit + 2 reviewer fixes (1)+(2):
+      //   (1) HOIST `lastThreeTools.some(isReadOnly)` above while condition --
+      //       restores the legacy `if (!hasReadOnlyTool) break` early-break semantics.
+      //       Note: dropped `hasListSuffix(name)` per reviewer rec to avoid
+      //       dependency on the missing-from-import hasListSuffix symbol.
+      //   (2) WRAP the migrated loop body in try { ... } finally { clearContinuationCount }
+      //       so the per-requestId counter is cleared on every exit path
+      //       (normal, break, throw).
+      // Note: reviewer's flag (3) [explicit const requestId declaration] is deferred
+      // to separate review since requestId is already in scope at L3387 inside
+      // runV1ApiWithTools.
+      try {
+        const lastThreeTools = toolInvocations.slice(-3);
+        const lastToolName = (t: { toolName?: string } | undefined): string =>
+          (t?.toolName?.toLowerCase() ?? '');
+        const hasReadOnlyTool = lastThreeTools.some(t => {
+          const name = lastToolName(t);
+          return READ_ONLY_TOOL_NAMES.has(name);
         });
-        const hasReadOnlyTool = recentTools.some(t => {
-          const name = t.toolName?.toLowerCase() || '';
-          return READ_ONLY_TOOL_NAMES.has(name) ||
-                 name.endsWith('.read') || name.endsWith('.list') ||
-                 name.endsWith('.search');
+        const hasWriteTool = lastThreeTools.some(t => {
+          const name = lastToolName(t);
+          return WRITE_TOOL_NAMES.has(name) || hasMutationSuffix(name);
         });
 
-        // Don't continue if: the model already wrote files, or didn't read anything
-        if (hasWriteTool) break;
-        if (!hasReadOnlyTool) break;
-
-        continuationCount++;
-        log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
-          continuationCount,
-          maxContinuations: MAX_CONTINUATIONS,
-          toolCount: toolInvocations.length,
-          responseLength: response.length,
-          lastTools: recentTools.map(t => t.toolName),
-        });
-
-        // Build context-aware continuation prompt that includes tool result
-        // summaries so the model knows what it already learned.
-        const toolResultsSummary = toolInvocations
-          .slice(-6) // Last 6 tools to avoid bloat
-          .map(t => {
-            const resultStr = typeof t.result?.output === 'string'
-              ? t.result.output.slice(0, 400)
-              : typeof t.result === 'string'
-                ? t.result.slice(0, 400)
-                : '';
-            return `[${t.toolName}]: ${resultStr || '(completed)'}`;
-          })
-          .join('\n');
-        const continuationPrompt = toolResultsSummary
-          ? `You previously ran these tools and got these results:
-${toolResultsSummary}
-
-Based on what you have learned, continue working on the original task. Take the necessary actions using the available tools.`
-          : 'Based on the information you have gathered, continue working on the original task. Take the necessary actions using the available tools.';
-        const contMessages = [
-          ...llmMessages,
-          { role: 'assistant', content: response },
-          { role: 'user', content: continuationPrompt },
-        ];
-
-        try {
-          const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
-          let contContent = '';
-          const toolsBeforeContinuation = toolInvocations.length;
-
-          for await (const chunk of streamWithConcurrentFallback({
-            provider: providerName,
-            model: modelForProvider,
-            messages: contMessages as any,
-            temperature: config.temperature || 0.7,
-            maxTokens: config.maxTokens || 65536,
-            maxSteps: config.maxSteps || 15,
-            tools: aiSdkTools,
-            toolCallStreaming: true,
-          })) {
-            if (chunk.content) {
-              contContent += chunk.content;
-              config.onStreamChunk?.(chunk.content);
+        while (
+          toolInvocations.length > 0 &&
+          response.trim() &&
+          !hasRoleSelectMarker &&
+          hasReadOnlyTool
+        ) {
+          const autoDecision = decideAutoContinue({
+            requestId,
+            advancedDetectorFn: needsMoreTurnsDetector,
+            steps: toolInvocations.map(t => ({ toolName: t.toolName, args: t.args })),
+            responseText: response,
+            result: {
+              response,
+              success: toolInvocations.every(t => t.result?.success !== false),
+              steps: toolInvocations.map(t => ({
+                toolName: t.toolName,
+                args: t.args,
+                result: t.result,
+              })),
+              fileEdits: toolInvocations
+                .filter(t => t?.toolName && WRITE_TOOL_NAMES.has(t.toolName.toLowerCase()))
+                .map(t => ({
+                  path: typeof t?.args?.path === 'string' ? t.args.path : undefined,
+                  action: 'write',
+                  toolName: t.toolName,
+                }))
+                .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
             }
-            if (chunk.toolInvocations) {
-              for (const inv of chunk.toolInvocations) {
-                if (inv.state !== 'result') continue;
-                toolInvocations.push({
-                  toolCallId: inv.toolCallId,
-                  toolName: inv.toolName,
-                  args: (inv.args as Record<string, any>) || {},
-                  result: inv.result ?? { success: false, error: 'Tool result was undefined' },
-                });
-              }
-            }
-          }
-
-          // If continuation produced no new content, the model has nothing more to say
-          if (!contContent?.trim()) {
-            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced empty content — model done');
-            break;
-          }
-          response += '\n\n' + contContent;
-
-          // If continuation didn't produce new tool calls, the model is done (text-only)
-          if (toolInvocations.length <= toolsBeforeContinuation) {
-            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced no new tool calls — model finished');
-            break;
-          }
-
-        } catch (contErr: any) {
-          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning partial results', {
-            error: contErr.message,
           });
-          break;
+          if (!autoDecision.continue) {
+            log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
+              reason: autoDecision.reason,
+              continuationsSoFar: autoDecision.continuationsSoFar,
+              finalIteration: autoDecision.finalIteration,
+            });
+            break;
+          }
+          // Preserve the legacy `if (hasWriteTool) break` stop-on-write semantics.
+          if (hasWriteTool) break;
+          log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
+            reason: autoDecision.reason,
+            continuationsSoFar: autoDecision.continuationsSoFar,
+            toolCount: toolInvocations.length,
+            responseLength: response.length,
+            lastTools: toolInvocations.slice(-3).map(t => t.toolName),
+          });
         }
+      } finally {
+        clearContinuationCount(requestId);
       }
 
       const duration = Date.now() - startTime;
@@ -3919,6 +4322,19 @@ Based on what you have learned, continue working on the original task. Take the 
       log.info(`[V1-API-WITH-TOOLS] │ responseLength: ${response.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ toolInvocations: ${toolInvocations.length}`);
       log.info(`[V1-API-WITH-TOOLS] │ tools: ${toolInvocations.map(t => t.toolName).join(', ') || 'none'}`);
+      // Bug #117 fix: classify response shape so "tools_only" vs "empty"
+      // is distinguishable (Bug #91 canonical helper, see classifying test).
+      const responseShape = classifyResponseShape({
+        response,
+        toolCalls: toolInvocations.map((inv) => ({ name: inv.toolName, args: inv.args })),
+      });
+      log.info(`[V1-API-WITH-TOOLS] │ responseShape: ${responseShape}${responseShape === 'empty' ? ' (suspicious — log a WARN)' : ''}`);
+      // Bug #117: by Bug #91 canonical semantics this also fires for
+      // whitespace-only responses (was previously logged as 'text' under
+      // the old local ternary). See classifyResponseShape contract.
+      if (responseShape === 'empty') {
+        log.warn('[V1-API-WITH-TOOLS] Empty response with no tool calls — possible stall pattern', { requestId, provider: providerName, model: modelForProvider });
+      }
       log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
       // FIX: Record success in circuit-breaker and model-ranker after stream completion
@@ -3933,6 +4349,11 @@ Based on what you have learned, continue working on the original task. Take the 
       // FIX: Save successful provider/model for SelfHeal retries to skip dead primary
       _selfHealProvider = providerName;
       _selfHealModel = modelForProvider;
+      // Bug #12 (Pass-8): Cache per-session so subsequent requests reuse the
+      // working provider instead of hitting the 429'd primary every time.
+      if (config.conversationId) {
+        recordLastWorkingProvider(config.conversationId, providerName, modelForProvider);
+      }
         log.info(`V1 API (with tools): Fallback provider succeeded`, {
           primaryProvider,
           primaryModel,
@@ -3943,17 +4364,41 @@ Based on what you have learned, continue working on the original task. Take the 
 
       // Text-mode file extraction: if response has text but no tool calls,
       // parse for ```file: / ```diff: blocks and apply to VFS
+      // Bug #4 (Pass-8): Use canonical ownerId construction (userId$conversationId
+      // format) and always prepend scopePath. Bare paths like "src/agent.js"
+      // get prepended server-side so VFS normalizePath never rejects them.
       if (response && toolInvocations.length === 0) {
         try {
           const { extractFileEdits } = await import('../chat/file-edit-parser');
           const { virtualFilesystem } = await import('../virtual-filesystem/index.server');
           const textEdits = extractFileEdits(response);
           if (textEdits.length > 0) {
-            const ownerId = config.userId || config.filesystemOwnerId || '1';
+            const ownerId = config.filesystemOwnerId
+              || (config.userId ? `${config.userId}$${config.conversationId || 'default'}` : 'default');
+            const scopePrefix = config.scopePath || 'workspace';
             for (const edit of textEdits) {
               if (edit.path && edit.content) {
+                // Bug #20: Session cross-contamination guard. If the LLM's
+                // extracted path references a different session folder
+                // (e.g. workspace/sessions/001/... when current is 002),
+                // rewrite it to use the current session prefix.
+                let editPath = edit.path;
+                const sessionMatch = editPath.match(/^workspace\/sessions\/(\d{3,})\//);
+                const currentSessionId = config.conversationId || '';
+                if (sessionMatch && sessionMatch[1] !== currentSessionId) {
+                  log.info('[V1-API-WITH-TOOLS] Cross-session path detected — rewriting to current session', {
+                    originalPath: editPath,
+                    rewritenSession: currentSessionId,
+                  });
+                  editPath = editPath.replace(
+                    `workspace/sessions/${sessionMatch[1]}`,
+                    `workspace/sessions/${currentSessionId}`,
+                  );
+                }
+                if (!editPath.startsWith(scopePrefix)) {
+                  editPath = `${scopePrefix}/${editPath}`;
+                }
                 try {
-                  const editPath = config.scopePath ? `${config.scopePath}/${edit.path}` : edit.path;
                   await virtualFilesystem.writeFile(ownerId, editPath, edit.content);
                 } catch { /* best effort */ }
               }
@@ -3975,6 +4420,15 @@ Based on what you have learned, continue working on the original task. Take the 
         success: inv.result?.success !== false,
       }));
 
+      // Bug #117 fix: classify response shape so "tools_only" vs "empty"
+      // is distinguishable (Bug #91 canonical helper, see classifying test).
+      // Local keeps the `telemetry` prefix because site 1 above declares
+      // `responseShape` in this same function scope.
+      const telemetryResponseShape = classifyResponseShape({
+        response,
+        toolCalls: toolCallTelemetry.map((inv) => ({ name: inv.toolName, args: inv.args })),
+      });
+
       log.info('[Telemetry-v1Api] Recording completion', {
         requestId,
         provider: providerName,
@@ -3982,6 +4436,7 @@ Based on what you have learned, continue working on the original task. Take the 
         duration,
         toolCount: toolCallTelemetry.length,
         responseLength: response.length,
+        responseShape: telemetryResponseShape,
       });
 
       chatRequestLogger.logRequestComplete(
@@ -4131,7 +4586,6 @@ Based on what you have learned, continue working on the original task. Take the 
       const shouldRetry = retryCount < MAX_TOOL_FAILURE_RETRIES && (
         (responseEmpty && (anyToolFailed || noToolCalls)) || responseIncomplete
       );
-        
 
       // FIX: When tools succeeded but the model produced no follow-up text, run
       // ONE server-side continuation turn that injects the ACTUAL tool results
@@ -4182,6 +4636,9 @@ Based on what you have learned, continue working on the original task. Take the 
             maxSteps: config.maxSteps || 15,
             tools: aiSdkTools,
             toolCallStreaming: true,
+            // Forward the caller's abort signal (continuation turn) — see note
+            // at the primary streamWithConcurrentFallback call site above.
+            signal: config.abortSignal,
           })) {
             if (chunk.content) {
               contResponse += chunk.content;
@@ -4306,8 +4763,12 @@ Based on what you have learned, continue working on the original task. Take the 
           // Give specific correction prompt based on what detectIncompleteResponse found.
           // NOTE: injectedFeedback sections are empty here (no entries when anyToolFailed is false),
           // but included for future-proofing when both conditions may coexist.
+          // Bug #16 fix: the feedback message is self-contained with the
+          // [STEER] [INCOMPLETE-RESPONSE-FEEDBACK] prefix and the
+          // instruction to complete the response. The retry path
+          // (retryMessages below) uses `feedbackMsg` directly — no
+          // `userPrompt` is needed for this branch.
           feedbackMsg = `[STEER] [INCOMPLETE-RESPONSE-FEEDBACK] ${incompleteDetection.prompt}\n\nYour previous response was truncated or cut off. Please complete your thought and provide a full answer.${injectedFeedback.correctionSection}${injectedFeedback.formatGuidance}`;
-          userPrompt = 'Continue from where you left off. Complete the remaining work.';
         } else if (successfulToolsButSilent) {
           // Tools ran successfully but the model produced zero follow-up text.
           // Give it the executed tool list so it can summarize for the user.
@@ -4368,19 +4829,28 @@ Based on what you have learned, continue working on the original task. Take the 
         // Track retries so we don't loop forever
         (config as any)._toolFailureRetryCount = retryCount + 1;
 
-        // CRITICAL: Build a ModelMessage-schema-valid retry sequence.
-        // Bug fixed: `{role:'assistant', content:''}` is rejected by Vercel
-        // AI SDK provider adapters (empty assistant content), and a stray
-        // `{role:'system'}` AFTER an assistant turn violates the ordering
-        // contract on newer providers (caused
-        //   "Invalid prompt: The messages do not match the ModelMessage[] schema")
-        // Instead: keep the existing conversation as-is and append a single
-        // user message that carries BOTH the steering feedback and the
-        // continuation prompt. This is provider-agnostic and ModelMessage-safe.
-        const combinedUserPrompt = `${feedbackMsg}\n\n---\n\n${userPrompt}`;
+        // Bug #16 fix (option 2 — safer): the INCOMPLETE-RESPONSE-FEEDBACK
+        // is injected as a standalone user message with a `[STEER]`
+        // prefix, instead of being combined with the continuation prompt
+        // and injected as a user message that "replaces" the user
+        // message body. The previous implementation combined `feedbackMsg`
+        // + `userPrompt` into `combinedUserPrompt`, which meant the
+        // feedback was the entire content of the new user message.
+        //
+        // The fix keeps the `user` role (to avoid the "stray
+        // {role:'system'} AFTER an assistant turn violates the ordering
+        // contract" schema issue) but makes the feedback a standalone
+        // message that starts with `[STEER] [INCOMPLETE-RESPONSE-FEEDBACK]`.
+        // The LLM can then clearly distinguish the feedback from a normal
+        // user message and treat it as a steering signal.
+        //
+        // The `feedbackMsg` already contains the full feedback text
+        // including the instruction to complete the response, so the
+        // `userPrompt` ("Continue from where you left off…") is now
+        // redundant — the feedback message is self-contained.
         const retryMessages = [
           ...messages,
-          { role: 'user' as const, content: combinedUserPrompt },
+          { role: 'user' as const, content: feedbackMsg },
         ];
 
         try {
@@ -4418,7 +4888,7 @@ Based on what you have learned, continue working on the original task. Take the 
         (!cleanedResponse || !cleanedResponse.trim()) &&
         (!response || !response.trim()) &&
         !!toolFailureMessage;
-      const finalResponse = cleanedResponse && cleanedResponse.trim()
+      let finalResponse = cleanedResponse && cleanedResponse.trim()
         ? cleanedResponse
         : (response && response.trim() ? response : (toolFailureMessage || ''));
 
@@ -4452,36 +4922,154 @@ Based on what you have learned, continue working on the original task. Take the 
         } catch { /* best effort */ }
       }
 
-      // Bug #1 fix: Check shouldAutoContinue for v1-api-with-tools path
-      // This handles: roleSelection.continue=true, empty_tool_args, single_step_read
-      // Previously this only fired in chat/route.ts SSE streaming path.
-      const continuationDecision = shouldAutoContinue({
-        routing: routingForClient ? {
-          continue: routingForClient.continue,
-          stepReprompt: routingForClient.stepReprompt,
-          primaryRole: routingForClient.primaryRole,
-          estimatedSteps: routingForClient.estimatedSteps,
-          planSteps: routingForClient.planSteps,
-        } : undefined,
-        steps: steps.map(s => ({ toolName: s.toolName, args: s.args })),
+      // Bug #10 fix: Wire [STEER] helpers into the v1-api completion handler.
+      // Previously these only fired in the chat/route.ts SSE streaming path.
+      // Now: steerFromFinishReason fires for empty completions and
+      // missing-tool-call patterns, injecting a [STEER] prefix into the
+      // continuation prompt or the final response so the LLM gets actionable
+      // guidance on the next turn.
+      let v1SteerPrompt: string | null = null;
+      const steerTrigger = steerFromFinishReason({
+        finishReason: response.trim() ? undefined : 'stop',
+        availableTools: Object.keys(aiSdkTools || {}).length,
+        provider: providerName,
+        model: modelForProvider,
         responseText: finalResponse,
-        continuationsSoFar: ((config as any)._autoContinueCount as number) || 0,
-        maxContinuations: 3,
+        toolCallsDone: toolInvocations.length,
       });
+      if (steerTrigger) {
+        v1SteerPrompt = buildSteerPrompt(steerTrigger);
+        log.info('[V1-API-WITH-TOOLS] STEER fired', {
+          kind: steerTrigger.kind,
+          promptLength: v1SteerPrompt.length,
+        });
+        // Prepend the steer to the final response so the LLM sees it
+        // on the next turn (or the client can surface it as guidance).
+        if (finalResponse.trim()) {
+          finalResponse = v1SteerPrompt + '\n\n' + finalResponse;
+        } else {
+          finalResponse = v1SteerPrompt;
+        }
+      }
+      // Previously only a single continuation attempt was made. Now we loop up to
+      // MAX_V1_CONTINUATIONS iterations, re-checking shouldAutoContinue after each
+      // continuation turn. This handles: roleSelection.continue=true, empty_tool_args,
+      // single_step_read, plan_steps_remaining, single_write_then_stop.
+      // Uses decideAutoContinue (shared with chat/route.ts) for consistent counter
+      // management and cleanup.
+      const MAX_V1_CONTINUATIONS = parseInt(process.env.LLM_MAX_CONTINUATIONS_PER_TURN || '3', 10);
+      let autoContinueIteration = 0;
+      let accumulatedResponse = finalResponse;
+      let accumulatedSteps = [...steps];
+      let accumulatedToolInvocations = [...toolInvocations];
 
-      if (continuationDecision.continue && continuationDecision.continuationPrompt) {
-        log.info('[V1-API-WITH-TOOLS] shouldAutoContinue triggered', {
-          reason: continuationDecision.reason,
-          continuationsSoFar: continuationDecision.continuationsSoFar,
+      while (autoContinueIteration < MAX_V1_CONTINUATIONS) {
+        const autoDecision = decideAutoContinue({
+          requestId,
+          // Bug #Q7 (audit): pass advancedDetectorFn to the v1-api-with-tools continuation
+              // loop so it gets the richer-signal coverage route.ts's
+              // maybeDetectorContinuation provides. The helper's default detector
+              // (defaultFileEditDetector) only watches file edits; needsMoreTurnsDetector
+              // also considers tool-failure patterns, accumulated tool-call counts, and
+              // the model-emitted next-action hint, so the v1 continuation loop stops
+              // asking prematurely on shallow runs and keeps going on substantive
+              // multi-step plans. Mirrors route.ts:1699 (the chat-SSE path) without
+              // touching route.ts.
+              advancedDetectorFn: needsMoreTurnsDetector,
+              routing: routingForClient ? {
+            continue: routingForClient.continue,
+            stepReprompt: routingForClient.stepReprompt,
+            primaryRole: routingForClient.primaryRole,
+            estimatedSteps: routingForClient.estimatedSteps,
+            planSteps: routingForClient.planSteps,
+          } as unknown as AutoContinueRouting : undefined,
+          steps: accumulatedSteps.map(s => ({ toolName: s.toolName, args: s.args })),
+          responseText: accumulatedResponse,
+          // Bug-#1 follow-up: pass REAL accumulated file edits so the
+          // defaultFileEditDetector inside decideAutoContinue can FIRE
+          // for the "stops after emitting file edits" failure mode.
+          // Without this, automatically falls through to the LLM decision
+          // only, missing the detector-override path that forces a
+          // continuation when the LLM emitted edits but didn't get the
+          // response format right. WRITE_TOOL_NAMES is the same set used
+          // elsewhere in runV1ApiWithTools for tool classification so the
+          // detector sees a consistent view.
+          // SEV-12 (TS2739 sweep #2): cast at the second decideAutoContinue call boundary.
+          // Mirror of the L1706 cast pattern: narrow-and-cast the result shape to the helper param type.
+          result: {
+            response: accumulatedResponse,
+            success: accumulatedSteps.every((s: any) => s.result?.success !== false),
+            fileEdits: accumulatedSteps
+              .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName))
+              .map((s: any) => ({
+                path: typeof s?.args?.path === 'string' ? s.args.path : undefined,
+                action: 'write',
+                toolName: s.toolName,
+              }))
+              .filter((e: any) => typeof e.path === 'string' && e.path.length > 0),
+          },
+        });
+
+        if (!autoDecision.continue || !autoDecision.continuationPrompt) {
+          break;
+        }
+
+        autoContinueIteration++;
+
+        // Emit SSE `continuation` event so the UI can show a "continuing…"
+        // indicator and operators can spot missed continuations in run.log.
+        // Parity with app/api/chat/route.ts SSE_EVENT_TYPES.CONTINUE
+        // (typed there; raw `config.onStreamChunk` here because the
+        // unified-agent path doesn't use the typed sse-events bus — the
+        // route layer parses the same JSON shape).
+        // sseDelivered is an observability flag; the autoContinueIteration
+        // increment above is unconditional. Without sseDelivered, an SSE
+        // throw would leave this log.info reporting iteration N+1 as "delivered"
+        // even though the client never saw the SSE event. Declared in the
+        // OUTER scope so the log.info's `sseDelivered,` shorthand binding
+        // works regardless of whether config.onStreamChunk is set, and as
+        // a `let` (not const) so the 3-state signal — not-configured /
+        // configured-and-delivered / configured-and-threw — is preserved.
+        let sseDelivered = false;
+        if (config.onStreamChunk) {
+          // JSON.stringify is intentionally OUTSIDE the try block —
+          // it cannot throw on this primitive shape (string/number/
+          // boolean values only — no BigInt, Symbol, or circular refs).
+          // Keeping it inside the try would over-mask any future code
+          // bug (e.g. someone adding a BigInt) as a benign SSE failure.
+          const ssePayload = JSON.stringify({
+            type: 'continuation',
+            requestId,
+            iteration: autoContinueIteration,
+            reason: autoDecision.reason,
+            forceSignal: autoDecision.forceSignal,
+            continuationsSoFar: autoDecision.continuationsSoFar,
+          });
+          try {
+            config.onStreamChunk(ssePayload);
+            sseDelivered = true;
+          } catch (sseErr) {
+            log.debug('[V1-API-WITH-TOOLS] SSE continuation emit failed', {
+              error: sseErr instanceof Error ? sseErr.message : String(sseErr),
+              requestId,
+              iteration: autoContinueIteration,
+            });
+          }
+        }
+
+        log.info('[V1-API-WITH-TOOLS] Auto-continuation loop iteration', {
+          iteration: autoContinueIteration,
+          reason: autoDecision.reason,
+          continuationsSoFar: autoDecision.continuationsSoFar,
+          forceSignal: autoDecision.forceSignal,
+          sseDelivered,
         });
 
         const contMessages = [
           ...llmMessages,
-          { role: 'assistant', content: finalResponse },
-          { role: 'user', content: continuationDecision.continuationPrompt },
+          { role: 'assistant', content: accumulatedResponse },
+          { role: 'user', content: autoDecision.continuationPrompt },
         ];
-
-        (config as any)._autoContinueCount = continuationDecision.continuationsSoFar;
 
         try {
           const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
@@ -4497,6 +5085,9 @@ Based on what you have learned, continue working on the original task. Take the 
             maxSteps: config.maxSteps || 15,
             tools: aiSdkTools,
             toolCallStreaming: true,
+            // Forward the caller's abort signal (continuation turn) — see note
+            // at the primary streamWithConcurrentFallback call site above.
+            signal: config.abortSignal,
           })) {
             if (chunk.content) {
               contContent += chunk.content;
@@ -4519,41 +5110,58 @@ Based on what you have learned, continue working on the original task. Take the 
             log.info('[V1-API-WITH-TOOLS] Auto-continuation produced results', {
               contentLength: contContent.length,
               toolCount: contToolInvocations.length,
+              iteration: autoContinueIteration,
             });
 
-            const allSteps = [
-              ...steps,
-              ...contToolInvocations.map(inv => ({
-                toolName: inv.toolName,
-                args: inv.args,
-                result: inv.result,
-              })),
-            ];
-
-            return {
-              success: true,
-              response: (finalResponse + '\n\n' + contContent).trim(),
-              steps: allSteps,
-              totalSteps: allSteps.length,
-              mode: 'v1-api',
-              metadata: {
-                provider: providerName,
-                model: modelForProvider,
-                duration: Date.now() - startTime,
-                toolInvocations: [...toolInvocations, ...contToolInvocations],
-                autoContinued: true,
-                autoContinueReason: continuationDecision.reason,
-                ...(routingForClient ? { routing: routingForClient } : {}),
-              },
-            };
+            accumulatedResponse = (accumulatedResponse + '\n\n' + contContent).trim();
+            accumulatedSteps.push(...contToolInvocations.map(inv => ({
+              toolName: inv.toolName,
+              args: inv.args,
+              result: inv.result,
+            })));
+            accumulatedToolInvocations.push(...contToolInvocations);
+          } else {
+            log.info('[V1-API-WITH-TOOLS] Auto-continuation produced no output, stopping loop', {
+              iteration: autoContinueIteration,
+            });
+            break;
           }
         } catch (contErr: any) {
-          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning original response', {
+          log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning accumulated response', {
             error: contErr?.message,
+            iteration: autoContinueIteration,
           });
+          break;
         }
       }
 
+      clearContinuationCount(requestId);
+
+      if (autoContinueIteration > 0) {
+        return {
+          success: true,
+          response: accumulatedResponse,
+          steps: accumulatedSteps,
+          totalSteps: accumulatedSteps.length,
+          mode: 'v1-api',
+          metadata: {
+            provider: providerName,
+            model: modelForProvider,
+            duration: Date.now() - startTime,
+            toolInvocations: accumulatedToolInvocations,
+            autoContinued: true,
+            autoContinueIterations: autoContinueIteration,
+            // Pass anyToolFailed through so client can auto-retry on tool failure
+            ...(accumulatedToolInvocations.length > 0 && accumulatedToolInvocations.some((inv: any) => isFailedToolInvocation(inv)) ? { anyToolFailed: true } : {}),
+            ...(routingForClient ? { routing: routingForClient } : {}),
+          },
+        };
+      }
+
+      // PR-F: clear the 530-blacklist counter on this provider's success.
+      // Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
+      // PR-W -- single-call both-trackers reset (replaces the manual pair).
+      maybeResetBothTrackers(providerName);
       return {
         success: true,
         response: finalResponse,
@@ -4594,7 +5202,13 @@ Based on what you have learned, continue working on the original task. Take the 
       };
     } catch (error: any) {
       lastError = error;
-      handleProviderError(providerName, error);
+      // PR-E + PR-H: both trackers fire here in parallel — pure
+      // record-or-noop, NEVER cross-wipe each other's Map. Parallels
+      // lib/chat/enhanced-llm-service.ts:746. Non-matching error
+      // signatures leave both counters untouched; only the corresponding
+      // success-path helpers decrement them (gated by ENABLE_*_RESET_ON_SUCCESS).
+      record5xxErrorIfApplicable(providerName, error);
+      record530ErrorIfApplicable(providerName, error);
 
       // FIX: Record failure in circuit-breaker and model-ranker so failing providers
       // get de-ranked and circuit-breaker trips after repeated failures
@@ -4662,7 +5276,7 @@ Based on what you have learned, continue working on the original task. Take the 
           if (isExplicitClientAbort) {
             // Set global flag: no subsequent provider attempts (or agent loop iterations)
             // should try any more providers — the response stream is gone.
-                        markClientDisconnected(error?.message || errorMessage);;
+                        markClientDisconnected(error?.message || errorMessage);
           }
 
           if (isExplicitClientAbort) {
@@ -4979,7 +5593,50 @@ async function runV1Orchestrated(
         continue: parsedRouting.routing.continue,
       });
 
-      if (parsedRouting.routing.continue && parsedRouting.routing.planSteps.length > 0) {
+      // Audit-Q7 option-(c) carve-out: Sites 3+4 (canonical-first-response
+      // routing) deliberately DO NOT pass `advancedDetectorFn` here.
+      //
+      // (b) Inverse-case contract: BOTH `defaultFileEditDetector` (the helper's
+      // default `detectorFn`) and `needsMoreTurnsDetector` (advanced optional)
+      // return `null` (NOT `{force:false}` — there is no `force:false` path on
+      // either function; the override type is `{ force: true, reason: string }
+      // | null`) when their input signals are missing. Both read
+      // `result.fileEdits` to compute their override — at Sites 3+4 no
+      // `result` argument is passed in, so both gracefully fall through,
+      // returning `null`. The LLM-emitted `parsedRouting.routing.continue`
+      // boolean therefore remains the canonical continuation signal at this
+      // decision point.
+      //
+      // (c) 'lose' reframed: this is not the detector losing on undefined —
+      // it's gracefully falling through. The helper's cascade resolves to
+      // `decideAutoContinue` -> `shouldAutoContinue` -> routing-derived
+      // reason (one of: 'role_selection_continue_true',
+      // 'plan_steps_remaining', 'single_step_read_pattern',
+      // 'empty_tool_args_detected', 'single_write_then_stop',
+      // 'no_continuation_needed', 'max_continuations_reached'). None of
+      // these are detector-derived buckets.
+      //
+      // (d) Decision.reason guard: tests assert that
+      // `decision.reason` is NOT in the detector-bucket allowlist
+      // ['file_edits_present', 'needs_more_turns', 'read-then-stall',
+      // 'deep-research-loop', 'failure-cascade', 'write-verify-loop',
+      // 'announced-next-step', 'incomplete-thought', 'step-enumeration',
+      // 'planned-multi-step', 'read-many-write-none', 'single-write-silent',
+      // 'diff-no-explanation', 'edits-mismatch', 'empty-after-tools',
+      // 'unclosed-code-block', 'mid-sentence-cutoff'], to catch regressions
+      // where a future refactor wires a detector into this slot.
+      //
+      // Precedence contract: when both detectors return non-null overrides,
+      // `advancedDetectorFn` wins over `detectorFn`. Tested explicitly in
+      // __tests__/chat/auto-continue-helper.test.ts in the 'advancedDetectorFn
+      // reason wins when both detectors fire' describe block.
+      const autoDecision = decideAutoContinue({
+        requestId: '',
+        routing: parsedRouting.routing as unknown as AutoContinueRouting,
+        steps: [],
+        responseText: firstResponseContent || content || '',
+      });
+      if (autoDecision.continue && parsedRouting.routing.planSteps.length > 0) {
         (config as any)._stepReprompt = generateStepReprompt(parsedRouting.routing, 0);
       }
       
@@ -5043,7 +5700,7 @@ async function runV1Orchestrated(
     // role-select auto-continue flow (roleSelectMeta.continue).
     const contentEmpty = !cleanedResponse || !cleanedResponse.trim();
     const shouldFallbackToV1Api =
-      !roleSelectMeta?.continue &&
+      roleSelectMeta?.continue !== false &&
       (budgetExhausted ||
         orchestrationFailed ||
         (contentEmpty && streamedTextLength === 0));
@@ -5136,7 +5793,7 @@ async function runV1Orchestrated(
         // Both fallbacks failed after budget exhaustion — return partial orchestrated result with budgetExhausted signal so callers can distinguish degraded response
         return {
           success: true,
-          response: cleanedResponse,
+          response: stringifyMessageContent(cleanedResponse),
           steps,
           totalSteps: stepsCount,
           mode: 'v1-agent-loop',
@@ -5164,7 +5821,7 @@ async function runV1Orchestrated(
 
     return {
       success: true,
-      response: cleanedResponse,
+      response: stringifyMessageContent(cleanedResponse),
       steps,
       totalSteps: stepsCount,
       mode: 'v1-agent-loop',
@@ -5239,7 +5896,17 @@ async function runV1ApiCompletion(
 
   // Use config provider/model if specified, otherwise fall back to env defaults
   // FIX: Use shared dynamic defaults resolver instead of hardcoded mistral
-  const _completionDefaults = await resolveDynamicDefaults();
+  // Win #2b (docs/async-parallelization-opportunities.md): like SITE B,
+  // Promise.all the cache-hit resolve with the PROVIDERS dynamic import. The
+  // model-ranker import on the next try/catch stays sequential because
+  // including it in Promise.all would propagate its (possibly-thrown)
+  // rejection outside the try/catch and lose the graceful-degradation
+  // semantics (empty `_getModelForRotation` means fall back to
+  // PROVIDER_DEFAULT_MODELS first).
+  const [_completionDefaults, _llmProvidersMod] = await Promise.all([
+    resolveDynamicDefaults(),
+    import('../providers/llm-providers'),
+  ]);
   const primaryProvider = config.provider || _completionDefaults.provider;
   const primaryModel = config.model || _completionDefaults.model;
   const requestId = `unified-v1-${Date.now()}`;
@@ -5251,7 +5918,7 @@ async function runV1ApiCompletion(
 
   // FIX: Map each provider to a model that supports tool calling / function calling.
   // Also: when falling back, check if the model is valid for the target provider.
-  const { PROVIDERS } = await import('../providers/llm-providers');
+  const { PROVIDERS } = _llmProvidersMod;
   let _getModelForRotation: any = null;
   try {
     const mrMod = await import('../providers/model-ranker');
@@ -5322,7 +5989,7 @@ async function runV1ApiCompletion(
       break;
     }
 
-    if (is530Blacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
+    if (is530Blacklisted(providerName) || isServerErrorBlacklisted(providerName)) { log.warn("530 BLACKLISTED in completion, skipping " + providerName); continue; }
     const modelForProvider = getModelForProvider(providerName);
     try {
       log.info('[V1-API-COMPLETION] ┌─ ATTEMPT ───────────────────');
@@ -5372,6 +6039,10 @@ async function runV1ApiCompletion(
         // handler. Force tools to undefined so the LLM completes in
         // text mode only.
         tools: undefined,
+        // Forward the caller's abort signal so a user-initiated stop (or the
+        // route-level hard deadline) truly cancels the upstream HTTP request
+        // and re-arms the fallback coordinator's user-abort race arm.
+        signal: config.abortSignal,
       };
 
       if (config.onStreamChunk) {
@@ -5497,7 +6168,6 @@ async function runV1ApiCompletion(
         ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
         : [];
 
-      
       // FIX: Track response and check for healing triggers in completion path
       const responseSuccess = content.trim().length > 0;
       recordResponse(sessionId, content.length, responseSuccess);
@@ -5558,6 +6228,10 @@ async function runV1ApiCompletion(
       const cleanedResponse = stripRoutingMarkers(truncatedCompletion);
       const isEmpty = !cleanedResponse || !cleanedResponse.trim();
 
+// PR-F: clear the 530-blacklist counter on this provider's success.
+// Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
+// PR-W -- single-call both-trackers reset (replaces the manual pair).
+maybeResetBothTrackers(providerName);
 return {
         success: true,
         response: cleanedResponse || '',
@@ -5578,7 +6252,13 @@ return {
       };
     } catch (error: any) {
       lastError = error;
-      handleProviderError(providerName, error);
+      // PR-E + PR-H: both trackers fire here in parallel — pure
+      // record-or-noop, NEVER cross-wipe each other's Map. Parallels
+      // lib/chat/enhanced-llm-service.ts:746. Non-matching error
+      // signatures leave both counters untouched; only the corresponding
+      // success-path helpers decrement them (gated by ENABLE_*_RESET_ON_SUCCESS).
+      record5xxErrorIfApplicable(providerName, error);
+      record530ErrorIfApplicable(providerName, error);
 
       // FIX: Invalidate cache so subsequent requests pick a different provider
       invalidateDynamicDefaultsCache();

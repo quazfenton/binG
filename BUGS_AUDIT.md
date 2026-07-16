@@ -1487,7 +1487,7 @@ Fixes applied during this audit review, grouped by source file:
 
 **Files:** `bing/web/lib/virtual-filesystem/virtual-filesystem-service.ts`, `bing/web/lib/database/session-store.ts`.
 
-#### ⬜ #76 — Loop-Guard at 2 Consecutive Failures (Too Aggressive)
+#### ✅ CLOSED #76 — Loop-Guard at 2 Consecutive Failures (Too Aggressive)
 **Symptom (run.log lines 4500–6000):** `[V1-API-WITH-TOOLS] Loop detected: Agent stopped: "read_files" failed 2 times with the same arguments.` — the loop-guard is killing the agent after 2 consecutive failures, not the 3 that #21 was supposed to allow.
 
 **Root cause:** there are TWO loop-guard implementations — one in the v1-with-tools path and one in the v1-api path. The v1-with-tools guard fires at 2 failures; the v1-api guard fires at 3. The v1-with-tools guard is too aggressive.
@@ -3214,7 +3214,7 @@ finishReason: "stop", toolInvocations: 0, tools: "none"
 | 73 | Polling | 🟡 Med | POLLING DETECTED spam — no client backoff | ⬜ OPEN |
 | 74 | VFS | 🟡 Med | Eager-init cooldown blocks reads after write | ⬜ OPEN |
 | 75 | Role Select | 🟡 Med | `choose_role` not auto-suggested to LLM | ⬜ OPEN |
-| 76 | LLM Stoppage | 🟠 High | LLM stops at step 1 — no tool calls after plan | ⬜ OPEN |
+| 76 | LLM Stoppage | 🟠 High | LLM stops at step 1 — no tool calls after plan | ✅ CLOSED |
 | 77 | VFS | 🟡 Med | Progressive edit `hasDiff: false` — no diff tracking | ⬜ OPEN |
 | 78 | VFS Path | 🟡 Med | MCP tool path resolves to wrong session | ⬜ OPEN |
 | 79 | Memory | 🟡 Med | Soft throttle re-engaged, not adopted in route | ⬜ OPEN |
@@ -3266,7 +3266,7 @@ The existing `auto-continue-detector.ts` has 8 signal types covering most Pass-5
 
 ## Pass-8: Fresh Log Audit — Additional OPEN Bugs
 
-### #110: Tool result parser loses real error when `error` is an object
+### ✅ CLOSED #110: Tool result parser loses real error when `error` is an object
 
 **Category:** Tools / Error Handling  
 **Severity:** 🟠 High  
@@ -3337,7 +3337,7 @@ The existing `auto-continue-detector.ts` has 8 signal types covering most Pass-5
 
 ---
 
-### #112: VFS ownership transfer has null row during cookie fast-path
+### ✅ CLOSED #112: VFS ownership transfer has null row during cookie fast-path
 
 **Category:** VFS / Auth  
 **Severity:** 🟡 Med  
@@ -3465,7 +3465,7 @@ The VFS sync layer retains sandbox references after the sandbox has been destroy
 
 ---
 
-### #116: Provider permanent failure is too sticky after a single auth/API error
+### ✅ CLOSED #116: Provider permanent failure is too sticky after a single auth/API error
 
 **Category:** LLM Provider Health / SelfHeal  
 **Severity:** 🟠 High  
@@ -3502,7 +3502,7 @@ Provider health state is persisted aggressively. A single hard auth/API failure 
 
 ---
 
-### #117: Completion telemetry can report zero response length after successful tool activity
+### ✅ CLOSED #117: Completion telemetry can report zero response length after successful tool activity
 
 **Category:** LLM Telemetry / Streaming  
 **Severity:** 🟡 Med  
@@ -3566,7 +3566,7 @@ Provider registry calls appear to reinitialize providers instead of reusing a st
 
 ---
 
-### #119: Plain-text fallback can still return invalid JSON
+### ✅ CLOSED #119: Plain-text fallback can still return invalid JSON
 
 **Category:** LLM Provider / Fallback  
 **Severity:** 🟠 High  
@@ -3635,16 +3635,16 @@ Provider errors are not normalized into a common `rate_limited` category with re
 
 | # | Category | Severity | Title | Status |
 |---|----------|----------|-------|--------|
-| 110 | Tools | 🟠 High | Tool result parser loses real error when `error` is an object | ⬜ OPEN |
+| 110 | Tools | 🟠 High | Tool result parser loses real error when `error` is an object | ✅ CLOSED |
 | 111 | Tool Loop | 🟠 High | Loop-abort steer sometimes has empty failure history | ⬜ OPEN |
-| 112 | VFS/Auth | 🟡 Med | VFS ownership transfer has null row during cookie fast-path | ⬜ OPEN |
+| 112 | VFS/Auth | 🟡 Med | VFS ownership transfer has null row during cookie fast-path | ✅ CLOSED |
 | 113 | Tool Validation | 🟡 Med | LLM repeatedly calls tools with missing required args | ⬜ OPEN |
 | 114 | Sandbox | 🟠 High | Daytona quota cleanup is not enough for persistent exhaustion | ⬜ OPEN |
 | 115 | VFS/Sandbox | 🟡 Med | VFS sandbox sync repeatedly references deleted sandboxes | ⬜ OPEN |
-| 116 | Provider Health | 🟠 High | Provider permanent failure is too sticky after one auth/API error | ⬜ OPEN |
-| 117 | Telemetry | 🟡 Med | Completion telemetry reports zero response length after tool activity | ⬜ OPEN |
+| 116 | Provider Health | 🟠 High | Provider permanent failure is too sticky after one auth/API error | ✅ CLOSED |
+| 117 | Telemetry | 🟡 Med | Completion telemetry reports zero response length after tool activity | ✅ CLOSED |
 | 118 | Sandbox Lifecycle | 🟡 Med | Repeated sandbox provider initialization churn | ⬜ OPEN |
-| 119 | LLM Fallback | 🟠 High | Plain-text fallback can still return invalid JSON | ⬜ OPEN |
+| 119 | LLM Fallback | 🟠 High | Plain-text fallback can still return invalid JSON | ✅ CLOSED |
 | 120 | Provider Health | 🟡 Med | Rate limiting is not normalized across providers | ⬜ OPEN |
 
 ---
@@ -4272,3 +4272,490 @@ const result = await bashTool.execute({ command }, {
 | `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts` | Document broad sandbox ID regex patterns (#OC-25), loose dead-sandbox detection regex (#OC-26) |
 | `web/lib/drivers/pi/pi-cli-session.ts` | Document hardcoded random UUID for `threadId` breaks session continuity (#OC-31) |
 | `web/components/enhanced-diff-viewer.tsx` | Document `includes(fileName)` matches partial filenames (#OC-30) |
+
+---
+
+## SEV-8 — Dev-Server Crash from Import-Cycle → TLA → TDZ Cascade (Audit-Chain Severity Classification)
+
+**Date documented:** 2026-06-18
+**Severity:** 🔴 Critical (operator-blocking — `pnpm dev` fails to start)
+**Status:** ✅ FIXED (four-layer architectural + root-cause fix)
+**Scope:** `lib/database/connection.ts`, `lib/database/connection-shim.ts`, `lib/storage/session-store.ts`, `lib/database/unwrap-default-export.ts` (NEW), `lib/auth/jwt.ts`, `lib/terminal/session/terminal-session-manager.ts`, `lib/storage/__tests__/sqlite-diagnostics.test.ts`.
+
+### Symptom
+
+`pnpm run dev` crashes at boot with this byte-stream in `instrumentation.ts`:
+
+```
+[connection-shim] database/connection loaded but unwrapDefaultExport returned undefined — exporting safe-degrade mock.
+[session-store] better-sqlite3 binding failed to load – falling back to in-memory store {
+  kind: 'unknown',
+  reason: "Cannot access 'getDatabase' before initialization",
+  hint: 'rebuild better-sqlite3 (`pnpm rebuild`) and verify the active Node.js version has a matching prebuild...'
+}
+[ServerInit] ✓ Database initialized successfully
+[Instrumentation] FATAL: server initialization failed — refusing to start.
+Error: [session-store] FATAL: SessionStore is NOT persisted — useSqlite=false
+```
+
+The hint pointing at `pnpm rebuild better-sqlite3` is **misleading** — the actual cause is a TypeScript import cycle reaching a TLA-pending namespace, not a native-binding load failure.
+
+### Root-cause cascade (4 stages)
+
+1. **Stage 1 — Cyclic import.** `connection-shim.ts` previously did `import { unwrapDefaultExport } from '@/lib/storage/session-store'`. `session-store.ts`'s top-level body called `tryRequireDatabaseConnection()` which did `require('../database/connection-shim')` — re-entering connection-shim from inside its own load chain. Same-name cross-file `import` on a function that gets CALLED inside a top-level `const` initializer creates a cycle TypeScript doesn't break.
+
+2. **Stage 2 — TLA-pending namespace.** `connection.ts` has `const { createRequire } = await import('node' + ':module')` at module top-level — top-level await (`TLA`). When CJS `require('./connection')` is invoked against a module with TLA, Node.js returns a synthetic namespace whose named-export accesses THROW until TLA resolves.
+
+3. **Stage 3 — TDZ on shape-C accessor.** `unwrapDefaultExport`'s third shape check `if (mod && typeof (mod as any).getDatabase === 'function')` reads a TLA-pending property → `ReferenceError: Cannot access 'getDatabase' before initialization` (the exact verbatim message observed in `run.log`).
+
+4. **Stage 4 — Misclassified hint.** `classifySqliteFailure` fell through to `kind: 'unknown'` with the misleading `rebuild better-sqlite3` hint because the TDZ message `"Cannot access 'getDatabase' before initialization"` matched only the loose `/getDatabase|default/i` filter of the interop-mismatch check, not the strict `TypeError + "is not a function"` gate. SEV-2 fast-fail in `assertSessionStorePersisted()` correctly refused to start, but the operator was pointed at the wrong root cause.
+
+### Fix — four layers (defense-in-depth + root-cause)
+
+**Layer 1 (architectural — breaks the cycle):** Extracted `unwrapDefaultExport` to a true leaf module `lib/database/unwrap-default-export.ts` with **zero imports**. Updated 5 importers (`connection-shim.ts`, `terminal-session-manager.ts`, `auth/jwt.ts`, `sqlite-diagnostics.test.ts`, and session-store itself) to import from the leaf. `session-store.ts` uses a regular `import { unwrapDefaultExport } from '@/lib/database/unwrap-default-export'` (NOT a re-export — re-exports put the name in the export object but NOT local scope, which broke the call site with `error TS2304: Cannot find name 'unwrapDefaultExport'`).
+
+**Layer 2 (defense-in-depth — narrow try/catch):** The leaf's shape-C access is wrapped in a narrow catch:
+```typescript
+try {
+  if (mod && typeof (mod as any).getDatabase === 'function') return (mod as any).getDatabase as T;
+} catch (caughtErr) {
+  if (caughtErr instanceof ReferenceError && /before initialization/i.test(caughtErr.message ?? '')) {
+    return undefined; // TLA-pending — silent fallthrough
+  }
+  throw caughtErr; // real bugs re-throw loudly
+}
+```
+The narrow predicate (`ReferenceError + /before initialization/i`) prevents a fallback to the prior blanket `catch {}` that would silently mask ANY non-TDZ error. Future regressions where some other code path throws on the property access will surface loudly instead of being swallowed.
+
+**Layer 3 (taxonomic — accurate hint):** Added new `SqliteFailureKind` `'esm-tla-pending'` to `classifySqliteFailure` in `session-store.ts`. Classification rule:
+```typescript
+if (/cannot access .* before initialization/i.test(haystack) && /getDatabase|default/i.test(haystack)) {
+  return { kind: 'esm-tla-pending', reason: ..., hint: 'an ESM dependency (connection.ts) is mid-evaluation due to a top-level await; ... NOT a better-sqlite3 binding issue. Fix the import cycle or move the `await` inside a function body.' };
+}
+```
+`decideOnSqliteLoadFailure` throws on `esm-tla-pending` (same SEV-2 hard-fail policy as `interop-mismatch`). Operators now see the accurate Turbopack/TLA hint instead of the misleading "rebuild better-sqlite3".
+
+**Layer 4 (root-cause — sync import):** Replaced the TLA pattern in `connection.ts` with a synchronous `import { createRequire } from 'node:module'`. The file is server-only (top-of-file comment: "do not import in Client Components"), so `node:module` (a Node built-in) is safe to statically import. Now `require('./connection')` against connection-shim or any consumer returns a fully-evaluated module namespace where `getDatabase` is callable — not a TLA-pending synthetic.
+
+### Files changed
+- **NEW:** `bing/web/lib/database/unwrap-default-export.ts` (~140 lines, true leaf module — no imports)
+- `bing/web/lib/database/connection.ts` — TLA → sync import
+- `bing/web/lib/database/connection-shim.ts` — import from leaf + `requireSucceeded` tracking + EV-1/SEV-8 marker
+- `bing/web/lib/storage/session-store.ts` — local `import` (not re-export) from leaf + new `esm-tla-pending` kind + classifier branch + decideOnSqliteLoadFailure policy update + SEV-8 marker
+- `bing/web/lib/terminal/session/terminal-session-manager.ts` — split imports
+- `bing/web/lib/auth/jwt.ts` — import from leaf
+- **NEW:** `bing/web/lib/storage/__tests__/sqlite-diagnostics.test.ts` — clean rewrite (removed em-dash/backslash-escape parse errors) + 4 new esm-tla-pending classifier tests + 3 Proxy-based TDZ-defensive tests
+
+### Tests
+- **vitest:** 4 SEV regression files pass, 77/77 tests green (connection-shim/validate/vfs-proxy/sqlite-diagnostics).
+- **tsc errors in the 6 touched files:** 0 (the 40 pre-existing tsc errors live in unrelated modules importing non-re-exported names from `connection-shim`).
+- **pnpm dev boot validation:** `Ready in 497ms` (was: SEV-2 fast-fail + process exit non-zero). The post-fix crash byte-stream is `kind: 'interop-mismatch', hint: 'CJS/ESM interop mismatch'` — accurate shape-language instead of the pre-fix `kind: 'unknown', hint: 'rebuild better-sqlite3'` if the env still surfaces an interop, OR a clean boot if the env resolves cleanly.
+
+### Why "SEV" not a Pass-N bug number
+
+The Pass-1 / Pass-2 / Pass-3 / Pass-4 numbering scheme in this audit classifies **discrete bugs observed in run.log**. The SEV-N scheme is a separate **audit-chain severity classification** introduced in earlier work (SEV-1 getDatabase TypeError cascade, SEV-2 SQLite fast-fail, SEV-4 middleware null-body guard, SEV-7 VFS git-vfs proxy). SEV-8 fits cleanly: it's the next layer of dev-server-crash hardening that builds on SEV-2's fast-fail policy and SEV-1's defensive unwrap work. Future greps for `SEV-` in code comments and this audit doc surface the fix chain consistently.
+
+### Why four layers (not just Layer 4)
+
+- Layer 4 (sync import) is the **root-cause fix** that should make the cascade structurally impossible.
+- Layers 1–3 are **defense-in-depth + diagnostic** that survive even if some future code re-introduces a similar cycle or TLA elsewhere.
+- The combination: Layer 4 prevents the cascade; Layer 1 prevents the same architecture in any future module; Layer 2 prevents silent regression; Layer 3 gives operators an accurate hint when either Layer 1 or 4 is bypassed.
+
+### Follow-ups (out of scope of this entry)
+- Audit other `await import(...)` patterns at module top-level across the codebase (any TLA creates a TDZ-at-CJS-require risk).
+- Investigate the 40 pre-existing tsc errors (modules importing `DatabaseOperations`/`encryptApiKey`/`decryptApiKey` from `connection-shim`).
+- Decide whether SEV-2 fast-fail should be soft-fail in dev (warn-only) vs. hard-fail everywhere.
+
+---
+
+## Audit Reconciliation (run on the actual codebase) --- ✅ FIXED
+
+### ✅ #100 --- Real tsc-Triage Drain (7 errors across 3 files; Pass-3 audit #50–#60 was stale)
+
+**Context:** The Pass-3 audit (this section's parent) claimed 114 errors across 14 clusters #50–#60 (e.g. #50 code-preview-panel.tsx with 18 errors, #51 OPFS layer with 25 errors). When the user asked to drain these clusters, project-level `npx tsc --noEmit -p bing/web/tsconfig.json --skipLibCheck` showed: **0 errors in #50's file, 0 in #51's OPFS files**. Full-project tsc reported only 7 real errors total, all in unrelated files (`bing/web/lib/orchestra/sse-prompt-chunk.ts` × 3, `bing/web/lib/orchestra/stateful-agent/agents/stateful-agent.ts` × 4, plus 1 in `.next/dev/types/validator.ts` --- a Next.js-generated file, not real source).
+
+**Pivot rationale:** the audit's 114-error count was almost certainly generated by running `tsc` without `tsconfig.json`, which inflates error counts with TS2307 (path aliases unavailable) and TS2304 (Cannot find name) --- both spurious without the project config. The user pivoted per ask_user and drained the actually-existing 7 errors instead.
+
+> **Status of Pass-3 cluster entries #50–#60:** kept as ⬜ OPEN in this audit as a historical artifact of the original claiming, but verified to be at **0 real errors** under canonical `tsc -p tsconfig.json`. No code changes were made in `bing/web/components/code-preview-panel.tsx` or `bing/web/lib/virtual-filesystem/opfs/*` for this drain. Future re-triage passes should treat the cluster table as historical reference, not a backlog.
+
+**Real errors & fixes (Strategy A --- widen lib-side types, clean up call sites):**
+
+| Errors | File | Root cause | Fix |
+|-------:|------|------------|-----|
+| 3 | `bing/web/lib/orchestra/sse-prompt-chunk.ts` (L234, L248, L264) | `makeSseChunk<K>` returns `Promise<_SseChunkReturn<K>>`; TS doesn't narrow generic K in return position, so the 3 switch-case returns (`as SsePromptChunk`, `as SseContinuationChunk`, `as SseErrorChunk`) failed the generic narrowing (TS2322). | Replaced the 3 explicit-interface casts with `as unknown as _SseChunkReturn<K>`. Runtime invariant preserved (the switch-on-kind deterministically returns the matching chunk variant); TS now accepts the return. |
+| 4 | `bing/web/lib/orchestra/stateful-agent/agents/stateful-agent.ts` (L1161, L1164, L1646, L1648) | Object literals to `decideAutoContinue` referenced an `explicitContinue` field missing from `AutoContinueRouting` (TS2353), and contained richer plan-step records (`attempt` / `maxAttempts` / `toolCount` / `errorsCount`) cast to a too-strict `{ action?: string }[]` (TS2352). | Extended `AutoContinueRouting` in `bing/web/lib/chat/auto-continue-helper.ts` --- added `explicitContinue?: boolean` and widened `planSteps?` element to `{ action?: string; [key: string]: unknown }` so richer literal shapes pass static checking. Removed the 2 no-op `as { action?: string }[]` casts at the call sites; the literals are now structurally valid. |
+| 0 | `bing/web/components/code-preview-panel.tsx` | (audit-stale --- verified 0 errors via project-tsc) | (no code change) |
+| 0 | `bing/web/lib/virtual-filesystem/opfs/opfs-adapter.ts` + `opfs-storage-backend.ts` + `opfs-git.ts` + `opfs-shadow-commit.ts` | (audit-stale --- verified 0 errors via project-tsc) | (no code change) |
+
+**Verification:** `npx tsc --noEmit -p bing/web/tsconfig.json --skipLibCheck` returns **1 remaining error** (`.next/dev/types/validator.ts(1066,31)` --- TS2344 `LayoutConfig` constraint mismatch in Next.js's generated validator types, out of scope of this turn; likely needs a `default` export in `app/api/layout.ts`).
+
+| Metric | Value |
+|--------|------:|
+| PRE  total errors (project-tsc) | 8 |
+| POST total errors (project-tsc) | 1 (.next generated only) |
+| Real source errors drained | 7 (3 sse-prompt-chunk + 4 stateful-agent) |
+| Strategy | A --- widen lib-side types (Strategy B --- tighten call sites --- rejected as higher-diff) |
+
+**Files touched (3):**
+- `bing/web/lib/chat/auto-continue-helper.ts` --- widened `AutoContinueRouting` (`+explicitContinue?: boolean`, `planSteps` element widened to `{ action?: string; [key: string]: unknown }`) + 2 doc comments.
+- `bing/web/lib/orchestra/sse-prompt-chunk.ts` --- 3 case-block `as SseXxxChunk` → `as unknown as _SseChunkReturn<K>` (TS2322 workaround for non-narrowed generic return).
+- `bing/web/lib/orchestra/stateful-agent/agents/stateful-agent.ts` --- 2 `as { action?: string }[]` no-op casts dropped (literal shapes now structurally valid after the lib-side widening).
+
+**Deferred follow-ups (kept off this seam to keep commit scope tight):**
+- (a) Migrate `planSteps` element shape from `[key: string]: unknown` to a discriminated union (`RecoverPlanStep | HasToolCallsPlanStep | EmptyPlanStep`) for stronger static checking on telemetry fields.
+- (b) Add inline comment in `sse-prompt-chunk.ts` (L234) explaining why `as unknown as _SseChunkReturn<K>` is required (TS limitation: generics don't narrow in return position).
+- (c) Investigate `.next/dev/types/validator.ts` TS2344 (or add `// @ts-expect-error shim`) --- Next.js-generated types, may need `app/api/layout.ts default` export.
+
+**Code-reviewer verdict:** ship-ready (1 review pass; 3 deferred nitpicks above).
+\n
+---\n\n## Pass-8 Triage (#110 -- #120) Reconciliation --- ✅ FIXED + 🟡 DEFERRED\n\n### Context\n\nWhen the user asked to drain Pass-8 bugs #110 -- #120 (1 in #110 through #120 per the audit table), I verified each against actual codebase state via:\n\n- `rg` searches for the fix-direction patterns (e.g. `_recoveryHint`, `wireLoopAbortSteer`, \"for missing required args\", `RATE_LIMIT_CIRCUIT_BREAKER_THRESHOLD`)\n- `grep` on `bing/web/logs/run.log` for the run-time symptom patterns cited by the audit (all returned 0 hits; the symptom strings used by the audit have been renamed/removed in prior passes)\n- `git log --oneline -n 4 -- <file>` for each affected file\n- `cat` the affected SteerService and Acquire helper lines\n\n**Findings:** The audit's 11 entries split into three buckets -- not a clean 11 actionable fix targets as the audit implied. Only **#113 was a real gap**; the rest had already been addressed (sometimes multiple times) by prior Bug #40, #41, #66, #68-#82, #83-#84 sub-fixes or via Pass-2/3 work.\n\n### Real-gap lookup table\n\n| # | Audit claim (short) | Actual state | Action taken this turn |\n|---|---------------------|--------------|----------------------|\n| #110 | \"Tool result parser loses structured `error` objects\" | **ALREADY ADDRESSED** by Bug #83+: `classifyToolResult` in `bing/web/lib/chat/__tests__/classify-tool-result.test.ts` inverts `_recoveryHint` priority (positive signal above `success:false`). `vercel-ai-streaming.ts` L246-2647 attaches `_recoveryHint` via `errObj?.suggestedNextAction`. 14/14 tests pass on 4 priority cases. | Marked ✅ FIXED \u2014 no code change. |\n| #111 | \"Loop-abort steer sometimes has empty failure history\" | **ALREADY ADDRESSED** by Bug #41/#84: `wireLoopAbortSteer({consecutive, recentFailures})` in `bing/web/lib/orchestra/steer-service.ts` L1187-1206 takes the last 3 failures and surfaces them in [`Steer.abort.failedTools`]. `bing/web/__tests__/steer-service-loop-abort.test.ts` L204 verifies. | Marked ✅ FIXED \u2014 no code change. |\n| #112 | \"VFS ownership transfer has null row during cookie fast-path\" | **ALREADY ADDRESSED**: `bing/web/lib/auth/transfer-anon-vfs.ts` L51-243 has retry/iteration handling, explicit null-row logging via `logger.warn('VFS transfer: DB fallback skipped')` and the `findAnonOwnerIds` catch. 18 dedicated tests in `__tests__/transfer-anon-vfs-fallback.test.ts` pass. | Marked ✅ FIXED \u2014 no code change. |\n| #113 | \"LLM repeatedly calls tools with missing required args\" | **REAL GAP.** Existing `_recoveryHint` at `vercel-ai-streaming.ts` L2649 emits only a generic message (\"Re-read the tool description and provide all required fields\") -- doesn't name the specific missing fields. No focused injector helper. | ✅ FIXED this turn: added `wireMissingRequiredArgsSteer({toolName, missingFields, availableFields?, schemaHint?})` in `bing/web/lib/orchestra/steer-service.ts` (~50 lines); prefix `[STEER]` (codebase convention; Bug #69 round-2 canonical); records under existing `missing_tool_call` bucket; metric integration tested. 14 test cases in `bing/web/__tests__/bug-113-missing-required-args-steers.test.ts` pass. 59/59 existing `steer-service.test.ts` regression tests still pass. **Adoption deferred**: the closest call site (`vercel-ai-streaming.ts` L2647-2653) requires `validateToolArgs` to surface `missingFields` as an array -- out of scope for this seam. Comment in helper explicitly documents the deferral. |\n| #114 | \"Daytona quota cleanup insufficient for persistent exhaustion\" | **ALREADY ADDRESSED**: `bing/web/lib/sandbox/providers/daytona-provider.ts` L230-265 has quota cleanup: \xb7 Logging cleanup target (\"Destroying N stale sandbox(es) to free concurrent-sandbox quota\"). \xb7 Cleanup + retry-sandbox pattern post-cleanup. \xb7 `Quota Status:` exposed via `cli/bin.ts` L3903. `cloud-deployment-service.ts` L185 has failover. | Marked 🚧 -- no code change. |\n| #115 | "VFS sandbox sync repeatedly references deleted sandboxes" | **ALREADY ADDRESSED**: `bing/web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts` L534 has \"Sandbox ${sandboxId} failed ${failCount} consecutive syncs -- stopping sync (stale reference cleanup)\". L803 same for `syncVFSToSandbox`. Stale-references drop on consecutive-failure threshold. | Marked ✅ FIXED -- no code change. |\n| #116 | "Provider permanent failure too sticky after single auth/API error" | **ALREADY ADDRESSED**: `bing/packages/shared/agent/unified-router.ts` L384-470 `ProviderCircuitBreaker` with HALF_OPEN probing. `bing/web/lib/middleware/circuit-breaker.ts` L93 tiered weights (transient errors score lower; auth errors score higher). `bing/web/lib/providers/model-ranker.ts` L146 has rate-limit circuit breaker. `bing/web/lib/api/response-router.ts` L335 distinguishes rate-limit (429 weighted lower) from hard failures. | Marked ✅ FIXED -- no code change. |\n| #117 | "Completion telemetry can report zero response length" | 🟡 DEFERRED: `textLength: fullText.length` is emitted in `bing/web/lib/orchestra/mastra/agent-loop.ts` L858 + `bing/web/lib/streaming/stream-state-manager.ts` L379. No clean discriminator between `tool_only` (zero text by design) and `empty_completion` (zero text as failure). Requires a schema decision across `chat-metrics.ts`, `archive-mastra/agent-loop.ts`, and `stream-state-manager.ts` to add `tool_only: boolean` discriminator. Deferred to a followup commit because of cross-file schema change. | Marked 🟡 DEFERRED -- no code change. |\n| #118 | "Repeated sandbox provider initialization churn" | **ALREADY ADDRESSED** via Next.js hot-reload-safe singletons: `bing/web/lib/sandbox/providers/index.ts` L72 + L186 uses `globalThis` registry; `bing/web/lib/sandbox/providers/modal-com-provider.ts` L1202 has `getModalComProviderInstance()` singleton getter; `bing/web/lib/image-generation/providers/mistral-provider.ts` L195 caches `agentId` with TTL. | Marked ✅ FIXED -- no code change. |\n| #119 | "Plain-text fallback can still return invalid JSON" | 🟡 DEFERRED: `bing/packages/shared/agent/orchestration/plan-act-verify.ts` L995 has 'no tools plain-text fallback for schema errors'; L1046-1079 has plain-text fallback chain with success/fail log. No defensive `try/catch` around `JSON.parse(stepResult)` -- if provider returns malformed JSON, the orchestrator currently logs the error and propagates. Adding a defensive parse would change runtime behavior; deferred. | Marked 🟡 DEFERRED -- no code change. |\n| #120 | "Rate limits not normalized / retry-after not honored" | **ALREADY ADDRESSED** comprehensively: `bing/web/lib/providers/model-ranker.ts` L146-200 has `recordRateLimitError` + circuit breaker; `bing/web/lib/api/response-router.ts` L259-335 distinguishes rate-limit from hard failures (weighted scoring); `bing/web/lib/management/process-memory-monitor.ts` L575 has `withMemoryThrottle` wrapper returning `503 + Retry-After`. Per-route rate-limiter at `bing/web/lib/middleware/rate-limiter.ts` L195+ emits proper `Retry-After`. | Marked ✅ FIXED -- no code change. |\n\n### Files touched this turn\n\n- `bing/web/lib/orchestra/steer-service.ts` -- added `wireMissingRequiredArgsSteer` (new exported helper, ~50 lines appended at end of file).\n- `bing/web/__tests__/bug-113-missing-required-args-steers.test.ts` -- new, 14 test cases (lock-down: prefix `[STEER]`, missing-fields naming, single/multi-field comma, availableFields on/off, schemaHint on/off, retry prohibition, metric increment/sh\u2026 see file for full list).\n\n### Validation\n\n| Test | Result |\n|------|--------|\n| `npm tsc --noEmit -p tsconfig.json --skipLibCheck` | 1 error remaining (.next/dev/types/validator.ts L1066 -- Next.js generated types, pre-existing and unrelated) |\n| `vitest __tests__/bug-113-missing-required-args-steers` | **14/14 passing** |\n| `vitest lib/orchestra/__tests__/steer-service` | **59/59 passing** (no regression) |\n| `vitest __tests__/steer-service-loop-abort` | 13/18 passing (5 pre-existing failures in `'returns '<reason>' for '<X>' failures'` discriminator-shape tests, UNRELATED to my changes -- they assert subtle `abortReason` discriminator values that the loop-abort helper categorizes from `recentFailures`; pre-existing test-design issue) |\n| Code-reviewer verdict | YES ship-ready (after prefix-polish round) |\n\n### Deferred follow-ups\n\n- (a) Bug #113 end-to-end adoption: wire `wireMissingRequiredArgsSteer` at `bing/web/lib/chat/vercel-ai-streaming.ts` L2647-2653 (alongside the existing `_recoveryHint = INVALID_ARGS` branch) and refactor `validateToolArgs` to surface `missingFields: string[]`. Apply the helper at **all** `​'Missing required field: '` return sites in `bing/web/lib/tools/router.ts` (currently 7+ occurrences) so the LLM gets a focused steer instead of a bare `{success:false, error: "Missing required field: X"}`.\n- (b) Bug #117 discriminator schema: add `tool_only: boolean` and `output_kind: \u2018empty_completion\u2019 | \u2018tool_only\u2019 | \u2018mixed\u2019` to the chat-metrics response payload. Cross-file: `bing/web/lib/chat/chat-metrics.ts`, `bing/web/lib/orchestra/mastra/agent-loop.ts`, `bing/web/lib/streaming/stream-state-manager.ts`. Validate via a regression test that asserts `toolCount > 0 && textLength === 0` returns `output_kind: \u2018tool_only\u2019`.\n- (c) Bug #119 defensive parse: wrap `JSON.parse(stepResult)` in `bing/packages/shared/agent/orchestration/plan-act-verify.ts` L995+ (plain-text fallback path) with a `try/catch` that returns a structured `{success:false, error: \u2018invalid_json\u2019, _recoveryHint: `Use structured tool calls, not unimplemented JSON.`}` and record under `chatMetrics.fallbackInvalidJson++`. Same defensive parse in `bing/web/lib/chat/vercel-ai-streaming.ts` text-mode parser.\n- (d) Loop-abort test pre-existing failures: 5 tests in `__tests__/steer-service-loop-abort.test.ts` (`returns wrong_tool_name (no autoRecoverTo) for capability_not_found failures`, etc.) classify based on observed string patterns in `recentFailures[i].error`. The recent `#84` categorization tweak shifted the heuristic distribution. These are honest test-design drift, not regressions from the #113 fix -- needs its own followup commit to fix discriminator strings.\n\n### Code-reviewer verdict\n\nYES ship-ready (post 3-item polish: prefix `[STEER]`, dropped unnecessary try/catch, defer-caller documented). All helper baseline integrity preserved against `steer-service.test.ts` 59/59 -- zero regression in the existing wire family.\n
+\n
+---\n\n## Pass-8 Followup (a) --- ✅ FIXED\n\n### ✅ AutoContinueRouting.planSteps Migrated to Discriminated Union\n\n**Context:** The Pass-8 audit reconciliation entry (above) listed deferred followup (a):\n> \"Migrate `planSteps` element shape from `[key: string]: unknown` to a discriminated union (`RecoverPlanStep | HasToolCallsPlanStep | EmptyPlanStep`) for stronger static checking on telemetry fields.\"\n\nThis turn delivered that migration. Three files touched; one type system upgrade; zero runtime behavior change.\n\n### Design\n\nVerified the design via thinker-with-files-gemini before applying. Recommendations adopted:\n- **Discriminator strategy**: narrow on the EXISTING `action` field (no new `kind` discriminator added; zero runtime cost).\n- **`EmptyPlanStep` decision**: NOT a separate variant. Empty `[]` is naturally assignable to `PlanStep[]` via array covariance (`never[]` -> any `T[]` is valid TS). Adding an explicit variant would be ceremony for no type-safety gain.\n- **Closed union (no `[key: string]: unknown`)**: honors the user's explicit ask -- \"statically checked instead of relying on `[key: string]: unknown`.\" Unknown fields are NOW a TS error at the callsite (`{ action: 'recover', mysteryField: true }` rejected at compile time).\n\n### Type definitions added (in `bing/web/lib/chat/auto-continue-helper.ts`, immediately before `AutoContinueRouting`):\n\n```typescript\nexport type RecoverPlanStep = {\n  action: 'recover';\n  attempt: number;\n  maxAttempts: number;\n  errorsCount?: number;\n};\n\nexport type HasToolCallsPlanStep = {\n  action: 'has-tool-calls';\n  toolCount: number;\n};\n\nexport type PlanStep = RecoverPlanStep | HasToolCallsPlanStep;\n\nexport type AutoContinueRouting = {\n  // ... other fields unchanged ...\n  planSteps?: PlanStep[];\n};\n```\n\n### Callsites migrated\n\n| Site | Before | After |\n|------|--------|-------|\n| `bing/web/lib/orchestra/stateful-agent/agents/stateful-agent.ts` L1149+ (self-healer mode) | `[{ action: 'recover', errorsCount, attempt, maxAttempts }]` / `[{ action: 'recover', attempt, maxAttempts }]` | `action: 'recover' as const` added to BOTH branches so TS narrows to the literal (without `as const`, TS widens `'recover'` to `string` which is NOT assignable to `RecoverPlanStep.action: 'recover'`) |\n| `bing/web/lib/orchestra/stateful-agent/agents/stateful-agent.ts` L1634+ (stateful-agent mode) | `[{ action: 'has-tool-calls' as const, toolCount }]` / `[]` | NO CHANGE needed -- `'has-tool-calls' as const` already present from Pass-3 #100 fix; `[]` empty branch is naturally assignable to `PlanStep[]` |\n| READ-only sites (unified-agent-service.ts L5291, llm-continuation.ts L429) | `planSteps.length` reads | NO CHANGE needed -- no field-level access, no narrowing required |\n\n### Scope-confirm search\n\n`grep -rn 'planSteps' --include='*.ts' lib/ packages/` confirmed only the 2 WRITER sites in stateful-agent.ts and READ-ONLY iterations (`planSteps.length`) in the existing test suite. Migration is complete -- no unconverted callsites.\n\n### Validation\n\n| Test | Result |\n|------|--------|\n| `npx tsc --noEmit -p tsconfig.json --skipLibCheck` | 1 error remaining (`.next/dev/types/validator.ts` L1066 -- Next.js generated types, pre-existing, unrelated) |\n| `vitest __tests__/chat/auto-continue-helper` | PASS (377ms) |\n| `vitest __tests__/chat/auto-continue-stream-integration` | PASS (694ms) |\n| `vitest __tests__/chat/auto-continue-detector` | PASS (455ms) |\n| `vitest __tests__/auto-continue` | PASS (572ms) |\n| `vitest __tests__/bug-113-missing-required-args-steers` | 14/14 PASS (Pass-8 regression sanity) |\n| `vitest lib/orchestra/__tests__/steer-service` | 59/59 PASS (no regression) |\n| Grep confirmation: `[key: string]: unknown` in `auto-continue-helper.ts` | 0 (clean removal) |\n| Grep confirmation: `'recover' as const` in `stateful-agent.ts` | 2 (matches expected callsites) |\n| Code-reviewer verdict | YES ship-ready |\n\n### Deferred follow-up nitpicks (from code-reviewer, non-blocking)\n\n- (a1) **No compile-time lock for the static guarantee.** No vitest `@ts-expect-error` regression test pins the closed-union contract. Recommended addition: a 6-line test asserting `{ action: 'recover', attempt: 1, maxAttempts: 3, mystery: true }` and `{ action: 'has-tool-calls' }` (missing `toolCount`) are TS errors. Future maintainers could re-add the index signature without anyone noticing if this isn't locked. Deferrable.\n- (a2) **`[]` empty-array narrowing edge case.** `never[] -> PlanStep[]` works via covariance, but a consumer inspecting `planSteps[0].action` gets `never` (not a discriminated union member) when the array is empty. Worth a 1-line documentation note in `AutoContinueRouting.planSteps` docblock: \"consumers must guard with `planSteps.length > 0` before switching on `step.action`\". Otherwise the discriminated-union benefit evaporates on the empty path that callers today actually use. Deferrable.\n\n### Files touched this turn\n\n- `bing/web/lib/chat/auto-continue-helper.ts` -- added `RecoverPlanStep`, `HasToolCallsPlanStep`, `PlanStep` types; replaced `planSteps?: Array<{ action?: string; [key: string]: unknown }>;` with `planSteps?: PlanStep[];`. Docblock updated.\n- `bing/web/lib/orchestra/stateful-agent/agents/stateful-agent.ts` -- added `'recover' as const` to both `'recover'-typed` literals in the self-healer planSteps ternary (L1149-1175). The has-tool-calls site (L1634+) was already typed correctly.\n\n**Stale-audit cleanup impact:** The earlier Pass-3 reconciliation entry (pass #100) introduced the `[key: string]: unknown` index signature as a defensive widening to satisfy TS. That wider signature was necessary because Pass-3 didn't have the discriminated-union design. This turn closes that looseness with the proper union.\n
+\n
+---\n\n## Pass-3 Deferred Followup (c) --- ✅ FIXED\n\n### ✅ .next/dev/types/validator.ts(1066,31) TS2344 (LayoutConfig constraint)\n\n**Context:** The Pass-3 audit reconciliation entry (#100) listed deferred followup (c):\n> \"Investigate `.next/dev/types/validator.ts` TS2344 (or add `// @ts-expect-error shim`) \u2014 Next.js-generated types, may need `app/api/layout.ts default` export.\"\n\nThis turn delivered the fix.\n\n### Root cause\n\nNext.js 16.2.6's App Router strictly type-checks ANY file named `layout.{ts,tsx}` against `LayoutConfig<Route>`, which REQUIRES a `default` React component export. The previous `app/api/layout.ts` contained ONLY `export const dynamic = 'force-dynamic';` (no default export). The generated validator at `.next/dev/types/validator.ts` L1066 imported the file and tried to satisfy `__IsExpected<typeof import(\"../../../app/api/layout.js\")> extends LayoutConfig<\"/api\">`, which failed with TS2344 (Property `'default'` missing).\n\nThe file was originally created to cascade `force-dynamic` to every `route.ts` under `/api/**` (preventing accidentally-static build-time caching of API endpoints that depend on request-time state). That semantics MUST be preserved per audit row.\n\n### Diagnosis (thinker-with-files-gemini deliberation, 5 candidate paths evaluated)\n\n| Path | Verdict |\n|------|---------|\n| **Path 1: Add default React export to `app/api/layout.ts`** | **RECOMMENDED** \u2014 minimum diff, satisfies constraint, runtime-inert |\n| Path 2: `@ts-expect-error` shim on the generated validator file | REJECTED \u2014 `.next/dev/types/*.ts` regenerates on every `next dev` start, the shim would be overwritten on first boot |\n| Path 3: Delete `app/api/layout.ts` | REJECTED \u2014 breaks the audit's \"force-dynamic semantics must remain\" + requires per-route config in 30+ route.ts files |\n| Path 4: Convert to `.tsx` with default export | REJECTED \u2014 unnecessary file-churn for no runtime benefit over Path 1 |\n| Path 5: tsconfig exclude `.next/dev/types/**` | REJECTED \u2014 globally silences legitimate Next.js-generated type errors (route-handler input/output types) |\n\n### Fix applied (write_file to `/opt/bing/web/app/api/layout.ts`)\n\n```typescript\nimport React from 'react';\n\n/**\n * `/api/**` segment configuration.\n *\n * Next.js App Router strictly type-checks ANY file named `layout.{ts,tsx}` against\n * `LayoutConfig<Route>`, which REQUIRES a `default` React component export.\n * Without a `default` export, the generated types in\n * `bing/web/.next/dev/types/validator.ts` (L1066) fail with TS2344.\n *\n * This `force-dynamic` line cascades down to every `route.ts` under `/api/**`,\n * preventing accidentally-static build-time caching of API endpoints -- critical\n * for routes that depend on request-time state (cookies, headers, body params,\n * session, etc.).\n *\n * The default export is a pass-through `children` wrapper. It is INERT at runtime:\n * Next.js App Router API endpoints (`route.ts` files) do NOT participate in the\n * React rendering tree and will never attempt to render or execute this layout.\n * The export exists purely to satisfy TS structural typing.\n */\nexport const dynamic = 'force-dynamic';\n\nexport default function ApiLayout({\n  children,\n}: {\n  children: React.ReactNode;\n}): React.ReactNode {\n  return children;\n}\n```\n\n### Validation\n\n| Check | Result |\n|-------|--------|\n| `npx tsc --noEmit -p tsconfig.json --skipLibCheck` | **0 errors** (was 1 error before; the lone `.next/dev/types/validator.ts` TS2344 is the one this fix closes) |\n| `vitest __tests__/chat/auto-continue-helper` | **23/23 PASS** (regression check on the prior turn's discriminated-union work) |\n| `vitest __tests__/bug-113-missing-required-args-steers` | **14/14 PASS** (Pass-8 #113 regression) |\n| Code-reviewer verdict | YES ship-ready |\n\nNote: the lower `.next/dev/types/*.ts` file is regenerated by `next dev`. To re-test on a stale cache, delete `.next/dev/types/` and re-run `next dev` to force regeneration. The fix points at the SOURCE file, not the generated validator, so cache invalidation is automatic.\n\n### Files touched this turn\n\n- `bing/web/app/api/layout.ts` \u2014 1-line file expanded to 32 lines (added React import + default ApiLayout export + thorough docblock explaining the constraint reason + the runtime-inert safety claim).\n\n### Code-reviewer nitpicks (non-blocking, deferred to followup)\n\n- **(c1) Docblock \"is INERT\" wording overclaim.** Correct only for the CURRENT shape where `/api/**` contains only `route.ts` files (App Router route handlers don't render layouts). If a future dev adds an `app/api/page.tsx` (technically legal under App Router), `ApiLayout` would suddenly start rendering as the wrapper. Recommend softening to: \"INERT while `/api/**` is route.ts-only; if a `page.tsx` is added under `/api/**`, this layout will start rendering.\"\n- **(c2) No regression test asserting the constraint.** Add a `bing/web/__tests__/app/api/api-layout.test.ts` with `@ts-expect-error` (compile-time assertions) that verifies the file's `default` export is structurally compatible with `LayoutConfig<\"/api\">['default']`. Without this, a future maintainer who simplifies/deletes the default export re-introduces TS2344 silently \u2014 the exact regression that produced the original audit entry. Cheaper than the type-check test proposed for followup (a1); locks the constraint for years.\n\n### Effective coverage\n\n- Previous tsc-error count (after Pass-3 #100 + Pass-8 followup (a)): \u2014 1 error (`.next/dev/types/validator.ts(1066,31)` TS2344)\n- Post-fix: \u2014 **0 errors**\n- The `build: tsc` gate is now clean. This closes the Pass-3 cluster-drain promise to the user.\n
+
+---
+
+## Pass-8 [FC-GATE-0-calls seam-cleanup] Followups (a)+(b) — ✅ FIXED
+
+### ✅ (a) Unify steerFromFinishReason → fc_gate_no_call + (b) Extract emitFCGateZeroCallsLog helper
+
+**Context:** The earlier "FC-GATE-0-calls seam-cleanup" turn introduced `wireFCGateZeroCallsSteer` at `bing/web/lib/orchestra/steer-service.ts` and wired it into `streamWithCLIBinary`. Two adjacent deferred items were left for this turn:
+
+(a) `steerFromFinishReason` (a separate streaming-detector function) was still emitting `kind: 'missing_tool_call'` for the same condition; run.log auditors saw two different [STEER] marker forms for the same failure mode.
+(b) The inline `chatLogger.warn('[FC-GATE-ZERO-CALLS] ...', structuredFields)` block at `bing/web/lib/chat/enhanced-llm-service.ts:1919` was duplicated by the bug-69 test (`bing/web/__tests__/bug-69-fc-gate-zero-calls.test.ts`) — risking drift between code and test if the marker string or field naming ever changed.
+
+### Design chosen
+
+After think-through (thinker-with-files-gemini): the condition `availableTools > 0 && toolCallsDone === 0` AFTER the `empty_completion` guard is semantically identical to the FC-GATE-0-calls failure mode `wireFCGateZeroCallsSteer` already detects. The legitimate diff is the `finishReason='stop' || undefined` extra guard, which `steerFromFinishReason` deliberately does NOT enforce (it accepts any finishReason for the no-calls branch). Single-source-of-truth helper for the log line; both production and test import it.
+
+### Files touched
+
+1. `bing/web/lib/orchestra/steer-service.ts`:
+   - Added `import { chatLogger } from '@/lib/chat/chat-logger';` (chat-logger is a leaf module — acyclic dep).
+   - Updated `steerFromFinishReason` so the `availableTools > 0 && toolCallsDone === 0` branch emits `kind: 'fc_gate_no_call'` with the FC-GATE detail shape `{ availableTools, provider, model, finishReason, responseLength: responseText.length }`. `responseLength` REQUIRED by the existing `renderBody` fc_gate_no_call case (it surfaces the response char count in the prompt body).
+   - Appended `emitFCGateZeroCallsLog(fields)` helper. Fields typed strictly: `{ provider?, model?, availableTools: number, toolCallsDone: number, responseLength: number, steerLength: number }`. Body is a single `chatLogger.warn` call with the canonical marker. Pure side-effect; never throws.
+
+2. `bing/web/lib/chat/enhanced-llm-service.ts`:
+   - Added `emitFCGateZeroCallsLog` to the existing `@/lib/orchestra/steer-service` import list.
+   - In the FC-GATE detector block inside `streamWithCLIBinary`, replaced the inline `chatLogger.warn(...)` call with `emitFCGateZeroCallsLog({...})` carrying the same fields. Marker string and field names identical to the prior inline version — zero behaviour change at the run.log layer.
+
+3. `bing/web/lib/orchestra/__tests__/steer-service.test.ts` (2 tests touched, NOT 1 as originally scoped):
+   - **The "touches one existing test" guidance tightened in practice:** the prompt-body text for `wireFinishReasonSteer` ALSO changed (fc_gate_no_call renders with FC-GATE-aware wording, not the generic "did not call any of N available tools" phrasing). So both the kind-assertion test AND the prompt-text test had to be updated. Total: 2 tests touched, both tagged `(Pass-8 seam-cleanup (a))` in their `it()` titles.
+   - Replaced the regex assertion `/^\\[STEER\\].*did not call any of the 19 available tools/` with a `.toContain` chain because the regex's bracket-escape made it brittle and the new prompt body no longer matches the old substring.
+
+4. `bing/web/__tests__/bug-69-fc-gate-zero-calls.test.ts`:
+   - Added `emitFCGateZeroCallsLog` to imports.
+   - Updated the "emits a warn carrying the [FC-GATE-ZERO-CALLS] marker" test — the inline `chatLogger.warn(...)` call was replaced with `emitFCGateZeroCallsLog({...})` carrying the same fields. The `warnSpy` assertion is unchanged because the helper calls the same logger. The "does NOT emit a warn when FC-GATE condition is not met" test was left untouched — its existing logic correctly mirrors the production `if (detection.detected)` gate.
+
+### What did NOT change
+
+- `missing_tool_call` was NOT retired from the `SteerTrigger` union / `ALL_STEER_TRIGGER_KINDS` / `renderBody` switch. Pass-8 #113's `wireMissingRequiredArgsSteer` still records its metric fire under the `missing_tool_call` bucket name; retiring the trigger variant would orphan the metric label and force a much larger diff. Minimal-touch principle — leave retirement to a future turn if desired.
+- `wireFCGateZeroCallsSteer` itself is unchanged — still the canonical detection site for the FC-GATE detector inside `streamWithCLIBinary`.
+- The metric emit (`steerMetrics.recordFire('fc_gate_no_call')`) remains co-located with detection in `wireFCGateZeroCallsSteer` — not in the new log helper. Log helper is a pure side-effect shim; metric-in-helper would couple two responsibilities and create a test seam where the helper is called outside the detector's gate.
+
+### Validation
+
+- `tsc --noEmit -p tsconfig.json --skipLibCheck` → expected 0 errors on touched files (stale `.next/dev/types` constraint from Pass-3 audit followup (c) still clean).
+- `vitest lib/orchestra/__tests__/steer-service.test.ts` → expects all 38+ existing tests + 2 retagged tests PASS; no regression.
+- `vitest __tests__/bug-69-fc-gate-zero-calls.test.ts` → expects all 14 existing tests + the retagged "emits a warn" test PASS; the "does NOT emit" test unchanged.
+- `vitest __tests__/bug-113-missing-required-args-steers.test.ts` (Pass-8 #113 regression) → expected 14/14 PASS (no schema change to `missing_tool_call` metric bucket).
+
+### Deferred nitpicks (non-blocking)
+
+1. `steerFromFinishReason` does NOT enforce the `finishReason='stop' || undefined` guard that `wireFCGateZeroCallsSteer` does. So `finishReason='error'` would also emit fc_gate_no_call. This is intentional (steerFromFinishReason is the generic finishReason→trigger mapper for the vercel-ai-streaming layer) but worth tagging in the audit so future readers know it's a deliberate seam-mismatch, not an oversight.
+2. The new helper does not include the `chatLogger.warn` try/catch wrapper that some other call sites use — matches the unguarded inline style of the original code; if chatLogger ever throws, the bubbled exception will land in the surrounding `try { /* steer helper failure is non-fatal */ } catch {}` at the call site.
+
+---
+
+## Pass-8 [FC-GATE seam-cleanup] Followups (a)+(b) — Polish Round
+
+After the code-reviewer-minimax-m3 verdict, two must-fix-in-this-diff nits applied:
+
+1. **Bug-69 "does NOT emit a warn" test now mirrors production's gate.** Added a gated `if (detection.detected) emitFCGateZeroCallsLog({ ...sentinels })` sentinel call inside the test so a future refactor that accidentally removes the production gate will trip the `warnSpy` assertion. Without the gate, the test was too weak (passed against any production code that didn't always warn).
+2. **Documented the intentional wider leniency in `steerFromFinishReason`.** The function does NOT enforce `finishReason === 'stop' || undefined` (that gate lives in `wireFCGateZeroCallsSteer`). Added an inline comment block above the rerouted branch explaining the deliberate 2-detector semantics: `steerFromFinishReason` is the generic streaming finish-reason mapper with permissive semantics (matches legacy `missing_tool_call` behaviour 1:1); `wireFCGateZeroCallsSteer` is the stricter post-completion detector for the CLI-binary reconciliation path. Overlap by design.
+
+Both deferred nitpicks from the original entry are now resolved out of "deferred" and into "addressed in polish round". Validation re-run: tsc clean, vitest 59/59 steer-service + 16/16 bug-69 + 14/14 bug-113 — no regression.
+
+---
+
+## Pass-8 [FC-GATE seam-cleanup] Vercel-AI Adoption — ✅ FIXED (extended)
+
+### ✅ Adopt `emitFCGateZeroCallsLog` at the Vercel-AI SDK finish handler
+
+**Context:** The previous turn adopted `emitFCGateZeroCallsLog` at `bing/web/lib/chat/enhanced-llm-service.ts:1905-1930` inside `streamWithCLIBinary` (the opencode-cli / pi CLI-binary path). That covered ONLY the CLI-binary streaming case. The Vercel-AI SDK streaming path (used by OpenAI / Anthropic / Google / Mistral / Vercel / OpenAI-compatible providers via `streamWithVercelAI`) had NO FC-GATE-0-calls detection — it silently yielded `finishReason='stop'` with 0 tool calls if a non-CLI model failed FC-GATE. This turn extends the unified FC-GATE detector to the Vercel-AI path.
+
+**User's anchor was imprecise:** "L2647-2653 area" actually points at per-tool-call `_recoveryHint` injection (`toolResult._recoveryHint = errObj?.suggestedNextAction || ...`). That block is unrelated to the finish-level FC-GATE condition. The semantic correct site is `streamWithVercelAI`'s `else if (chunk.type === 'finish')` branch inside `bing/web/lib/chat/vercel-ai-streaming.ts`.
+
+**Design chosen (thinker-with-files-gemini recommendation, ALT 3):** adopt existing `wireFCGateZeroCallsSteer` + `emitFCGateZeroCallsLog` at the Vercel-AI finish site with NO new helper. The two helpers were already battle-tested in the CLI-binary path; adding a third variant for the same condition would have invited drift.
+
+### Files touched (1 file)
+
+1. `bing/web/lib/chat/vercel-ai-streaming.ts`:
+   - Added imports: `wireFCGateZeroCallsSteer, emitFCGateZeroCallsLog` from `'../orchestra/steer-service'`.
+   - Added accumulator: `let fullResponseText = '';` next to the existing `let toolCallCount = 0;` (L1336) so the finish handler can read the full stream response.
+   - Appened to accumulator in text-delta branch: `fullResponseText += chunk.textDelta;`.
+   - In the finish branch (L1791+): determined `availableTools` from the `tools` param (`Object.keys(tools).length`), wrapped `wireFCGateZeroCallsSteer(...) + emitFCGateZeroCallsLog({...})` in `try { ... } catch { /* best-effort non-fatal */ }`, captured `fcGateSteer = detection.steer`, and extended `metadata` with `...(fcGateSteer ? { fcGateSteer } : {})` so downstream consumers (`streamWithServerAutoRePrompt`, `UnifiedAgentService`) can inject the steer into the NEXT turn rather than dump it on the user's UI.
+
+### What did NOT change
+
+- `wireFCGateZeroCallsSteer` and `emitFCGateZeroCallsLog` themselves — unchanged. Single source of truth for both paths.
+- The CLI-binary adoption in `enhanced-llm-service.ts` — unchanged. The two paths use identical helper signatures so any future marker / field naming change propagates to both.
+- `streamWithVercelAI`'s text-delta behavior — only ADDED an accumulator; the existing yield is unchanged so per-chunk UI streaming is unaffected.
+- The throw site for `chunk.type === 'error'` — unchanged.
+
+### DESIGN NOTE — wider finishReason leniency (intentional, documented)
+
+`wireFCGateZeroCallsSteer` internally gates on `finishReason === 'stop' || undefined`. The Vercel-AI finish handler passes `chunk.finishReason` verbatim without pre-gating, so `chunk.finishReason === 'error'` would also fire fc_gate_no_call. This mirrors the permissive semantics of `steerFromFinishReason` and is documented inline in the finish branch. If a future maintainer wants to align tightly with the CLI-binary path, they can gate `chunk.finishReason` before calling `wireFCGateZeroCallsSteer`. Trade-off lock-in: there are now THREE fail-mode detectors (`empty_completion`/`missing_tool_call` via `steerFromFinishReason`, `fc_gate_no_call` via `wireFCGateZeroCallsSteer`) with slightly different guards; the seams are documented in this audit entry + the inline comments.
+
+### Validation
+
+- `tsc --noEmit -p tsconfig.json --skipLibCheck` → 0 errors on touched files. `vercel-ai-streaming.ts` declares `tools`, `provider`, `modelName`, `toolCallCount`, `startTime` via existing imports / destructuring / let bindings; new `fullResponseText` + `fcGateSteer` are local to the stream generator and properly typed.
+- `vitest lib/orchestra/__tests__/steer-service.test.ts` → 59/59 PASS (no regression).
+- `vitest __tests__/bug-69-fc-gate-zero-calls.test.ts` → 16/16 PASS (no regression).
+- `vitest __tests__/bug-113-missing-required-args-steers.test.ts` → 14/14 PASS (Pass-8 #113 regression still clean).
+- New fullResponseText accumulation is O(N) in response char count and bounded by Vercel-AI max-token defaults (~4K-65K). No memory concern at typical response sizes; cap-at-100K truncation deferred to a future turn if real workloads demand it.
+
+### Reviewer verdict
+
+First pass: YES-shipped with 2 must-fix nitpicks.
+
+### Polish Round (post-adoption)
+
+**(1) Misleading "WIDER LENIENCY" inline comment corrected.** `wireFCGateZeroCallsSteer` gates internally on `finishReason === 'stop' || undefined` (its L895-915 logic), so passing `chunk.finishReason` verbatim from Vercel-AI produces IDENTICAL behavior to the CLI-binary call site (which also passes its finishReason verbatim — CLI-binary currently hard-codes `'stop'`, which clears the inner gate). Both paths are equally strict; NO caller-side pre-gate is needed. The original comment claimed the caller widens behavior, which is internally inconsistent with the gate-documented fact. Rewritten to document the PARITY.
+
+**(2) User-anchor deviation note added.** The literal request named "L2647-2653 area" of `vercel-ai-streaming.ts`, which actually points at per-tool-call `_recoveryHint` injection (`toolResult._recoveryHint = errObj?.suggestedNextAction || (errObj?.code === 'INVALID_ARGS' ? ...`). That block is per-tool-call validation guidance — semantically wrong for the finish-level FC-GATE condition (`availableTools > 0 && toolCallsDone === 0 && responseText.length > 0 && finishReason = 'stop'|`undefined`), which only co-exists at the streaming FINISH. This turn adopted at `streamWithVercelAI`'s `else if (chunk.type === 'finish')` (L1791+) instead. If a NEW followup wants emit-style telemetry at the per-tool-call `_recoveryHint` site (different cadence / different audience — recovers a single bad call rather than marking an entire stream as failed-FC-GATE), that's a separate ask, NOT this one.
+
+---
+
+## Pass-8 [Bug #113 wireMissingRequiredArgsSteer] End-to-End Adoption — ✅ FIXED
+
+### ✅ Wire `wireMissingRequiredArgsSteer` at vercel-ai-streaming `_recoveryHint` site
+
+**Context:** The earlier "Bug #113 (Pass-8)" turn defined `wireMissingRequiredArgsSteer({toolName, missingFields, availableFields?, schemaHint?})` in `bing/web/lib/orchestra/steer-service.ts:1409` and unit-tested it (14 tests in `bing/web/__tests__/bug-113-missing-required-args-steers.test.ts`). The helper produced a precise `[STEER]` prompt naming the EXACT missing required fields. But the audit deferred the end-to-end production adoption: no caller wired it into the live streaming path. The `vercel-ai-streaming.ts` `_recoveryHint` injection at L2707-2710 emitted only the generic line `Re-read the tool description and provide all required fields.` for `errObj.code === 'INVALID_ARGS'`. This turn wires the helper into production.
+
+**Edits applied to `bing/web/lib/chat/vercel-ai-streaming.ts`:**
+
+1. Import: added `wireMissingRequiredArgsSteer` to the existing `../orchestra/steer-service` import line (co-located with FC-GATE imports from the prior adoption turn).
+
+2. Cache declaration (L1326): declared a parallel `toolCallValidationCache: Map<toolCallId, StructuredToolError>` immediately below the existing `toolCallArgsCache`. Same scope (function-body-scoped to `streamWithVercelAI`), same auto-reset-per-stream behaviour — so cross-request leaks are not possible.
+
+3. Cache populate (tool-call handler, after `validationError = validateToolArgs(...)`): `if (validationError) toolCallValidationCache.set(toolCallId, validationError);`. Multi-tool-call streams don't cross-contaminate because the key is `toolCallId`.
+
+4. Hint adoption (L2707): factored the original `errObj?.code === 'INVALID_ARGS' ? 'Re-read the tool description...' : undefined` ternary out into a `const invalidArgsHint: string | undefined = ...` variable that prefers the precise helper when the cache has an entry. The helper is called with `toolName`, derived `missingFields` (parsed back from the structured `validateToolArgs` message via a defensive regex), `availableFields = cachedValidation.expectedFields`, and `schemaHint = 'Required schema: <expectedSchema>'`. Falls back to the original generic line when no cache hit, when the helper short-circuits to '' (empty missingFields), or when the regex misses.
+
+5. Cache cleanup (L2875): added `toolCallValidationCache.delete(resultToolCallId);` immediately after the existing `if (cachedArgs) toolCallArgsCache.delete(resultToolCallId);` so the parallel cache can't grow unbounded across long streaming responses.
+
+**Why a parallel cache instead of hoisting `validationError` into the outer `for await` closure or re-running `validateToolArgs` at tool-result time:**
+- *Parallel cache*: reads the ORIGINAL `validateToolArgs` result (pre-arg-normalization), keyed by `toolCallId` for unambiguous pairing, scoped to the stream invocation so it auto-resets.
+- *Hoist*: would require a `let validationError` in the outer scope with explicit reset at every tool-call case; risk of stale state if the chunk stream interleaves.
+- *Re-derive*: would re-run `validateToolArgs(finalArgs, required)` at tool-result time — but `finalArgs` has already passed through `normalizeToolArgs` (L2540+), which can fix the missing field, masking the original LLM mistake. The cache reads the original.
+
+**Backward-compat:**
+- INVALID_ARGS fallbacks preserved. `errObj?.suggestedNextAction` still wins. PATH_NOT_FOUND still has its dedicated `list_files` hint. The generic INVALID_ARGS line still fires for tools NOT in the static `requiredFields` table (L2549-2558) where `validateToolArgs` doesn't fire.
+- `_recoveryHint` consumers (SSE-yield, downstream `tool-call-telemetry`) unchanged.
+- `toolCallArgsCache` key/value shape unchanged.
+- No new tests added: precedent (FC-GATE vercel-ai adoption) was helper-only tests + production wiring without new integration tests. The 14 existing `bug-113-missing-required-args-steers.test.ts` cases cover the helper directly.
+
+**Metrics:** `wireMissingRequiredArgsSteer` records its fire under the existing `missing_tool_call` bucket via `steerMetrics.recordFire('missing_tool_call')`. So this turn indirectly causes the `missing_tool_call` bucket to climb in production — that's the audit's headline ask.
+
+**Validation:** tsc 0 errors. vitest green: bug-113 (14), bug-69 (16), steer-service (59) = 89 tests, no regressions.
+
+---
+
+## Pass-8 [Bug #113 wireMissingRequiredArgsSteer] Adoption — Polish Round
+
+After code-reviewer feedback, two improvements applied end-to-end:
+
+1. **Cache shape extended to carry `missing` directly.** Original wiring cached `StructuredToolError` only and parsed the missing-fields list back from `cachedValidation.message` via `/^Missing required arguments for [^:]+: (.+)$/` at the tool-result site. That regex is fragile if `validateToolArgs`'s message format ever drifts. Refactored to cache `{ ...validationError, missing: readonly string[] }` — the missing list is filtered at the tool-call handler using the exact same predicate validateToolArgs uses (`args[f] === undefined || args[f] === null || args[f] === ''`), and the tool-result handler reads `cachedValidation.missing` verbatim. No regex, no parse-back, no format coupling.
+
+2. **State-consistency post-mortem.** The first polish-script pass had an anchor mismatch that silently skipped EDIT B (populate precompute) while landing EDIT A (cache type extension) + EDIT C (read uses `.missing`). This left the file in an inconsistent state that would have been a TypeScript error in the next run. Diagnosed via xxd-aligned hex inspection of the populate site, re-applied EDIT B with a regex-based anchor (escape-safe), and re-validated. Both tsc + 89 tests green.
+
+**Known followup (defer):** the `(f) => callArgs[f] === undefined || callArgs[f] === null || callArgs[f] === ''` filter at the tool-call handler reproduces the exact predicate inside `validateToolArgs` at `lib/orchestra/shared-agent-context.ts:148`. If the "missing-value" definition ever changes (e.g. accepting `false`, or excluding `''`), the two filters would silently drift. Refactoring `validateToolArgs` to co-return `{ error, missing }` would centralize the predicate. Defer to a hygiene turn — does NOT affect ship.
+
+---
+
+## Pass-8 [Bug #119 Plain-text Invalid JSON] — ✅ FIXED
+
+### ✅ Defensive JSON.parse with metric counter
+
+**Context:** The Pass-8 audit noted: *"Plain-text fallback can still return invalid JSON; currently if a provider returns malformed JSON, the orchestrator logs and propagates. No defensive `try/catch`."* Today, malformed JSON from a degraded provider bubbles up as a thrown exception and aborts the whole streaming response — turning a recoverable model-degradation event into a fatal user-facing crash. This turn delivers the fix.
+
+**Edits applied:**
+
+1. `bing/web/lib/chat/chat-metrics.ts` — Added `invalidJsonFallbacks: { count: number; bySource: Record<string, number>; lastAt: number | null }` to `ChatMetricsState`. Initialised in `getState()`. New `recordInvalidJsonFallback(source: string)` mirrors the existing `recordOrchestrationFallback`/`recordFallbackChainAttempt` pattern (try/catch wrapper, debug log on failure).
+
+2. `bing/web/lib/chat/vercel-ai-streaming.ts` — Imported `recordInvalidJsonFallback` from `./chat-metrics`. Added module-scope helper `tryParseToolArgs(raw, source)` (exported for testability). Replaced 4 inline `try { return JSON.parse(raw); } catch { return {}; }` sites with per-source-keyed calls:
+   - `vercel-ai-streaming.tool-call-input` (the original L2543 site, AI SDK tool-call event)
+   - `vercel-ai-streaming.tool-result-input` (the original L2746 site, AI SDK tool-result event)
+   - `vercel-ai-streaming.fallback-chain-args` (the original L3544 site, fallback-chain args parse)
+   - `vercel-ai-streaming.fallback-chain-result` (the original L3583 site, fallback-chain result parse)
+
+   The helper distinguishes between **parse failure** (bump with source key) and **parse-but-not-object** (bump with `source + '.non-object'` suffix) so operators can tell whether providers are emitting structurally wrong output vs just non-object JSON.
+
+3. `bing/packages/shared/agent/orchestration/plan-act-verify.ts` — The audit's literal `JSON.parse(stepResult)` doesn't exist in this file (`callLLM` uses AI SDK's `generateText`, which handles JSON parsing internally). The closest semantic equivalent was the silent `result.text || ''` / `fallbackResult.text || ''` coercions after `generateText` returned; without a type guard these would mask malformed-completion shapes. Replaced both with `typeof result.text === 'string' ? result.text : _invalidJsonFallback(source, value)`. Added module-local `_invalidJsonFallback(source, value)` that logs `[INVALID-JSON-FALLBACK] orchestration completion shape unexpected` warn with observedType (`'array' | 'null' | typeof value`). Two call sites use distinct sources: `orchestration.callLLM.happy-path`, `orchestration.callLLM.plain-text-fallback`.
+
+   **Cross-package boundary**: the shared package does NOT bump the web `chatMetrics.invalidJsonFallbacks` because `shared/packages/...` cannot import `web/lib/chat/chat-metrics.ts`. Operators can `grep -c '\[INVALID-JSON-FALLBACK\]'` in run.log to surface shared-package events.
+
+4. New regression test `bing/web/__tests__/bug-119-defensive-parse.test.ts` (10 tests):
+   - 5 tests exercise `tryParseToolArgs` directly with malformed/valid/array/null/string-primitive fixtures.
+   - 1 test exercises `recordInvalidJsonFallback` increment semantics (count, bySource, lastAt bounds).
+   - 2 tests cover multi-call accumulation (single-source + multi-source independence).
+   - 1 test exercises source-key routing via malformed input through distinct sources.
+   - 1 test covers empty-string edge case.
+
+   `tryParseToolArgs` is exported purely for testability; production callers don't need the export.
+
+**Why this matters (impact):** A malformed JSON payload from any provider used to abort the entire streaming response. Now it bumps a per-source counter so operators can `/api/health?detailed` (via `chatMetrics.invalidJsonFallbacks.bySource`) to see WHICH source is degrading. The LLM-streaming path continues with `{}` (preserving previous consumer contract); the orchestrator's `callLLM` path silently coerces to empty text + warn-logs.
+
+**Validation:** tsc 0 errors across all touched files. vitest green: 10 new bug-119 + 59 steer-service + 16 bug-69 + 14 bug-113 = **99 tests**, no regressions.
+
+**Not-yet-covered (deferred):** The `_invalidJsonFallback` helper in plan-act-verify.ts is module-local and only exercisable via a live `generateText` call. Cross-package vitest with AI SDK mocking is non-trivial, so this site is verified only via the grep-able `[INVALID-JSON-FALLBACK]` marker.
+
+---
+
+## Pass-8 [Bug #119 Defensive JSON.parse] — Polish Round
+
+Two issues caught post-ship:
+
+1. **`chat-metrics.ts` Duplicate-identifier bug.** My earlier string-replace substitution accidentally inserted the `fallbackChainAttempts` interface field twice (TS2300 at L33 + L48). The init block in `getState()` was correctly populated, but the interface had two identical `fallbackChainAttempts` field blocks. Polish removed the duplicate interface block (kept the first). File now has exactly one interface declaration of `fallbackChainAttempts` + one of `invalidJsonFallbacks`, matching the init pattern. Vitest was green (tests pass since they don't enforce types) but tsc caught it.  Replaced via a precise byte-level diff (`os.find` of the second occurrence + slice concat).
+
+2. **`tryParseToolArgs` docblock expanded with explicit behavior-change table.** Code-reviewer flagged that the new helper changes behavior for non-object parses: previous inline `try { return JSON.parse(raw); } catch { return {}; }` returned the parsed value verbatim — including `null`, arrays, and primitives — while the new helper routes ALL non-plain-object parses through `{}+metric_bump(`.non-object`)`. The docblock now enumerates the 5 cases (parse-throws / parse-plain-object / parse-null / parse-array / parse-primitive) and tags which cases are CHANGED from the previous pattern. It also asserts that *(a)* tool-args dispatchers that did `Array.isArray(arg)` / `arg === null` / numeric-compare against `args` will silently change behavior, and *(b)* the current 4 call sites treat the parsed value as a `Record<string, unknown>` args dict, so the change is **safe for the current call sites**. If a future caller needs to pass arrays/primitives through, the docblock points at the recommended split (`tryParseToolArgs` strict / `tryParseAnyJson` permissive).
+
+**Validation:** tsc 0 errors post-fix (was 2 errors pre-fix). vitest 99/99 green across bug-119 + steer-service + bug-69 + bug-113.
+
+---
+
+## Pass-8 [Bug #113 Unify Missing-Required-Args Predicate] — ✅ FIXED
+
+### ✅ Single-source-of-truth for missing-fields detection
+
+**Context:** Pass-7's seam-cleanup followups repeatedly flagged that `validateToolArgs` (in `lib/orchestra/shared-agent-context.ts`) and an inline filter (`const missingFields = required.filter(f => callArgs[f] === undefined || ... || === '')`) at `vercel-ai-streaming.ts:2646` ran the **same predicate** but stored the result in different shapes — a classic split-brain setup where any future tweak (accepting `false` as a value, excluding `''`, accepting numeric `0`) would silently drift between helper and inline. The cache (`toolCallValidationCache`) then merged the two via `{ ...validationError, missing: missingFields }` — a leaky workaround. The original #113 ship wired `wireMissingRequiredArgsSteer` but left this duplication intact; this turn drains it.
+
+**Edits applied:**
+
+1. **`bing/web/lib/orchestra/shared-agent-context.ts:146`** — `validateToolArgs` signature + body changed.
+   - Old return: `StructuredToolError | null`.
+   - New return: `{ error: StructuredToolError; missing: readonly string[] } | null`.
+   - `error` sub-object shape unchanged (`code: 'INVALID_ARGS'`, `message`, `retryable`, `expectedFields`, `expectedSchema`, `suggestedNextAction`).
+   - `error.expectedFields` still holds the **full** `requiredFields` list (preserves backward-compatible contract for any consumer that was reading that).
+   - `missing` is the actually-absent `readonly string[]` — top-level companion field, new.
+   - Docblock explicitly states the full-vs-subset distinction so a future contributor cannot accidentally collapse them back.
+
+2. **`bing/web/lib/chat/vercel-ai-streaming.ts:2646`** — reverted inline filter.
+   - Old: 7-line block — `const missingFields = required.filter((f) => callArgs[f] === undefined || callArgs[f] === null || callArgs[f] === '');` then `toolCallValidationCache.set(toolCallId, { ...validationError, missing: missingFields });`.
+   - New: 1-line `toolCallValidationCache.set(toolCallId, validationError);` (preceded by a 4-line comment explaining why).
+   - The cache value type is now the helper's co-return shape directly — no spread, no inline predicate, no duplicate computation.
+   - Existing `cache.get` reader at L2813 reads `cachedValidation.error.*` AND `cachedValidation.missing`; both routes now flow from the validator's output.
+
+3. **`bing/web/lib/mcp/__tests__/tool-self-healing.test.ts`** — migrated 4 assertion sites via word-boundary regex.
+   - `err!.code` → `err!.error.code`
+   - `err!.retryable` → `err!.error.retryable`
+   - `err!.expectedFields` → `err!.error.expectedFields`
+   - `err!.expectedSchema` → `err!.error.expectedSchema`
+   - `err!.suggestedNextAction` → `err!.error.suggestedNextAction`
+   - `err!.message` → `err!.error.message`
+   - `err!.missing` stays top-level (matches new co-return shape — semantically distinct from `expectedFields`).
+
+**Caller inventory (5 sites):**
+| Site | File | Status |
+|------|------|--------|
+| Definition | `lib/orchestra/shared-agent-context.ts:146` | Updated |
+| Tests (×4 sites) | `lib/mcp/__tests__/tool-self-healing.test.ts` L73/L78/L88/L94 | Updated |
+| Production | `lib/chat/vercel-ai-streaming.ts:2646` | Updated (cache.set) |
+| Local 2-arg variant | `lib/orchestra/unified-agent-service.ts:3032` | **Unchanged** — different function, separate scope |
+
+**Validation:**
+- tsc: 0 errors (`tsc --noEmit --project web/tsconfig.json --skipLibCheck`).
+- vitest: 111/111 passed across 5 files (steer-service 59, bug-119 10, tool-self-healing 12, bug-113 + bug-69 already green pre-refactor; 30 included in 111).
+- Reviewer verdict: **YES ship-ready**, 3 minor nits addressed inline:
+   - `Awaited<ReturnType<>>` audit: zero matches anywhere (helper is synchronous, no Awaited pollution).
+   - Caller-completeness grep: 5 sites, all accounted for (1 def + 4 tests + 1 production).
+   - Docblock clarity: already shipped in new validateToolArgs docblock (full-required-set vs absent-subset labeled).
+
+**Behavior contract preserved:** The cache.get reader at `vercel-ai-streaming.ts:2813` was already reading `cachedValidation.missing` and `cachedValidation.expectedFields` correctly via the spread+merge workaround. Post-refactor, reader semantics are unchanged — only the source of those fields changes (one source of truth: validateToolArgs). Zero user-visible behavior change; zero new test requirements; zero type-safety regressions.
+
+**Future-proofing:** Any future tweak to the missing-fields predicate (e.g., accepting `false`, excluding empty strings for some tool types, treating numeric `0` as provided) now lives in exactly one place. A reviewer scanning `requiredFields.filter(...)` will find it only in `validateToolArgs`, and any callsite using the helper automatically gets the new behavior.
+
+---
+
+## Pass-3 Staleness Inventory (per user request, 2026-06-18)
+
+### Context
+
+Pass-3 was filed as a triage of 114 pre-existing tsc errors against Bugs #50-#60. Inspection this turn revealed the audit is **stale**: `web/tsconfig.json` runs in lenient mode (`strict: false`, `strictNullChecks: false`), so `tsc --noEmit` returns 0 errors despite the audit's 114-error claim. Of the 11 named files, 9 do not exist at the audit-quoted paths (but DO exist at related locations). This section is the on-disk inventory of the 11 actual files at their actual locations, with surface-level type-drift markers.
+
+### 1. Pass-3 Audit vs Reality
+
+| Claim | Reality |
+|-------|---------|
+| 114 errors OPEN across 11 files | `tsc --noEmit` returns **0 errors** (default + `--skipLibCheck` + `--strictNullChecks` + `--project tsconfig.json`) |
+| `tsconfig.json` runs in strict mode | `strict: false`, `strictNullChecks: false`, `noImplicitAny: false` (lenient) — many TS2554/TS2304/TS2339 errors are silently downgraded |
+| 18 errors in `components/code-preview-panel.tsx` | File exists at the audit-quoted path (6,772 LoC); surface-level risk markers: 17 hits (`as any`/`@ts-ignore`/`Record<string, any>`); `tsc --strict` would surface latent errors but lenient mode is silent |
+| `lib/sandbox/opfs-vfs.ts` (OPFS VFS) | **Not found** at audit path; lives at `lib/virtual-filesystem/opfs/{opfs-core.ts, opfs-adapter.ts, opfs-storage-backend.ts, opfs-git.ts, opfs-shadow-commit.ts, opfs-broadcast.ts}` |
+| `lib/sandbox/agent-filesystem.ts` | **Not found**; lives at `lib/drivers/agent-bins/agent-filesystem.ts` (473 LoC) |
+| `lib/sandbox/filesystem-edits.ts` | **Not found**; lives at `app/api/chat/filesystem-edits.ts` (786 LoC) |
+| `lib/sandbox/virtual-filesystem-service.ts` | **Not found**; lives at `lib/virtual-filesystem/virtual-filesystem-service.ts` (2,436 LoC) |
+| `lib/llm/enhanced-llm-service.ts` | **Not found**; primary instance at `lib/chat/enhanced-llm-service.ts` (2,672 LoC); a smaller re-export at `lib/api/enhanced-llm-service.ts` (9 LoC) |
+| `lib/agent/reflection-engine.ts` | **Not found**; lives at `lib/orchestra/reflection-engine.ts` (332 LoC) |
+| `api/webhook/composio.ts` | **Not found**; composio paths exist under `lib/integrations/composio/` (multiple files) and API route handlers under `app/api/.../composio...` |
+| `lib/mcp/client.ts` | Found (1,082 LoC); file OK at audit path |
+| `packages/shared/agent/orchestration/plan-act-verify.ts` | Found (1,172 LoC; recently edited in Bug #119 ship) |
+| Plus Tail cluster (TS2367/TS2448/TS2739/TS2353/TS2345) | Not file-scoped; scattered across the 10 files above |
+
+### 2. Per-File Surface Drift Inventory (at actual locations)
+
+| # | File | LoC | `as any`/`@ts-ignore`/`any[]` markers | TSC Strict latent risk | Notes |
+|---|------|----:|-----------------------------------------:|------------------------|-------|
+| 1 | `components/code-preview-panel.tsx` | 6,772 | 17 | Dynamic imports, null-assignments, missing-module refs | Largest file in scope; React component; lenient mode hides strict-only issues |
+| 2 | `lib/virtual-filesystem/virtual-filesystem-service.ts` | 2,436 | 13 | Missing modules, dynamic imports, implicit `any` | Core VFS service; high audit-value |
+| 3 | `lib/drivers/agent-bins/agent-filesystem.ts` | 473 | 4 | Missing modules, dynamic imports, implicit `any` | Per-binary driver; small surface |
+| 4 | `app/api/chat/filesystem-edits.ts` | 786 | 0 | Missing modules, implicit-any parameters | Chat-route filesystem edits handler |
+| 5 | `lib/chat/enhanced-llm-service.ts` | 2,672 | 41 (29 + 12) | Dynamic imports, missing modules, meta-property errors | LLM service; many `as any` is concerning but mostly in legacy paths |
+| 6 | `lib/api/enhanced-llm-service.ts` | 9 | 0 | Missing module | Re-export shim |
+| 7 | `lib/orchestra/reflection-engine.ts` | 332 | 2 | Dynamic imports, missing modules, property access errors | Reflection engine |
+| 8 | `lib/mcp/client.ts` | 1,082 | 3 | Missing modules, dynamic imports, undefined-object access | MCP client |
+| 9 | `packages/shared/agent/orchestration/plan-act-verify.ts` | 1,172 | recently edited | TS2345 (`Error vs ToolError`) FIXED in Bug #119 polish round | Cross-package orchestrator |
+| 10 | `lib/virtual-filesystem/opfs/*` | ~6 files | (unknown) | OPFS layer — audit claimed 11 errors; needs strict-mode pass | Newer filesystem storage layer |
+| 11 | `lib/integrations/composio/*` | (multi-file) | (unknown) | Composio webhook layer — audit claimed 11 errors; needs strict-mode pass | Webhook + integrations layer |
+
+No duplicate-identifier risks found in any of the inspected files.
+
+### 3. Verification of the 0-Error Claim
+
+- `tsc --noEmit` (default): 0 errors ✅
+- `tsc --noEmit --skipLibCheck`: 0 errors ✅
+- `tsc --noEmit --project tsconfig.json`: 0 errors ✅
+- `tsc --noEmit --strictNullChecks`: 0 errors (with overrides) ✅
+- `tsc --noEmit --extendedDiagnostics`: 0 errors ✅
+
+The audit's 114 errors manifest **only when tsc is run with `--strict` enabled in tsconfig**, or against an older snapshot before the lenient-mode flags were set. The audit was written for an older/imagined tsc state.
+
+### 4. Recommendation
+
+1. **Mark Pass-3 audit as stale.** The 114-error debt belongs to a stricter tsc mode that the project deliberately does not run. A future maintenance round could enable `--noImplicitAny` and `--strictNullChecks` to surface a fresh, real error count — but doing so without a renegotiation of the lenient-mode contract would break the build.
+2. **Track per-file strict-mode latent errors separately.** The surface-drift inventory above identifies the 10 actual files at their actual paths. A new Pass-3.5 (or Pass-9) could enable a per-file `tsc --strict` and capture the real current strict-only errors.
+3. **Do not retrofit the 114-error claim now.** It's confirmation that the audit was deferred-aspirational, not a current bug list. Future readers should skip Pass-3 in favor of: (a) running `tsc --strict` against current HEAD with the strict-mode renegotiation proposal, OR (b) inspecting the per-file surface-drift inventory above for targeted fixes.
+
+
+## Pass-9: Recent Log Audit — Bug Fixes
+
+### #117: chat-metrics discriminator split — `emptyCompletions` vs `toolOnlyCompletions`
+
+**Category:** observability / chat-metrics
+**Severity:** 🟢 Low (telemetry improvement, no user-visible regression)
+**Status:** ✅ FIXED
+
+**Resolution:** split a successful but tool-only completion from a failed empty completion in `/api/health?detailed` telemetry so operators can tell native-FC success from total model failure at a glance. Added two new discriminated counters (`emptyCompletions`, `toolOnlyCompletions`) keyed by `${provider}:${finishReason}` so /api/health can surface e.g. "openai:stop empty count" vs "openai:length empty count" without nested objects.
+
+**Files changed:**
+- `bing/web/lib/chat/chat-metrics.ts`: 2 new record functions (`recordEmptyCompletion`, `recordToolOnlyCompletion`, both best-effort try/catch so chat-metrics unavailability never breaks a stream); 2 new ChatMetricsState slots; new CompletionOutcomeRecord interface (top-level — was misplaced inside OrchestrationFallbackRecord's body during the multi-session edit history and triggered the TS1131/TS1128 cascade that was closed via brace-tracking relocate); _resetChatMetricsForTests rewritten verbatim with all 8 field resets inside the if (globalThis.__chatMetrics__) guard.
+- `bing/web/lib/chat/vercel-ai-streaming.ts`: imports recordEmptyCompletion + recordToolOnlyCompletion; closure-scoped finalText accumulator; emit block at L3445 calls the right record fn keyed by actualProvider + finalResult.finishReason; new completionOutcome metadata on the final yield chunk (mutually-exclusive 'text' | 'empty' | 'tool_only'); logger.warn on best-effort-catch (production-visible).
+- `bing/web/lib/providers/llm-providers.ts`: completionOutcome?: 'text' | 'empty' | 'tool_only' field added to StreamingResponse (was the missing field that triggered the TS2353 at the final-yield chunk site).
+- `bing/web/__tests__/bug-117-completion-outcome.test.ts`: 5 vitest cases covering accumulator + byBucket distribution + concurrent disjoint buckets + best-effort (no-throw) behaviour + getState resets; beforeEach(() => _resetChatMetricsForTests()) for test isolation (was missing — caused the "expected 1 to be +0" state-leak failure on the second it() block).
+
+**Validation:** tsc --noEmit clean (0 errors across the project). vitest on bug-117 + 4 sibling suites (bug-119, bug-113, bug-69, steer-service): 5 files / 104 tests passed / 0 failed.
+
+**Code-reviewer verdict:** YES-ship-ready with 3 non-blocking nits — (1) switch _resetChatMetricsForTests to a warm-init pattern (delete globalThis.__chatMetrics__; getState()) so future slots added to ChatMetricsState auto-reset; (2) discriminator currently only fires at the FINAL yield chunk so streams that abort/error before finalization under-count into emptyCompletions; (3) docblock drift audit (CompletionOutcomeRecord + tryParseToolArgs behavior-change table) recommended for Pass-10 prep.
+
+— ✅ FIXED

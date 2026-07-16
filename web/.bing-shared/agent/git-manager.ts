@@ -52,7 +52,7 @@ export class GitManager {
   async status(): Promise<GitStatusResult> {
     const result = await this.handle.executeCommand('git status --porcelain -b');
     if (!result.success) {
-      throw new Error(`Git status failed: ${result.output}`);
+      throw new Error(`Git status failed: ${result.output ?? 'unknown error'}`);
     }
 
     const lines = (result.output ?? '').split('\n');

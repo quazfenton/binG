@@ -157,7 +157,7 @@ describe('Desktop Integration Tests', () => {
       const binaryPath = path.join(workspaceRoot, 'test.png');
       await fs.writeFile(binaryPath, binaryContent);
       
-      const readContent = await fs.readFile(binaryPath);
+      const readContent = await fs.readFile(binaryPath) as Buffer;
       expect(readContent.equals(binaryContent)).toBe(true);
     });
 
@@ -211,7 +211,7 @@ describe('Desktop Integration Tests', () => {
       const binaryData = Buffer.from([0x00, 0x01, 0x02, 0x03]);
       await fs.writeFile(binaryPath, binaryData);
       
-      const readData = await fs.readFile(binaryPath);
+      const readData = await fs.readFile(binaryPath) as Buffer;
       expect(readData.equals(binaryData)).toBe(true);
     });
   });

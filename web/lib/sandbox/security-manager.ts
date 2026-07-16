@@ -49,7 +49,18 @@ export class SandboxSecurityManager {
   // expansion, subshells, arithmetic). Bug #81 — removal is safe because
   // DANGEROUS_COMMAND_PARTIALS blocks eval/source, and schema validation prevents
   // injection through tool arguments.
-  private static readonly SHELL_METADATA_CHARS = ['`'];
+  //
+  // Security model: This list is NOT a comprehensive metacharacter blocklist. Characters
+  // like ;, |, &, >, < are intentionally permitted because they are essential for
+  // legitimate multi-command sequences (e.g. "npm install && npm test", "cat file | grep foo").
+  // Defense-in-depth is provided by:
+  //   1. DANGEROUS_COMMAND_PARTIALS — blocks privilege escalation (sudo, su),
+  //      network exfiltration (curl, wget, nc), and eval-based injection.
+  //   2. ExecShellSchema validation — ensures well-formed command input.
+  //   3. Path containment (resolvePath) — prevents filesystem escape.
+  //   4. Tool-argument validation — all tool inputs pass through Zod schemas
+  //      that reject injection payloads before they reach the shell.
+  private static readonly SHELL_METADATA_CHARS = ['`', '$'];
 
 
   // Input size limits

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/init-db.js",
+    "lint:tsc:cascade": "tsc --noEmit > /tmp/tsc-cascade-out 2>&1; tsc_exit=$?; grep -E 'route\\.ts|auto-continue-helper\\.ts|llm-continuation\\.ts|sse-prompt-chunk\\.ts|unified-agent-service\\.ts' /tmp/tsc-cascade-out | head -60; rm -f /tmp/tsc-cascade-out; exit $tsc_exit",
     "dev": "next dev",
     "dev:ws": "tsx server.ts",
     "dev:standard": "node scripts/run-dev-mode.js standard",
@@ -68,7 +69,6 @@
     "@getbrevo/brevo": "^4.0.1",
     "@google/genai": "^1.0.0",
     "@google/generative-ai": "^0.14.0",
-    "hls.js": "^1.5.17",
     "@hookform/resolvers": "^3.9.1",
     "@langchain/anthropic": "^1.3.21",
     "@langchain/core": "^1.1.31",
@@ -85,6 +85,7 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@nangohq/frontend": "^0.69.7",
     "@nangohq/node": "^0.69.5",
+    "@novnc/novnc": "^1.7.0",
     "@opencode-ai/sdk": "^1.2.24",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.214.0",
@@ -143,6 +144,7 @@
     "ai": "^6.0.142",
     "anchorbrowser": "^0.16.3",
     "archiver": "^7.0.1",
+    "async-mutex": "0.5.0",
     "autoprefixer": "^10.4.20",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^11.1.2",
@@ -223,6 +225,7 @@
     "together-ai": "^0.5.0",
     "ts-morph": "^25.0.0",
     "tslib": "^2.8.1",
+    "vaul": "^0.9.6",
     "vm2": "^3.11.4",
     "web-tree-sitter": "^0.26.8",
     "webdav": "^5.8.0",
@@ -267,43 +270,5 @@
     "typescript-eslint": "^8.57.1",
     "unenv": "^1.10.0",
     "vitest": "^4.0.18"
-  },
-  "pnpm": {
-    "overrides": {
-      "node-forge": ">=1.3.2",
-      "qs": ">=6.14.1",
-      "@modelcontextprotocol/sdk": ">=1.25.2",
-      "form-data": ">=4.0.4",
-      "minimatch": ">=10.2.1",
-      "fast-xml-parser": ">=5.3.6",
-      "tar": ">=7.4.0",
-      "jsondiffpatch": ">=0.6.0",
-      "undici": ">=7.1.0",
-      "glob": ">=11.0.0",
-      "ioredis": "^5.4.1",
-      "bullmq>ioredis": "^5.4.1"
-    },
-    "onlyBuiltDependencies": [
-      "better-sqlite3",
-      "msgpackr-extract"
-    ],
-    "ignoredBuiltDependencies": [
-      "@smithery/cli",
-      "bufferutil",
-      "cpu-features",
-      "es5-ext",
-      "esbuild",
-      "protobufjs",
-      "sharp",
-      "ssh2",
-      "utf-8-validate"
-    ]
-  },
-  "resolutions": {
-    "fast-xml-parser": ">=5.3.6",
-    "next": ">=15.5.10"
-  },
-  "overrides": {
-    "elliptic": "^6.6.1"
   }
 }

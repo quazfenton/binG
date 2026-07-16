@@ -17,8 +17,39 @@
 
 import { execSchemaFile } from '@/lib/database/schema';
 import { createLogger } from '@/lib/utils/logger';
+// Tag better-sqlite3 binding-load failures with the same diagnostic taxonomy
+// used by storage/session-store.ts so the in-memory fallback log line states
+// WHY the binding failed, not just THAT it failed.
+import { classifySqliteFailure } from '@/lib/database/sqlite-failure';
 
 const logger = createLogger('ToolCallTracker');
+
+/**
+ * Dynamic-import wrapper around `better-sqlite3`. The previous code used a
+ * naked `require('better-sqlite3')` inside the async initializer — that works
+ * in vitest and in webpack-bundled output, but in pure-Next.js / turbopack ESM
+ * contexts `require` is undefined and the import throws ReferenceError before
+ * the binding can even fail to load. Dynamic `await import(...)` works in any
+ * ESM context (Node ESM, vitest, Next dev, Edge runtime).
+ *
+ * On failure emits a structured warn with `classifySqliteFailure(err)` (see
+ * storage/session-store.ts) so operators can tell apart an arch mismatch, a
+ * missing libc++, an ABI mismatch, or a missing module — not just a vague
+ * "better-sqlite3 unavailable" string.
+ */
+async function tryImportBetterSqlite(): Promise<any> {
+  try {
+    const mod = await import('better-sqlite3');
+    // better-sqlite3 is a CJS module — Node's ESM import wraps the default export.
+    return (mod as any).default ?? mod;
+  } catch (err) {
+    logger.warn(
+      'better-sqlite3 failed to load – falling back to in-memory storage',
+      classifySqliteFailure(err),
+    );
+    return null;
+  }
+}
 
 export interface ToolCallRecord {
   /** The model that made the tool call */
@@ -92,7 +123,13 @@ class ToolCallTracker {
           fs.mkdirSync(dbDir, { recursive: true });
         }
 
-        const Database = require('better-sqlite3');
+        const Database = await tryImportBetterSqlite();
+        if (!Database) {
+          // Wrapper already logged the structured warn; mark initialized so
+          // subsequent recordToolCall paths use the in-memory fallback.
+          this.initialized = true;
+          return;
+        }
         this.db = new Database(dbPath);
 
         // Enable WAL mode for concurrent reads
@@ -119,10 +156,68 @@ class ToolCallTracker {
           logger.warn('Failed to create tool_call_payloads table', e);
         }
 
+        // SEV-9 (2026-06-18 fix): Defensive CREATE TABLE IF NOT EXISTS for
+        // `tool_calls` mirroring the canonical definition in
+        // lib/database/schema/logging-schema.sql. The execSchemaFile call above
+        // SHOULD apply that schema, but in some runtime paths — e.g. when
+        // TOOL_CALL_DB_PATH points to a fresh `.data/tool-calls.db` outside
+        // the bundled cwd resolution root, when schema-version drift causes
+        // execSchemaFile to skip stale markers, or when the file lookup path
+        // is misaligned in dev — the `tool_calls` table is observably absent
+        // at query time, surfacing as
+        //   SqliteError: no such table: tool_calls
+        // and silently demoting telemetry to in-memory storage via the
+        // `SQLite query failed, using memory fallback` warn at line ~314.
+        // Mirror the exact pattern already used for `tool_call_payloads`
+        // (defensive CREATE alongside execSchemaFile) so this tracker
+        // guarantees tool_calls exists on its own when execSchemaFile's run
+        // is a no-op. Columns AND indexes are reproduced verbatim from
+        // logging-schema.sql so the existing SELECT/INSERT/DELETE statements
+        // in this file continue to match.
+        try {
+          this.db.prepare(`
+            CREATE TABLE IF NOT EXISTS tool_calls (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              model TEXT NOT NULL,
+              provider TEXT NOT NULL,
+              tool_name TEXT NOT NULL,
+              success INTEGER NOT NULL,
+              error TEXT,
+              timestamp INTEGER NOT NULL,
+              conversation_id TEXT,
+              tool_call_id TEXT
+            )
+          `).run();
+
+          this.db.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_model
+              ON tool_calls(provider, model, timestamp)
+          `).run();
+          this.db.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_timestamp
+              ON tool_calls(timestamp)
+          `).run();
+          this.db.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_tool_calls_dedup
+              ON tool_calls(tool_call_id) WHERE tool_call_id IS NOT NULL
+          `).run();
+        } catch (e) {
+          logger.warn('Failed to create tool_calls defensive schema', e);
+        }
+
         this.initialized = true;
         logger.info('Tool call tracker initialized (SQLite)');
       } catch (error) {
-        logger.warn('better-sqlite3 unavailable, using in-memory fallback', error);
+        // The dynamic import above succeeded but `new Database(dbPath)` or
+        // schema setup threw. Classify with the same diagnostic taxonomy so
+        // operators see WHY the SQLite path failed (locked DB, missing dir,
+        // schema mismatch, missing table) and not just a generic error.
+        // Distinct from the binding-load failure above, which the wrapper
+        // already surfaced as a separate warn.
+        logger.warn(
+          'SQLite init failed after import – falling back to in-memory storage',
+          classifySqliteFailure(error),
+        );
         this.initialized = true; // Mark as initialized so we use memory fallback
       }
     })();

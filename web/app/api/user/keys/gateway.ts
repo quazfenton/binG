@@ -9,10 +9,30 @@ import { createLogger } from '@/lib/utils/logger';
 const log = createLogger('UserKeys');
 
 // SECURITY: Fail-closed - require JWT_SECRET to be set
+// SEV-12 (2026-06-18 fix): the throw was firing at module-load regardless of
+// NODE_ENV, blocking the entire /api/user/keys route in local dev where the
+// operator hasn't set JWT_SECRET (e.g. iterating without auth). The error
+// message correctly said "in production" but the guard was unconditional.
+// Now: production OR SESSION_STORE_REQUIRE_JWT_SECRET=1 forces the throw;
+// elsewhere we emit a loud WARN at module-load and continue — identical to
+// the prior dev behaviour (which used to surface as `[UserKeys] JWT_SECRET
+// missing — dev fallback active` at first request time).
 const JWT_SECRET = process.env.JWT_SECRET;
+const requireJwtSecretEnv = process.env.SESSION_STORE_REQUIRE_JWT_SECRET;
+const shouldHardFailOnMissingJwt =
+  process.env.NODE_ENV === 'production' ||
+  (requireJwtSecretEnv != null && requireJwtSecretEnv !== '0' && requireJwtSecretEnv !== 'false');
 if (!JWT_SECRET) {
-  log.error('CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.');
-  throw new Error('JWT_SECRET is required in production. Set this environment variable before deploying.');
+  if (shouldHardFailOnMissingJwt) {
+    log.error('CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.');
+    throw new Error('JWT_SECRET is required in production. Set this environment variable before deploying.');
+  }
+  // Non-production: loud warn at module-load; downstream code uses
+  // verifyToken → jwt.verify against an undefined secret, which will throw
+  // at first request — visible to the dev as a 401 + WARN log line, not as
+  // a bricked module load.
+  log.warn('⚠️  JWT_SECRET not configured. /api/user/keys will return 401 until JWT_SECRET is set. ' +
+    'Set NODE_ENV=production or SESSION_STORE_REQUIRE_JWT_SECRET=1 to enforce strict-fail.');
 }
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;

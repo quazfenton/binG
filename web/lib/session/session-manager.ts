@@ -188,11 +188,74 @@ export class SessionManager {
    *  OPENCODE_HEAP_ALERT_MB. */
   private readonly heapAlertMb: number;
 
+  // -------------------------------------------------------------------------
+  // Diagnostic counters — surfaced in the heartbeat so an operator can
+  // disambiguate `sessions: 0` (correctly empty when no chats attempted)
+  // from `sessions: 0` (chat sessions being created on a different
+  // SessionManager instance because Next.js HMR leaked an old one).
+  // If you see `${instanceId}` change across heartbeats while uptimeMs is
+  // steady, you have leaked singletons — count go up over time, fix with
+  // module-reload cleanup. If `attempts` stays at 0, no chat route is
+  // hitting this instance at all.
+  // -------------------------------------------------------------------------
+  private readonly instanceId: string = Math.random().toString(36).substring(2, 8);
+  private createAttempts: number = 0;
+
   constructor() {
     this.maxSessionsPerUser = parseInt(process.env.OPENCODE_MAX_SESSIONS_PER_USER || '10', 10);
     this.defaultTimeout = parseInt(process.env.OPENCODE_DEFAULT_TIMEOUT || '300000', 10);
     this.enableQuotaEnforcement = process.env.OPENCODE_ENFORCE_QUOTA === 'true';
     this.heapAlertMb = parseInt(process.env.OPENCODE_HEAP_ALERT_MB || '1200', 10);
+
+    // Next.js HMR re-evaluates this module in-place on every save and runs
+    // `export const sessionManager = new SessionManager()` again, so a second
+    // instance is created with its own private `sessions` Map and its own
+    // setInterval — but the FIRST instance's intervals are never cleared.
+    // The two instances both keep firing heartbeats with `globalThis.
+    // processStartTime` (set via ??= to the first import), so uptimeMs
+    // looks continuous, but chat-route calls land on whichever singleton
+    // was exported last — typically the orphan, leaving the visible
+    // instance reporting sessions: 0 forever.
+    //
+    // Reclaim: track the live instance on globalThis, and on each
+    // construction synchronously clear the prior's timers so at most ONE
+    // heartbeat + ONE cleanup timer is in flight. The orphan's
+    // `this.sessions` Map is unreachable (all callers go through the
+    // `sessionManager` export's live binding), so we deliberately skip
+    // shutdown()'s async destroySession / captureShutdownHeapSnapshot
+    // work — that would otherwise pollute ./heap-snapshots/ on every save.
+    //
+    // SKIPPED under NODE_ENV=test because constructing two SessionManagers
+    // within the same vitest test file is a normal pattern (one per test
+    // case) and reclamation would destroy the first instance's state mid-
+    // test, breaking assertions. Reclamation is opt-in for any non-test
+    // env that hot-reloads this module.
+    if (process.env.NODE_ENV !== 'test') {
+      const prior = (globalThis as unknown as { __sessionManagerInstance__?: SessionManager }).__sessionManagerInstance__;
+      if (prior && prior !== this) {
+        logger.warn('Reclaiming timers from leaked prior SessionManager instance (Next.js HMR)', {
+          priorInstanceId: prior.instanceId,
+          newInstanceId: this.instanceId,
+          priorAttempts: prior.createAttempts,
+        });
+        // Synchronous clearInterval so the prior's heartbeat/cleanup stop
+        // firing IMMEDIATELY, not after an async tick boundary.
+        if (prior.heartbeatTimer) {
+          clearInterval(prior.heartbeatTimer);
+          prior.heartbeatTimer = undefined;
+        }
+        if (prior.cleanupTimer) {
+          clearInterval(prior.cleanupTimer);
+          prior.cleanupTimer = undefined;
+        }
+        // Intentionally do NOT call prior.shutdown() here — it would
+        // (a) await destroySession per tracked session, reaching
+        // sandboxServiceBridge, (b) write a heap-snapshot file on every
+        // HMR, and (c) take seconds to flush. The orphan is unreachable;
+        // letting GC reclaim it is sufficient.
+      }
+    }
+    (globalThis as unknown as { __sessionManagerInstance__?: SessionManager }).__sessionManagerInstance__ = this;
 
     this.startCleanupTimer();
     this.startHeartbeat();
@@ -210,6 +273,7 @@ export class SessionManager {
     conversationId: string,
     config: SessionConfig = {} as SessionConfig,
   ): Promise<Session> {
+    this.createAttempts += 1;
     const key = this.getSessionKey(userId, conversationId);
 
     // Return existing session if available and healthy
@@ -935,9 +999,11 @@ export class SessionManager {
       }
 
       logger.info('Heartbeat — process alive', {
+        instanceId: this.instanceId,
         uptimeMs: Date.now() - globalThis.processStartTime,
         sessions: stats.totalSessions,
         activeSessions: stats.activeSessions,
+        attempts: this.createAttempts,
         memoryMb,
       });
     }, 60_000);

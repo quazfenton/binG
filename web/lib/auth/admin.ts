@@ -45,7 +45,7 @@ export function isAdminAccessConfigured(): boolean {
  */
 function checkDbRolesExist(): boolean {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return false;
     const row = db.prepare('SELECT 1 FROM user_roles WHERE is_active = TRUE LIMIT 1').get();
@@ -69,7 +69,7 @@ export function isEnvAdminConfigured(): boolean {
  */
 function checkDbRole(userId: string, role: string = 'admin'): boolean {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return false;
 
@@ -131,7 +131,7 @@ export function logAdminAction(params: {
   userAgent?: string;
 }): void {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return;
 
@@ -169,7 +169,7 @@ export interface RoleAssignment {
  */
 export function grantRole(params: RoleAssignment): { success: boolean; error?: string } {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       return { success: false, error: 'Database not available' };
@@ -204,7 +204,7 @@ export function grantRole(params: RoleAssignment): { success: boolean; error?: s
  */
 export function revokeRole(userId: string, role: string, resource?: string): { success: boolean; error?: string } {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) {
       return { success: false, error: 'Database not available' };
@@ -235,7 +235,7 @@ export function revokeRole(userId: string, role: string, resource?: string): { s
  */
 export function getUserRoles(userId: string): Array<{ role: string; resource: string | null; grantedBy: string; grantedAt: string }> {
   try {
-    const { getDatabase } = require('@/lib/database/connection');
+    const { getDatabase } = require('@/lib/database/connection-shim');
     const db = getDatabase();
     if (!db) return [];
 

@@ -518,6 +518,9 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
             this.emit('job:max-executions', job.jobId);
             // P0-2 fix: Clean up dedupLookup when job naturally completes
             this.cleanupDedupEntry(job);
+            // Bug #2 fix: route the jobs-map removal through safeDeleteJob()
+            // (single source of truth for the status-transition+delete pair).
+            this.safeDeleteJob(job.jobId, 'completed');
             break;
           }
 
@@ -534,6 +537,9 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
                 this.emit('job:stop-condition', job.jobId, job.stopCondition);
                 // P0-2 fix: Clean up dedupLookup when job naturally completes
                 this.cleanupDedupEntry(job);
+                // Bug #2 fix: centralize deletion via safeDeleteJob() —
+                // status flip + map removal in a single synchronous block.
+                this.safeDeleteJob(job.jobId, 'completed');
                 break;
               }
             } catch (conditionError: any) {
@@ -810,7 +816,12 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     // P0-2 fix: Clean up dedup lookup entry
     this.cleanupDedupEntry(job);
 
-    this.jobs.delete(jobId);
+    // Bug #2 fix: route the jobs-map removal through safeDeleteJob() so the
+    // status='stopped' transition + map deletion happen in a single
+    // synchronous block. Closes the TOCTOU window that the codereview
+    // flagged (race between this deletion and concurrent stopJob/pauseJob
+    // queries reading the map at the same microtask tick).
+    this.safeDeleteJob(jobId, 'stopped');
     this.emit('job:stopped', jobId, reason);
 
     logger.info('Background job stopped locally', {
@@ -967,6 +978,41 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
   }
 
   /**
+   * P2: Atomic job cleanup (Bug #2 fix). Centralizes the
+   * `this.jobs.delete(jobId)` call sites so the status flip + map removal
+   * happen in a single synchronous block. Single source of truth for all
+   * jobs.delete paths (executeJobLoop's max-executions branch, its
+   * stop-condition branch, and stopJob). Concurrent readers (stopJob /
+   * pauseJob / listJobs / getJob) now see a consistent state transition:
+   * the job is briefly present with status='completed'/'stopped' before
+   * the map entry disappears, eliminating the prior TOCTOU window where
+   * a reader could call `getJob(jobId)` then lose the reference mid-read.
+   *
+   * Note: Single-threaded JS doesn't allow true atomic mutations across
+   * microtask boundaries. This helper minimizes the window — concurrent
+   * reads through `Array.from(this.jobs.values())` snapshots at any tick.
+   */
+  private safeDeleteJob(jobId: string, finalStatus: 'completed' | 'stopped' | 'failed'): void {
+    const job = this.jobs.get(jobId);
+    if (!job) return;
+    job.status = finalStatus;
+    this.jobs.delete(jobId);
+    // Single-source-of-truth: also drop the dedupLookup entry so callers don't
+    // have to remember to call cleanupDedupEntry manually. Removal paths that
+    // use only safeDeleteJob will no longer leak dedupLookup entries.
+    //
+    // SEV-12 pre-existing tsc TS2345 (`Argument of type 'string' is not assignable to parameter of type 'EnhancedJob'`) fix:
+    // pass the cached job reference (still has .dedupId) instead of jobId.
+    try {
+      this.cleanupDedupEntry(job);
+    } catch (err) {
+      // Surface real errors instead of swallowing — caller should be able to
+      // observe dedup-cleanup failures even though job-deletion succeeded.
+      console.warn('[enhanced-background-jobs] cleanupDedupEntry failed inside safeDeleteJob', { jobId, error: String(err) });
+    }
+  }
+
+  /**
    * Add a failed job to the Dead Letter Queue.
    * P0-3 fix: Retain failed jobs for inspection and replay instead of discarding.
    */
@@ -988,9 +1034,17 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    * P0-2 fix: Prevents memory leak from stale dedupLookup entries accumulating
    * in long-running processes.
    */
-  private cleanupDedupEntry(job: EnhancedJob): void {
-    if (job.dedupId) {
-      this.dedupLookup.delete(job.dedupId);
+  private cleanupDedupEntry(jobOrDedupId: EnhancedJob | string): void {
+    // SEV-12 widen: callers may now pass either an EnhancedJob reference OR
+    // a raw dedupId string. The typeof discriminant below unifies both paths
+    // while preserving the original "delete only if dedupId is set" semantics.
+    // runtime: typeof check is cheap; the string fallback covers future
+    // boxed-String-from-app generic APIs.
+    const dedupId = typeof jobOrDedupId === 'string'
+      ? jobOrDedupId
+      : jobOrDedupId.dedupId;
+    if (dedupId) {
+      this.dedupLookup.delete(dedupId);
     }
   }
 

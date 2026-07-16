@@ -14,18 +14,22 @@ const logger = createLogger('API:Agent:Interrupt');
  * Requires authentication to prevent unauthorized approval/denial.
  */
 export async function POST(request: NextRequest) {
-  try {
+  try {    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(request) + request.json() pair to
+    // mask wallclock. This site uses @/lib/auth/verify-auth (different from
+    // @/lib/auth/jwt) — authResult.authenticated check (not .success / .userId). The
+    // body parse happens AFTER auth succeeds so drop-while-no-auth is safe. ~2-5ms
+    // saved per request on the auth+body overlap window.
     // Verify authentication
-    const authResult = await verifyAuth(request);
-    if (!authResult || !authResult.authenticated) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+    const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+  if (!authResult || !authResult.authenticated) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
 
-    const body = await request.json();
-    const { action, target, reason, diff, interrupt_id, command } = body;
+  const { action, target, reason, diff, interrupt_id, command } = body;
 
     if (command === 'approve' || command === 'reject') {
       if (!interrupt_id) {

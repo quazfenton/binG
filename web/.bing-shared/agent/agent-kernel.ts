@@ -872,12 +872,13 @@ export class AgentKernel extends EventEmitter {
    * Run Nullclaw agent (messaging, automation)
    */
   private async runNullclawAgent(agent: Agent, workPayload?: unknown): Promise<unknown> {
-    let nullclaw: { isNullclawAvailable: () => boolean; executeNullclawTask: (...args: unknown[]) => Promise<unknown> };
+    let nullclawModule: typeof import('./nullclaw-integration');
     
     try {
-      nullclaw = await import('./nullclaw-integration');
+      nullclawModule = await import('./nullclaw-integration');
+      const { isNullclawAvailable, executeNullclawTask } = nullclawModule;
       
-      if (!nullclaw.isNullclawAvailable()) {
+      if (!isNullclawAvailable || !isNullclawAvailable()) {
         logger.warn('Nullclaw not available, using fallback');
         return this.runDefaultAgent(agent, workPayload);
       }
@@ -889,9 +890,11 @@ export class AgentKernel extends EventEmitter {
       }
       const taskType = payload.taskType || 'automate';
       const description = payload.description || agent.config.goal;
-      const params = payload.params || {};
+      const params = (typeof payload.params === 'object' && payload.params !== null && !Array.isArray(payload.params) && !(payload.params instanceof Date) && !(payload.params instanceof RegExp))
+        ? payload.params
+        : {};
 
-      const result = await nullclaw.executeNullclawTask(
+      const result = await executeNullclawTask(
         taskType as 'message' | 'browse' | 'automate' | 'api' | 'schedule',
         description,
         params,

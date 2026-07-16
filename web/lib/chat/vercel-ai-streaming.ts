@@ -29,11 +29,30 @@ import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
 import { recordCall } from './llm-provider-health';
+// PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
+
+// PR-W -- DRY helper consumed at the success-return reset pair.
+import { maybeResetBothTrackers } from '../orchestra/provider-530-tracker';
+// PR-E: 5xx success-side reset paired at the two PR-C success-sites.
+
 // Pass-2 cross-cutting theme: record mid-stream stalls (TTFT/idle timeout)
 // so the degradation chain shows the silent failure that contributed to
 // the user reprompting. sessionId is best-effort — not always available
 // inside the streaming generator.
 import { recordDegradation } from '@/lib/observability/degradation-tracker';
+// Pass-8 [FC-GATE seam-cleanup] followup (b) extended: adopt the unified
+// FC-GATE-0-calls detector at the Vercel-AI finish site (non-CLI path)
+// so the [FC-GATE-ZERO-CALLS] run.log marker fires from BOTH the CLI-binary
+// path (enhanced-llm-service.ts streamWithCLIBinary) AND the Vercel-AI SDK
+// path. Single source of truth for marker + field naming.
+import {
+  wireFCGateZeroCallsSteer,
+  emitFCGateZeroCallsLog,
+  // Bug #113 (Pass-8) deferred end-to-end adoption: wire
+  // wireMissingRequiredArgsSteer at the _recoveryHint injection
+  // site so missing-required-field steers fire in production.
+  wireMissingRequiredArgsSteer,
+} from '../orchestra/steer-service';
 
 import { getProviderForModel } from './openai-compat-wrapper';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
@@ -44,9 +63,101 @@ import { recordToolCall, shouldForceTextMode } from '../tools/tool-call-telemetr
 // surfaces how often the LLM silently dropped all tools. recordSteerInjected
 // is best-effort — if chat-metrics is unavailable (e.g. in a unit test that
 // doesn't import it), the optional-chained call is a no-op.
-import { recordSteerInjected } from './chat-metrics';
+import {
+  recordSteerInjected,
+  // Bug #119 (Pass-8 audit) — defensive JSON.parse metric recorder,
+  // called from `tryParseToolArgs` below at every `JSON.parse(raw)` site.
+  recordInvalidJsonFallback,
+  // Bug #117 (Pass-9 audit) — final-shape discriminator. Bumped at
+  // stream finalization (see comment block above the final yield chunk)
+  // so /api/health can surface tool-only-completion vs empty-completion
+  // distinct from text responses. Mutually-exclusive switch.
+  recordEmptyCompletion,
+  recordToolOnlyCompletion,
+} from './chat-metrics';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Chat:Streaming');
 import { getModelsForPurpose } from './model-capability-registry';
 import { isKnownGoodFC, shouldStripTools, getTextModeInstructions } from '../llm-compat';
+
+// Bug #3 (Pass-8): FC-GATE positive cache — records models that have successfully
+// used tool calls. When supportsFC is unknown but a model has a fresh positive
+// cache entry, we skip the expensive two-phase strategy and go directly to
+// tool-calling mode. Cache is cleared on 429/rate-limit errors since provider
+// rotation may change FC support. Persisted on globalThis for hot-reload survival.
+/**
+ * Bug #119 (Pass-8 audit) — defensive tool-args JSON.parse wrapper.
+ *
+ * Why a wrapper (vs inline `try { return JSON.parse(raw); } catch { return {}; }`):
+ *   - The 4 inline sites did NOT log invalid-JSON events. Bad inputs were
+     silently coerced to `{}`, so /api/health surfaced no signal and run.log
+     grep returned 0 — meaning operators couldn't tell when an upstream
+     provider degraded to malformed JSON.
+   - Consumer contract is preserved: still returns `{}` on failure so the
+     downstream tool-args dispatcher keeps working with sensible defaults.
+   - Bumps `chatMetrics.invalidJsonFallbacks` keyed by source so /api/health
+     can surface per-callsite counts.
+ *
+ * **Behavior change vs. the previous inline catches** — review this table
+ * before modifying the helper, because any downstream consumer that branches
+ * on the parse-result shape (rather than treating the return as opaque args)
+ * will see a different value than at the old inline sites. The five cases are:
+ *
+ * | # | Input shape                       | Old (inline) | New (this helper)                                         |
+ * |---|-----------------------------------|--------------|-----------------------------------------------------------|
+ * | 1 | `JSON.parse` throws (malformed)   | return `{}`  | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ * | 2 | `JSON.parse` returns a plain obj  | return obj   | return obj  (NO metric bump — valid args)                  |
+ * | 3 | `JSON.parse` returns an array     | return arr   | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ * | 4 | `JSON.parse` returns `null`       | return null  | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ * | 5 | `JSON.parse` returns a primitive  | return val   | return `{}` + bump `invalidJsonFallbacks[source]++`       |
+ *
+ * The metric bump is keyed by the `source` argument (e.g. `tool-result-input`,
+ * `tool-call-args`, `text-mode-extract`) so /api/health surfaces per-callsite
+ * counts. Cases 3–5 are tightened vs. the old inline catches because arrays,
+ * null, and primitives are NEVER valid tool-call args; coercing them silently
+ * to `{}` was the documented behavior, but it now produces a metric row so
+ * operators can detect a provider that started returning shaped JSON instead
+ * of an args object.
+ *
+ * @param raw — the suspected JSON string (typically from a tool-args
+   cache or chunk.input).
+ * @param source — short caller identifier for per-source metric bucketing.
+ * @returns parsed Record on success, or `{}` on parse failure (matches
+   previous behavior, just now instrumented).
+ */
+export function tryParseToolArgs(
+  raw: string,
+  source: string,
+): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    // JSON parsed but is e.g. an array, null, or primitive — treat as
+    // unusable for tool-args. Still bump the metric so the operator sees it.
+    recordInvalidJsonFallback(source + '.non-object');
+    return {};
+  } catch (err) {
+    recordInvalidJsonFallback(source);
+    return {};
+  }
+}
+
+const _fcGatePositiveCache = new Map<string, { confirmedAt: number; provider: string }>();
+declare global { var __fcGatePositiveCache__: Map<string, { confirmedAt: number; provider: string }> | undefined; }
+const fcGatePositiveCache = globalThis.__fcGatePositiveCache__ ?? (globalThis.__fcGatePositiveCache__ = _fcGatePositiveCache);
+
+export function recordFCGatePositive(provider: string, modelName: string): void {
+  const key = `${provider}/${modelName}`;
+  fcGatePositiveCache.set(key, { confirmedAt: Date.now(), provider });
+}
+
+export function clearFCGateCache(provider: string, modelName: string): void {
+  const key = `${provider}/${modelName}`;
+  fcGatePositiveCache.delete(key);
+}
 
 /**
  * Tool execution context for Vercel AI SDK tools
@@ -179,29 +290,23 @@ The previous attempt(s) may have failed due to: malformed arguments, missing req
  * and killed the agent.
  *
  * The fix inverts the priority:
- *   1. `_recoveryHint` presence → success (the injector set it on the
- *      success path with a non-fatal recovery hint; treat as positive).
- *   2. `success === true`      → success (source of truth, even when
+ *   1. `success === true`      → success (source of truth, even when
  *      `error` is explicitly `null`).
- *   3. `success === false`     → failure (use the legacy error extraction).
- *   4. Legacy fallback (no `success` field): truthy `error` → failure,
+ *   2. `success === false`     → failure (use the legacy error extraction).
+ *      `_recoveryHint` is appended to the error message, NOT used to
+ *      reclassify a failure as success.
+ *   3. Legacy fallback (no `success` field): truthy `error` → failure,
  *      otherwise → success.
  *
  * Returns a structured result so callers can both log the outcome AND
  * forward the original error message when the tool did actually fail.
  */
 export type ToolResultClassification =
-  | { isFailure: false; reason: 'success_true' | 'recovery_hint' | 'no_error_field' }
+  | { isFailure: false; reason: 'success_true' | 'no_error_field' }
   | { isFailure: true; reason: 'success_false' | 'error_string' | 'error_object' | 'unknown_shape'; errorMsg: string };
 
 export function classifyToolResult(toolResult: any): ToolResultClassification {
-  // Priority 1: _recoveryHint is a positive signal — even on success===false,
-  // the injector attached a recovery hint meaning the executor has a non-fatal
-  // recoverable path the LLM can use on the next turn.
-  if (toolResult?._recoveryHint) {
-    return { isFailure: false, reason: 'recovery_hint' };
-  }
-  // Priority 2: success:true is the source of truth, even when error is
+  // Priority 1: success:true is the source of truth, even when error is
   // explicitly null. Many tools (bash_execute, etc.) return
   // { success: true, output, exitCode, error: null } on success.
   if (toolResult?.success === true) {
@@ -440,7 +545,7 @@ export const STREAM_TIMEOUTS = {
   // Default 15s — Phase 2 is supposed to be a quick "re-parse the same
   // content as text" retry, not a full second completion. Per-model
   // overrides live in MODEL_SERVER_TIMEOUT_OVERRIDES.phase2MaxDurationMs.
-  phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '15000', 10),
+  phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '600000', 10),
   // Bug #13 (Phase 1 text-length gate): if Phase 1 already produced more
   // than this many chars of text in prose, the model is clearly answering
   // in prose (not trying to call tools). Re-streaming in Phase 2 would
@@ -448,8 +553,28 @@ export const STREAM_TIMEOUTS = {
   // and let the text-mode parser extract any file edits from the
   // existing textContent (or just return Phase 1's response as-is).
   // Default 10K chars (~2K tokens) — a full answer in prose is usually <5K chars.
-  phase1TextCharsSkipPhase2: parseInt(process.env.LLM_STREAM_PHASE1_TEXT_CHARS_SKIP_PHASE2 || '10000', 10),
+
 } as const;
+
+/**
+ * PR-A stream-timer finalize guard.
+ *
+ * When true (default ON), the `streamWithVercelAI` async generator wraps its
+ * OUTER try/catch in a `finally` clause that clears the four timing primitives
+ * (`ttftTimeoutId`, `hardDeadlineTimeoutId`, `thinkPingIntervalId`,
+ * `idleTimeoutId`) on every exit path — normal completion, thrown error,
+ * AbortError, or explicit `return` from inside the catch block.
+ *
+ * Without this guard, the think-ping `setInterval` and the pending idle
+ * `setTimeout` leak when the generator exits via a path that doesn't reach the
+ * inner `finally` at line ~3049 (e.g., the `Responses API` openrouter fallback
+ * `return`, a thrown non-AbortError from `streamText`, or any path inside the
+ * OUTER catch that returns early).
+ *
+ * Operators can disable by setting `ENABLE_STREAM_TIMER_FINALIZE=0`. The
+ * effect is purely a leak fix; no observable streaming behavior changes.
+ */
+const STREAM_TIMER_FINALIZE_ENABLED = process.env.ENABLE_STREAM_TIMER_FINALIZE !== '0';
 
 /**
  * Bug #104 (Pass-7 audit) — per-model server-side timeout overrides.
@@ -919,6 +1044,13 @@ export async function preflightProviderHealthCheck(
     // Can't determine base URL — assume reachable (don't block)
     // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
     recordCall(provider, true, 0);
+    // PR-E: mirror enhanced-llm-service.ts:1434 — pair the 5xx success-reset
+    // alongside the 530 reset at each PR-C wire-up site. Both tracks are
+    // independently blacklisted and independently recoverable; a single
+    // provider-level success event should clear BOTH pending blacklists so
+    // the next provider selection does not re-block on a stale one.
+    // PR-W -- single-call both-trackers reset (replaces the manual pair).
+    maybeResetBothTrackers(provider);
     return { reachable: true, latencyMs: 0 };
   }
 
@@ -942,6 +1074,13 @@ export async function preflightProviderHealthCheck(
     clearTimeout(timeoutId);
     // Self-correcting: feeds the llm-provider-health rolling window so next request can derank this provider if it's been bad.
     recordCall(provider, true, Date.now() - startTime);
+    // PR-E: mirror enhanced-llm-service.ts:1434 — pair the 5xx success-reset
+    // alongside the 530 reset at each PR-C wire-up site. Both tracks are
+    // independently blacklisted and independently recoverable; a single
+    // provider-level success event should clear BOTH pending blacklists so
+    // the next provider selection does not re-block on a stale one.
+    // PR-W -- single-call both-trackers reset (replaces the manual pair).
+    maybeResetBothTrackers(provider);
     return { reachable: true, latencyMs: Date.now() - startTime };
   } catch {
     clearTimeout(timeoutId);
@@ -1058,7 +1197,7 @@ function getReasoningTag(provider: string): { tagName: string; separator?: strin
  *
  * Starts iterating the primary generator. If no chunk arrives within
  * `speculativeMs`, a fallback generator is created (from `createFallback`)
- * and the two are raced — the first to yield a chunk wins.
+ * and the two are raced -- the first to yield a chunk wins.
  *
  * The slower stream's underlying connection is aborted immediately so
  * API credits are not wasted on the loser.
@@ -1067,6 +1206,35 @@ function getReasoningTag(provider: string): { tagName: string; separator?: strin
  * when the fallback wins, allowing the caller to update metadata.
  * `onLoser` is called with timing info for the loser, allowing the caller
  * to record telemetry (e.g. model-ranker failure, latency tracking).
+ *
+ * PR-T (Stage 3 R5 fix) -- three sub-bugs closed in this rewrite:
+ *
+ *   1. Speculative-race setTimeout leak: pre-PR-T, the speculative-timer
+ *      was NEVER cleared when primaryIt.next() won the race. The timer
+ *      remained alive in Node's queue until speculativeMs elapsed -- a
+ *      per-request setTimeout leak. Under load this accumulates with the
+ *      request rate (one orphaned timer per /api/chat call). Fix: capture
+ *      the timer handle in outer scope and clear it via .finally()
+ *      chained on the race promise (resolves on either winner path).
+ *
+ *   2. Secondary-race NO TIMEOUT ARM (P0 hang): pre-PR-T, the secondary
+ *      race (primary.next vs. fallback.next) had no timeout arm. If BOTH
+ *      streams stalled indefinitely, the secondary race hung forever.
+ *      This is the ninerouter-class scenario that PR-X / PR-R fixed in
+ *      coordinateConcurrentFallback -- legacy `withSpeculativeFallback`
+ *      had the same hole and was still in the hot path for some callers.
+ *      Fix: add a per-fallback hard-deadline timer arm (speculativeMs * 2,
+ *      mirroring PR-X's per-fallback timeout) to the secondary race. When
+ *      the deadline fires before either side emits a chunk, both streams
+ *      are aborted and the generator returns. The caller decides what to
+ *      do next (e.g. a higher-layer fallback in coordinateConcurrentFallback).
+ *
+ *   3. Missing user-abort arm in BOTH races: pre-PR-T, the only signal-
+ *      abort check was INSIDE the post-race generator loops, leaving a
+ *      stall window between the timeout firing and the next iteration of
+ *      the loop's signal check. Fix: both races now include a user-abort
+ *      arm that yields `{type:'aborted'}`. Resolves the user's stop click
+ *      within the same microtask as the abort, dropping partial data.
  */
 async function* withSpeculativeFallback<T>(
   primaryGen: AsyncGenerator<T>,
@@ -1078,7 +1246,7 @@ async function* withSpeculativeFallback<T>(
      * - abort: function to abort the fallback stream (called if primary wins)
      */
     createFallback: () => { gen: AsyncGenerator<T>; abort: () => void };
-    /** Called when fallback wins — should provide a way to abort the primary */
+    /** Called when fallback wins -- should provide a way to abort the primary */
     abortPrimary: () => void;
     onFallbackWin?: () => void;
     /**
@@ -1103,90 +1271,212 @@ async function* withSpeculativeFallback<T>(
   let speculativeStartTime = 0;
   let fallbackCreateTime = 0;
 
-  // Race: first primary chunk vs speculative timeout
-  const first = await Promise.race([
-    primaryIt.next().then(r => {
-      firstPrimaryResult = r;
-      return { type: 'chunk' as const, value: r };
-    }),
-    new Promise<{ type: 'timeout' }>(resolve =>
-      setTimeout(() => {
-        speculativeStartTime = Date.now();
-        resolve({ type: 'timeout' });
-      }, speculativeMs)
-    ),
-  ]);
+  // PR-T timer-handle tracking -- see the function-level JSDoc sub-bug 1.
+  let speculativeTimer: NodeJS.Timeout | undefined;
+  let secondaryTimer: NodeJS.Timeout | undefined;
+  let speculativeAbortListener: (() => void) | undefined;
+  let secondaryAbortListener: (() => void) | undefined;
 
-  if (first.type === 'timeout') {
-    // Primary was silent for speculativeMs — start fallback
-    let fallbackResult: { gen: AsyncGenerator<T>; abort: () => void };
-    try {
-      fallbackResult = createFallback();
-      fallbackCreateTime = Date.now();
-    } catch {
-      // Fallback setup failed — continue with primary
-      if (firstPrimaryResult && !firstPrimaryResult.done) {
-        yield firstPrimaryResult.value;
+  // Top-level try/finally for defensive cleanup of any race-resolved-
+  // but-stream-still-iterating path (rare exception throws, generator's
+  // post-race loops throwing). The .finally() chained on each race promise
+  // covers the normal resolve/reject paths; this catch handles the
+  // abnormal paths where the generator function throws before reaching
+  // the inner finally.
+  try {
+    // Race: first primary chunk vs speculative timeout vs user abort.
+    //   - primary.first.next(): the primary stream's first chunk.
+    //   - speculative timer: armed for speculativeMs; resolves {type:'timeout'}.
+    //   - user-abort: signal listener that resolves {type:'aborted'} on
+    //     the caller's stop click.
+    const first = await Promise.race([
+      primaryIt.next().then(r => {
+        firstPrimaryResult = r;
+        return { type: 'chunk' as const, value: r };
+      }),
+      new Promise<{ type: 'timeout' }>(resolve => {
+        speculativeTimer = setTimeout(() => {
+          speculativeStartTime = Date.now();
+          resolve({ type: 'timeout' });
+        }, speculativeMs);
+      }),
+      new Promise<{ type: 'aborted' }>(resolve => {
+        if (!signal) return;
+        speculativeAbortListener = () => resolve({ type: 'aborted' });
+        signal.addEventListener('abort', speculativeAbortListener, { once: true });
+      }),
+    ]).finally(() => {
+      // Single source of truth for timer/listener cleanup -- PR-A/PR-B
+      // pattern mirrored from coordinator/race machinery in
+      // llm-fallback-coordinator.ts. Covers BOTH resolve and reject paths.
+      if (speculativeTimer) {
+        clearTimeout(speculativeTimer);
+        speculativeTimer = undefined;
       }
-      while (true) {
-        if (signal?.aborted) return;
-        const n = await primaryIt.next();
-        if (n.done) return;
-        yield n.value;
+      if (signal && speculativeAbortListener) {
+        signal.removeEventListener('abort', speculativeAbortListener);
+        speculativeAbortListener = undefined;
       }
+    });
+
+    if (first.type === 'aborted') {
+      // User aborted during the speculative race -- primary is still
+      // running but the caller doesn't want the result. Abort primary
+      // and return. No fallback was launched on this path.
+      abortPrimary();
       return;
     }
 
-    const fallbackIt = fallbackResult.gen[Symbol.asyncIterator]();
+    if (first.type === 'timeout') {
+      // Primary was silent for speculativeMs -- start fallback
+      let fallbackResult: { gen: AsyncGenerator<T>; abort: () => void };
+      try {
+        fallbackResult = createFallback();
+        fallbackCreateTime = Date.now();
+      } catch {
+        // Fallback setup failed -- continue with primary
+        if (firstPrimaryResult && !firstPrimaryResult.done) {
+          yield firstPrimaryResult.value;
+        }
+        while (true) {
+          if (signal?.aborted) return;
+          const n = await primaryIt.next();
+          if (n.done) return;
+          yield n.value;
+        }
+        return;
+      }
 
-    // Race first chunks from both streams
-    const winner = await Promise.race([
-      firstPrimaryResult
-        ? Promise.resolve({ ...firstPrimaryResult, source: 'primary' as const })
-        : primaryIt.next().then(r => ({ ...r, source: 'primary' as const })),
-      fallbackIt.next().then(r => ({ ...r, source: 'fallback' as const })),
-    ]);
+      const fallbackIt = fallbackResult.gen[Symbol.asyncIterator]();
 
-    if (winner.done) return;
+      // PR-T (Stage 3 R5 fix) -- secondary race widened to FOUR arms:
+      //   - primary chunk (cached or fresh primaryIt.next())
+      //   - fallback chunk (fallbackIt.next())
+      //   - hard-deadline timer (speculativeMs * 2 -- per-fallback
+      //     ceiling mirroring PR-X; prevents the ninerouter-class
+      //     infinite hang)
+      //   - user-abort (mirrors the first-race abort arm)
+      //
+      // The wider discriminator (SecondaryRaceResult) is a tagged union
+      // that lets the post-race code branch cleanly on the four kinds.
+      // `done: true` from either stream is treated as 'fallback-timeout'
+      // for parity with PR-X (an exhausted stream is the same failure
+      // shape as both streams stalling past the deadline).
+      type SecondaryRaceResult =
+        | { type: 'chunk'; value: T; done: boolean; source: 'primary' | 'fallback' }
+        | { type: 'fallback-timeout' }
+        | { type: 'aborted' };
+      const winner: SecondaryRaceResult = await Promise.race([
+        firstPrimaryResult
+          ? Promise.resolve({ type: 'chunk' as const, value: firstPrimaryResult.value, done: firstPrimaryResult.done, source: 'primary' as const })
+          : primaryIt.next().then(r => ({ type: 'chunk' as const, value: r.value, done: r.done, source: 'primary' as const })),
+        fallbackIt.next().then(r => {
+          if (r.done) return { type: 'fallback-timeout' as const };
+          return { type: 'chunk' as const, value: r.value, done: false, source: 'fallback' as const };
+        }),
+        new Promise<{ type: 'fallback-timeout' }>(resolve => {
+          secondaryTimer = setTimeout(() => resolve({ type: 'fallback-timeout' }), speculativeMs * 2);
+        }),
+        new Promise<{ type: 'aborted' }>(resolve => {
+          if (!signal) return;
+          secondaryAbortListener = () => resolve({ type: 'aborted' });
+          signal.addEventListener('abort', secondaryAbortListener, { once: true });
+        }),
+      ]).finally(() => {
+        if (secondaryTimer) {
+          clearTimeout(secondaryTimer);
+          secondaryTimer = undefined;
+        }
+        if (signal && secondaryAbortListener) {
+          signal.removeEventListener('abort', secondaryAbortListener);
+          secondaryAbortListener = undefined;
+        }
+      });
 
-    // ABORT THE LOSER immediately to stop wasting API credits
-    if (winner.source === 'fallback') {
-      abortPrimary();
-      // Loser = primary. Approximate total time primary was running:
-      // speculativeMs + time from timeout expiry to now.
-      const primaryLatency = Date.now() - speculativeStartTime + speculativeMs;
-      options.onLoser?.({ source: 'primary', latencyMs: primaryLatency });
-      options.onFallbackWin?.();
-    } else {
-      fallbackResult.abort();
-      // Loser = fallback. Time from when fallback was created to now.
-      const fallbackLatency = Date.now() - fallbackCreateTime;
-      options.onLoser?.({ source: 'fallback', latencyMs: fallbackLatency });
+      if (winner.type === 'aborted') {
+        // User-abort during the secondary race -- abort both streams and
+        // return. No partial data yields to the consumer.
+        abortPrimary();
+        fallbackResult.abort();
+        return;
+      }
+
+      if (winner.type === 'fallback-timeout') {
+        // PR-T (Stage 3 R5 fix) -- this is the bug-fix arm. Previously
+        // an infinite-hang scenario for the ninerouter-class provider
+        // (where the primary network edge is stuck AND the fallback
+        // network edge is also stuck). Now: timeout fires at
+        // speculativeMs * 2 -> we abort both streams and return. The
+        // caller decides what to do next (e.g., a higher-layer
+        // fallback in coordinateConcurrentFallback).
+        abortPrimary();
+        fallbackResult.abort();
+        return;
+      }
+
+      // winner.type === 'chunk'
+      if (winner.done) return;
+
+      // ABORT THE LOSER immediately to stop wasting API credits
+      if (winner.source === 'fallback') {
+        abortPrimary();
+        // Loser = primary. Approximate total time primary was running:
+        // speculativeMs + time from timeout expiry to now.
+        const primaryLatency = Date.now() - speculativeStartTime + speculativeMs;
+        options.onLoser?.({ source: 'primary', latencyMs: primaryLatency });
+        options.onFallbackWin?.();
+      } else {
+        fallbackResult.abort();
+        // Loser = fallback. Time from when fallback was created to now.
+        const fallbackLatency = Date.now() - fallbackCreateTime;
+        options.onLoser?.({ source: 'fallback', latencyMs: fallbackLatency });
+      }
+
+      yield winner.value;
+
+      // Continue with the winner
+      const winnerIt = winner.source === 'primary' ? primaryIt : fallbackIt;
+      while (true) {
+        if (signal?.aborted) return;
+        const next = await winnerIt.next();
+        if (next.done) return;
+        yield next.value;
+      }
     }
 
-    yield winner.value;
+    // Primary won before speculative timeout fired -- yield first chunk and continue
+    if (first.value && !first.value.done) {
+      yield first.value.value;
+    }
 
-    // Continue with the winner
-    const winnerIt = winner.source === 'primary' ? primaryIt : fallbackIt;
+    // Continue with remaining primary chunks
     while (true) {
       if (signal?.aborted) return;
-      const next = await winnerIt.next();
+      const next = await primaryIt.next();
       if (next.done) return;
       yield next.value;
     }
-  }
-
-  // Primary won before speculative timeout fired — yield first chunk and continue
-  if (first.value && !first.value.done) {
-    yield first.value.value;
-  }
-
-  // Continue with remaining primary chunks
-  while (true) {
-    if (signal?.aborted) return;
-    const next = await primaryIt.next();
-    if (next.done) return;
-    yield next.value;
+  } finally {
+    // Defensive cleanup for any race-resolved-but-stream-still-iterating
+    // path (rare exception throws, generator's post-race loops throwing,
+    // etc.). The .finally() above each race covers the normal
+    // resolve/reject paths.
+    if (speculativeTimer) {
+      clearTimeout(speculativeTimer);
+      speculativeTimer = undefined;
+    }
+    if (secondaryTimer) {
+      clearTimeout(secondaryTimer);
+      secondaryTimer = undefined;
+    }
+    if (signal && speculativeAbortListener) {
+      signal.removeEventListener('abort', speculativeAbortListener);
+      speculativeAbortListener = undefined;
+    }
+    if (signal && secondaryAbortListener) {
+      signal.removeEventListener('abort', secondaryAbortListener);
+      secondaryAbortListener = undefined;
+    }
   }
 }
 
@@ -1297,7 +1587,16 @@ export async function* streamWithVercelAI(
   const healthCheckPromise = preflightProviderHealthCheck(provider, url);
 
   // Cache for tool call arguments - scoped to this stream invocation to prevent cross-request leaks
-  const toolCallArgsCache = new Map<string, any>();
+  const toolCallArgsCache = new Map<string, Record<string, unknown>>();
+  // Bug #113 (Pass-8) deferred end-to-end adoption: parallel cache for
+  // the StructuredToolError produced by validateToolArgs during the
+  // tool-call chunk phase, consumed by the tool-result chunk phase to
+  // feed the precise wireMissingRequiredArgsSteer(_recoveryHint). Keyed
+  // by toolCallId so multiple in-flight tool calls don't cross-contaminate.
+  const toolCallValidationCache = new Map<
+  string,
+  import('../orchestra/shared-agent-context').StructuredToolError & { missing: readonly string[] }
+>();
   let useCompatibilityFallback = false;
 
   // Time-to-first-token timeout: only cancels if NO content arrives within timeoutMs
@@ -1321,6 +1620,11 @@ export async function* streamWithVercelAI(
   let lastActivityType: 'ttft-waiting' | 'text' | 'tool-call' | 'tool-result' | 'reasoning' | 'step' = 'ttft-waiting';
   let lastActivityDetail: string = '';  // e.g. tool name, token preview
   let toolCallCount = 0;                // total tool calls made
+  // Pass-8 [FC-GATE seam-cleanup] followup (b) extended: accumulator for
+  // the full streamed response text so the Vercel-AI finish handler can
+  // run the FC-GATE-0-calls detector independently of streamWithCLIBinary.
+  // Empty string is the reset value; chunks append via text-delta handler.
+  let fullResponseText = '';
   let toolResultSuccessCount = 0;       // successful tool results
   let toolResultFailCount = 0;          // failed tool results
   let totalTokensReceived = 0;          // total text tokens received
@@ -1769,6 +2073,9 @@ export async function* streamWithVercelAI(
             onFirstToken();
             // Reset rolling idle timeout - activity detected
             resetIdleTimeout();
+            // Pass-8 [FC-GATE seam-cleanup]: accumulate for finish-time
+            // FC-GATE-0-calls detection. Cheap (single string concat per chunk).
+            fullResponseText += chunk.textDelta;
             
             yield {
               content: chunk.textDelta,
@@ -1776,6 +2083,63 @@ export async function* streamWithVercelAI(
               timestamp: new Date(),
             };
           } else if (chunk.type === 'finish') {
+            // Pass-8 [FC-GATE seam-cleanup] followup (b) extended: detect
+            // FC-GATE-0-calls at finish time for the Vercel-AI SDK path
+            // (non-CLI streaming). Mirrors the block in enhanced-llm-service.ts
+            // streamWithCLIBinary so the [FC-GATE-ZERO-CALLS] log marker
+            // surfaces for ANY model whose stream ends with 0 tool calls
+            // despite tools being available.
+            //
+            // PARITY WITH CLI-BINARY PATH (code-reviewer polish round):
+            // wireFCGateZeroCallsSteer internally gates on
+            // `finishReason === 'stop' || undefined` (its L895-915 logic), so
+            // passing `chunk.finishReason` verbatim produces IDENTICAL behavior
+            // to the CLI-binary call site (which also passes its finishReason
+            // verbatim — CLI-binary currently passes the literal string
+            // 'stop', which clears the inner gate). Both paths are equally
+            // strict; NO caller-side pre-gate is needed. Do NOT add one here
+            // without also adding it to the CLI-binary site, or asymmetric
+            // detection will result.
+            const availableTools = tools ? Object.keys(tools).length : 0;
+            let fcGateSteer: string | null = null;
+            try {
+              const detection = wireFCGateZeroCallsSteer({
+                toolCallsDone: toolCallCount,
+                availableTools,
+                responseText: fullResponseText,
+                finishReason: chunk.finishReason,
+                provider,
+                model: modelName,
+              });
+              if (detection.detected) {
+                // NEW-4 (audit 2026-06-20, latency mask; ~2-5ms/stream end):
+                // defer the chatLogger.warn emit out of the synchronous
+                // streamText.finish chunk handler. The detector itself
+                // (`wireFCGateZeroCallsSteer`) stays synchronous because its
+                // return value IS the chunk metadata (see `fcGateSteer`
+                // below); the emit is pure telemetry/observability
+                // (write [FC-GATE-ZERO-CALLS] to chatLogger) and can be
+                // deferred without losing the marker. `setImmediate` runs
+                // the callback in the next event-loop tick, AFTER the
+                // current chunk has been yielded to the consumer, so SSE
+                // fan-out isn't blocked. Best-effort: any throw from the
+                // emit (logger pipe collapse, etc.) cannot reach the outer
+                // hot path.
+                setImmediate(() => {
+                  try {
+                    emitFCGateZeroCallsLog({
+                      provider,
+                      model: modelName,
+                      availableTools,
+                      toolCallsDone: toolCallCount,
+                      responseLength: fullResponseText.length,
+                      steerLength: detection.steer?.length || 0,
+                    });
+                  } catch { /* best-effort, non-fatal */ }
+                });
+                fcGateSteer = detection.steer;
+              }
+            } catch { /* best-effort, non-fatal */ }
             yield {
               content: '',
               isComplete: true,
@@ -1792,6 +2156,12 @@ export async function* streamWithVercelAI(
                 provider,
                 model: modelName,
                 latencyMs: Date.now() - startTime,
+                // Surface the FC-GATE steer prompt via metadata so
+                // downstream orchestrators (streamWithServerAutoRePrompt,
+                // UnifiedAgentService) can inject it into the NEXT turn
+                // rather than dumping it on the user's UI. Undefined when
+                // no FC-GATE condition matched.
+                ...(fcGateSteer ? { fcGateSteer } : {}),
               },
             };
           } else if (chunk.type === 'error') {
@@ -1799,8 +2169,12 @@ export async function* streamWithVercelAI(
           }
         }
         return;
-      } catch (error: any) {
-        if (error.name === 'AbortError') return;
+  } catch (error: any) {
+    if (STREAM_TIMER_FINALIZE_ENABLED && error.name !== 'AbortError') {
+      // PR-A: prevent leak if we re-throw or fall through. Clear safe-to-clear timers now.
+      stopThinkPingInterval();
+    }
+    if (error.name === 'AbortError') return;
         chatLogger.error('Custom provider streaming failed', { provider, model: modelName, error: error.message });
         throw error;
       }
@@ -2015,17 +2389,35 @@ export async function* streamWithVercelAI(
           streamOptions.system = textModeInstructions;
         }
       } else if (supportsFC === undefined) {
-        // Model doesn't report this capability — could be unknown provider.
-        // POLICY (per user): always let the model TRY tools first. Don't pre-emptively
-        // strip them based on telemetry. The Phase 2 fallback below already kicks in
-        // after the fact if Phase 1 produces zero usable output.
-        chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
-          provider,
-          model: modelName,
-          toolCount,
-          strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
-        });
-        // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        // Bug #3 (Pass-8): Check FC-GATE positive cache. If this model previously
+        // made successful tool calls, treat it as FC-capable and skip the
+        // expensive two-phase strategy. Cache has a 30-min TTL and is cleared
+        // on 429/rate-limit errors (provider rotation may change FC support).
+        const fcCacheKey = `${provider}/${modelName}`;
+        const fcCacheEntry = fcGatePositiveCache.get(fcCacheKey);
+        const fcCacheTtlMs = parseInt(process.env.FC_GATE_POSITIVE_TTL_MS || '1800000', 10);
+        const fcCacheHit = !!(fcCacheEntry && (Date.now() - fcCacheEntry.confirmedAt) < fcCacheTtlMs);
+        if (fcCacheHit) {
+          chatLogger.info('[FC-GATE] Function calling CONFIRMED via positive cache — skipping two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            cacheAgeMs: Date.now() - fcCacheEntry.confirmedAt,
+          });
+        } else {
+          // Model doesn't report this capability — could be unknown provider.
+          // POLICY: always let the model TRY tools first. Don't pre-emptively
+          // strip them based on telemetry. The Phase 2 fallback below already
+          // kicks in after the fact if Phase 1 produces zero usable output.
+          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
+            fcCacheHit: false,
+          });
+          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
+        }
       }
       // === COMMENTED OUT: Auto text-mode based on telemetry ===
       // This was removed in favor of letting the model TRY tools first and only
@@ -2156,6 +2548,26 @@ export async function* streamWithVercelAI(
               }
             }, fbTimeoutMs);
 
+    // PR-U (Stage 3 R6 fix) -- defensive try/catch around the createFallback
+    // body so a throw AFTER `setTimeout` arms `fbTimeoutId` doesn't leave
+    // the timer in Node's queue for `fbTimeoutMs` (60s default). Pre-PR-U,
+    // any throw AFTER L2646 (e.g., a misconfigured provider blowing up
+    // inside `streamText`, or an AbortSignal.any plumbing error) would
+    // skip the existing L2691 / L2705 cleanup paths because those
+    // clearTimeout sites are reachable ONLY after `createFallback`
+    // successfully returned the { gen, abort } handle. The catch
+    // block below closes that gap.
+    //
+    // The catch is intentionally NARROW -- it clears fbTimeoutId and
+    // RE-throws so upstream callers (withSpeculativeFallback after
+    // PR-T) can herd the setup-fail into the chain-walk's
+    // `recordCall(fb, false, 0, 'setup-fail')` log + the next chain
+    // entry. The L2691 / L2705 cleanup paths continue to handle the
+    // SUCCESSFUL-return paths (fallback wins the race -- L2705 clears;
+    // fallback aborts -- L2691 clears). Those sites are idempotent so
+    // a no-op clear in catch is safe even after the abort-handler has
+    // already nulled the timer.
+    try {
     // Bug fix: the fallback's network request previously only honored
     // fbController.signal (the speculative-race cancel), so the global
     // firstTokenTimeoutMs / idleTimeoutMs never aborted it. Merge all
@@ -2199,6 +2611,18 @@ export async function* streamWithVercelAI(
                 fbController.abort();
               },
             };
+            } catch (err) {
+              // PR-U -- defensive clear on throw. Idempotent w.r.t. the
+              // existing L2691 / L2705 cleanup paths because both of those
+              // sites null `fbTimeoutId` after clearing, so a subsequent
+              // `if (fbTimeoutId)` check in the catch finds null and the
+              // clearTimeout call is a no-op.
+              if (fbTimeoutId) {
+                clearTimeout(fbTimeoutId);
+                fbTimeoutId = null;
+              }
+              throw err;
+            }
           },
           abortPrimary: () => {
             if (timeoutController && !timeoutController.signal.aborted) {
@@ -2433,7 +2857,7 @@ while (thinkPingQueue.length > 0) {
             let callArgs = (() => {
               const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
               if (typeof raw === 'string') {
-                try { return JSON.parse(raw); } catch { return {}; }
+                return tryParseToolArgs(raw, 'vercel-ai-streaming.tool-call-input');
               }
               return raw || {};
             })();
@@ -2441,13 +2865,30 @@ while (thinkPingQueue.length > 0) {
             const toolCallId = (chunk as any).toolCallId;
             const isInvalid = !!(chunk as any).invalid;
 
+            // NEW-1 followup-d (2026-07-07, ~2-10ms/stream-chunk): sequential
+            // [vfs-mcp-tools.normalizeToolArgs + shared-agent-context.validateToolArgs]
+            // dynamic-imports folded into Promise.all — both modules are lazy-loaded
+            // by the SELF-HEALING + VALIDATE try-catches directly below; the prior
+            // sequential shape paid for 2 round-trips through the ESM loader on every
+            // tool-call chunk. Per-import .catch(() => null) preserves each
+            // try-catch's independent best-effort semantics — a failure of one
+            // module-load no longer wipes out the other's downstream consumer.
+            const [
+              { normalizeToolArgs },
+              { validateToolArgs },
+            ] = await Promise.all([
+              import('../mcp/vfs-mcp-tools').catch(() => null),
+              import('../orchestra/shared-agent-context').catch(() => null),
+            ]);
+
             // SELF-HEALING: Normalize tool args to fix common LLM mistakes
             // (wrong field names like "filename" → "path", "code" → "content")
             try {
-              const { normalizeToolArgs } = await import('../mcp/vfs-mcp-tools');
-              callArgs = normalizeToolArgs(toolName, callArgs);
-              (chunk as any).input = callArgs;
-              (chunk as any).args = callArgs;
+              if (normalizeToolArgs) {
+                callArgs = normalizeToolArgs(toolName, callArgs);
+                (chunk as any).input = callArgs;
+                (chunk as any).args = callArgs;
+              }
             } catch {
               // Normalization is best-effort
             }
@@ -2455,23 +2896,51 @@ while (thinkPingQueue.length > 0) {
             // VALIDATE REQUIRED FIELDS: Check for missing/invalid args and trigger self-healing
             let validationError = null;
             try {
-              const { validateToolArgs } = await import('../orchestra/shared-agent-context');
+              if (validateToolArgs) {
+                // Define required fields for common tools
+                const requiredFields: Record<string, string[]> = {
+                  'write_file': ['path', 'content'],
+                  'read_file': ['path'],
+                  'list_files': ['path'],
+                  'delete_file': ['path'],
+                  'batch_write': ['files'],
+                  'apply_diff': ['path', 'diff'],
+                  'execute_bash': ['command'],
+                  'search_files': ['query'],
+                };
 
-              // Define required fields for common tools
-              const requiredFields: Record<string, string[]> = {
-                'write_file': ['path', 'content'],
-                'read_file': ['path'],
-                'list_files': ['path'],
-                'delete_file': ['path'],
-                'batch_write': ['files'],
-                'apply_diff': ['path', 'diff'],
-                'execute_bash': ['command'],
-                'search_files': ['query'],
-              };
+                const required = requiredFields[toolName];
+                if (required) {
+                  validationError = validateToolArgs(toolName, callArgs, required);
+                  // Bug #113 (Pass-8): stash the validationError so
+                  // the tool-result handler can feed its missing-fields
+                  // list into wireMissingRequiredArgsSteer. Cleared
+                  // alongside toolCallArgsCache at the end of the
+                  // tool-result case.
+                  if (validationError) {
 
-              const required = requiredFields[toolName];
-              if (required) {
-                validationError = validateToolArgs(toolName, callArgs, required);
+                    // Bug #113 (Pass-8) polish-round: stash both the
+
+                    // StructuredToolError AND the precomputed missing-
+
+                    // fields list so the tool-result handler can read
+
+                    // `missing` directly without re-parsing the error
+
+                    // message (regex-fragility deferred risk). Cleared
+
+                    // alongside toolCallArgsCache at the end of the
+
+                    // tool-result case.
+
+                    // Bug #113 (Pass-8) polish: missing-required-args predicate
+                    // lives in validateToolArgs (orchestra/shared-agent-context).
+                    // The cache stores the helper's co-return shape directly so
+                    // downstream readers see `cachedValidation.error.*` and
+                    // `cachedValidation.missing` from exactly one source of truth.
+                    toolCallValidationCache.set(toolCallId, validationError);
+                  }
+                }
               }
             } catch {
               // Validation is best-effort
@@ -2600,7 +3069,9 @@ while (thinkPingQueue.length > 0) {
           const finalArgs = (() => {
             const raw = cachedArgs ?? (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
             if (typeof raw === 'string') {
-              try { return JSON.parse(raw); } catch { return {}; }
+              // Bug #119 (Pass-8 audit) — defensive JSON.parse via
+              // the helper that bumps chatMetrics.invalidJsonFallbacks.
+              return tryParseToolArgs(raw, 'vercel-ai-streaming.tool-result-input');
             }
             return raw || {};
           })();
@@ -2613,9 +3084,36 @@ while (thinkPingQueue.length > 0) {
             const errObj = toolResult.error;
             const errMsg = typeof errObj === 'string' ? errObj : errObj?.message || '';
             if (!toolResult._recoveryHint) {
+              // Bug #113 (Pass-8) deferred end-to-end adoption: prefer
+              // the precise wireMissingRequiredArgsSteer over the generic
+              // 'Re-read the tool description' line so the LLM sees the
+              // EXACT missing required fields. Falls back to the generic
+              // hint if no validationError was cached for this toolCallId
+              // (e.g. INVALID_ARGS fires for a tool not in the static
+              // requiredFields table at L2549-2558), if the helper
+              // short-circuits to '' (missingFields empty), or if we
+              // can't derive the missing list from the error message.
+              const cachedValidation = toolCallValidationCache.get(resultToolCallId);
+              const invalidArgsHint: string | undefined =
+                errObj?.code === 'INVALID_ARGS' && toolName && cachedValidation
+                  ? (() => {
+                      // Bug #113 (Pass-8) polish-round: read the precomputed
+                      // `missing` list directly from the cache (captured at
+                      // tool-call time, pre-arg-normalization). Eliminates
+                      // the regex parse-back-from-message that the original
+                      // wiring used — the cached shape is owned and stable.
+                      const helperPrompt = wireMissingRequiredArgsSteer({
+                        toolName,
+                        missingFields: cachedValidation.missing,
+                        availableFields: cachedValidation.expectedFields,
+                        schemaHint: `Required schema: ${cachedValidation.expectedSchema}`,
+                      });
+                      return helperPrompt || `Re-read the tool description and provide all required fields.`;
+                    })()
+                  : (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined);
               toolResult._recoveryHint = errObj?.suggestedNextAction
                 || (errObj?.code === 'PATH_NOT_FOUND' ? `Check the path and call list_files on the parent directory.` : undefined)
-                || (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined)
+                || invalidArgsHint
                 || `Read the error carefully. Do NOT retry the exact same call — try a different approach.`;
             }
             // Wrap plain-string errors into structured format for consistency
@@ -2735,6 +3233,10 @@ while (thinkPingQueue.length > 0) {
             timestamp: new Date(),
           };
           if (cachedArgs) toolCallArgsCache.delete(resultToolCallId);
+          // Bug #113 (Pass-8): also evict from the validation cache
+          // so the parallel map doesn't grow unbounded across long
+          // streaming responses.
+          toolCallValidationCache.delete(resultToolCallId);
           break;
         }
 
@@ -2749,10 +3251,39 @@ while (thinkPingQueue.length > 0) {
           // Record 429 rate-limit errors immediately so subsequent requests
           // skip this provider-model combo via model-ranker's isRateLimited check.
           if (errMsg.includes('429') || errMsg.includes('rate limit') || errMsg.toLowerCase().includes('rate_limit')) {
+            // NEW-1 followup-d (2026-07-07, ~2-10ms/429-error-chunk): sequential
+            // [model-ranker.recordRateLimitError + circuit-breaker.circuitBreakerManager]
+            // dynamic-imports folded into Promise.all — both modules are lazy-loaded
+            // on every 429 rate-limit error chunk; the prior sequential shape paid for
+            // 2 round-trips through the ESM loader on each rate-limit-error observation.
+            // Per-import .catch(() => null) preserves each try-catch's independent
+            // best-effort semantics (model-ranker can still record the failure even if
+            // circuit-breaker module-load failed, and vice versa).
+            const [
+              { recordRateLimitError },
+              { circuitBreakerManager },
+            ] = await Promise.all([
+              import('@/lib/providers/model-ranker').catch(() => null),
+              import('@/lib/middleware/circuit-breaker').catch(() => null),
+            ]);
             try {
-              const { recordRateLimitError } = await import('@/lib/providers/model-ranker');
-              recordRateLimitError(provider, modelName);
+              if (recordRateLimitError) {
+                recordRateLimitError(provider, modelName);
+              }
             } catch { /* best-effort */ }
+            // Bug #5 fix: Also record 429 in the per-provider circuit breaker
+            // so the unified-agent-service fallback chain skips this provider
+            // on the next request. Without this, the v1-api path keeps trying
+            // the 429'd primary on every subsequent request.
+            try {
+              if (circuitBreakerManager) {
+                const breaker = circuitBreakerManager.getBreaker(provider);
+                breaker.recordFailure(new Error(`429 rate limit from ${provider}/${modelName}`));
+              }
+            } catch { /* circuit-breaker best-effort */ }
+            // Bug #3 (Pass-8): Clear FC-GATE positive cache on 429 — provider
+            // rotation may change the model's FC support.
+            clearFCGateCache(provider, modelName);
           }
           throw (chunk as any).error;
         }
@@ -2784,6 +3315,10 @@ while (thinkPingQueue.length > 0) {
 }
 
 // Get final usage and metadata (from the winner's result if speculative fallback was used)
+// Bug #117 (Pass-9) — closure-scoped text accumulator for the
+// completion-outcome discriminator. Populated just before the final
+// yield chunk. Either path (tool-only / empty) is mutually exclusive.
+let finalText: string = '';
 const finalResult = fallbackResultRef?.result || result;
 const usage = await finalResult.usage;
 const finishReason = (await finalResult.finishReason) || 'stop';
@@ -2827,6 +3362,9 @@ const steps = await finalResult.steps;
           toolsCalled: allToolCalls.length,
           toolNames: allToolCalls.map(tc => tc.name),
         });
+        // Bug #3 (Pass-8): Record positive FC-GATE result so future requests
+        // to this model skip the expensive two-phase strategy.
+        recordFCGatePositive(provider, modelName);
       } else {
         chatLogger.warn('[TOOL-SUMMARY] LLM did NOT call any tools despite tools being available', {
           provider,
@@ -2853,18 +3391,10 @@ const steps = await finalResult.steps;
         // waste 15s of wall-clock time. Skip the Phase 2 round-trip and
         // let the text-mode parser extract any file edits from the
         // existing textContent (or just return Phase 1's response as-is).
-        const phase1TextLength = textContent?.length || 0;
-        const phase1TextSkipThreshold = STREAM_TIMEOUTS.phase1TextCharsSkipPhase2;
-        const skipPhase2ForProse = phase1TextLength > phase1TextSkipThreshold;
-        if (skipPhase2ForProse) {
-          chatLogger.info('[FC-GATE] Phase 2 SKIPPED: Phase 1 already produced a full prose answer', {
-            provider,
-            model: modelName,
-            phase1TextLength,
-            threshold: phase1TextSkipThreshold,
-            reason: 'phase1_text_chars_skip_phase2',
-          });
-        }
+        // Bug #13: the 10K-char phase1TextCharsSkipPhase2 gate was removed.
+        // Phase 2 now runs whenever the fallback conditions below are met,
+        // regardless of Phase 1 text length. See the env var removal at
+        // STREAM_TIMEOUTS (line ~462).
         const supportsFC = (vercelModel as any)?.supports?.functionCalling;
         const FILE_EDIT_TOOLS = new Set([
           'write_file', 'batch_write', 'apply_diff', 'delete_file',
@@ -2875,6 +3405,37 @@ const steps = await finalResult.steps;
           .map((tc: any) => tc.name);
         const fileEditToolFailed = failedToolNames.some((n: string) => FILE_EDIT_TOOLS.has(n));
         const fileEditToolAvailable = availableToolNames.some((n) => FILE_EDIT_TOOLS.has(n));
+        // Bug #3 fix: Track whether ANY tool call succeeded in Phase 1.
+        // If the model made at least one successful tool call, Phase 2
+        // text-mode fallback is unnecessary and wasteful (it re-streams
+        // the entire response in text-mode, taking 30-92s, and produces
+        // duplicate writes). Only run Phase 2 when ALL tool calls failed
+        // or no tool calls were made.
+        // Bug #7 fix (audit-C2): derive anyToolCallSucceeded from the Vercel AI
+        // SDK's canonical `step.toolResults` map, NOT from `tc.result`. The
+        // allToolCalls array at L2837–2860 is populated with {id, name, arguments}
+        // only — `tc?.result` is ALWAYS undefined, so the previous check silently
+        // evaluated to false, defeating the Phase 1 guard. Without this fix,
+        // Phase 2 text-mode fallback (30–92s re-stream, duplicate writes) ran
+        // even after a successful tool call.
+        //
+        // SDK contract: each `step` has both `step.toolCalls` (model requests)
+        // and `step.toolResults` (outcomes). We invert the lookup: build a
+        // toolCallId → result map from `steps`, then check each toolCall.
+        const toolResultByCallId: Record<string, any> = {};
+        for (const step of steps || []) {
+          for (const tr of (step as any)?.toolResults || []) {
+            if (tr?.toolCallId && ((tr as any).output !== undefined || (tr as any).result !== undefined)) {
+              toolResultByCallId[tr.toolCallId] = tr;
+            }
+          }
+        }
+        const anyToolCallSucceeded = allToolCalls.some((tc: any) => {
+          const tr = tc?.id ? toolResultByCallId[tc.id] : undefined;
+          if (!tr) return false;
+          const out = (tr as any).output ?? (tr as any).result ?? tr;
+          return out && (out as any).success !== false && !(out as any).error;
+        });
 
         if (supportsFC === undefined) {
           const allToolCallsFailed = allToolCalls.length > 0 && allToolCalls.every((tc: any) => {
@@ -2898,11 +3459,17 @@ const steps = await finalResult.steps;
           // Gate: text-mode can only substitute when a file-edit tool was actually
           // attempted-and-failed, OR (in the silent-output case) when at least one
           // file-edit tool was available so the model has *something* to express in text.
-          const triggerFallback = hasToolCallPattern
+          // Bug #3 fix: Skip Phase 2 entirely when ANY Phase 1 tool call succeeded.
+          // Running Phase 2 after a successful tool call wastes 30-92s and causes
+          // duplicate writes (Bug #15/48). Phase 2 is only useful as a recovery
+          // mechanism when ALL tools failed or no calls were made.
+          const triggerFallback = !anyToolCallSucceeded && (
+            hasToolCallPattern
             || (allToolCallsFailed && (!textContent || textContent.length < 20) && fileEditToolFailed)
-            || (noOutputAtAll && fileEditToolAvailable);
+            || (noOutputAtAll && fileEditToolAvailable)
+          );
 
-          if (triggerFallback && !skipPhase2ForProse) {
+          if (triggerFallback) { // Bug #13: removed !skipPhase2ForProse gate
             // Bug #13 (Phase 2 wall-clock budget): create a dedicated
             // AbortController for the Phase 2 fallback stream so we can
             // enforce the `phase2MaxDurationMs` ceiling independently of
@@ -3001,11 +3568,13 @@ const steps = await finalResult.steps;
         }
       }
 
-      // ── PHASE 3: After ≥2 consecutive tool call failures, retry with a telemetry-derived
+      // ── PHASE 3: After ≥3 consecutive tool call failures, retry with a telemetry-derived
       // reliable tool-calling model — independent of whether Phase 2 text-mode ran.
       // This surfaces models that have demonstrated >65% tool-call success rate
       // in the rolling 30-min window (from tool-call-telemetry).
-      if (consecutiveToolFailures >= 2 && allToolCalls.length > 0 && (toolCallStreaming ?? true)) {
+      // Bug #76 fix: threshold raised from 2→3 to match the loop-guard kill
+      // threshold (shared-agent-context.ts:444) so the two mechanisms stay in sync.
+      if (consecutiveToolFailures >= 3 && allToolCalls.length > 0 && (toolCallStreaming ?? true)) {
         const capableModels = getModelsForPurpose('tool-calling', { maxModels: 3 });
         const currentModelKey = `${provider}:${modelName}`;
         const betterModel = capableModels.find(
@@ -3153,6 +3722,31 @@ ${healingInstructions}` : healingInstructions)
       }
     }
 
+    // Bug #117 (Pass-9) — completion-outcome discriminator at stream
+    // finalization. Mutually-exclusive switch:
+    //   - toolCalls > 0 + no prose → toolOnlyCompletion (native FC success)
+    //   - toolCalls == 0 + no prose → emptyCompletion (real failure)
+    //   - any prose → no metric (default success)
+    // Best-effort: failures swallowed with debug log so a tail-side error
+    // (await / state) cannot abort the stream.
+    try {
+      const rawText: unknown = typeof (finalResult as any)?.text === 'function'
+        ? await (finalResult as any).text()
+        : ((finalResult as any)?.text ?? '');
+      finalText = typeof rawText === 'string' ? rawText : '';
+      const hasProse = finalText.trim().length > 0;
+      if (!hasProse) {
+        if (allToolCalls.length > 0) {
+          recordToolOnlyCompletion(actualProvider, finishReason);
+        } else {
+          recordEmptyCompletion(actualProvider, finishReason);
+        }
+      }
+    } catch (err) {
+      logger.warn('[Bug #117] completion-outcome metric emit failed (best-effort)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     // Final chunk with completion status and metadata
     yield {
       content: '',
@@ -3166,6 +3760,16 @@ ${healingInstructions}` : healingInstructions)
       },
       reasoning: reasoningContent || undefined,
       toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
+      // Bug #117 (Pass-9) — informational outcome tag (peer to the metric
+      // bump above). Three mutually-exclusive values: 'tool_only' | 'empty' | 'text'.
+      // Bug #117 (Pass-9) — metadata aligned with metric dispatch:
+      // 'tool_only' only when NO prose + tools present; 'empty' when NO
+      // prose + no tools; 'text' otherwise (text+tools is the success
+      // baseline and does NOT bump either counter).
+      completionOutcome:
+        allToolCalls.length > 0 && finalText.trim().length === 0 ? 'tool_only'
+        : allToolCalls.length === 0 && finalText.trim().length === 0 ? 'empty'
+        : 'text',
       timestamp: new Date(),
       metadata: {
         vercelAI: true,
@@ -3323,7 +3927,7 @@ ${healingInstructions}` : healingInstructions)
             let fbCallArgs = (() => {
               const raw = (chunk as any).input ?? (chunk as any).args ?? (chunk as any).arguments;
               if (typeof raw === 'string') {
-                try { return JSON.parse(raw); } catch { return {}; }
+                return tryParseToolArgs(raw, 'vercel-ai-streaming.fallback-chain-args');
               }
               return raw || {};
             })();
@@ -3362,7 +3966,7 @@ ${healingInstructions}` : healingInstructions)
                 state: 'result' as const,
                 args: (() => {
                   const r = (chunk as any).input ?? (chunk as any).args;
-                  if (typeof r === 'string') { try { return JSON.parse(r); } catch { return {}; } }
+                  if (typeof r === 'string') { return tryParseToolArgs(r, 'vercel-ai-streaming.fallback-chain-result'); }
                   return r || {};
                 })(),
                 result: fbToolResult,
@@ -3409,10 +4013,6 @@ ${healingInstructions}` : healingInstructions)
       latencyMs: Date.now() - startTime,
     });
 
-    // Cleanup timeout
-    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
-        if (idleTimeoutId) clearTimeout(idleTimeoutId);
-
     error.metadata = {
       ...error.metadata,
       vercelAI: true,
@@ -3422,6 +4022,18 @@ ${healingInstructions}` : healingInstructions)
       latencyMs: Date.now() - startTime,
     };
     throw error;
+  }
+  finally {
+    // Always clear timer handles to prevent leaks — these are independent
+    // of the think-ping gate below. Only the think-ping interval is gated
+    // by `STREAM_TIMER_FINALIZE_ENABLED` so operators who disable it
+    // accept that the interval may fire once after exit (benign).
+    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+    if (hardDeadlineTimeoutId) clearTimeout(hardDeadlineTimeoutId);
+    if (idleTimeoutId) clearTimeout(idleTimeoutId);
+    if (STREAM_TIMER_FINALIZE_ENABLED) {
+      stopThinkPingInterval();
+    }
   }
 }
 

@@ -526,7 +526,7 @@ export class WorkspaceServiceManager {
    */
   rehydrate(workspaceId: string): void {
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return;
 
@@ -632,7 +632,7 @@ export class WorkspaceServiceManager {
     if (service.logs.length % 20 !== 0) return;
 
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return;
 
@@ -650,7 +650,7 @@ export class WorkspaceServiceManager {
    */
   private persistServiceFinalState(service: WorkspaceService): void {
     try {
-      const { getDatabase } = require('@/lib/database/connection');
+      const { getDatabase } = require('@/lib/database/connection-shim');
       const db = getDatabase();
       if (!db) return;
 

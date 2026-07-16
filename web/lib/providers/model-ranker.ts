@@ -301,6 +301,14 @@ export interface ModelStats {
 export interface RankedModel extends ModelStats {
   score: number
   rank: number
+  /**
+   * True when this pick was synthesised by the graceful-degraded fallback path
+   * (no live telemetry, no healthy candidate available). Callers can use this
+   * flag to attach a "best-effort" marker in their 200 response so the UI can
+   * communicate the degraded state to the user. Optional — undefined means a
+   * normal ranker pick.
+   */
+  degraded?: boolean
 }
 
 // Scoring configuration
@@ -991,8 +999,118 @@ export async function getRetryModel(options?: {
     return { ...pick, score: 0, rank: 1 }
   }
 
-  logger.error('No alternative models available for retry - all models exhausted')
+  logger.error('No alternative models available for retry - all models exhausted', {
+    failedProvider,
+    failedModel,
+    statsCount: stats.length,
+  })
+
+  // Graceful degraded fallback: instead of returning null and forcing the route
+  // to hard-503 the chat request, return the first configured provider's
+  // default model marked with failureRate=1 / successRate=0 / score=Infinity.
+  // This gives the route one more 200-attempt with a known-configured
+  // provider/model pair. The `degraded: true` flag lets callers distinguish
+  // this pick from a healthy ranker pick (e.g. for SSE metadata).
+  //
+  // Without this, the failure chain `getRetryModel() → null →
+  // recordFallbackChainAttempt() → 503` is a dead end whenever every candidate
+  // is rate-limited, untested, or its provider's API key is missing — the most
+  // common root cause of the `POST /api/chat 503` symptom in multi-replica
+  // deployments where in-memory rotation state can diverge.
+  const degraded = findDegradedFallback(failedProvider)
+  if (degraded) {
+    logger.warn('Using degraded fallback model on retry (best-effort, no telemetry backing)', {
+      provider: degraded.provider,
+      model: degraded.model,
+      failedProvider,
+      failedModel,
+      degraded: true,
+    })
+    return {
+      provider: degraded.provider,
+      model: degraded.model,
+      avgLatency: 2000,
+      failureRate: 1,                       // explicit signal: this is a low-quality pick
+      lastUpdated: Date.now(),
+      totalCalls: 0,                        // signal: not telemetry-backed
+      successRate: 0,
+      score: Infinity,                      // rank dead-last among candidates
+      rank: Number.MAX_SAFE_INTEGER,
+      degraded: true,
+    }
+  }
+
+  // Truly unrecoverable: no provider in PROVIDERS has its API key set.
+  logger.error('No configured providers available for degraded fallback; route will 503', {
+    failedProvider,
+    failedModel,
+  })
   return null
+}
+
+/**
+ * Graceful degraded-fallback pick: resolves `{ provider, model }` for the
+ * degraded-fallback branch of `getRetryModel()`. Resolution order:
+ *
+ *   1. **Explicit env override**: if both `process.env.DEFAULT_PROVIDER` and
+ *      `process.env.DEFAULT_MODEL` are set, validate that DEFAULT_PROVIDER is
+ *      in PROVIDERS, that DEFAULT_MODEL is in that provider's models list, and
+ *      that the provider passes `isProviderConfiguredForTelemetry` (its API key
+ *      env var is set). If all three checks pass, return that pair verbatim.
+ *      If any check fails, log a structured warn and fall through to auto
+ *      discovery (the env override is "preferred but not authoritative").
+ *
+ *   2. **Auto discovery**: two-pass scan of PROVIDERS. Pass 1 prefers a
+ *      provider other than `excludeProvider`. Pass 2 falls back to the
+ *      excluded provider itself so single-provider deployments still resolve
+ *      instead of returning null.
+ *
+ * @param excludeProvider - Optional. If set, the auto-discovery pass 1 skips
+ *   this provider; pass 2 ignores the exclude so single-provider setups still
+ *   resolve. The explicit env-override path is unaffected by this argument.
+ * @returns `{ provider, model }`, or null if no provider has its API key set
+ *   AND no env override is usable.
+ */
+function findDegradedFallback(excludeProvider?: string): { provider: string; model: string } | null {
+  if (!PROVIDERS || typeof PROVIDERS !== 'object') return null
+
+  // ---- Pass 0: explicit env override (DEFAULT_PROVIDER + DEFAULT_MODEL) ----
+  const envProvider = process.env['DEFAULT_PROVIDER']?.trim()
+  const envModel = process.env['DEFAULT_MODEL']?.trim()
+  if (envProvider && envModel) {
+    const providerConfig = (PROVIDERS as Record<string, any>)[envProvider]
+    const modelList: unknown[] | undefined =
+      providerConfig && Array.isArray(providerConfig.models) ? providerConfig.models : undefined
+    const knownModel = modelList?.some((m: any) =>
+      typeof m === 'string' ? m === envModel : m && typeof m === 'object' && m.id === envModel,
+    )
+    const providerConfigured = isProviderConfiguredForTelemetry(envProvider)
+    if (knownModel && providerConfigured) {
+      return { provider: envProvider, model: envModel }
+    }
+    logger.warn('[DegradedFallback] DEFAULT_PROVIDER/DEFAULT_MODEL env override rejected, falling back to auto discovery', {
+      envProvider,
+      envModel,
+      providerConfigured,
+      knownModel: !!knownModel,
+    })
+  }
+
+  // ---- Pass 1 + 2: auto-discovery two-scan ----
+  const pickFirst = (applyExclude: boolean): { provider: string; model: string } | null => {
+    for (const [pName, pConfig] of Object.entries(PROVIDERS)) {
+      if (!pConfig?.models || !Array.isArray(pConfig.models) || pConfig.models.length === 0) continue
+      if (applyExclude && excludeProvider && pName === excludeProvider) continue
+      if (!isProviderConfiguredForTelemetry(pName)) continue
+      const first = pConfig.models[0]
+      const modelId = typeof first === 'string' ? first : first.id
+      if (!modelId) continue
+      return { provider: pName, model: modelId }
+    }
+    return null
+  }
+
+  return pickFirst(true) ?? pickFirst(false)
 }
 
 /**

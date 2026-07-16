@@ -21,7 +21,8 @@
 
 import { resolve, relative, join, dirname } from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { enable as enableDebug } from 'debug';
+import debugModule from 'debug';
+const enableDebug = debugModule.enable;
 
 // Suppress verbose HTTP request logging from axios/got/follow-redirects internals
 // follow-redirects logs full request options (including auth headers) via debug("follow-redirects")

@@ -91,6 +91,26 @@ vi.mock('@/lib/utils/compression', () => ({
 // ============================================================================
 
 import { ContentAddressableStorage, getContentAddressableStorage } from '../content-addressable-storage';
+import { getRuntimeBroker } from '../../sandbox/runtime-broker';
+
+/**
+ * Smoke test for the instrumentation API surface added by the Bug #4
+ * followup (getCurrentCacheSize) and the RuntimeBroker degraded-mode fix
+ * (getInitError). Both are called on a fresh instance — the CAS store
+ * tests in this file use a local `cas` variable (not the singleton), so
+ * no prior test populates the counter or triggers broker init. The
+ * expected initial state is:
+ *   - getInitError() returns null (clean init, no degraded fallback)
+ *   - getCurrentCacheSize() returns 0 (no writes have populated the counter)
+ */
+describe('Instrumentation API smoke test (Bug #4 + RuntimeBroker degraded-mode)', () => {
+  it('returns null from getRuntimeBroker().getInitError() and 0 from getContentAddressableStorage().getCurrentCacheSize() on a fresh instance', () => {
+    // RuntimeBroker degraded-mode indicator: null = clean init.
+    expect(getRuntimeBroker().getInitError()).toBeNull();
+    // CAS counter: 0 = no writes have populated the counter yet.
+    expect(getContentAddressableStorage().getCurrentCacheSize()).toBe(0);
+  });
+});
 
 describe('ContentAddressableStorage', () => {
   let cas: ContentAddressableStorage;

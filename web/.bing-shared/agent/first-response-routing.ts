@@ -13,6 +13,28 @@
 
 import { tryRepairJson, extractFirstJsonObject } from './spec-parser-utils';
 
+// ─── Env-Aware Default ──────────────────────────────────────────────────────────────
+
+/**
+ * Single source of truth for the env-aware continuation default.
+ *
+ * Contract: returns `true` unless the operator explicitly sets
+ * `LLM_AUTO_CONTINUE_DEFAULT=false` (literal, case-sensitive). Any other
+ * value — unset, empty, "0", "FALSE" (case-mismatched) — defers to
+ * default-on because the discriminator is `!== 'false'`.
+ *
+ * Runtime: declared at module-top so DEFAULT_ROUTING (cached at module
+ * load) and validateAndNormalize fallback path both reach the same
+ * definition. The `typeof process !== 'undefined'` guard prevents a
+ * ReferenceError in browser/Worker bundles (this package has no
+ * `browser` export condition to gate server-only loading).
+ */
+export function resolveDefaultContinue(): boolean {
+  if (typeof process === 'undefined' || !process.env) return true;
+  return process.env.LLM_AUTO_CONTINUE_DEFAULT !== 'false';
+}
+
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 export type TaskClassification = 'code' | 'research' | 'planning' | 'debugging' | 'review' | 'multi-step';
@@ -46,6 +68,18 @@ export interface RoutingMetadata {
   toolCallOptions: ToolCallOption[];
   specializationRoute: SpecializationRoute;
   planSteps: PlanStep[];
+  /**
+   * Q1 (Issue 1): literal LLM "yes" intent after strict-equality coercion.
+   * Resilient to `"false"`-string truthiness traps that `!!routing.continue`
+   * would silently flip. `validateAndNormalize` stamps this with
+   * `parsed.continue === true`.
+   *
+   * Q3 audit (post-Issue 1 close): the legacy `requiresAutoReprompt` tier
+   * had ZERO upstream producers in any LLM prompt template or test fixture,
+   * so the OR was dropped from the stamping site — dead code would have
+   * mis-trusted future readers. See `parsed.continue` strict-equality below.
+   */
+  explicitContinue: boolean;
   continue: boolean;
 }
 
@@ -91,22 +125,30 @@ export function stripRoutingMarkers(responseText: string): string {
       const beforeMarker = cleaned.slice(0, markerMatch.index);
       const headerRegex = /###?\s*$/;
       const cleanedBefore = beforeMarker.replace(headerRegex, '');
-      
+
       const afterJsonIndex = cleaned.indexOf(jsonBlock, markerMatch.index) + jsonBlock.length;
       let afterJson = cleaned.slice(afterJsonIndex);
-      
+
       // Remove trailing code fences if present
       afterJson = afterJson.replace(/^\s*```?\s*/, '');
-      
-      cleaned = cleanedBefore + afterJson;
-    } else {
-      // JSON extraction failed — still strip the marker text so it doesn't leak to users
-      const beforeMarker = cleaned.slice(0, markerMatch.index);
-      const afterMarker = cleaned.slice(markerMatch.index + markerMatch[0].length);
-      const headerRegex = /###?\s*$/;
-      const cleanedBefore = beforeMarker.replace(headerRegex, '');
-      cleaned = cleanedBefore + afterMarker;
-    }
+
+      cleaned = cleanedBefore + afterJson;      } else {
+        // JSON extraction failed — strip the marker AND any leaked partial-JSON
+        // content following it. Truncate at the next plausible section break
+        // (next `###` header, code fence, or 2+ blank-line gap) so a malformed
+        // `[ROLE_SELECT] { broken-json` fragment doesn't leak to the user when
+        // the LLM emits `[ROLE_SELECT]` followed by broken/malformed braces.
+        const beforeMarker = cleaned.slice(0, markerMatch.index);
+        const afterMarker = cleaned.slice(markerMatch.index + markerMatch[0].length);
+        const headerRegex = /###?\s*$/;
+        const cleanedBefore = beforeMarker.replace(headerRegex, '');
+        const nextSectionBreak = afterMarker.match(/\n(?:\s*#{1,6}\s|\s*```|^\s*$)[\s\S]*?$/m);
+        const safeAfter =
+          nextSectionBreak && nextSectionBreak.index !== undefined
+            ? afterMarker.slice(0, nextSectionBreak.index).trimEnd()
+            : '';
+        cleaned = cleanedBefore + safeAfter;
+      }
   }
 
   // 3. Remove ### Initial Response section
@@ -119,9 +161,8 @@ export function stripRoutingMarkers(responseText: string): string {
 }
 
 /** Default routing for when parsing fails — safe conservative defaults.
- * Bug #70: `continue` defaults to true (env-tunable via LLM_AUTO_CONTINUE_DEFAULT)
- * so multi-step agent tasks auto-continue instead of stopping at step 1. */
-const DEFAULT_ROUTING: RoutingMetadata = {
+ * `continue` follows the resolveDefaultContinue() contract — see docblock. */
+export const DEFAULT_ROUTING: RoutingMetadata = {
   classification: 'multi-step',
   complexity: 'medium',
   suggestedRole: 'coder',
@@ -129,7 +170,12 @@ const DEFAULT_ROUTING: RoutingMetadata = {
   toolCallOptions: [],
   specializationRoute: 'multi-step',
   planSteps: [],
-  continue: typeof process !== 'undefined' && process.env?.LLM_AUTO_CONTINUE_DEFAULT !== 'false',
+  // Q1: explicitContinue = literal LLM intent; this is a function-level default.
+  // No parsed LLM input exists here, so explicitContinue MUST be false; the
+  // env-aware default still applies to `continue` via resolveDefaultContinue().
+  explicitContinue: false,
+  // resolveDefaultContinue() contract — see docblock.
+  continue: resolveDefaultContinue(),
 };
 
 /**
@@ -145,7 +191,7 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
   const legacyIdx = responseText.indexOf('[ROUTING_METADATA]');
   let markerIndex = -1;
   let markerText = '[ROLE_SELECT]';
-  
+
   if (roleSelectIdx !== -1 && (legacyIdx === -1 || roleSelectIdx <= legacyIdx)) {
     markerIndex = roleSelectIdx;
     markerText = '[ROLE_SELECT]';
@@ -159,7 +205,7 @@ export function parseFirstResponseRouting(responseText: string): ParsedRouting {
   }
 
   const afterMarker = responseText.slice(markerIndex + markerText.length).trim();
-  
+
   const jsonObject = extractFirstJsonObject(afterMarker);
 
   if (!jsonObject) {
@@ -224,10 +270,20 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       toolCallOptions: Array.isArray(parsed.toolCallOptions) ? parsed.toolCallOptions : DEFAULT_ROUTING.toolCallOptions,
       specializationRoute,
       planSteps: Array.isArray(parsed.planSteps) ? parsed.planSteps : DEFAULT_ROUTING.planSteps,
-      continue:
-        normalizeBoolean(parsed.continue) ??
-        normalizeBoolean(parsed.requiresAutoReprompt) ??
-        (Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2 ? true : DEFAULT_ROUTING.continue),
+      // Q1: explicitContinue = literal LLM "yes" intent; ignore env default here.
+      // Strict-equality on raw `parsed.continue` (resilient to the
+      // `"false"`-string truthiness trap that `!!routing.continue` would flip).
+      //
+      // Q3 audit (post-Issue 1 close): the legacy `requiresAutoReprompt` tier
+      // had ZERO upstream producers in any LLM prompt template or test fixture,
+      // so the OR was dropped here — dead code would have mis-trusted callers.
+      explicitContinue: parsed.continue === true,
+      // resolveDefaultContinue() contract — see docblock.
+      // Multi-step plans force continuation even when the parsed payload
+      // explicitly says continue: false (conflicting signal from the LLM).
+      continue: Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2
+        ? true
+        : (parsed.continue !== undefined ? (normalizeBoolean(parsed.continue) ?? false) : resolveDefaultContinue()),
     };
 
     return {
@@ -302,7 +358,7 @@ Continue with this step. If completed, proceed to next steps or conclude.
 
 /**
  * Truncate response at the first [ROLE_SELECT] (or legacy [ROUTING_METADATA]) marker.
- * 
+ *
  * Some LLMs (especially text-mode fallback like gpt-oss) keep generating content after
  * emitting their [ROLE_SELECT] block — e.g. they "simulate" the next turn or repeat the
  * plan in a different format. We only want the prose BEFORE the first marker; everything
@@ -328,6 +384,32 @@ export function truncateAtFirstRouting(responseText: string): string {
   return truncated;
 }
 
+// ============================================================================
+// Q1: shouldContinue helpers — single source of truth (Issue 1 close).
+// (Single declaration; earlier duplicates were removed during Q3 cleanup.)
+// ============================================================================
+
+/** Q1: a "multi-step plan" is one with >= 2 steps (matches the LLM contract). */
+function hasMultiplePlanSteps(routing: RoutingMetadata): boolean {
+  return Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
+}
+
+/**
+ * Q1: Single source of truth for the `shouldContinue` derivation.
+ *
+ * Stamped onto `RoutingMetadata.explicitContinue` at normalize time, so
+ * client builders + any future consumer (orchestrators, telemetry) can
+ * read a coercion-safe boolean. Replaces prior divergent `!!routing.continue`
+ * and inline `hasMultiplePlanSteps` derivation at the call site.
+ *
+ * Returns true when EITHER:
+ *   - the LLM explicitly said `continue: true` (stamped as `explicitContinue`), or
+ *   - the plan has >= 2 steps (multi-step intent overrides a "false" explicit).
+ */
+export function computeShouldContinue(routing: RoutingMetadata): boolean {
+  return routing.explicitContinue || hasMultiplePlanSteps(routing) || routing.continue === true;
+}
+
 /**
  * Build a chat-route-friendly routing metadata payload that includes a
  * `stepReprompt` string. This is the contract the client (use-enhanced-chat.ts)
@@ -343,13 +425,10 @@ export function buildRoutingMetadataForClient(routing: RoutingMetadata): {
   planSteps: PlanStep[];
   continue: boolean;
 } {
-  // Bug #2 fix: planSteps >= 2 should force continue: true
-  // The LLM outlined a multi-step plan but may have set continue: false
-  // (DEFAULT_ROUTING.continue defaults to false). This ensures multi-step
-  // plans always trigger auto-continuation.
-  const hasMultiplePlanSteps = Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
-  const explicitContinue = !!routing.continue && Array.isArray(routing.planSteps) && routing.planSteps.length > 0;
-  const shouldContinue = explicitContinue || hasMultiplePlanSteps;
+  // Q1: single source of truth — see computeShouldContinue() above. Resilient
+  // to `routing.continue` string-coercion traps (e.g. `"false"` is truthy
+  // under `!!`; we never re-derive here).
+  const shouldContinue = computeShouldContinue(routing);
   return {
     stepReprompt: shouldContinue ? generateStepReprompt(routing, 0) : '',
     primaryRole: routing.suggestedRole,

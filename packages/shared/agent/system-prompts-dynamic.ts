@@ -344,13 +344,18 @@ export const CHOOSE_ROLE_DIRECTIVE = `
 ============================================
 
 You have the ability to switch your expert role to better suit the task.
+1. **ASSESS**: Sweep the task along the dimensions most relevant here — complexity (multi-file vs. single-file; novel vs. familiar; design vs. mechanical edit), domain (security, ML, infra, UI, testing, performance, data, etc.), and recovery (did a prior turn fail and need root-cause?). Not every dimension applies to every task — only enumerate the ones that genuinely fire.
+2. **SELECT**: If a different role is the better fit, call choose_role with role set to one of these 9 IDs (coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier). The 7 worked examples below cover the most common cases; coder and simplifier (the 2 unillustrated roles) use the same shape.
+3. **WAIT**: The system injects the new persona at the start of your next turn.
 
-1. **ASSESS**: Monitor task complexity, domain, or failure recovery needs.
-2. **SELECT**: If a better role exists (e.g., 'debugger' for failures, 'architect' for high-complexity design), call 'choose_role(role="...", reason="...")'.
-3. **WAIT**: Once called, the system will inject the new persona and prompt for your next turn.
-
-Available roles:
-- coder, reviewer, planner, architect, researcher, debugger, specialist, orchestrator, simplifier
+Worked examples (choose_role is a tool that already exists):
+- "Need a multi-step plan spanning UI + API + tests before any code is written" -> choose_role(role='planner')
+- "Last turn failed with a stack trace or assertion; need root-cause not another guess" -> choose_role(role='debugger')
+- "Cross-cutting architectural decision affecting multiple subsystems, requires trade-off analysis" -> choose_role(role='architect')
+- "Just shipped a change and want a verification pass before calling it done" -> choose_role(role='reviewer')
+- "Need deep expertise in a narrow domain (vector index internals, GPU kernels, on-call incident triage, security audit checklist)" -> choose_role(role='specialist')
+- "Need to hand a task off to another role or split a multi-agent coordination problem across roles" -> choose_role(role='orchestrator')
+- "Need to gather citations, evidence, or external documentation before committing to a decision" -> choose_role(role='researcher')
 `;
 
 export function generateDynamicInjection(config?: {

@@ -47,27 +47,31 @@ export async function GET(request: NextRequest) {
  * Create or update a Smithery connection. Requires authentication.
  */
 export async function POST(request: NextRequest) {
-  try {
+  try {    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(request) + request.json() pair to
+    // mask wallclock. The auth library used here is @/lib/auth/verify-auth (different
+    // from @/lib/auth/jwt) — authResult.success check (no .userId attr). Body comes
+    // from request.json() since this site uses `request`-named param (not `req`).
+    // ~2-5ms saved per request on the auth+body overlap window.
     // Verify authentication
-    const authResult = await verifyAuth(request);
-    if (!authResult || !authResult.success) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+    const [authResult, body] = await Promise.all([verifyAuth(request), request.json()]);
+  if (!authResult || !authResult.success) {
+    return NextResponse.json(
+      { error: 'Authentication required' },
+      { status: 401 }
+    );
+  }
 
-    const service = getSmitheryService();
+  const service = getSmitheryService();
 
-    if (!service.isConfigured()) {
-      return NextResponse.json(
-        { error: 'Smithery API not configured' },
-        { status: 503 }
-      );
-    }
+  if (!service.isConfigured()) {
+    return NextResponse.json(
+      { error: 'Smithery API not configured' },
+      { status: 503 }
+    );
+  }
 
-    const body = await request.json();
-    const { mcpUrl, metadata, connectionId } = body;
+  const { mcpUrl, metadata, connectionId } = body;
 
     if (connectionId) {
       // Update existing connection

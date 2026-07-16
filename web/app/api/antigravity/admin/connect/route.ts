@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
 
 import { requireAdminApiOrForbidden } from '@/lib/auth/admin';
 import { getAntigravityOAuthUrl } from '@/lib/providers/antigravity-provider';

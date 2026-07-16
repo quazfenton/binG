@@ -110,14 +110,23 @@ export class DesktopVFSService {
     const changes = new Map(this.pendingFileChanges);
     this.pendingFileChanges.clear();
     
-    for (const [path, { content }] of changes) {
-      try {
-        await this.syncToLocal(path, content);
-        log.debug('Coalesced sync to local', { path });
-      } catch (err: any) {
-        log.warn('Failed to flush coalesced change', { path, error: err.message });
-      }
-    }
+    // NEW-1 followup-d at `lib/virtual-filesystem/desktop-vfs-service.ts` (flushCoalescedChanges, L113-L121);
+    // Tier 3 #40 — parallelize per-path syncToLocal calls via Promise.all + per-entry try/catch.
+    // Each path is independent (separate vfs.syncToLocal call), saves ∝N sync latency. Per-callback
+    // try/catch + log.warn preserves the original "best-effort" semantics (a single failed sync
+    // does not abort the rest of the coalesced flush). Array.from(changes) is needed because Map
+    // iterators cannot be passed to Promise.all.map directly. ∝N paths per flush — typical
+    // coalesced batch is 5-50 paths. No new dependencies.
+    await Promise.all(
+      Array.from(changes).map(async ([path, { content }]) => {
+        try {
+          await this.syncToLocal(path, content);
+          log.debug('Coalesced sync to local', { path });
+        } catch (err: any) {
+          log.warn('Failed to flush coalesced change', { path, error: err.message });
+        }
+      }),
+    );
     
     log.info(`Flushed ${changes.size} coalesced file changes to local FS`);
   }
@@ -181,15 +190,24 @@ export class DesktopVFSService {
       const sessionPaths = this.pendingSessionSyncs.get(ownerId);
       if (sessionPaths && sessionPaths.size > 0) {
         log.debug(`Session ${ownerId} debounce fired for ${sessionPaths.size} paths`);
-        // Process the queued paths - sync each to local
-        for (const path of sessionPaths) {
-          try {
-            const file = await this.vfs.readFile(ownerId, path);
-            await this.syncToLocal(path, file.content);
-          } catch (err: any) {
-            log.warn('Failed to sync queued path', { path, error: err.message });
-          }
-        }
+
+        // NEW-1 followup-d at `lib/virtual-filesystem/desktop-vfs-service.ts` (debounce handler, L194-L211);
+        // Tier 3 #38 — parallelize per-path readFile + syncToLocal via Promise.all + per-entry
+        // try/catch. Each path is independent (read-only vfs.readFile + syncToLocal call);
+        // saves ∝N read+sync wallclock. Per-entry try/catch + log.warn preserves the original
+        // "best-effort" semantics (a single failed sync does not abort the rest of the debounced
+        // flush). Array.from(sessionPaths) needed because Set iterators cannot be passed directly.
+        // ∝N paths per debounced session — typical 5-20 paths. No new dependencies.
+        await Promise.all(
+          Array.from(sessionPaths).map(async (path) => {
+            try {
+              const file = await this.vfs.readFile(ownerId, path);
+              await this.syncToLocal(path, file.content);
+            } catch (err: any) {
+              log.warn('Failed to sync queued path', { path, error: err.message });
+            }
+          }),
+        );
         this.pendingSessionSyncs.delete(ownerId);
       }
       this.sessionDebounceQueues.delete(ownerId);
@@ -428,13 +446,25 @@ export class DesktopVFSService {
     this.queueSessionSync(ownerId, paths);
     
     // For now, do immediate sync for full sync (could change to queued)
-    for (const file of snapshot.files) {
-      try {
-        await this.syncToLocal(file.path, file.content);
-        synced++;
-      } catch {
-        errors++;
-      }
+    // NEW-1 followup-d at `lib/virtual-filesystem/desktop-vfs-service.ts` (syncAllToLocal, L441-L460);
+    // Tier 3 #41 — parallelize per-file syncToLocal via Promise.all + per-file try/catch. Each
+    // file is independent (separate syncToLocal call); saves ∝N sync wallclock on full sync.
+    // The "synced" vs "errors" counters are accumulated sequentially AFTER Promise.all resolves
+    // (counters don't double-count — JS ++ is single-threaded atomic; the loop just iterates the
+    // resolved booleans). ∝N files per full sync — typical workspace has 50-500 files.
+    const syncResults41 = await Promise.all(
+      snapshot.files.map(async (file) => {
+        try {
+          await this.syncToLocal(file.path, file.content);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    for (const ok of syncResults41) {
+      if (ok) synced++;
+      else errors++;
     }
 
     log.info('Full sync to local', { synced, errors });
@@ -533,46 +563,60 @@ export class DesktopVFSService {
         return;
       }
 
-      for (const entry of entries) {
-        const fullPath = path.join(currentDir, entry.name);
-        const relativePath = path.relative(dir, fullPath).replace(/\\/g, '/');
+      // NEW-1 followup-d at `lib/virtual-filesystem/desktop-vfs-service.ts` (importFromLocal walk, L536-L595);
+      // Tier 3 #39 — parallelize per-entry processing inside the recursive walk() via Promise.all
+      // + per-entry try/catch. Each entry is independent (separate lstat + read/write — or
+      // recursive walk for subdirs). `continue` becomes `return` to skip the current entry (the
+      // .map callback's `return` exits the current entry's processing). `imported++` is safe to
+      // race: JS is single-threaded so the final count matches; only the increment order differs
+      // (irrelevant since `imported` is consumed by log.info at L579 after walk() resolves).
+      // Subdirectory recursion becomes "all subdirs at this depth in parallel" instead of
+      // depth-first — the final counter + syncedHashes Map are order-agnostic. Arrow function
+      // `fs.lstat().catch(...)` pattern preserves the broken-symlink skip semantics. ∝N entries
+      // per directory — typical workspace has 10-100 entries per directory. No new dependencies.
+      await Promise.all(
+        entries.map(async (entry) => {
+          const fullPath = path.join(currentDir, entry.name);
+          const relativePath = path.relative(dir, fullPath).replace(/\\/g, '/');
 
-        // Skip hidden/system dirs
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+          // Skip hidden/system dirs
+          if (entry.name.startsWith('.') || entry.name === 'node_modules') return;
 
-        // Use lstat to detect symlinks - isDirectory() returns false for symlinks to dirs
-        let fileStats: Stats;
-        try {
-          fileStats = await fs.lstat(fullPath);
-        } catch (err: any) {
-          // Broken symlink - skip
-          if (err.code === 'ENOENT') continue;
-          log.warn('Cannot stat file during import', { fullPath, error: err.message });
-          continue;
-        }
-
-        // Skip symlinks to avoid importing files outside the import directory
-        if (fileStats.isSymbolicLink()) {
-          log.debug('Skipping symlink during import', { fullPath, target: fileStats });
-          continue;
-        }
-
-        if (fileStats.isDirectory()) {
-          await walk(fullPath);
-        } else {
+          // Use lstat to detect symlinks - isDirectory() returns false for symlinks to dirs
+          let fileStats: Stats;
           try {
-            const content = await fs.readFile(fullPath, 'utf-8');
-            await this.vfs.writeFile(ownerId, relativePath, content);
-            this.syncedHashes.set(relativePath, this.hashContent(content));
-            imported++;
+            fileStats = await fs.lstat(fullPath);
           } catch (err: any) {
-            // Skip binary or unreadable files, but log unexpected errors
-            if (err.code !== 'ENOENT' && err.code !== 'EISDIR') {
-              log.warn('Failed to import file', { fullPath, error: err.message });
+            // Broken symlink - skip
+            if (err.code === 'ENOENT') return;
+            log.warn('Cannot stat file during import', { fullPath, error: err.message });
+            return;
+          }
+
+          // Skip symlinks to avoid importing files outside the import directory
+          if (fileStats.isSymbolicLink()) {
+            log.debug('Skipping symlink during import', { fullPath, target: fileStats });
+            return;
+          }
+
+          if (fileStats.isDirectory()) {
+            // Recurse into directory (now parallel — siblings resolve in parallel)
+            await walk(fullPath);
+          } else {
+            try {
+              const content = await fs.readFile(fullPath, 'utf-8');
+              await this.vfs.writeFile(ownerId, relativePath, content);
+              this.syncedHashes.set(relativePath, this.hashContent(content));
+              imported++;
+            } catch (err: any) {
+              // Skip binary or unreadable files, but log unexpected errors
+              if (err.code !== 'ENOENT' && err.code !== 'EISDIR') {
+                log.warn('Failed to import file', { fullPath, error: err.message });
+              }
             }
           }
-        }
-      }
+        }),
+      );
     };
 
     await walk(dir);

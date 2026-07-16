@@ -53,6 +53,38 @@ vi.mock('@/lib/sandbox/providers/llm-factory', () => ({
   }),
 }));
 
+vi.mock('@/lib/tools', () => ({
+  initToolSystem: vi.fn().mockResolvedValue(undefined),
+  executeToolCapability: vi.fn().mockResolvedValue({ success: true, output: '' }),
+  hasToolCapability: vi.fn().mockReturnValue(true),
+  isToolSystemReady: vi.fn().mockReturnValue(true),
+}));
+
+vi.mock('@/lib/chat/enhanced-llm-service', () => ({
+  streamWithConcurrentFallback: vi.fn().mockImplementation(async function* (options: any) {
+    // When tools are provided, yield a read_file tool result with text that
+    // includes a [ROLE_SELECT] prose marker (bypasses old auto-continuation loop
+    // and SelfHeal, reaching the decideAutoContinue path). When no tools (the
+    // runV1ApiCompletion path used by most existing tests), yield plain text.
+    if (options?.tools) {
+      yield {
+        content: 'I read the file. [ROLE_SELECT] continue',
+        toolInvocations: [
+          {
+            toolCallId: 'call_1',
+            toolName: 'read_file',
+            args: { path: '/test.ts' },
+            state: 'result',
+            result: { success: true, output: 'file content' },
+          },
+        ],
+      };
+    } else {
+      yield { content: 'LLM response' };
+    }
+  }),
+}));
+
 describe('Unified Agent Service', () => {
   const originalEnv = { ...process.env };
 
@@ -396,5 +428,73 @@ describe('Unified Agent Service - Edge Cases', () => {
     const result = await processUnifiedAgentRequest(config);
     
     expect(result).toBeDefined();
+  });
+});
+
+// ─── V1-API with tools auto-continuation SSE ──────────────────────────
+//
+// Exercises the runV1ApiWithTools call site (unified-agent-service.ts:~4545)
+// with a read_file tool invocation + non-empty responseText that includes
+// a [ROLE_SELECT] prose marker (to skip the old inline auto-continuation
+// loop and the SelfHeal block, reaching the decideAutoContinue path).
+//
+// This closes the gap where the HEADLINE tests lock the helper API
+// (decideAutoContinue) but the call-site wiring (SSE event emission via
+// config.onStreamChunk) could regress independently.
+describe('V1-API with tools auto-continuation SSE', () => {
+  it('emits continuation SSE event when read_file triggers single_step_read_pattern', async () => {
+    const streamChunks: string[] = [];
+
+    const config: UnifiedAgentConfig = {
+      userMessage: 'Read the file src/app.ts',
+      mode: 'v1-api',
+      tools: [
+        {
+          name: 'read_file',
+          description: 'Read a file from the filesystem',
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string' } },
+            required: ['path'],
+          },
+        },
+      ],
+      executeTool: vi.fn().mockResolvedValue({ success: true, output: 'file content' }),
+      onStreamChunk: (chunk: string) => {
+        streamChunks.push(chunk);
+      },
+    };
+
+    const result = await processUnifiedAgentRequest(config);
+
+    // The mock stream yields a read_file tool result with text that
+    // contains [ROLE_SELECT] (prose, not structured — so hasRoleSelectMarker
+    // is true but parsedRouting.found is false). The old auto-continuation
+    // loop is skipped, SelfHeal is skipped (response non-empty), and the
+    // decideAutoContinue loop fires single_step_read_pattern.
+    expect(result.success).toBe(true);
+    expect(result.mode).toBe('v1-api');
+    expect(result.response).toContain('I read the file.');
+
+    // Find SSE continuation events (JSON payloads with type: 'continuation')
+    const continuationEvents = streamChunks.filter((c) => {
+      try {
+        const p = JSON.parse(c);
+        return p.type === 'continuation';
+      } catch {
+        return false;
+      }
+    });
+
+    expect(continuationEvents.length).toBeGreaterThanOrEqual(1);
+    const event = JSON.parse(continuationEvents[0]);
+    expect(event).toMatchObject({
+      type: 'continuation',
+      reason: 'single_step_read_pattern',
+      forceSignal: false,
+      requestId: expect.any(String),
+      iteration: 1,
+      continuationsSoFar: 1,
+    });
   });
 });

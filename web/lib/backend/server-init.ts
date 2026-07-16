@@ -21,26 +21,34 @@ export async function initializeServer(): Promise<void> {
   const logger = createLogger('ServerInit');
 
   const getDbMod = async () => {
-    const mod = await import('@/lib/database/connection');
+    const mod = await import('@/lib/database/connection-shim');
     return mod.getDatabase();
   };
 
   logger.info('Initializing server resources...');
 
-  // Pre-initialize database to avoid first-request delay
-  try {
-    const db = await getDbMod();
-    if (db) {
-      logger.info('✓ Database initialized successfully');
-    } else {
-      logger.info('⏳ Database initialization in progress (will be ready shortly)');
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-  } catch (error) {
-    logger.warn('⏳ Database init will complete lazily', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+  // SEV-2: Fast-fail at boot if SQLite is not loaded. The previous
+  // try/catch wrapper silently demoted this to "Database init will complete
+  // lazily" which masked the silent-fallback into an in-memory store — a
+  // mass data-loss anti-pattern. Replace with hard-fail so a misconfigured
+  // deployment is loudly rejected by whatever orchestrator is launching it
+  // (systemd / pm2 / Docker / k8s all surface non-zero exit codes).
+  const db = await getDbMod();
+  if (!db) {
+    throw new Error(
+      '[server-init] FATAL: Database initialization returned null — refusing to start ' +
+        'with in-memory persistence (SEV-2 data-loss risk). Check upstream logs for the ' +
+        'root cause (better-sqlite3 native binding load failure, schema drift, etc.).',
+    );
   }
+  logger.info('✓ Database initialized successfully');
+
+  // SEV-2: Verify the SessionStore in particular resolved to a persisted
+  // SQLite store, not the in-memory Map fallback. Throws if the fallback
+  // was taken or if the SQLite handle is null.
+  const { assertSessionStorePersisted } = await import('@/lib/storage/session-store');
+  assertSessionStorePersisted();
+  logger.info('✓ SessionStore persistence verified');
 
   // Pre-compile /api/chat route at startup to eliminate cold start latency
   // Dynamic import triggers module initialization without executing handlers

@@ -240,7 +240,7 @@ describe('File Operations Integration Tests', () => {
       await fs.writeFile(filePath, binaryData);
 
       const result = await fs.readFile(filePath);
-      expect(result.equals(binaryData)).toBe(true);
+      expect(Buffer.isBuffer(result) && result.equals(binaryData)).toBe(true);
     });
 
     it('should return null for missing files', async () => {

@@ -73,7 +73,7 @@ export async function GET(request: NextRequest) {
 
     if (!localUserId) {
       // Try to find by email
-      const { getDatabase } = await import('@/lib/database/connection');
+      const { getDatabase } = await import('@/lib/database/connection-shim');
       const db = getDatabase();
       const email = auth0Session.user.email;
 

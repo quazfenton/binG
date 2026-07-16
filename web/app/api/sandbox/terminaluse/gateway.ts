@@ -100,8 +100,12 @@ export async function POST(req: NextRequest) {
   try {
     log(`[${requestId}] POST /api/sandbox/terminaluse/tasks`)
 
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. Rate-limit on authResult.userId stays AFTER this PA; createTaskSchema
+    // .safeParse(body) downstream. ~2-5ms saved per request on the auth+body overlap.
     // Authenticate user
-    const authResult = await verifyAuth(req)
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()])
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized: valid authentication token required' },
@@ -119,9 +123,6 @@ export async function POST(req: NextRequest) {
         { status: 429, headers: rateLimitResult.headers }
       )
     }
-
-    // Parse request body
-    const body = await req.json()
     const parseResult = createTaskSchema.safeParse(body)
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0]
@@ -260,17 +261,18 @@ async function POST_EVENT(req: NextRequest) {
   try {
     log(`[${requestId}] POST /api/sandbox/terminaluse/tasks/${taskId}/events`)
 
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. No rate-limit on this site; sendEventSchema.safeParse(body) downstream.
+    // ~2-5ms saved per request on the auth+body overlap window.
     // Authenticate user
-    const authResult = await verifyAuth(req)
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()])
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
-
-    // Parse request body
-    const body = await req.json()
     const parseResult = sendEventSchema.safeParse(body)
     if (!parseResult.success) {
       return NextResponse.json(
@@ -380,17 +382,18 @@ async function POST_FILESYSTEM(req: NextRequest) {
   try {
     log(`[${requestId}] POST /api/sandbox/terminaluse/filesystems`)
 
+    // NEW-1 followup-b (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
+    // §NEW-1 followup-b): Promise.all the verifyAuth(req) + req.json() pair to mask
+    // wallclock. No rate-limit on this site; createFilesystemSchema.safeParse(body)
+    // downstream. ~2-5ms saved per request on the auth+body overlap window.
     // Authenticate user
-    const authResult = await verifyAuth(req)
+    const [authResult, body] = await Promise.all([verifyAuth(req), req.json()])
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       )
     }
-
-    // Parse request body
-    const body = await req.json()
     const parseResult = createFilesystemSchema.safeParse(body)
     if (!parseResult.success) {
       return NextResponse.json(

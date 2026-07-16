@@ -51,63 +51,231 @@ let stmtDelete: BetterSqlite3.Statement | null = null
 let stmtAllActive: BetterSqlite3.Statement | null = null
 let stmtCleanup: BetterSqlite3.Statement | null = null
 
-try {
-  const { default: getDatabase } = require('../database/connection') as { default: () => BetterSqlite3.Database }
-  db = getDatabase()
+// ---------------------------------------------------------------------------
+// Native-binding diagnostics
+// ---------------------------------------------------------------------------
+// `require('../database/connection-shim')` can throw for several distinct reasons.
+// The bare warn line used to swallow every possibility under the same
+// `[session-store] better-sqlite3 unavailable` text, leaving operators no way
+// to tell apart a CPU-arch mismatch from a missing libc++ from an ESM/CJS
+// require mismatch. The classifier (now in the leaf module
+// `@/lib/database/sqlite-failure`) tags each failure mode so the warn log
+// states WHY, not just THAT the binding failed.
+//
+// SEV-11 follow-up (2026-06-18): `classifySqliteFailure` + its types were
+// extracted to the dependency-free leaf module `@/lib/database/sqlite-failure`
+// so `connection.ts` can import the classifier WITHOUT importing session-store
+// (which runs DB init at module-load). Import it (local scope — used below by
+// decideOnSqliteLoadFailure) AND re-export it so every existing
+// `@/lib/storage/session-store` importer keeps working unchanged.
+import {
+  classifySqliteFailure,
+  type SqliteFailure,
+  type SqliteFailureKind,
+} from '@/lib/database/sqlite-failure'
+export { classifySqliteFailure }
+export type { SqliteFailure, SqliteFailureKind }
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sandbox_sessions (
-      sessionId   TEXT PRIMARY KEY,
-      sandboxId   TEXT NOT NULL,
-      userId      TEXT NOT NULL,
-      ptySessionId TEXT,
-      cwd         TEXT NOT NULL,
-      createdAt   TEXT NOT NULL,
-      lastActive  TEXT NOT NULL,
-      status      TEXT NOT NULL DEFAULT 'creating'
+/**
+ * Wrap the `require('../database/connection-shim')` call — the line that historically
+ * swallowed every failure under a single vague warn message. If the require
+ * itself throws (CJS/ESM mismatch, missing module, native binding failure
+ * surfacing from connection.ts), classify and warn with structured fields
+ * before returning null so the caller can fall back to the in-memory store.
+ *
+ * Pure Node ESM-safe: uses the same `require(...)` pattern connection.ts uses.
+ *
+ * BUG FIX (3-shape ladder, hardened against the actual dev-server symptom):
+ *   The first version unwrapped `const { default } = conn` — broken on
+ *   CJS-hoisted output. The second version unwrapped
+ *   `typeof conn === 'function' ? conn : (conn && conn.default)` — broken on
+ *   the namespace-flattened output where named exports are preserved but
+ *   `default` is dropped. The third shape, seen in production:
+ *     typeof conn=object, conn.default=undefined, conn.getDatabase=fn
+ *   is the result of Next.js/turbopack flattening `export default getDatabase`
+ *   + `export function getDatabase` into just `{ getDatabase: fn, ... }`.
+ *
+ * Fix: try `typeof conn === 'function'` first (CJS-hoisted), then
+ * `conn.default` (ESM-wrapped namespace), then `conn.getDatabase` (named-only
+ * flattened). Only throw TypeError when NONE of the three resolve to a callable.
+ * Each throw includes "is not a function" + "did not export a callable default"
+ * + the literal substring `getDatabase` so classifySqliteFailure's
+ * interop-mismatch branch reliably fires.
+ */
+function tryRequireDatabaseConnection():
+  | { getDatabase: () => BetterSqlite3.Database }
+  | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const conn: any = require('../database/connection-shim')
+    // 3-shape unwrap delegated to the exported pure helper — single source
+    // of truth across session-store, terminal-session-manager, and jwt (×3).
+    // The helper returns `undefined` when none of Shape A/B/C matches, so
+    // the throw below fires only on genuine interop-mismatch (no callable).
+    const getDatabase = unwrapDefaultExport<() => BetterSqlite3.Database>(conn)
+    if (typeof getDatabase !== 'function') {
+      throw new TypeError(
+        // Include both "is not a function" (JavaScript runtime TypeError format)
+        // AND "did not export a callable default" (our wrapper vocabulary) so
+        // classifySqliteFailure's interop-mismatch branch reliably fires for
+        // either phrasing. Without these two substrings, the error falls through
+        // unknown and the operator gets the misleading "rebuild better-sqlite3"
+        // hint — the very bug this whole patch is fixing.
+        `getDatabase is not a function: database/connection-shim did not export a callable default ` +
+        `(typeof conn=${typeof conn}, conn.default=${typeof conn?.default}, conn.getDatabase=${typeof conn?.getDatabase}). ` +
+        `This is a CJS/ESM interop mismatch, not a better-sqlite3 binding issue.`,
+      )
+    }
+    return { getDatabase }
+  } catch (requireErr) {
+    const decision = decideOnSqliteLoadFailure(requireErr)
+    if (decision.kind === 'throw') {
+      log.error(
+        '[session-store] CRITICAL: CJS/ESM interop-mismatch — refusing silent fallback. ' +
+          'Restarting the server would lose all chat sessions, OAuth refresh tokens, ' +
+          'and VFS session metadata. Fix the build/bundler configuration before retrying.',
+        decision.reason,
+      )
+      throw decision.err
+    }
+    useSqlite = false
+    log.warn(
+      '[session-store] better-sqlite3 binding failed to load – falling back to in-memory store',
+      decision.reason,
     )
-  `)
+    return null
+  }
+}
 
-  // Indexes
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_userId ON sandbox_sessions(userId)`)
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_status ON sandbox_sessions(status)`)
+/**
+ * SEV-2 policy helper — pure function that decides what to do when
+ * `better-sqlite3` fails to load. Extracted from tryRequireDatabaseConnection
+ * so the hard-fail vs graceful-fallback policy is lock-down unit-testable
+ * (without spinning up the full session-store module or trying to mock the
+ * CJS `require()` call, which vi.doMock / vi.mock have spotty coverage for).
+ *
+ * Discrimination rule:
+ *   - 'interop-mismatch' → throw (SEV-2 hard policy — never silent-fall-back)
+ *   - all other kinds     → warn-and-fall-back (graceful degradation OK)
+ *
+ * Pure function: takes an unknown error, returns a tagged-union decision.
+ * No side effects, no logging (the caller logs based on the decision).
+ *
+ * Exported for unit testing in `__tests__/session-store-probe.test.ts`.
+ */
+export type SessionStoreLoadDecision =
+  | { kind: 'fallback'; reason: SqliteFailure }
+  | { kind: 'throw'; err: unknown; reason: SqliteFailure }
 
-  // Prepare statements
-  stmtInsert = db.prepare(`
-    INSERT OR REPLACE INTO sandbox_sessions
-      (sessionId, sandboxId, userId, ptySessionId, cwd, createdAt, lastActive, status)
-    VALUES
-      (@sessionId, @sandboxId, @userId, @ptySessionId, @cwd, @createdAt, @lastActive, @status)
-  `)
+export function decideOnSqliteLoadFailure(requireErr: unknown): SessionStoreLoadDecision {
+  const diagnostic = classifySqliteFailure(requireErr)
+  // SEV-2 hard-fail policy — never silently fall back to in-memory store on
+  // module-resolution timing errors. Both kinds propagate up to instrumentation
+  // / server-init which throws and exits the process non-zero.
+  if (diagnostic.kind === 'interop-mismatch' || diagnostic.kind === 'esm-tla-pending') {
+    return { kind: 'throw', err: requireErr, reason: diagnostic }
+  }
+  return { kind: 'fallback', reason: diagnostic }
+}
 
-  stmtGet = db.prepare(`
-    SELECT * FROM sandbox_sessions
-    WHERE sessionId = ? AND lastActive > datetime('now', '-4 hours')
-  `)
+/**
+ * Pure unwrap helper — imported from leaf module `@/lib/database/unwrap-default-export`.
+ *
+ * SEV-8 (2026-06-18 audit chain). Moved out of session-store.ts into a true
+ * leaf module to break the import cycle that crashed `pnpm run dev`:
+ *
+ *   instrumentation.ts → server-init.ts → connection-shim.ts ← unwrapDefaultExport
+ *                                                       ↑
+ *   session-store.ts ─────────────────────────────────┘ (circular TS import)
+ *                                                       │
+ *   tryRequireDatabaseConnection() require(./connection-shim) ───────┘
+ *
+ * The cycle point was `import { unwrapDefaultExport } from '@/lib/storage/session-store'`
+ * sitting at the top of connection-shim.ts. When session-store’s top-level body
+ * hit `tryRequireDatabaseConnection()` → `require('../database/connection-shim')`,
+ * the cycle re-entered and connected to connection.ts (which has TLA
+ * `await import('node' + ':module')`). unwrapDefaultExport’s shape-C
+ * `mod.getDatabase` access TDZ-threw on the TLA-pending synthetic namespace.
+ *
+ * This line is an IMPORT (not a re-export) so that the local symbol is in
+ * scope and callable from `tryRequireDatabaseConnection()` below. Earlier
+ * variants used `export { unwrapDefaultExport } from '...'` which is a
+ * re-export — that puts the name in the module’s export object but NOT in
+ * local scope, breaking the call below with `error TS2304: Cannot find name
+ * 'unwrapDefaultExport'`. All 5 external consumers (connection-shim,
+ * terminal-session-manager, jwt × 3 sites, sqlite-diagnostics.test) already
+ * import directly from the leaf, so no backwards-compat shim is needed.
+ */
+import { unwrapDefaultExport } from '@/lib/database/unwrap-default-export'
 
-  stmtGetByUser = db.prepare(`
-    SELECT * FROM sandbox_sessions
-    WHERE userId = ? AND status = 'active' AND lastActive > datetime('now', '-4 hours')
-    LIMIT 1
-  `)
+const connection = tryRequireDatabaseConnection()
+if (connection) {
+  try {
+    const { getDatabase } = connection
+    db = getDatabase()
 
-  stmtDelete = db.prepare(`DELETE FROM sandbox_sessions WHERE sessionId = ?`)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS sandbox_sessions (
+        sessionId   TEXT PRIMARY KEY,
+        sandboxId   TEXT NOT NULL,
+        userId      TEXT NOT NULL,
+        ptySessionId TEXT,
+        cwd         TEXT NOT NULL,
+        createdAt   TEXT NOT NULL,
+        lastActive  TEXT NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'creating'
+      )
+    `)
 
-  stmtAllActive = db.prepare(`
-    SELECT * FROM sandbox_sessions
-    WHERE status = 'active' AND lastActive > datetime('now', '-4 hours')
-  `)
+    // Indexes
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_userId ON sandbox_sessions(userId)`)
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_status ON sandbox_sessions(status)`)
 
-  stmtCleanup = db.prepare(`DELETE FROM sandbox_sessions WHERE lastActive <= datetime('now', '-4 hours')`)
+    // Prepare statements
+    stmtInsert = db.prepare(`
+      INSERT OR REPLACE INTO sandbox_sessions
+        (sessionId, sandboxId, userId, ptySessionId, cwd, createdAt, lastActive, status)
+      VALUES
+        (@sessionId, @sandboxId, @userId, @ptySessionId, @cwd, @createdAt, @lastActive, @status)
+    `)
 
-  // Initial cleanup
-  stmtCleanup.run()
+    stmtGet = db.prepare(`
+      SELECT * FROM sandbox_sessions
+      WHERE sessionId = ? AND lastActive > datetime('now', '-4 hours')
+    `)
 
-  useSqlite = true
-  console.log('[session-store] Using SQLite for session persistence')
-} catch (_err) {
-  useSqlite = false
-  console.warn('[session-store] better-sqlite3 unavailable – falling back to in-memory store')
+    stmtGetByUser = db.prepare(`
+      SELECT * FROM sandbox_sessions
+      WHERE userId = ? AND status = 'active' AND lastActive > datetime('now', '-4 hours')
+      LIMIT 1
+    `)
+
+    stmtDelete = db.prepare(`DELETE FROM sandbox_sessions WHERE sessionId = ?`)
+
+    stmtAllActive = db.prepare(`
+      SELECT * FROM sandbox_sessions
+      WHERE status = 'active' AND lastActive > datetime('now', '-4 hours')
+    `)
+
+    stmtCleanup = db.prepare(`DELETE FROM sandbox_sessions WHERE lastActive <= datetime('now', '-4 hours')`)
+
+    // Initial cleanup
+    stmtCleanup.run()
+
+    useSqlite = true
+    console.log('[session-store] Using SQLite for session persistence')
+  } catch (initErr) {
+    // The require above succeeded but the DB schema setup or
+    // `getDatabase()` itself raised. Treat as a binding/runtime failure and
+    // surface the same diagnostic taxonomy so the operator isn't told it's
+    // "better-sqlite3 unavailable" when in reality it was a permission
+    // problem during db.exec.
+    useSqlite = false
+    log.warn(
+      '[session-store] SQLite initialization failed after require – falling back to in-memory store',
+      classifySqliteFailure(initErr),
+    )
+  }
 }
 
 // ============================================================================
@@ -592,4 +760,73 @@ function enforceMemoryCheckpointLimits(): void {
 export function getLatestCheckpoint(sessionId: string): SessionCheckpoint | undefined {
   const checkpoints = getCheckpointsBySession(sessionId, 1)
   return checkpoints[0]
+}
+
+// ============================================================================
+// SEV-2 Persistence Probe
+// ============================================================================
+
+/**
+ * SEV-2 startup probe — guarantees that the SessionStore is backed by real
+ * persisted SQLite at the moment `assertSessionStorePersisted()` returns,
+ * not by the silent in-memory fallback.
+ *
+ * Call from `instrumentation.ts` / `server-init.ts` immediately after the
+ * database is initialized. Throws if either condition holds:
+ *   - `useSqlite === false` — the module-load init never bound a callable
+ *     `getDatabase` (native binding missing, broken build, etc.) AND
+ *     that fail was not a hard-fatal `interop-mismatch` (in which case
+ *     `tryRequireDatabaseConnection` already threw at module-load time, so
+ *     we never reached this probe).
+ *   - `db === null` — the SQLite handle never opened even though the
+ *     require succeeded (likely a runtime init failure during schema exec).
+ *
+ * On throw, the process should exit non-zero so a misconfigured deployment
+ * is loudly rejected by whatever orchestration is launching it
+ * (systemd/pm2/Docker/Kubernetes all surface non-zero exit codes).
+ */
+export function assertSessionStorePersisted(): void {
+  if (!useSqlite || !db) {
+    const reason = !useSqlite
+      ? 'useSqlite=false (better-sqlite3 binding load failed at module-load)'
+      : 'null db handle (init succeeded but getDatabase() returned null)'
+
+    // SEV-12 (2026-06-18 fix): SEV-2 hard-fail policy applies in PRODUCTION
+    // only — in non-production environments, we surface a loud WARN and
+    // continue with in-memory state so dev boot isn't completely blocked when
+    // the binding can't load (the most common cause is a Node-ABI mismatch
+    // during local development against a freshly-installed Node version).
+    //
+    // Rationale: the user-reported crash chain in their dev log shows the
+    // server reaches `Ready in 554ms` but then `instrumentation.ts` →
+    // server-init → assertSessionStorePersisted throws a FATAL, which
+    // Next.js prints as ELIFECYCLE Command failed with exit code 1. That's
+    // correct production behavior — but in NODE_ENV=development, the same
+    // throw bricks the entire dev surface (no chat history, but readable
+    // pages) for a problem that has nothing to do with the user's code.
+    //
+    // NOTE: any operator/dev who sees the WArn and wants strict SEV-2
+    // enforcement can set `SESSION_STORE_REQUIRE_SQLITE=1` in non-prod.
+    const requireSqliteEnv = process.env.SESSION_STORE_REQUIRE_SQLITE
+    const shouldHardFail =
+      process.env.NODE_ENV === 'production' ||
+      (requireSqliteEnv != null && requireSqliteEnv !== '0' && requireSqliteEnv !== 'false')
+
+    if (shouldHardFail) {
+      throw new Error(
+        '[session-store] FATAL: SessionStore is NOT persisted — ' + reason + '. ' +
+          'Refusing to start: this would silently lose all chat sessions, OAuth refresh ' +
+          'tokens, and VFS session metadata on the next restart.',
+      )
+    }
+    // Non-production (default): loud WARN + continue with in-memory store.
+    // The session/chat surface remains functional in dev; data won't survive
+    // a restart, which is the same behaviour as before SEV-2 and acceptable
+    // for day-to-day dev work.
+    log.warn(
+      '[session-store] ⚠️  NOT persisted (in-memory fallback active) — ' + reason + '. ' +
+        'This is acceptable in non-production environments. Set ' +
+        'SESSION_STORE_REQUIRE_SQLITE=1 or NODE_ENV=production to enforce SEV-2 strict mode.',
+    )
+  }
 }
