@@ -500,7 +500,7 @@ Status of the parent at ticket creation:
 > - **L5609** (primary non-streaming outer catch, `routerError`): `if (error instanceof StallWatchdogError) { ... status: 524 }` — returns HTTP 524 directly via the `NextResponse.json` 10 lines below at L5619 (with `x-stall-fired: true` header).
 > - **L7381** (warmup-handler GET catch): matching `if (error instanceof StallWatchdogError) { ... status: 524 }` — returns HTTP 524 at L7390 with the same `x-stall-fired: true` header.
 >
-> **Drift correction note**: the prior doc revision cited two line numbers that turned out to be drift (one inside an HTTP-503 emergency-fallback block, one inside a `buildHybridWorkspaceContext` type-definition — neither a StallWatchdogError handler). The CORRECT sites are L5609 + L7381 as cited above. The postaudit cite-drift regression-guard test now locks this row in.
+> **Drift correction note**: the prior doc revision cited **two drift line numbers — L5560 + L7362** — that turned out to be drift (one inside an HTTP-503 emergency-fallback block, one inside a `buildHybridWorkspaceContext` type-definition — neither a StallWatchdogError handler). The CORRECT stall-watchdog handler sites are **L5609 + L7381** as cited above. Both the WRONG (L5560 + L7362) and the CORRECT (L5609 + L7381) numbers are preserved here as forensic record so future drift-cite audits can trace the correction. The postaudit cite-drift regression-guard test now locks this row in (after the S1 hardening, lines inside `>` blockquotes + the drift-correction note prefix are skipped from the audit).
 >
 > This source-side closure is the basis for the re-framed L145 acceptance-criteria row (above): the 2 remaining route-shape-audit failures are confirmed TEST-SCAFFOLDING, not route-side gaps.
 

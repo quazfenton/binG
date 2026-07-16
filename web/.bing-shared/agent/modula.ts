@@ -324,6 +324,8 @@ export async function executeWithOrchestrationMode(
           systemPrompt,
           maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
           mode: 'auto', // Let unified agent auto-select best execution mode
+          tools: (request as any).tools,
+          executeTool: (request as any).executeTool,
         });
 
         result = {

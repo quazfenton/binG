@@ -67,6 +67,20 @@ function extractCites(docPath: string): Cite[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    // Code-reviewer S1 (2026-07-16): skip markdown BLOCKQUOTE lines (whose
+    // first non-whitespace char is `>`). Drift-correction notes that are
+    // intentional forensic records (and the historical L5560 + L7362
+    // numbers they reference) live inside `>` blockquotes in the postaudit
+    // doc — they should be skipped from the cite-drift audit so the
+    // regression guard doesn't flag them as new evidence needing drift
+    // correction.
+    if (line.trimStart().startsWith('>')) continue;
+    // Code-reviewer S1 (2026-07-16): skip the drift-correction NOTE line itself
+    // (distinct from the `>` blockquote skip above — fenced `>` lines inside
+    // code blocks could otherwise accidentally match the first skip rule and
+    // silently drop legitimate cites; this second rule is the explicit
+    // meta-commentary carve-out).
+    if (line.trimStart().startsWith('**Drift correction note**:')) continue;
     citePattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = citePattern.exec(line)) !== null) {

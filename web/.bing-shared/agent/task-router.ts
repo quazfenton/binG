@@ -4,6 +4,10 @@
  * hardcoded keyword arrays.
  */
 
+// Option 1 (postaudit item ④): migrated from `@/lib/utils/logger` to
+// direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
+// — a real file inside this package, NOT a cross-package reference into
+// web/lib/*.
 import { createLogger } from '@/lib/utils/logger';
 import type { AgentPriority, AgentType } from './agent-kernel';
 import { getAgentKernel } from './agent-kernel';
@@ -13,6 +17,7 @@ import { emitEvent } from '@/lib/events/bus';
 import { AnyEvent as EventTypes } from '@/lib/events/schema';
 import type { IntentMatch, IntentDefinition } from './intent-schema';
 import { classifyIntentStage1, classifyIntentStage2 } from './intent-schema';
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 
 // Re-export types for convenience
 export type { IntentMatch, IntentDefinition } from './intent-schema';
@@ -764,7 +769,12 @@ class TaskRouter {
       sandboxHandle: session.sandboxHandle,
     });
 
-    const tools = await getMCPToolsForAI_SDK(request.userId, request.task);
+    // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+    const toolPlan: SelectToolPlanResult = selectToolPlan({
+      userMessage: request.task,
+      authenticated: !!request.userId,
+    });
+    const tools = await getMCPToolsForAI_SDK(request.userId, toolPlan);
 
     const result = await provider.runAgentLoop({
       userMessage: request.task,
