@@ -96,6 +96,16 @@ export interface SelectToolPlanOptions {
   /** Weight multiplier on agentTask matches. Default: 0.6. */
   agentTaskWeight?: number;
   /**
+   * Item ⑤: When true, URLs / file paths detected inside `agentTask`
+   * will promote the corresponding `web.fetch` / file intents via the
+   * explicit-signal boost — even when `currentTurn` is empty. Default:
+   * `false`. The audit-cited defect was that agent-purpose URLs bled
+   * into every turn's web-automation intent. Closing by default keeps
+   * current call sites safe; opt in per-site when a standing task
+   * explicitly drives a fetch.
+   */
+  agentTaskUrlReadsEnabled?: boolean;
+  /**
    * Multiplier applied to an intent's score when its negative regex matches
    * the current turn. Default: 0 (hard exclude). Set to e.g. 0.25 for
    * "soft negation" if you want to keep the intent on standby.
@@ -481,7 +491,15 @@ function scoreIntent(
   // yet expose a current-turn accessor; the active chat route does
   // NOT pass agentTask and continues to consume only currentTurn +
   // history as before.
-  if (agentTask && safeMatches(rule.keywordsRegExp, agentTask)) {
+  //
+  // Item ② guard: agentTask scoring is strictly gated to fire ONLY when
+  // the current turn is empty (or whitespace-only). This prevents a
+  // unified-agent standing task ("review PRs daily") from bleeding into
+  // every user turn ("write a function") and inflating the tool list
+  // with artefacts the user did not ask for. When currentTurn is
+  // non-empty, currentTurn + history carry the full signal — agentTask
+  // is silently ignored.
+  if (currentTurn.trim() === '' && agentTask && safeMatches(rule.keywordsRegExp, agentTask)) {
     score += rule.weight * opts.agentTaskWeight;
     matchedSignals.push('agent-task');
   }
@@ -576,6 +594,9 @@ export function selectToolPlan(
     currentTurnWeight: Math.max(0, options.currentTurnWeight ?? 1.0),
     historyWeight: Math.max(0, options.historyWeight ?? 0.4),
     agentTaskWeight: Math.max(0, options.agentTaskWeight ?? 0.6),
+    // Item ⑤: default OFF so a future default-flip is a deliberate
+    // migration, not a silent regression. Opt-in per call site.
+    agentTaskUrlReadsEnabled: options.agentTaskUrlReadsEnabled ?? false,
     negativeMultiplier: clamp01(options.negativeMultiplier ?? 0),
     maxIntents: Math.max(1, options.maxIntents ?? DEFAULT_MAX_INTENTS),
   };
@@ -625,12 +646,19 @@ export function selectToolPlan(
   // - A bare URL in the current turn strongly hints at web.fetch — but
   //   only when the web.fetch intent was NOT negatively-evidenced this
   //   turn. "do not browse https://x" should NOT add web.fetch.
+  // Item ⑤: the agentTask halves of these explicit-signal detectors are
+  // gated on `opts.agentTaskUrlReadsEnabled`. With the flag at its
+  // default `false`, an agent-purpose URL (`agentTask` only) is ignored
+  // and the explicit-signal boost fires only off `userMessage`. This
+  // closes the audit-found "agent-purpose URLs bleeding into every
+  // turn" leak. Setting the flag to `true` re-engages the agentTask
+  // halves for callers that explicitly opt in.
   const urlMatch =
     /(https?:\/\/[^\s)}\]]+)/i.test(userMessage) ||
-    (!!agentTask && /(https?:\/\/[^\s)}\]]+)/i.test(agentTask));
+    (opts.agentTaskUrlReadsEnabled && !!agentTask && /(https?:\/\/[^\s)}\]]+)/i.test(agentTask));
   const explicitFileMatch =
     /[^\s]+\.[a-z0-9]{1,5}\b/i.test(userMessage) ||
-    (!!agentTask && /[^\s]+\.[a-z0-9]{1,5}\b/i.test(agentTask));
+    (opts.agentTaskUrlReadsEnabled && !!agentTask && /[^\s]+\.[a-z0-9]{1,5}\b/i.test(agentTask));
   const hasAttachedFile = !!(input.attachedFiles && input.attachedFiles.length > 0);
   // Detect negation before aggregating so we don't override it later.
   const webFetchNegated = (

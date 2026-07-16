@@ -1,27 +1,29 @@
 {
+  "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "allowSyntheticDefaultImports": true
+    "noEmit": true,
+    // incremental build cache scoped to this package. Root tsconfig.json
+    // does NOT set incremental, so the package-level declaration IS the
+    // explicit intent — keep these two lines together so future operators
+    // don't strip tsBuildInfoFile thinking it's redundant with hypothetical
+    // root inheritance. Cache lives at packages/shared/dist/.tsbuildinfo.
+    "incremental": true,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": [
-    "agent/**/*.ts", "agent/**/*.tsx",
-    "FS/**/*.ts", "auth/**/*.ts", "lib/**/*.ts", "types/**/*.ts", "index.ts"
+    "agent/**/*.ts",
+    "agent/**/*.tsx",
+    "FS/**/*.ts",
+    "auth/**/*.ts",
+    "lib/**/*.ts",
+    "types/**/*.ts",
+    "index.ts"
   ],
   "exclude": [
-    "node_modules", "dist", "**/__tests__/**", "**/*.test.ts", "**/*.spec.ts"
+    "node_modules",
+    "dist",
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.spec.ts"
   ]
 }

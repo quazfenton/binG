@@ -26,5 +26,8 @@
   "dependencies": {
     "@bing/platform": "workspace:*",
     "jsonrepair": "^3.14.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   }
 }
