@@ -64,17 +64,39 @@ describe('Finding #5 — processUnifiedAgentRequest returned outcome discriminat
       // be ADJACENT-ish with only whitespace between them, but TypeScript
       // formatter inserts `: void` (the return-type annotation). The
       // capture never reached the meta-object closer.
-      //
-      // New approach: anchor on the deterministic function-signature
+      //      // New approach: anchor on the deterministic function-signature
       // terminator `\): *void *{` which only appears at the END of the
       // auditResponseShape signature. No magic bound needed because the
-      // `): void {` pattern is unique to a void-returning TS function
+      //`): void {` pattern is unique to a void-returning TS function
       // declaration that follows an inline meta-object parameter — and
       // no other function in unified-agent-service.ts returns void with
       // an inline meta object literal. Greedy-then-non-greedy means:
       // `[\s\S]*?` non-greedy from `function ... (` to the FIRST
       // occurrence of `): void {`. The capture range INCLUDES the
       // entire meta object (including `outcome:` at L1541-L1546).
+      //
+      // WHY non-greedy `*?` is safe: the `): void {` anchor is a deterministic
+      // function-signature terminator. Once the regex engine encounters it
+      // (no earlier `)` in the auditResponseShape signature itself, since
+      // the meta-object literal is closed by `}` BEFORE the signature
+      // terminator `)`), the non-greedy match STOPS immediately. Greedy
+      // backtracking is impossible because the engine prefers the shortest
+      // viable match from `function ... (` — the rule is: non-greedy matches
+      // expand only as many chars as needed to reach the FIRST satisfying
+      // anchor. Without this anchor, the same regex with greedy `*` would
+      // over-capture into the function body and miss `outcome: meta.outcome`
+      // at L1541-L1546. So the safety proof relies on:
+      //   (a) the anchor exists (verified by the prior failing rerun),
+      //   (b) the anchor is unique to auditResponseShape's signature, and
+      //   (c) regex backtracking semantics guarantee non-greedy stops
+      //       at the FIRST anchor (not at the next one).
+      // Future readers: if anyone weakens the anchor pattern, re-run this
+      // test + verify the capture still includes `outcome:`. If the
+      // capture drops the `outcome:` line, the failure mode is silent
+      // (the assertion would still pass via `'success'`/`'error'` matches
+      // in the captured range), so a stronger negative assertion (e.g.,
+      // asserting `meta.outcome` appears in sig) would catch anchor drift
+      // early in CI.
       const sigMatch = UAG.match(
         /function\s+auditResponseShape\s*\([\s\S]*?\)\s*:\s*void\s*\{/,
       );

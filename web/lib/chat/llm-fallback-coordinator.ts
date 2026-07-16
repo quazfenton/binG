@@ -993,12 +993,47 @@ export class StallWatchdogError extends Error {
  * The implementation signature accepts `StallWatchdogError | StallWatchdogErrorCode`
  * and dispatches by typeof — keeping the exhaustiveness guard in one place.
  */
+/**
+ * Type guard that narrows an arbitrary value to the {@link StallWatchdogErrorCode}
+ * string-literal union. Encapsulates the `/^(STALL|DRIFT|ABORT|OTHER)$/` regex
+ * so route-side discriminators become `if (isStallWatchdogErrorCode(x))` and
+ * the downstream `as StallWatchdogErrorCode` cast is compiler-verified (not a
+ * string-only assumption).
+ */
+export function isStallWatchdogErrorCode(value: unknown): value is StallWatchdogErrorCode {
+  return typeof value === 'string' && /^(STALL|DRIFT|ABORT|OTHER)$/.test(value);
+}
+
+/**
+ * Canonical StallWatchdogError discriminator by constructor.name — used by the
+ * orchestrator non-streaming discriminator + OUTERCATCH to survive vi.mock
+ * hoist-hop cases where `instanceof StallWatchdogError` returns false because
+ * the test mock's `new StallWatchdogError(...)` constructs an instance via a
+ * different module-load context. Matches the JS pattern of reading
+ * `value.constructor.name` rather than `value.name` so a future Error subclass
+ * that overrides `.name` (e.g. a re-export wrapper) doesn't accidentally match
+ * when it shouldn't. Companion to `isStallWatchdogErrorCode` (which discriminates
+ * by `errorCode` string field) — call both for defense-in-depth.
+ */
+export function isStallWatchdogInstanceByConstructorName(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { constructor?: { name?: unknown } }).constructor?.name === 'StallWatchdogError'
+  );
+}
+
+/** Map a {@link StallWatchdogError} (or its `errorCode` directly) to its HTTP status code.
+ * @example stallWatchdogErrorToStatus(new StallWatchdogError('drift', { errorCode: 'DRIFT' })) // → 502
+ * @example stallWatchdogErrorToStatus('STALL')                                                  // → 524
+ */
 export function stallWatchdogErrorToStatus(error: StallWatchdogError): number;
 export function stallWatchdogErrorToStatus(errorCode: StallWatchdogErrorCode): number;
 export function stallWatchdogErrorToStatus(
   input: StallWatchdogError | StallWatchdogErrorCode,
 ): number {
-  const code: StallWatchdogErrorCode = typeof input === 'string' ? input : input.errorCode;
+  const code: StallWatchdogErrorCode =
+    input instanceof StallWatchdogError ? input.errorCode : input;
   switch (code) {
     case 'STALL': return 524;
     case 'DRIFT': return 502;

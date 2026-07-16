@@ -70,6 +70,21 @@ describe('orchestrator-error-unwrap helper', () => {
       expect(result).not.toBeNull();
       expect(result!).toContain('[retryable=false]');
     });
+
+    it('Error instance with .message → passes duck-type guard → formatted block', () => {
+      // `new Error('boom')` has a non-empty `.message` string, so it PASSES the
+      // `isStructuredMcpError` guard (which only checks `typeof value.message === 'string'
+      // and `value.message.length > 0`). The duck-type guard is intentionally permissive —
+      // Error instances are accepted as structured inputs even though they lack `code` /
+      // `retryable` / `correctedExample`. Lock this behavior so a future guard-tightening
+      // PR doesn't silently drop Error-shape errors from the LLM-facing pipeline.
+      const result = unwrapStructuredToolError(new Error('boom'));
+      expect(result).not.toBeNull();
+      expect(result!).toMatch(/^\[ORCHESTRATOR-UNWRAP\]: /);
+      expect(result!).toContain('boom');
+      expect(result!).toContain('[error.code=UNKNOWN]');
+      expect(result!).toContain('[retryable=false]');
+    });
   });
 
   describe('non-structured inputs → null', () => {
@@ -84,6 +99,12 @@ describe('orchestrator-error-unwrap helper', () => {
       ['object with only non-message fields', { foo: 'bar' }],
       ['object with empty message string', { message: '' }],
       ['object with non-string message', { message: 123 }],
+      // Duck-type guard lock against class instances — `Date` and custom
+      // class instances have NO `.message` property, so they FAIL the guard
+      // and return `null`. Locks the guard against future shallow-typed
+      // regressions where a class instance might accidentally be accepted.
+      ['Date object', new Date()],
+      ['plain class instance', new (class { foo = 'bar' })()],
     ])('%s → null', (_label, value) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       expect(unwrapStructuredToolError(value as any)).toBeNull();

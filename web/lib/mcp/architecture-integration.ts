@@ -2170,6 +2170,44 @@ function applyPostCallPipeline(
 }
 
 /**
+ * Code-reviewer SHOULD-CONSIDER (b) refactor — module-private thin wrapper
+ * that consolidates the 15 `return contract ? applyPostCallPipeline(VAR,
+ * contract, toolName, toolCallId, args) : VAR;` patterns across the
+ * dispatch body into single-line helper calls. Strict no-op functionally
+ * (the ternary body is exactly equivalent) — consolidation wins:
+ *   - One place for the contract-vs-undefined decision (was duplicated
+ *     at every wrap site; a future change to the unconditional-vs-bypass
+ *     logic only requires editing this helper).
+ *   - Param ordering matches the call-site convention `(contract,
+ *     toolName, toolCallId, args, result)` so the helper reads like
+ *     "wrap this tool's result with this contract's gates".
+ *   - Param order DIFFERS from `applyPostCallPipeline(result, contract,
+ *     toolName, toolCallId, args)` which takes result FIRST (canonical
+ *     for the `pipeline(X, ...context)` shape). The re-order here trades
+ *     canonical shape for call-site readability — a deliberate ergonomic
+ *     choice documented in the JSDoc above.
+ *   - Accepts `Contract | undefined` to match the call sites where the
+ *     route layer passes `contract` as the optional 7th param of
+ *     `callMCPToolFromAI_SDK` (see signature at L2190). When contract is
+ *     undefined, the helper short-circuits to `result` unchanged — same
+ *     backward-compat behavior as the prior ternary pattern.
+ *
+ * Future maintenance: adding a new dispatch branch should use this helper
+ * (NOT the inline ternary pattern). Adding a new gate (e.g., per-tool
+ * token-budget enforcement) requires editing only `wrapDispatch` to add
+ * the gate call before delegating to `applyPostCallPipeline`.
+ */
+function wrapDispatch(
+  contract: Contract | undefined,
+  toolName: string,
+  toolCallId: string,
+  args: Readonly<Record<string, unknown>> | undefined,
+  result: { success: boolean; output: string; error?: string },
+): { success: boolean; output: string; error?: string } {
+  return wrapDispatch(contract, toolName, toolCallId, args, result);
+}
+
+/**
  * Call MCP tool from Architecture 1 (AI SDK)
  *
  * Use this when the LLM requests a tool call
@@ -2340,7 +2378,7 @@ export async function callMCPToolFromAI_SDK(
             } else {
               logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
               const __dispatchResult: { success: boolean; output: string; error?: string } = { success: true, output: cachedData };
-              return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+              return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
             }
           } else {
             // Fully cacheable: list_files, search_files
@@ -2349,7 +2387,7 @@ export async function callMCPToolFromAI_SDK(
               success: true,
               output: typeof cached === 'string' ? cached : JSON.stringify(cached),
             };
-            return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
           }
         }
       }
@@ -2359,14 +2397,14 @@ export async function callMCPToolFromAI_SDK(
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
       const result = await executeBlaxelCodegenTool(toolName, args)
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return result;
+      return wrapDispatch(contract, toolName, toolCallId, args, result);
     }
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
       const result = await executeArcadeTool(toolName, args, userId);
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return result;
+      return wrapDispatch(contract, toolName, toolCallId, args, result);
     }
 
     // NEW: Check if it's a provider-specific advanced tool
@@ -2376,12 +2414,14 @@ export async function callMCPToolFromAI_SDK(
       toolName.startsWith('codesandbox_') ||
       toolName.startsWith('sprites_')
     ) {
-      return executeProviderAdvancedTool(toolName, args)
+      const __dispatchResult = await executeProviderAdvancedTool(toolName, args);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
     }
 
     // NEW: Check if it's a Nullclaw tool
     if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
-      return nullclawMCPBridge.executeTool(toolName, args, userId)
+      const __dispatchResult = await nullclawMCPBridge.executeTool(toolName, args, userId);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
     }
 
     // NEW: Check if it's a remote MCP tool (from HTTP transport servers)
@@ -2390,7 +2430,8 @@ export async function callMCPToolFromAI_SDK(
       const remoteServerNames = (await import('./http-transport')).getHTTPTransportNames();
       for (const serverName of remoteServerNames) {
         if (toolName.startsWith(`${serverName}_`)) {
-          return callRemoteMCPTool(toolName, args, { signal: options?.signal });
+          const __dispatchResult = await callRemoteMCPTool(toolName, args, { signal: options?.signal });
+          return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
         }
       }
     }
@@ -2488,7 +2529,7 @@ export async function callMCPToolFromAI_SDK(
         output: resultOutput,
         error: (result as any)?.error,
       };
-      return contract ? applyPostCallPipeline(dispatchResult, contract, toolName, toolCallId) : dispatchResult;
+      return wrapDispatch(contract, toolName, toolCallId, undefined, dispatchResult);
     }
 
     // Check if it's the web_search tool
@@ -2522,7 +2563,7 @@ export async function callMCPToolFromAI_SDK(
               success: true,
               output: JSON.stringify({ results, query: args.query, source: 'searxng' }),
             };
-            return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
           }
         }
 
@@ -2538,7 +2579,7 @@ export async function callMCPToolFromAI_SDK(
           success: true,
           output: JSON.stringify({ ...result, source: 'duckduckgo' }),
         };
-        return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
       } catch (error: any) {
         logger.error('[WebSearch] Failed', { error: error.message });
         const __dispatchResult: { success: boolean; output: string; error?: string } = {
@@ -2546,7 +2587,7 @@ export async function callMCPToolFromAI_SDK(
           output: '',
           error: error.message || 'Web search failed',
         };
-        return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
       }
     }
 
@@ -2618,7 +2659,7 @@ export async function callMCPToolFromAI_SDK(
           output: (result as any)?.output || JSON.stringify(result),
           error: (result as any)?.error,
         };
-        return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
       }
     }
 
@@ -2650,7 +2691,7 @@ export async function callMCPToolFromAI_SDK(
         output: nativeResult.content,
         error: nativeResult.isError ? nativeResult.content : undefined,
       }
-      return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
     }
 
     const mcporterResult = await callMCPorterTool(toolName, args);
@@ -2660,7 +2701,7 @@ export async function callMCPToolFromAI_SDK(
       invalidateToolResultCache(args?.path);
     }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
-    return mcporterResult
+    return wrapDispatch(contract, toolName, toolCallId, args, mcporterResult);
   } catch (error: any) {
     logger.error(`MCP tool call failed: ${toolName}`, error)
     const __dispatchResult: { success: boolean; output: string; error?: string } = {
@@ -2668,7 +2709,7 @@ export async function callMCPToolFromAI_SDK(
       output: '',
       error: error.message || 'Tool call failed',
     }
-    return contract ? applyPostCallPipeline(__dispatchResult, contract, toolName, toolCallId, args) : __dispatchResult;
+    return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
   }
 }
 

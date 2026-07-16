@@ -12,6 +12,14 @@
  *   8. Empty object + empty array edge cases
  */
 
+// TODO(CANONICAL-JSON-ALIGN): see /opt/bing/.tickets/CANONICAL-JSON-DRIFT-FIX.md
+// The docblock at /opt/bing/web/lib/utils/canonical-json.ts:L13-L15 commits to
+// JSON.stringify-compatible undefined handling (drop undefined keys in objects;
+// preserve undefined as null in arrays), but tests 6 + 7 currently assert the
+// OPPOSITE behavior (literal "undefined" string for objects, empty entries for
+// arrays). This header is a single-grep signal for the docblock-vs-implementation
+// drift; flip tests 6 + 7 to assert JSON.stringify parity when option (a) lands.
+
 import { describe, it, expect } from 'vitest';
 import { stableStringify } from '@/lib/utils/canonical-json';
 

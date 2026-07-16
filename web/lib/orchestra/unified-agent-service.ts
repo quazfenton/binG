@@ -2375,6 +2375,22 @@ async function runV2Native(
     
     if (!result.success) {
       recordFailure('v2-cli', 'opencode-engine', result.error);
+      // Fix A (UAG-LOG-SHAPE-CONTRACT-INVESTIGATION.md) — emit `outcome: 'error'`
+      // along the failure-path so the 5-value audit-log contract
+      // (success/exhausted/error/degraded/phase2-fallback/modal-success) covers
+      // every canonical outcome. The pre-throw position ensures the emit
+      // happens BEFORE the throw escapes this function (vs. a post-throw
+      // catch-site emit that would race with the route layer's OUTERCATCH).
+      // The `outcome: 'error' as const` literal narrows the type so a future
+      // tsc-gated CI gate doesn't widen it to `string` (which would mask the
+      // contract).
+      log.info('[AGENT-SERVICE] processUnifiedAgentRequest error-path pre-throw', {
+        provider: config?.provider ?? '(unknown)',
+        model: config?.model ?? '(unknown)',
+        mode: 'v2-cli',
+        outcome: 'error' as const,
+        errorMessage: result.error,
+      });
       throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
     }
     

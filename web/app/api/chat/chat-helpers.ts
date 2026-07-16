@@ -3,6 +3,13 @@
  *
  * Non-parser helpers extracted from route.ts. Response-text parsing now lives
  * in '@/lib/chat/file-edit-parser' so backend and UI consume the same logic.
+ *
+ * Tool-result surfacing note: when this file grows helpers that surface
+ * structured MCP errors (`{ message, code?, retryable?, correctedExample? }`)
+ * to the LLM, they MUST use `unwrapStructuredToolError` from
+ * `@/lib/mcp/orchestrator-error-unwrap` rather than building the
+ * `[ORCHESTRATOR-UNWRAP]: …` block inline. This keeps the canonical format
+ * in one place. Tracked in /opt/bing/.tickets/UNWRAP-HELPER-MIGRATION.md.
  */
 
 import { z } from 'zod';

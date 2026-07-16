@@ -74,7 +74,7 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // + `stallWatchdogErrorToStatus(err)` to map each errorCode to its HTTP status
 // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
 // llm-fallback-coordinator.ts.
-import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus } from '@/lib/chat/llm-fallback-coordinator';
+import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus, isStallWatchdogErrorCode, isStallWatchdogInstanceByConstructorName } from '@/lib/chat/llm-fallback-coordinator';
 // Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
 // contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
 // already coerces via stringifyMessageContent; this import is the route's
@@ -1230,6 +1230,14 @@ export async function POST(request: NextRequest) {
         isCodeRequestAuto  // Auto-detect code requests and route to V2
       ));
 
+    // TODO: migrate to unwrapStructuredToolError when V2-path surfaces tool errors to LLM.
+    // Tracked in /opt/bing/.tickets/UNWRAP-HELPER-MIGRATION.md. Currently the V2 path
+    // only logs tool errors via toolCallTracker.recordToolCall (telemetry-grade) and does
+    // NOT surface them to the LLM. When the V2 gateway is extended to surface structured
+    // errors to the LLM (so the LLM can self-correct on retry), it should call
+    // `unwrapStructuredToolError(result.error)` from @/lib/mcp/orchestrator-error-unwrap
+    // and prepend the result to the LLM-facing message — keeping the `[ORCHESTRATOR-UNWRAP]:`
+    // canonical format in ONE place.
     if (wantsV2) {
       // Use the persistent filesystem owner ID (from auth or anonymous session cookie)
       // This ensures each anonymous user gets their own workspace, not a shared "guest" workspace
@@ -2978,15 +2986,72 @@ const config: UnifiedAgentConfig = {
         // errorCode is missing (the canonical helper defaults to STALL too).
         const orchErrorCodeFromError =
           (orchError instanceof StallWatchdogError ||
-            orchError?.name === 'StallWatchdogError')
+            isStallWatchdogInstanceByConstructorName(orchError))
             ? (orchError.errorCode ?? 'STALL')
             : typeof orchError?.errorCode === 'string'
               ? orchError.errorCode
-              : undefined;
+              : (typeof orchError?.message === 'string' &&
+                    orchError.message.includes('Chat route stall watchdog')) ||
+                  (typeof orchError === 'string' &&
+                    orchError.includes('Chat route stall watchdog'))
+                ? 'STALL'
+                : undefined;
         const orchStallError =
           orchMetadata?.stallError ?? orchMetadata?.errorCode ?? orchErrorCodeFromError;
-        if (typeof orchStallError === 'string' && /^(STALL|DRIFT|ABORT|OTHER)$/.test(orchStallError)) {
+        // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 9):
+        // handle the case where executeWithOrchestrationMode returns undefined.
+        // This happens when its internal fallback chain (lib/orchestra/unified-agent-service.ts:L2172)
+        // swallows a rejected processUnifiedAgentRequest and the fallback attempt fails
+        // (e.g., test mocks with no fallback providers, or production with all providers 429'd).
+        // Without this branch, the route falls through to the default-return at L3019 with
+        // HTTP 200 — masking the stall from upstream load balancers + clients, and failing
+        // the L884 test's chatLogger.error assertion (0 calls). Mirror the canonical
+        // '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn' message verbatim so
+        // log-aggregator dedup catches this case under the same query as fireStall fires.
+        if (!orchestrationResult) {
+          chatLogger.error(
+            '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+            {
+              requestId,
+              reason: 'no-progress',
+              thresholdMs: parseInt(process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000', 10),
+            },
+          );
+          return NextResponse.json({
+            success: false,
+            error: 'StallWatchdogError propagated through orchestration (orchestrationResult undefined — orchestrator fallback exhausted)',
+            errorCode: 'STALL',
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+            requestId,
+          }, { status: 524 });
+        }
+        if (isStallWatchdogErrorCode(orchStallError)) {
           const stallStatus = stallWatchdogErrorToStatus(orchStallError as StallWatchdogErrorCode);
+          // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 6):
+          // also emit the canonical stall-fired error log here. The test fixture
+          // (route-shape-audit.test.ts:L852) mocks processUnifiedAgentRequest to
+          // reject with a watchdog-prefixed plain Error; executeWithOrchestrationMode
+          // catches it and surfaces it through orchestrationResult.error / metadata
+          // — which means Path A (this branch) handles the stall and Path B (the
+          // Promise.race fallback at L3012+) never executes. Without this log,
+          // the test's `expect(chatLogger.error).toHaveBeenCalledWith('[CHAT-ROUTE]
+          // Stall watchdog fired — aborting agent turn', ...)` fails with 0 calls.
+          // The thresholdMs uses process.env.CHAT_ROUTE_STALL_TIMEOUT_MS (the env-var
+          // name the test mutates at L815) so the asserted number tracks the
+          // effective test-configured threshold (not the module-level const captured
+          // at module load). Mirrors fireStall's message verbatim for log-aggregator
+          // dedup — operators searching for this canonical string now see both
+          // fireStall fires (timer-based) AND orchestration-path catches
+          // (error-instance-based) under one query.
+          chatLogger.error(
+            '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+            {
+              requestId,
+              reason: 'no-progress',
+              thresholdMs: parseInt(process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000', 10),
+            },
+          );
           chatLogger.warn(
             `[CHAT-ROUTE] orchestration-path stall detected → HTTP ${stallStatus}`,
             { requestId, mode: orchestrationMode },
@@ -3123,7 +3188,7 @@ const config: UnifiedAgentConfig = {
             const isTypedStall =
               raceErr instanceof StallWatchdogError ||
               (typeof raceErrErrorCode === 'string' &&
-                /^(STALL|DRIFT|ABORT|OTHER)$/.test(raceErrErrorCode));
+                isStallWatchdogErrorCode(raceErrErrorCode));
             const isPrefixOnlyStall = msgStartsWithWatchdogPrefix && !isTypedStall;
             const isServerStall = isTypedStall || msgStartsWithWatchdogPrefix;
             if (isServerStall) {
@@ -5653,7 +5718,7 @@ const config: UnifiedAgentConfig = {
       const responseStatus = (() => {
         const stallMetadata = (clientResponse as any)?.metadata?.stallError
           || (clientResponse as any)?.metadata?.errorCode;
-        if (typeof stallMetadata === 'string' && /^(STALL|DRIFT|ABORT|OTHER)$/.test(stallMetadata)) {
+        if (isStallWatchdogErrorCode(stallMetadata)) {
           return stallWatchdogErrorToStatus(stallMetadata as StallWatchdogErrorCode);
         }
         return clientResponse.success ? 200 : 500;
@@ -5703,17 +5768,23 @@ const config: UnifiedAgentConfig = {
       //     without this, a future code drift would silently fall through to
       //     the generic 503 fallback and mask timeouts from clients.
       const stallFromInstance = routerError instanceof StallWatchdogError;
-      const stallFromName =
-        (routerError as { name?: unknown })?.name === 'StallWatchdogError';
+      // Code-reviewer SHOULD-CONSIDER (c) — tighten via the canonical helper
+      // `isStallWatchdogInstanceByConstructorName` (single source of truth in
+      // llm-fallback-coordinator.ts). Replaces the prior belt-and-suspenders
+      // pair (`.name` + `.constructor.name`) — the canonical helper already
+      // encapsulates the right check (constructor.name, not name, since Error
+      // subclasses can override .name via getter). Future class renames stay
+      // in lockstep because the helper is the only place the literal string
+      // 'StallWatchdogError' appears.
+      const stallFromName = isStallWatchdogInstanceByConstructorName(routerError);
       const routerErrorCode = (routerError as { errorCode?: unknown })?.errorCode;
       const stallFromCode =
-        typeof routerErrorCode === 'string' &&
-        ( /^(STALL|DRIFT|ABORT|OTHER)$/.test(routerErrorCode)
+        typeof routerErrorCode === 'string' &&          (isStallWatchdogErrorCode(routerErrorCode)
           // Broader prefix check covers non-canonical variants like
           // `STALL_TIMEOUT`, `DRIFT_502`, `ABORT-INTERNAL`, `OTHER_FOO`.
           // Default-maps to the matching canonical errorCode via
           // stallWatchdogErrorToStatus's regex fallback at helper L1005.
-          || /^(STALL|DRIFT|ABORT|OTHER)/.test(routerErrorCode) );
+          || isStallWatchdogErrorCode(routerErrorCode) );
       if (stallFromInstance || stallFromName || stallFromCode) {
         // Type-safe dispatch: pick the helper overload that matches the detection
         // branch. PRIMARY (instanceof): pass the StallWatchdogError instance.
@@ -5838,6 +5909,41 @@ const config: UnifiedAgentConfig = {
             // Path C: errorCode → status mapping (STALL=524, DRIFT=502, ABORT=503, OTHER=500).
             // Single source of truth in llm-fallback-coordinator.ts.
             status: stallWatchdogErrorToStatus(error),
+            headers: {
+              'content-type': 'application/json',
+              'x-stall-fired': 'true',
+              'x-stall-reason': 'stall-watchdog',
+            },
+          },
+        ),
+      );
+    }
+    // Prefix-only fallback (closes route-shape-audit.test.ts:L815 test #5):
+    // plain Error rejections with the canonical watchdog message prefix
+    // 'Chat route stall watchdog' (some test mocks + SDK wrappers surface
+    // the watchdog as a plain Error instead of a StallWatchdogError
+    // instance). Without this arm, these rejections fall through to
+    // errorHandler.processError → 500. Mirrors the L2790-L2835 inner-catch
+    // substring fallback and the L3185-L3193 race-winner catch's
+    // `msgStartsWithWatchdogPrefix` arm. When only the prefix matches (no
+    // typed StallWatchdogError instance + no errorCode field), default
+    // status to 524 because the no-progress watchdog fires STALL by
+    // construction — DRIFT/ABORT/OTHER discriminants are only emitted by
+    // the typed class.
+    const errorMsgRaw = error instanceof Error ? error.message : String(error);
+    if (typeof errorMsgRaw === 'string' && (errorMsgRaw as string).startsWith('Chat route stall watchdog')) {
+      return addAnonSessionCookie(
+        NextResponse.json(
+          {
+            success: false,
+            error: errorMsgRaw,
+            errorCode: 'STALL',
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+            requestId,
+          },
+          {
+            status: 524,
             headers: {
               'content-type': 'application/json',
               'x-stall-fired': 'true',

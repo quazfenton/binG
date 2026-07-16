@@ -269,6 +269,7 @@ describe('agents/contract', () => {
 
     // (d) Mutating a single entry's properties must throw TypeError (per-entry
     // freeze applied inside the getter's `.map(e => Object.freeze({ ...e }))`).
+    // AuditLine is flat (no nested objects) — the shallow per-entry freeze covers all mutation paths.
     expect(() => {
       (c.audit.lines[0] as any).note = 'tampered';
     }).toThrow(TypeError);
