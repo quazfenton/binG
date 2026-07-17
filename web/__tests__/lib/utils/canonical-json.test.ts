@@ -7,18 +7,17 @@
  *   3. Array preservation vs object sort (arrays are NOT sorted)
  *   4. Circular reference detection (throws RangeError)
  *   5. Primitives (string / number / boolean / null) handling
- *   6. undefined values in objects are DROPPED (matching JSON.stringify behavior)
- *   7. undefined as a top-level value returns undefined (matching JSON.stringify)
- *   8. Empty object + empty array edge cases
+ *   6. Top-level undefined returns undefined (matches JSON.stringify)
+ *   7. Object values: undefined / functions / Symbols DROPPED (matches JSON.stringify)
+ *   8. Array values: undefined / functions / Symbols become null (matches JSON.stringify)
+ *   9-10. Circular reference detection
+ *   11-12. Edge cases (empty object, mixed nested)
+ *   13-15. Object-drop + array-null for functions/Symbols (new in 2026-07-16)
  */
 
-// TODO(CANONICAL-JSON-ALIGN): see /opt/bing/.tickets/CANONICAL-JSON-DRIFT-FIX.md
-// The docblock at /opt/bing/web/lib/utils/canonical-json.ts:L13-L15 commits to
-// JSON.stringify-compatible undefined handling (drop undefined keys in objects;
-// preserve undefined as null in arrays), but tests 6 + 7 currently assert the
-// OPPOSITE behavior (literal "undefined" string for objects, empty entries for
-// arrays). This header is a single-grep signal for the docblock-vs-implementation
-// drift; flip tests 6 + 7 to assert JSON.stringify parity when option (a) lands.
+// Tests 6 + 7 + 13 + 14 + 15 align with Option (a) (close the docblock-vs-impl
+// drift): stableStringify mirrors JSON.stringify for undefined / functions /
+// Symbols. See /opt/bing/.tickets/CANONICAL-JSON-DRIFT-FIX.md for closure context.
 
 import { describe, it, expect } from 'vitest';
 import { stableStringify } from '@/lib/utils/canonical-json';
@@ -73,30 +72,39 @@ describe('lib/utils/canonical-json', () => {
       expect(stableStringify(undefined)).toBeUndefined();
     });
 
-    // NOTE (2026-07-16): The canonical-json.ts docblock CLAIMS that
-    // `undefined` values inside an object are dropped (matching
-    // JSON.stringify behavior). The actual implementation in this file
-    // outputs the literal string "undefined" for object values (via the
-    // recursion `JSON.stringify(k) + ':' + stableStringify(obj[k])` where
-    // stableStringify(undefined) returns `undefined` which coerces to the
-    // string "undefined" when concatenated). The tests below assert the
-    // ACTUAL current behavior so they pass; an audit-ticket TODO is
-    // tracked separately to align the implementation with its docblock.
-    it('7. undefined values inside an object serialize as the literal "undefined" string (CURRENT IMPL BEHAVIOR — see TODO)', () => {
-      // JSON.stringify(undefined) === undefined (primitive).
-      // `'a':` + undefined coerces to the string 'undefined' via string
-      // concatenation. The implementation does NOT drop the key — it
-      // emits `"b":undefined` as the literal token.
-      expect(stableStringify({ a: 1, b: undefined })).toBe('{"a":1,"b":undefined}');
+    // Option (a) docblock-alignment: the implementation now mirrors
+    // JSON.stringify semantics — undefined / functions / Symbols are DROPPED
+    // from object keys, and become `null` inside arrays. This closes the
+    // audit-ticket docblock-vs-impl drift (CANONICAL-JSON-DRIFT-FIX.md).
+    it('7. undefined values inside an object are DROPPED (JSON.stringify parity)', () => {
+      // Mirrors JSON.stringify: { a: 1, b: undefined } -> '{"a":1}' (b is dropped)
+      expect(stableStringify({ a: 1, b: undefined })).toBe('{"a":1}');
+      expect(stableStringify({ a: undefined })).toBe('{}');
+      expect(stableStringify({ a: 1, b: undefined, c: 3 })).toBe('{"a":1,"c":3}');
     });
 
-    it('8. undefined inside arrays emits empty entries (CURRENT IMPL BEHAVIOR — see TODO)', () => {
-      // `[undefined, 1, undefined].map(stableStringify)` produces
-      // `[undefined, '1', undefined]` (the primitives, not strings).
-      // `[undefined, '1', undefined].join(',')` === ',1,' (Array.prototype.join
-      // coerces undefined / null to empty string). Wrapped in `[...]`:
-      // `'[,1,]'`.
-      expect(stableStringify([undefined, 1, undefined])).toBe('[,1,]');
+    it('8. undefined inside arrays becomes null (JSON.stringify parity)', () => {
+      // Mirrors JSON.stringify: [undefined, 1, undefined] -> '[null,1,null]'
+      expect(stableStringify([undefined, 1, undefined])).toBe('[null,1,null]');
+      expect(stableStringify([undefined])).toBe('[null]');
+      expect(stableStringify([1, undefined, 2])).toBe('[1,null,2]');
+    });
+
+    it('13. function values inside an object are DROPPED (JSON.stringify parity)', () => {
+      const fn = () => 'never called';
+      expect(stableStringify({ a: 1, b: fn })).toBe('{"a":1}');
+      expect(stableStringify({ a: fn, b: 2 })).toBe('{"b":2}');
+    });
+
+    it('14. Symbol values inside an object are DROPPED (JSON.stringify parity)', () => {
+      expect(stableStringify({ a: 1, b: Symbol('x') })).toBe('{"a":1}');
+      expect(stableStringify({ [Symbol.iterator]: 'x', a: 1 })).toBe('{"a":1}');
+    });
+
+    it('15. functions and Symbols inside arrays become null (JSON.stringify parity)', () => {
+      const fn = () => 'never';
+      expect(stableStringify([fn, 1, Symbol('x')])).toBe('[null,1,null]');
+      expect(stableStringify([Symbol.iterator])).toBe('[null]');
     });
   });
 

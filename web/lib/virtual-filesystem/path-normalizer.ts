@@ -136,6 +136,11 @@ export function normalizeLLMPath(
     }
   }
 
+  // 4ab: Bare "workspace" keyword with a scoped session path means scope root
+  if (p === 'workspace' && scopePath && scopePath.startsWith('workspace/') && scopePath !== 'workspace') {
+    p = '';
+  }
+
   // 4b: Strip "workspace/sessions/{anyId}/" prefix (LLM echoing context paths)
   const projectSessionMatch = p.match(/^workspace\/sessions\/[^/]+\/(.+)$/);
   if (projectSessionMatch) {

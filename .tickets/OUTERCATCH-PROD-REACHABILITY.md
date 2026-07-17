@@ -7,6 +7,8 @@
 
 ## Summary
 
+
+**Cross-ref:** This is the orchestrator-side L2172-swallow bug. The route-side OUTERCATCH catch lives at  (CLOSED 2026-07-16, see [postaudit #stall-closure-2026-07-16](/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#stall-closure-2026-07-16)).
 The route.ts **OUTERCATCH** discriminator at **L5621** maps `StallWatchdogError` → HTTP 524 (mirroring the inner catch's 524 contract). This is the production-side safety net for the rare case where `StallWatchdogError` escapes the orchestrator.
 
 **However:** the outer try/catch at **`lib/orchestra/unified-agent-service.ts:L2172`** wraps `processUnifiedAgentRequest` and catches **all** thrown errors — including `StallWatchdogError` instances thrown internally at L2378, L2467, L2609, L2655, L2738, L3043. The catch:

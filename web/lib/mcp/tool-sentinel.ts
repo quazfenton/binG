@@ -20,6 +20,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { stableStringify } from '@/lib/utils/canonical-json';
 
 // ───── Sentinel shape constants ──────────────────────────────────────────────
 
@@ -110,7 +111,11 @@ export function wrapWithSentinel(
   const toolCallId = options?.toolCallId ?? randomUUID();
 
   // 1. Stringify — stable JSON so the model sees a deterministic shape.
-  const body = stableStringify(result);
+  //    stableStringify returns string | undefined (matches JSON.stringify
+  //    for top-level undefined); coerce to '' as the sentinel body must
+  //    be a string. The actual tool-result paths return objects/arrays,
+  //    so the coalesce is a type-system guard, not a runtime fallback.
+  const body = stableStringify(result) ?? '';
   // 2. Scrub injection patterns out of the body.
   const { scrubbed, drops } = scrubInjectionPatterns(body);
 
@@ -137,21 +142,8 @@ export function wrapWithSentinel(
 }
 
 // ───── Helpers ────────────────────────────────────────────────────────────────
-
-/** Stable stringifier — same canonical-form rules as contract.ts. */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return '[' + value.map(stableStringify).join(',') + ']';
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return (
-    '{' +
-    keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') +
-    '}'
-  );
-}
+// stableStringify is imported from @/lib/utils/canonical-json (single source
+// of truth; mirrors JSON.stringify semantics for undefined/functions/Symbols).
 
 function safeParse(text: string): unknown {
   try {

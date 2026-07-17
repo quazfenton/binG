@@ -391,16 +391,6 @@ returning exactly two hits at L692 and L713.
 
 ## Item ⑥ closure (2026-07-16)
 
-Item ⑥ is fully resolved as of 2026-07-16. The `requireFullCatalog`
-typed sentinel — introduced in `enhanced-llm-service.ts` so tools-only
-helpers (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`) get
-the full MCP catalog for fuzzy name matching and JSON-Schema lookup —
-was previously locked in by prose JSDoc + `computeTaskFilterView`
-SHOULD-CONSIDER notes, not CI-runnable assertions. The risk: a future
-regression that loosened the sentinel's short-circuit OR widened the
-per-source-filter helpers' `[...all]` acceptance criteria would silently
-degrade tools-only dispatch with no test catching it. Item ⑥ closes that
-gap by codifying the contract as Vitest assertions.
 
 ### What landed (item ⑥ DONE 2026-07-16)
 
@@ -573,6 +563,8 @@ Path C source code is **CLOSED**. The `StallWatchdogError` class was extended wi
 
 ## STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16)
 
+
+**Stable anchor:** `#stall-closure-2026-07-16`
 The STALL-ROUTEINTEGRATION-FOLLOWUP workstream is fully closed as of 2026-07-16. All three investigation paths (a) discriminator-widening at L5551, (b) direct-rethrow at L2990, (c) test-side workaround) are no longer needed - the route-side discriminator + test-side signature regex fix closed the L945 identity-loss gap end-to-end.
 
 ### What landed (2026-07-16)
@@ -590,3 +582,12 @@ The STALL-ROUTEINTEGRATION-FOLLOWUP workstream is fully closed as of 2026-07-16.
 - [x] OUTERCATCH-GAP test-side - CLOSED (resolution a + signature regex)
 - [x] Path C discriminant - CLOSED (StallWatchdogError errorCode -> HTTP mapping via helper)
 - [x] L141 acceptance row - `[x]` (172/172 FULLY GREEN 2026-07-16)
+
+## Env-var-gated tests (appendix)
+
+Tests gated behind  for load-bearing RED surfacing.
+
+### Section F: picker-layer upgrade signal
+
+`/opt/bing/web/__tests__/chat/phase1-status-cascade.test.ts` — picker-layer FUNCTIONALLY integrates `alreadyWrittenPaths` into filesystem-edits derivation. Gate: `PHASE1_PICKER_LOCK={on|1|true}` — default off (CI badge-clean); when enabled locally surfaces a gap in the picker-layer upgrade signal.
+

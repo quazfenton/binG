@@ -339,7 +339,7 @@ class VFSProvider implements CapabilityProvider {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
       const { resolveToScopedPath, stripScopePrefixForDisplay } = await import('../virtual-filesystem/path-normalizer');
       const scopePath = context.scopePath || 'workspace';
-      const scopedPath = resolveToScopedPath(input.path || 'workspace', scopePath);
+      const scopedPath = resolveToScopedPath(input.path || '/', scopePath);
       const listing = await virtualFilesystem.listDirectory(ownerId, scopedPath);
       return {
         path: stripScopePrefixForDisplay(listing.path, { scopePath }),

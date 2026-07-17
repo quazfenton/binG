@@ -2995,6 +2995,10 @@ const config: UnifiedAgentConfig = {
           const encoder = new TextEncoder();
           const streamBody = new ReadableStream({
             async start(controller) {
+              // SSE emit contract — all events MUST include `mode: orchestrationMode`
+              // for cross-mode usage analytics + drift detection at the LLM-stream
+              // layer. Event-specific fields are added per call site (e.g. token
+              // carries `content`, done carries `success` + `phase1Status`).
               const enqueue = (eventType: string, data: Record<string, unknown>) => {
                 try {
                   controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify({ ...data, timestamp: Date.now() })}\n\n`));
@@ -3012,18 +3016,112 @@ const config: UnifiedAgentConfig = {
                 });
 
                 // Send response content
+
+                  // `phase1Status` intentionally absent — orchestrator result is unknown mid-stream;
+
+                  // surfaced only in done/error events. See [CHAT-ROUTE] boundary JSDoc for the contract.
                 if (orchestrationResult?.response) {
                   enqueue('token', {
                     content: orchestrationResult?.response ?? "",
+                  mode: orchestrationMode,
                   });
                 }
 
                 // Send completion
-                enqueue('done', {
+                // Phase B — derive phase1Status from orchestration metadata so
+                // SSE consumers + operators debugging 'empty response' tickets
+                // can see the Phase 1 outcome WITHOUT waiting for the chat
+                // hook to update.
+                //
+                // Precedence (canonical → defensive fallback):
+                //   1. orchestrationResult.metadata.phase1Status
+                //      — set upstream by the orchestrator after
+                //        applyFilesystemEditsFromResponse returns
+                //        (filesystem-edits.ts:L82). Single source of truth
+                //        per /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-
+                //        ARCHITECTURE.md.
+                //   2. orchestrationResult.phase1Status
+                //      — defensive fallback for legacy callers that
+                //        pre-date the metadata wrapping.
+                //   3. 'unknown'
+                //      — backward-compat with pre-Phase A clients that
+                //        don't surface any phase1Status field.
+                const ssePhase1Status = orchestrationResult?.metadata?.phase1Status
+                  ?? (orchestrationResult as any)?.phase1Status
+                  ?? 'unknown';
+
+                // Phase B — emit `[CHAT-ROUTE] phase1Status:` log line so
+                // operators can grep server logs for empty-response tickets
+                // without waiting for the chat hook UI to update.
+                // SHOULD-CONSIDER (a) — silent fallthrough to 'unknown' masks
+                // upstream bugs. Log a warn when BOTH upstream sources are
+                // missing so operators debug the missing field, not the SSE
+                // event. Gated behind NODE_ENV !== 'test' to avoid test-suite
+                // noise when mocks don't set phase1Status.
+                if (
+                  ssePhase1Status === 'unknown' &&
+                  !hasMetadataPhase1Status &&
+                  !hasTopLevelPhase1Status &&
+                  process.env.NODE_ENV !== 'test'
+                ) {
+                  chatLogger.warn('[CHAT-ROUTE] phase1Status source missing — falling back to "unknown"', {
+                    hasMetadata: !!orchestrationResult?.metadata,
+                    hasTopLevel: hasTopLevelPhase1Status,
+                    mode: orchestrationMode,
+                  });
+                }
+
+                // Phase B — emit `[CHAT-ROUTE] phase1Status` log line so
+                // operators can grep server logs for empty-response tickets
+                // without waiting for the chat hook UI to update.
+                chatLogger.info('[CHAT-ROUTE] phase1Status', {
+                  phase1Status: ssePhase1Status,
+                  mode: orchestrationMode,
+                });
+
+                                const hasMetadataPhase1Status = !!orchestrationResult?.metadata && typeof orchestrationResult.metadata.phase1Status !== 'undefined';
+                const hasTopLevelPhase1Status = !!orchestrationResult && typeof (orchestrationResult as any).phase1Status !== 'undefined';
+                const ssePhase1Status = orchestrationResult?.metadata?.phase1Status
+                  ?? (orchestrationResult as any)?.phase1Status
+                  ?? 'unknown';
+
+                // SHOULD-CONSIDER (a) — silent fallthrough to 'unknown' masks
+                // upstream bugs. Log a warn when BOTH upstream sources are
+                // missing so operators debug the missing field, not the SSE
+                // event. Gated behind NODE_ENV !== 'test' to avoid test-suite
+                // noise when mocks don't set phase1Status.
+                if (
+                  ssePhase1Status === 'unknown' &&
+                  !hasMetadataPhase1Status &&
+                  !hasTopLevelPhase1Status &&
+                  process.env.NODE_ENV !== 'test'
+                ) {
+                  chatLogger.warn('[CHAT-ROUTE] phase1Status source missing — falling back to "unknown"', {
+                    hasMetadata: !!orchestrationResult?.metadata,
+                    hasTopLevel: hasTopLevelPhase1Status,
+                    mode: orchestrationMode,
+                  });
+                }
+
+                // Phase B — emit `[CHAT-ROUTE] phase1Status` log line so
+                // operators can grep server logs for empty-response tickets
+                // without waiting for the chat hook UI to update.
+                chatLogger.info('[CHAT-ROUTE] phase1Status', {
+                  phase1Status: ssePhase1Status,
+                  mode: orchestrationMode,
+                });
+
+enqueue('done', {
                   success: orchestrationResult?.success ?? false,
                   content: orchestrationResult?.response ?? "",
                   metadata: orchestrationResult?.metadata ?? null,
                   mode: orchestrationMode,
+                  // Phase B — propagate phase1Status as a top-level SSE
+                  // payload field. Cross-references cascade test
+                  // `phase1-status-cascade.test.ts` Section B (SSE
+                  // metadata contract). The `it.todo` at L228 flips to
+                  // passing once this field is in the done event payload.
+                  phase1Status: ssePhase1Status,
                 });
 
                 controller.close();
@@ -3046,7 +3144,7 @@ const config: UnifiedAgentConfig = {
                 // tags are appended inline).
                 // See /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md
                 // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) for design rationale.
-                enqueue('error', { message: error.message, mode: orchestrationMode });
+                enqueue('error', { message: error.message, mode: orchestrationMode, phase1Status: ssePhase1Status });
                 // SHOULD-CONSIDER (b) postaudit fix: structured chatLogger.error
                 // for log-side grep-discoverability. Operators searching server
                 // logs: `grep 'orchestration error' log.txt` recovers operator-friendly signal.

@@ -7,12 +7,14 @@
  * sentinel-wrap can share one implementation (the earlier duplication was
  * flagged by the code-reviewer as SHOULD-CONSIDER S1).
  *
- * Canonical-form contract:
+ * Canonical-form contract (aligned with JSON.stringify):
  *   - Object keys are sorted lexicographically at EVERY depth.
  *   - Array order is preserved (arrays are NOT sorted).
  *   - `null` and primitives pass through `JSON.stringify(value)` unchanged.
- *   - `undefined` values inside an object are dropped (matches `JSON.stringify`
- *     behavior; arrays preserve them as `null`).
+ *   - `undefined` values inside an object are DROPPED (matches `JSON.stringify`).
+ *   - `undefined` inside an array becomes `null` (matches `JSON.stringify`).
+ *   - Functions and Symbols are DROPPED inside objects; become `null` in arrays.
+ *   - Returns `string | undefined` — top-level `undefined` mirrors `JSON.stringify(undefined)`.
  *   - Throws on circular references. `JSON.stringify` already throws on
  *     cycles for objects/arrays; the explicit cycle-detection here is
  *     defense-in-depth so callers can rely on a `RangeError` rather than
@@ -52,22 +54,51 @@ function hasCircularReference(value: unknown, seen: WeakSet<object>): boolean {
  * Throws RangeError on circular references. Throws TypeError on
  * non-serializable values (e.g., BigInt) — same behavior as
  * `JSON.stringify` on the same input.
+ *
+ * Returns `string | undefined`:
+ *   - `undefined` (the primitive) at top-level matches `JSON.stringify(undefined)`.
+ *   - `undefined` / functions / Symbols inside an object are DROPPED.
+ *   - `undefined` / functions / Symbols inside an array become `null`.
+ *
+ * Callers that need a guaranteed string (e.g., for `createHash().update()`)
+ * should coalesce with `?? ''` at the call site — passing `undefined` to
+ * `update()` throws TypeError in Node's crypto module.
  */
-export function stableStringify(value: unknown): string {
+export function stableStringify(value: unknown): string | undefined {
   if (value === null || typeof value !== 'object') {
+    // Pass-through: primitives are not transformed by stableStringify.
+    // Note: JSON.stringify(undefined) === undefined; JSON.stringify(function)
+    // === undefined. We return undefined in both cases so callers can
+    // distinguish "intentional undefined" from a serialized string.
     return JSON.stringify(value);
   }
   if (hasCircularReference(value, new WeakSet())) {
     throw new RangeError('stableStringify: circular reference detected');
   }
   if (Array.isArray(value)) {
-    return '[' + value.map(stableStringify).join(',') + ']';
+    // Array preservation: keep order, but coerce undefined/functions/Symbols
+    // to `null` to match JSON.stringify behavior.
+    return (
+      '[' +
+      value
+        .map((item) => {
+          const serialized = stableStringify(item);
+          return serialized === undefined ? 'null' : serialized;
+        })
+        .join(',') +
+      ']'
+    );
   }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
   return (
     '{' +
     keys
+      .filter((k) => {
+        // Drop undefined/functions/Symbols at every depth — matches JSON.stringify.
+        const v = obj[k];
+        return v !== undefined && typeof v !== 'function' && typeof v !== 'symbol';
+      })
       .map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k]))
       .join(',') +
     '}'

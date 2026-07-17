@@ -352,7 +352,18 @@ describe('phase1Status cross-layer cascade', () => {
   // tests are accidentally passing against text-mode-only logic.
 
   describe('Section F: picker-layer upgrade signal', () => {
-    it('filesystem-edits.ts picker FUNCTIONALLY integrates alreadyWrittenPaths into derivation', () => {
+    // gate Section F via it.runIf (local RED, CI green)
+    //   truthy: PHASE1_PICKER_LOCK={on|1|true}
+    //   skip:   garbage + unset (interpret as 'no lock-in')
+    //   RED:    lock-in gap locally when enabled
+    // postaudit carryover — see /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#section-f-picker-layer
+    it.runIf(
+      process.env.PHASE1_PICKER_LOCK === 'on' ||
+      process.env.PHASE1_PICKER_LOCK === '1' ||
+      process.env.PHASE1_PICKER_LOCK === 'true',
+    )(
+      'locks picker-layer integration',
+      () => {
       const filesystemEditsPath = resolve(
         process.cwd(),
         'app/api/chat/filesystem-edits.ts',

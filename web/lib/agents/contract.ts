@@ -22,6 +22,7 @@
  */
 
 import { createHash, randomUUID } from 'crypto';
+import { stableStringify } from '@/lib/utils/canonical-json';
 
 // ───── Types ─────────────────────────────────────────────────────────────────
 
@@ -170,23 +171,8 @@ export interface Contract {
 }
 
 // ───── sha256 contractHash (canonical JSON, sorted keys, no audit) ────────────
-
-/** Stable JSON serializer: sorts keys at every depth. */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return '[' + value.map(stableStringify).join(',') + ']';
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return (
-    '{' +
-    keys
-      .map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k]))
-      .join(',') +
-    '}'
-  );
-}
+// stableStringify is imported from @/lib/utils/canonical-json (single source of
+// truth; mirrors JSON.stringify semantics for undefined/functions/Symbols).
 
 /**
  * Compute the sha256 hex of the contract payload — but EXCLUDE the audit log
@@ -206,7 +192,13 @@ export function computeContractHash(
     killSwitches: payload.killSwitches,
     escalationGraph: payload.escalationGraph,
   };
-  return createHash('sha256').update(stableStringify(material)).digest('hex');
+  // stableStringify returns string | undefined; coalesce to '' because
+  // createHash().update(undefined) throws TypeError. The material object
+  // is fully populated (no undefined values at top-level keys), so the
+  // stringified output is always defined — the coalesce is a type-system
+  // guard, not a runtime fallback.
+  const serialized = stableStringify(material) ?? '';
+  return createHash('sha256').update(serialized).digest('hex');
 }
 
 // ───── Audit log factory ──────────────────────────────────────────────────────

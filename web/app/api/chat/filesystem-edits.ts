@@ -825,8 +825,19 @@ export async function applyFilesystemEditsFromResponse(input: {
   // omitted here because this function is never bypassed when called —
   // phase-status.ts path-level handling is the responsibility of the
   // caller (route.ts).
+  //
+  // Bug #48/Phase F — picker-layer integration of `alreadyWrittenPaths`:
+  // paths already written by structured tool calls in this turn are
+  // structurally-committed (VFS write succeeded at the tool layer) but
+  // don't appear in `result.applied` because the text-mode parser blocked
+  // them at the top of this function. Without integrating
+  // `input.alreadyWrittenPaths?.size`, phase1Status underreports actual
+  // applied work as 'empty' (BUG 2/5) when only structured writes
+  // succeeded. Adding the size gives downstream consumers (route.ts
+  // retry-surface, SSE metadata, chat hook, loop-guard) the correct
+  // success signal.
   result.phase1Status = derivePhase1Status({
-    applied: result.applied.length,
+    applied: result.applied.length + (input.alreadyWrittenPaths?.size || 0),
     errors: result.errors.length,
   });
 
