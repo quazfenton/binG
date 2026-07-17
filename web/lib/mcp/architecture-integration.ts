@@ -2204,7 +2204,7 @@ function wrapDispatch(
   args: Readonly<Record<string, unknown>> | undefined,
   result: { success: boolean; output: string; error?: string },
 ): { success: boolean; output: string; error?: string } {
-  return wrapDispatch(contract, toolName, toolCallId, args, result);
+  return contract ? applyPostCallPipeline(result, contract, toolName, toolCallId, args) : result;
 }
 
 /**
@@ -2268,7 +2268,12 @@ export async function callMCPToolFromAI_SDK(
       note: 'pre-call',
     });
     const validation = validateArguments(toolName, args);
-    if (!validation.ok) {
+    // Use explicit `=== false` discriminant check (rather than `!validation.ok`)
+    // so TS reliably narrows the GateResult discriminated union to the failure
+    // branch where `reason` is present. Negation narrowing slips in some TS
+    // versions + project tsconfig settings, so the explicit check is the
+    // canonical safe pattern.
+    if (validation.ok === false) {
       // Hoist the narrowing into a local binding so downstream template
       // literals can read `validation.reason` without TS narrowing slips.
       const failReason: string = validation.reason;

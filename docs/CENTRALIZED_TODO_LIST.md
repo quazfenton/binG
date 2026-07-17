@@ -870,3 +870,14 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
 - **Canonical regression guard**: `/opt/bing/web/lib/chat/__tests__/stall-watchdog-error.test.ts` (10 tests, all green).
 - **Follow-up**: `/opt/bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md` (route.ts HTTP 200 override bug).
 - **Reference**: `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` Path C closure section.
+
+
+---
+
+## STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16)
+
+Workstream status: CLOSED 2026-07-16 (full closure narrative in /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md).
+
+- OUTERCATCH-GAP: route-side CLOSED + test-side CLOSED.
+- Path C discriminant helper: CLOSED (StallWatchdogError errorCode -> HTTP status mapping via `stallWatchdogErrorToStatus`).
+- L141 acceptance row: `[x]` (172/172 FULLY GREEN 2026-07-16).

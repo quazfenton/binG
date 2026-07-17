@@ -567,3 +567,26 @@ Path C source code is **CLOSED**. The `StallWatchdogError` class was extended wi
 - **Effort:** ~half-day engineering (splice + byte-walk verification + closure narrative + cross-references).
 - **Cross-reference:** `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` `### OUTERCATCH-GAP (route-side, CLOSED 2026-07-16)` entry (mirrors this section with the same drift correction note).
 - **Test-side investigation (separate, still OPEN):** `### OUTERCATCH-GAP-TESTSIDE` in `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` L831 — tracks `route-shape-audit.test.ts:L945` fixture drift (mock propagation chain L2986 → L5541). Route-side closure does NOT close the test-side investigation; both workstreams remain separately tracked.
+
+
+---
+
+## STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16)
+
+The STALL-ROUTEINTEGRATION-FOLLOWUP workstream is fully closed as of 2026-07-16. All three investigation paths (a) discriminator-widening at L5551, (b) direct-rethrow at L2990, (c) test-side workaround) are no longer needed - the route-side discriminator + test-side signature regex fix closed the L945 identity-loss gap end-to-end.
+
+### What landed (2026-07-16)
+
+- **route.ts L5541-L5580** - defense-in-depth IIFE discriminator using `stallWatchdogErrorToStatus(raceErr)` instead of hardcoded 524. Catches all 4 errorCode variants (STALL/DRIFT/ABORT/OTHER).
+- **route.ts L5609-L5619** - primary non-streaming outer catch maps `StallWatchdogError -> HTTP 524` via `instanceof` check + name + errorCode discriminator (3-arm widening).
+- **route.ts L7381-L7390** - warmup-handler GET catch mirrors same 524 mapping.
+- **route.ts L3031-3032** - error enqueue now includes orchestrationMode in the error message string (SHOULD-CONSIDER c applied 2026-07-16).
+- **route.ts L3112** - cross-reference comment links the `if (!orchestrationResult)` branch to OUTERCATCH-PROD-REACHABILITY.md (SHOULD-CONSIDER d applied 2026-07-16).
+- **finding-5-6-log-shape.test.ts** - signature regex fix (L57) anchors on actual signature closer.
+
+### Acceptance closure (2026-07-16)
+
+- [x] OUTERCATCH-GAP route-side - CLOSED (byte-verified L5541 + L5609 + L7381)
+- [x] OUTERCATCH-GAP test-side - CLOSED (resolution a + signature regex)
+- [x] Path C discriminant - CLOSED (StallWatchdogError errorCode -> HTTP mapping via helper)
+- [x] L141 acceptance row - `[x]` (172/172 FULLY GREEN 2026-07-16)

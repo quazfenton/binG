@@ -1,7 +1,7 @@
 # OUTERCATCH-PROD-REACHABILITY — F3.5 SHOULD-CONSIDER (d)
 
 **Ticket type:** Follow-up audit finding (code-reviewer verdict: OK with N SHOULD-CONSIDER, item d)
-**Status:** 🟡 OPEN
+**Status:** ✅ CLOSED 2026-07-16
 **Opened:** 2026-07-16
 **Code-reviewer:** OK with 1 SHOULD-CONSIDER (F3.5 refactor — `isStallWatchdogErrorCode` predicate + `instanceof` dispatch + JSDoc trim)
 
@@ -95,3 +95,21 @@ Rationale:
 ## Closure Narrative
 
 _To be filled when ticket is closed._
+
+## Closure (2026-07-16)
+
+The Option (c) documentation gap is closed as of 2026-07-16. The route-side OUTERCATCH at `route.ts:L5621` correctly maps `StallWatchdogError` -> HTTP 524 (byte-walk confirms L5541-L5580 IIFE discriminator + L5609, L7381 outer catch sites). The production-unreachable nature of the OUTERCATCH under the L2172 `processUnifiedAgentRequest` swallow chain is documented inline + cross-referenced from the L3112 `if (!orchestrationResult)` branch.
+
+### What landed (2026-07-16)
+
+- `route.ts` L5621 + L5541-L5580 + L5609, L7381 outer catches enforce `StallWatchdogError -> HTTP 524`.
+- `route.ts` L3032 error enqueue includes orchestrationMode in the error message string (SHOULD-CONSIDER c).
+- `route.ts` L3112 cross-reference comment links to OUTERCATCH-PROD-REACHABILITY.md (SHOULD-CONSIDER d).
+- `CENTRALIZED_TODO_LIST.md` mirrored: STALL-ROUTEINTEGRATION-FOLLOWUP workstream formally closed.
+
+### Acceptance criteria — all DONE
+
+- [x] c.1 — JSDoc above OUTERCATCH at route.ts:L5621 documents production-unreachable
+- [x] c.2 — One-line comment near L2172 explains intentional catch
+- [x] c.3 — CENTRALIZED_TODO_LIST.md cross-reference updated
+- [x] a.1 — STALL-RETHROUGH-REFACTOR follow-up ticket opened

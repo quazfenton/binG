@@ -82,6 +82,16 @@ import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus,
 // stream regression where non-string response shapes became `'[object Object]'`
 // at L1889 (operator-precedence floor: `+` binds tighter than `||`).
 import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
+// Phase D — retry-path decision helper (extracted from the inline OR
+// chain in this file for unit-testability + cross-consumer reuse). The
+// helper encapsulates the BUG 1 / BUG 6 fix decision: skip the retry
+// enhancements when phase1Status is 'empty'/'success'/'skipped' — but
+// keep the existing retry path for 'error' or undefined (backward
+// compat with clients that pre-date the phase1Status field).
+import {
+  shouldSkipRetryForPhase,
+  retryActionForPhase,
+} from '@/lib/chat/retry-route-decision';
 // Inspector helpers (extracted to `lib/chat/shape-helpers.ts` in this turn
 // so they're unit-testable without a live LLM). Used at L1717-L1718 to emit
 // `[CHAT-ROUTE] processUnifiedAgentRequest returned` INFO lines that surface
@@ -633,6 +643,18 @@ export async function POST(request: NextRequest) {
         toolExecutionSummary?: string;
         failedToolCalls?: Array<{ name: string; error: string; args?: any }>;
         filesystemChanges?: { applied: number; failed: number; failedDetails: any[] };
+        // Phase D — Phase 1/Phase 2 success-signal architecture. The 4-state
+        // enum that the client captures from the previous turn's SSE
+        // metadata. Routes the retry-path decision so the BUG 1 / BUG 6
+        // surface (tools/tool_choice stripped on retry) only fires when
+        // phase1Status === 'error' — for 'empty' (LLM was thinking) we
+        // SKIP the enhancement payload + model rotation entirely and let
+        // the request serve to the original model with the original tools
+        // intact. Optional for backward compatibility — clients that
+        // don't surface phase1Status yet still work (the existing 'error'
+        // retry path runs by default). See:
+        // /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md
+        phase1Status?: 'success' | 'empty' | 'error' | 'skipped';
       };
     };
     provider = requestedProvider;
@@ -646,6 +668,58 @@ export async function POST(request: NextRequest) {
     let retrySource = 'none'; // 'client-rotation', 'telemetry-ranker', or 'none'
 
     if (retryContext?.isEmptyResponseRetry) {
+      // Phase D — Phase 1/Phase 2 success-signal architecture retry-path
+      // gate. Closes BUG 1 + BUG 6 (Mistral retry doesn't pass tools /
+      // Mistral retry 400 error). The 4-state enum routes the retry so:
+      //
+      //   'error'   → existing retry path (preserves tools/tool_choice
+      //                since we never strip them; do model rotation + the
+      //                enhancement payload). Closes BUG 1 + BUG 6.
+      //   'empty'   → SKIP the entire retry block. The LLM was thinking
+      //                last turn; re-running with the original model is
+      //                the right thing — do NOT strip tools/tool_choice,
+      //                do NOT prepend the [RETRY CONTEXT] system message,
+      //                do NOT rotate the model. Just serve the request to
+      //                the original model with the original tools intact.
+      //   'skipped' / 'success' → defensive: neither should trigger a retry.
+      //                Log a warning + skip the retry block.
+      //   undefined → backward-compat (clients that don't yet surface
+      //                phase1Status will hit the pre-existing retry path).
+      //
+      // Without this gate, the empty-response retry path strips the
+      // tools/tool_choice from the body — Mistral then returns 400
+      // "Assistant message must have either content or tool_calls, but
+      // not none." (BUG 1 + BUG 6 surface in /opt/bing/web/logs/run.log).
+      const retryPhase1Status = retryContext.phase1Status;
+      // Decision-fn is extracted to /opt/bing/web/lib/chat/retry-route-decision.ts
+      // so unit tests can assert the BUG 1 + BUG 6 contract directly without
+      // mocking the full route.ts POST() flow. Pure function, no I/O.
+      const shouldSkipRetry = shouldSkipRetryForPhase(retryPhase1Status);
+
+      if (shouldSkipRetry) {
+        chatLogger.info(
+          'Phase D: Skipping retry-path enhancement (phase1Status not "error")',
+          {
+            requestId,
+            phase1Status: retryPhase1Status,
+            reason:
+              retryPhase1Status === 'empty'
+                ? 'Phase 1 was empty — serve original request without retry enhancement'
+                : retryPhase1Status === 'success'
+                  ? 'Phase 1 succeeded — defensive: this retry is unexpected'
+                  : 'Phase 1 was skipped — defensive: this retry is unexpected',
+            originalProvider: retryContext.originalProvider,
+            originalModel: retryContext.originalModel,
+          },
+        );
+        // Leave selectedRetryModel = null (no model rotation); leave
+        // processedMessages = messages (no enhancement system message).
+        // Both `provider` and `model` retain their original (requested*)
+        // values from earlier in the request flow. Tools / tool_choice
+        // continue to be attached downstream per the active route's
+        // normal config-tools plumbing — never stripped.
+      }
+
       chatLogger.info('Client-side empty response retry detected', {
         requestId,
         originalProvider: retryContext.originalProvider,
@@ -654,10 +728,24 @@ export async function POST(request: NextRequest) {
         clientRetryModel: retryContext.retryModel,
         toolSummary: retryContext.toolExecutionSummary,
         failedToolCalls: retryContext.failedToolCalls?.length,
+        phase1Status: retryPhase1Status ?? 'unknown',
+        // Pair the operator-grep value with the same helper-derived
+        // discriminator as the shouldSkipRetry flag so a single source
+        // of truth for "which retry path ran" is preserved in run.log.
+        retryAction: retryActionForPhase(retryPhase1Status),
       });
 
       // Record failed tool calls in telemetry for model ranking
-      if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0 && retryContext.originalModel) {
+      // (only when the retry path actually applies — i.e. phase1Status === 'error'
+      // or undefined backward-compat. Phase D skips this when phase1Status is
+      // 'empty'/'success'/'skipped' so an empty-response retry doesn't pollute
+      // the telemetry ranker with failure data.)
+      if (
+        !shouldSkipRetry &&
+        retryContext.failedToolCalls &&
+        retryContext.failedToolCalls.length > 0 &&
+        retryContext.originalModel
+      ) {
         const { toolCallTracker } = await import('@/lib/tools/tool-call-tracker');
         const timestamp = Date.now();
 
@@ -679,9 +767,16 @@ export async function POST(request: NextRequest) {
       }
 
       // PRIORITY 1: Use client-requested provider/model rotation if set
+      // (Phase D: only inside the retry-path-apply branch; the shouldSkipRetry
+      // short-circuit above already left selectedRetryModel = null + processedMessages
+      // unchanged for the empty/success/skipped cases.)
       // The client has already computed which provider/model to retry with
       // based on its rotation strategy (next model → fallback provider chain)
-      if (retryContext.retryProvider && retryContext.retryModel) {
+      // Phase D — inline !shouldSkipRetry guard closes BUG 1 + BUG 6 (Mistral
+      // retry 400) by skipping the model-rotation path entirely when
+      // phase1Status is 'empty'/'success'/'skipped' (LLM was thinking —
+      // rotated-model retry would just re-introduce the same risk).
+      if (!shouldSkipRetry && retryContext.retryProvider && retryContext.retryModel) {
         const isDifferentFromOriginal =
           retryContext.retryProvider !== retryContext.originalProvider ||
           retryContext.retryModel !== retryContext.originalModel;
@@ -699,8 +794,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate
-      if (!selectedRetryModel && retryContext.originalModel) {
+      // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate.
+      // Phase D — same !shouldSkipRetry guard rationale as PRIORITY 1 above.
+      if (!shouldSkipRetry && !selectedRetryModel && retryContext.originalModel) {
         try {
           const { getRetryModel } = await import('@/lib/providers/model-ranker');
           const retryModel = await getRetryModel({
@@ -751,7 +847,12 @@ export async function POST(request: NextRequest) {
         retryEnhancementParts.push(`\n[MODEL SWITCH] Retrying with ${selectedRetryModel.provider}:${selectedRetryModel.model} (${sourceLabel})`);
       }
 
-      if (retryEnhancementParts.length > 0) {
+      // Phase D — same !shouldSkipRetry guard. Skips injecting the
+      // [RETRY CONTEXT] system message when phase1Status is
+      // 'empty'/'success'/'skipped' (LLM was thinking — the
+      // enhancement payload's narrative ("previous attempt failed") would
+      // mislead the model on a second attempt with no actual prior failure).
+      if (!shouldSkipRetry && retryEnhancementParts.length > 0) {
         // Inject as system message at the start
         processedMessages = [
           { role: 'system' as const, content: retryEnhancementParts.join('\n') },
@@ -2922,13 +3023,38 @@ const config: UnifiedAgentConfig = {
                   success: orchestrationResult?.success ?? false,
                   content: orchestrationResult?.response ?? "",
                   metadata: orchestrationResult?.metadata ?? null,
+                  mode: orchestrationMode,
                 });
 
                 controller.close();
                 // Clean up the continuation counter on success so it doesn't leak.
                 clearContinuationCount(requestId);
               } catch (error: any) {
-                enqueue('error', { message: error.message });
+                // SHOULD-CONSIDER (c): include orchestrationMode in the error
+                // message so operators can see which orchestration path
+                // failed (mode carries discriminator value via getOrchestrationModeFromRequest at L2973).
+                // SHOULD-CONSIDER (a) postaudit fix: surface orchestrationMode
+                // as a structured SSE field instead of concatenating into message
+                // (keeps the verbatim message intact for downstream regex detection
+                // — e.g. the "no text and no tool calls" VanillaMistral drift signal).
+                // SHOULD-CONSIDER (a) postaudit fix: surface orchestrationMode
+                // as a structured SSE field instead of concatenating into message
+                // (keeps the verbatim message intact for downstream regex-detection
+                // invariants — no concrete consumer identified at fix time; this is
+                // preventive so future structured-field consumers that key on
+                // the message string do not break when grep-discoverability
+                // tags are appended inline).
+                // See /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md
+                // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) for design rationale.
+                enqueue('error', { message: error.message, mode: orchestrationMode });
+                // SHOULD-CONSIDER (b) postaudit fix: structured chatLogger.error
+                // for log-side grep-discoverability. Operators searching server
+                // logs: `grep 'orchestration error' log.txt` recovers operator-friendly signal.
+                // Wrapped in try/catch so a log-transport failure cannot block
+                // controller.close() (matches the L923 stall-catch defensive pattern).
+                try {
+                  chatLogger.error('orchestration error', { mode: orchestrationMode, error: error.message, stack: error.stack });
+                } catch { /* log-emit best-effort — must not block controller.close() */ }
                 controller.close();
                 // Clean up the continuation counter on error so it doesn't leak.
                 clearContinuationCount(requestId);
@@ -3008,6 +3134,9 @@ const config: UnifiedAgentConfig = {
         // the L884 test's chatLogger.error assertion (0 calls). Mirror the canonical
         // '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn' message verbatim so
         // log-aggregator dedup catches this case under the same query as fireStall fires.
+        // See /opt/bing/.tickets/OUTERCATCH-PROD-REACHABILITY.md for the
+        // route-side OUTERCATCH discriminator at L5621 + the L2172
+        // orchestrator-side `processUnifiedAgentRequest` swallow chain.
         if (!orchestrationResult) {
           chatLogger.error(
             '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
