@@ -17,8 +17,8 @@
 import { createServer } from 'http';
 import { createLogger } from '@/lib/utils/logger';
 import { taskRouter } from '@bing/shared/agent/task-router';
-import type { ExecutionPolicy } from '@/lib/voice/types';
-import { determineExecutionPolicy } from '@/lib/voice/types';
+import type { ExecutionPolicy } from '../../lib/sandbox/types';
+import { determineExecutionPolicy } from '../../lib/sandbox/types';
 import Redis from 'ioredis';
 
 const logger = createLogger('PlannerWorker');

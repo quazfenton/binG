@@ -75,6 +75,13 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
 // llm-fallback-coordinator.ts.
 import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus, isStallWatchdogErrorCode, isStallWatchdogInstanceByConstructorName } from '@/lib/chat/llm-fallback-coordinator';
+// Phase 2 success-signal architecture — ssePhase1Status (L472) needs the
+// Phase1Status type for its `let` declaration + the assignment site
+// `?? 'unknown'` widening per code-reviewer NEEDS-CHANGE (a). Phase1Status
+// is the 4-state enum from `/opt/bing/web/lib/agent/phase-status.ts` — the
+// PHASE1_STATUSES tuple is referenced from chat-helpers.ts:retryContextSchema,
+// and the type itself is referenced here + at the orchestrator SSE emits.
+import { Phase1Status } from '@/lib/agent/phase-status';
 // Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
 // contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
 // already coerces via stringifyMessageContent; this import is the route's
@@ -465,6 +472,11 @@ export async function POST(request: NextRequest) {
   // call sites so the text-mode parser skips these paths instead of overwriting
   // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
   const alreadyWrittenPaths = new Set<string>();
+  // Hoist ssePhase1Status to function scope so error-handler SSE emits (L3101)
+  // can carry the same value the orchestrator-loop emitted; previously const'd
+  // inside an inner block, inaccessible from the outer try/catch that maps
+  // StallWatchdogError → 524. Phase 2 ticket propagation.
+  let ssePhase1Status: Phase1Status | 'unknown' | undefined = undefined;
 
   // Bug #43: memory-pressure throttle. If the heap is above the soft
   // threshold, return 503 Retry-After before any processing starts.
@@ -633,29 +645,16 @@ export async function POST(request: NextRequest) {
       };
       /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
       autoAttachFiles?: boolean;
-      /** Client-side empty response retry context */
-      retryContext?: {
-        isEmptyResponseRetry: boolean;
-        originalProvider?: string;
-        originalModel?: string;
-        retryProvider?: string;  // Client-requested provider for rotation
-        retryModel?: string;      // Client-requested model for rotation
-        toolExecutionSummary?: string;
-        failedToolCalls?: Array<{ name: string; error: string; args?: any }>;
-        filesystemChanges?: { applied: number; failed: number; failedDetails: any[] };
-        // Phase D — Phase 1/Phase 2 success-signal architecture. The 4-state
-        // enum that the client captures from the previous turn's SSE
-        // metadata. Routes the retry-path decision so the BUG 1 / BUG 6
-        // surface (tools/tool_choice stripped on retry) only fires when
-        // phase1Status === 'error' — for 'empty' (LLM was thinking) we
-        // SKIP the enhancement payload + model rotation entirely and let
-        // the request serve to the original model with the original tools
-        // intact. Optional for backward compatibility — clients that
-        // don't surface phase1Status yet still work (the existing 'error'
-        // retry path runs by default). See:
-        // /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md
-        phase1Status?: 'success' | 'empty' | 'error' | 'skipped';
-      };
+      /** Client-side empty response retry context — SHOULD-CONSIDER #1 / Phase D.
+       *  Shape sourced from `/opt/bing/app/api/chat/chat-helpers.ts:retryContextSchema`
+       *  (Zod schema + RetryContext type export). The inline TS cast that
+       *  previously lived here drifted from the runtime contract; the
+       *  qualified `import('./chat-helpers').RetryContext` keeps the type
+       *  in lock-step with the schema parser. Runtime validation now happens
+       *  at `chatRequestSchema.safeParse(rawBody)` — invalid values 400
+       *  instead of silently falling through the gate. See:
+       *  /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md */
+      retryContext?: import('./chat-helpers').RetryContext;
     };
     provider = requestedProvider;
     model = requestedModel;
@@ -3046,42 +3045,12 @@ const config: UnifiedAgentConfig = {
                 //   3. 'unknown'
                 //      — backward-compat with pre-Phase A clients that
                 //        don't surface any phase1Status field.
-                const ssePhase1Status = orchestrationResult?.metadata?.phase1Status
-                  ?? (orchestrationResult as any)?.phase1Status
-                  ?? 'unknown';
-
-                // Phase B — emit `[CHAT-ROUTE] phase1Status:` log line so
-                // operators can grep server logs for empty-response tickets
-                // without waiting for the chat hook UI to update.
-                // SHOULD-CONSIDER (a) — silent fallthrough to 'unknown' masks
-                // upstream bugs. Log a warn when BOTH upstream sources are
-                // missing so operators debug the missing field, not the SSE
-                // event. Gated behind NODE_ENV !== 'test' to avoid test-suite
-                // noise when mocks don't set phase1Status.
-                if (
-                  ssePhase1Status === 'unknown' &&
-                  !hasMetadataPhase1Status &&
-                  !hasTopLevelPhase1Status &&
-                  process.env.NODE_ENV !== 'test'
-                ) {
-                  chatLogger.warn('[CHAT-ROUTE] phase1Status source missing — falling back to "unknown"', {
-                    hasMetadata: !!orchestrationResult?.metadata,
-                    hasTopLevel: hasTopLevelPhase1Status,
-                    mode: orchestrationMode,
-                  });
-                }
-
-                // Phase B — emit `[CHAT-ROUTE] phase1Status` log line so
-                // operators can grep server logs for empty-response tickets
-                // without waiting for the chat hook UI to update.
-                chatLogger.info('[CHAT-ROUTE] phase1Status', {
-                  phase1Status: ssePhase1Status,
-                  mode: orchestrationMode,
-                });
-
-                                const hasMetadataPhase1Status = !!orchestrationResult?.metadata && typeof orchestrationResult.metadata.phase1Status !== 'undefined';
+                const hasMetadataPhase1Status = !!orchestrationResult?.metadata && typeof orchestrationResult.metadata.phase1Status !== 'undefined';
                 const hasTopLevelPhase1Status = !!orchestrationResult && typeof (orchestrationResult as any).phase1Status !== 'undefined';
-                const ssePhase1Status = orchestrationResult?.metadata?.phase1Status
+                // Assign to function-scope let (declared at top of POST) so the
+                // error-handler SSE emit at L3101+ can read the same value the
+                // orchestrator-loop block computed. Phase 2 ticket propagation.
+                ssePhase1Status = orchestrationResult?.metadata?.phase1Status
                   ?? (orchestrationResult as any)?.phase1Status
                   ?? 'unknown';
 
@@ -3144,7 +3113,14 @@ enqueue('done', {
                 // tags are appended inline).
                 // See /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md
                 // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) for design rationale.
-                enqueue('error', { message: error.message, mode: orchestrationMode, phase1Status: ssePhase1Status });
+                // Re-derive phase1Status here: the `ssePhase1Status` const is
+                // scoped to the try block above and is not visible in this
+                // catch. orchestrationResult (declared before the try) is in
+                // scope, so recompute from the same precedence chain.
+                const catchPhase1Status = orchestrationResult?.metadata?.phase1Status
+                  ?? (orchestrationResult as any)?.phase1Status
+                  ?? 'unknown';
+                enqueue('error', { message: error.message, mode: orchestrationMode, phase1Status: catchPhase1Status });
                 // SHOULD-CONSIDER (b) postaudit fix: structured chatLogger.error
                 // for log-side grep-discoverability. Operators searching server
                 // logs: `grep 'orchestration error' log.txt` recovers operator-friendly signal.

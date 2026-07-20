@@ -43,6 +43,13 @@
 
 // --- First-round typed declarations: 30 well-known @/lib/X import sites ---
 
+declare module '@/lib/sandbox/types' {
+  export type ExecutionPolicy = any;
+  export type PreviewInfo = any;
+  export const determineExecutionPolicy: (...args: unknown[]) => ExecutionPolicy;
+  export type SandboxHandle = any;
+}
+
 declare module '@/lib/utils/logger' {
   export const createLogger: (name: string) => {
     info: (...args: unknown[]) => void;
@@ -56,12 +63,7 @@ declare module '@/lib/utils/logger' {
   };
 }
 
-declare module '@/lib/sandbox/types' {
-  export type ExecutionPolicy = any;
-  export type PreviewInfo = any;
-  export const determineExecutionPolicy: (...args: unknown[]) => ExecutionPolicy;
-  export type SandboxHandle = any;
-}
+
 
 declare module '@/lib/sandbox/providers' {
   export const getSandboxProvider: (...args: unknown[]) => Promise<any>;
@@ -183,10 +185,7 @@ declare module '@/lib/errors/logging-utils' {
   export const redactArgsForLogging: (...args: unknown[]) => any;
 }
 
-declare module '@/lib/voice/types' {
-  export type ExecutionPolicy = any;
-  export const determineExecutionPolicy: (...args: unknown[]) => ExecutionPolicy;
-}
+
 
 // --- Second-round body-less declarations: 10 paths discovered post first validator run (+ crewai for path-alias pilot) ---
 // Body-less form is used because the consumer (mirror file body) accesses a

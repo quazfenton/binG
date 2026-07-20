@@ -59,6 +59,15 @@
 export type Phase1Status = 'success' | 'empty' | 'error' | 'skipped';
 
 /**
+ * Canonical tuple of valid Phase1Status values. Use this in Zod schemas
+ * (`z.enum(PHASE1_STATUSES)`) instead of hardcoding the list, so future
+ * additions to the Phase1Status union automatically propagate to validation.
+ * Source of truth: see also `DEFAULT_PHASE1_STATUS` below for the default
+ * derived status when no signal can determine success/empty/error/skipped.
+ */
+export const PHASE1_STATUSES = ['success', 'empty', 'error', 'skipped'] as const satisfies readonly Phase1Status[];
+
+/**
  * Input shape for `derivePhase1Status`. All fields are numeric/boolean counts.
  */
 export interface Phase1DerivationInput {

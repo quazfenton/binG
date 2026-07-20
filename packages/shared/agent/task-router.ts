@@ -8,16 +8,16 @@
 // direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
 // — a real file inside this package, NOT a cross-package reference into
 // web/lib/*.
-import { createLogger } from '@/lib/utils/logger';
+import { createLogger } from '../../../web/lib/utils/logger';
 import type { AgentPriority, AgentType } from './agent-kernel';
 import { getAgentKernel } from './agent-kernel';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
-import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
-import { emitEvent } from '@/lib/events/bus';
-import { AnyEvent as EventTypes } from '@/lib/events/schema';
+import { determineExecutionPolicy } from '../../../web/lib/sandbox/types';
+import { normalizeSessionId } from '../../../web/lib/virtual-filesystem/scope-utils';
+import { emitEvent } from '../../../web/lib/events/bus';
+import { AnyEvent as EventTypes } from '../../../web/lib/events/schema';
 import type { IntentMatch, IntentDefinition } from './intent-schema';
 import { classifyIntentStage1, classifyIntentStage2 } from './intent-schema';
-import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
+import { selectToolPlan, type SelectToolPlanResult } from '../../../web/lib/tools/select-tool-plan';
 
 // Re-export types for convenience
 export type { IntentMatch, IntentDefinition } from './intent-schema';
@@ -748,9 +748,9 @@ class TaskRouter {
       };
     }
 
-    const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
-    const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
-    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } = await import('@/lib/mcp');
+    const { OpencodeV2Provider } =    await import('../../../web/lib/sandbox/spawn/opencode-cli');
+    const { agentSessionManager } =    await import('../../../web/lib/session/agent/agent-session-manager');
+    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } =    await import('../../../web/lib/mcp');
 
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
@@ -912,7 +912,7 @@ class TaskRouter {
   }
 
   private async executeWithCliAgent(request: TaskRequest): Promise<any> {
-    const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
+    const { agentSessionManager } =    await import('../../../web/lib/session/agent/agent-session-manager');
     const session = await agentSessionManager.getOrCreateSession(
       request.userId, request.conversationId, { mode: 'opencode' },
     );

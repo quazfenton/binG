@@ -409,6 +409,102 @@ describe('phase1Status cross-layer cascade', () => {
         );
       }
     });
+
+    // L363 early-return sub-test — picker-layer integration at the second
+    // site MUST also reference `input.alreadyWrittenPaths?.size` (not `0`)
+    // so that structured-write count isn't lost when the guard short-circuits
+    // with `totalRequestedPaths > 0 && totalValidPaths === 0`.
+    //
+    // Test methodology: source-level structural check (no runtime call
+    // into filesystem-edits.ts to keep this lightweight + the picker is
+    // pure-function-on-input not requiring VFS mocks). Use brace-balanced
+    // bounds (parse-stable) so future insertions between the guard and
+    // the `phase1Status: derivePhase1Status({...})` field don't push the
+    // integration outside the bounded window.
+    it.runIf(
+      process.env.PHASE1_PICKER_LOCK === 'on' ||
+        process.env.PHASE1_PICKER_LOCK === '1' ||
+        process.env.PHASE1_PICKER_LOCK === 'true',
+    )(
+      'L363 early-return integrates picker-layer size (alreadyWrittenPaths.size)',
+      () => {
+        const filesystemEditsPath = resolve(
+          process.cwd(),
+          'app/api/chat/filesystem-edits.ts',
+        );
+        if (!existsSync(filesystemEditsPath)) {
+          console.warn(
+            '[cascade L363] filesystem-edits.ts not readable; edge-case test void',
+          );
+          return;
+        }
+        try {
+          const source = readFileSync(filesystemEditsPath, 'utf8');
+
+          // Locate the L349-L363 early-return guard. Find the opening
+          // brace, then advance through brace-balanced chars to find the
+          // matching closing `};` of the early-return statement.
+          const guardIdx = source.search(
+            /totalRequestedPaths\s*>\s*0\s*&&\s*totalValidPaths\s*===\s*0/,
+          );
+          if (guardIdx < 0) {
+            console.warn(
+              '[cascade L363] early-return guard not found at expected location — picker refactor may have relocated it; structural assertion void',
+            );
+            return;
+          }
+
+          // Find the `{` immediately after the guard's `if (...)` to begin
+          // brace-balancing from the early-return block scope.
+          const openBraceIdx = source.indexOf('{', guardIdx);
+          if (openBraceIdx < 0) {
+            console.warn(
+              '[cascade L363] early-return guard opens no `{` — picker AST shape changed; structural assertion void',
+            );
+            return;
+          }
+
+          // Brace-balanced scan forward from `{` — track depth, increment
+          // on `{`, decrement on `}`. Stop at depth 0 (matching close).
+          // This anchors on a parse-stable marker independent of line
+          // count or inserted code between guard and `phase1Status`.
+          let depth = 0;
+          let closeIdx = -1;
+          for (let i = openBraceIdx; i < source.length; i++) {
+            const ch = source[i];
+            if (ch === '{') depth++;
+            else if (ch === '}') {
+              depth--;
+              if (depth === 0) {
+                closeIdx = i;
+                break;
+              }
+            }
+          }
+          if (closeIdx < 0) {
+            console.warn(
+              '[cascade L363] could not find matching close brace for early-return — picker AST unbalanced; structural assertion void',
+            );
+            return;
+          }
+
+          // Bound the assertion slice to the early-return block (inclusive
+          // of the close brace) — guarantees the integration check matches
+          // the L363 derivation site specifically, NOT the L828 final-return.
+          const earlyReturnSlice = source.slice(openBraceIdx, closeIdx + 1);
+
+          expect(
+            /input\.alreadyWrittenPaths\?\.size/.test(earlyReturnSlice),
+            'L363 early-return derivePhase1Status must reference `input.alreadyWrittenPaths?.size` ' +
+              '(picker-layer integration — same contract as L828 final-return site)',
+          ).toBe(true);
+        } catch (err) {
+          console.warn(
+            `[cascade L363] filesystem-edits.ts read failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+    );
   });
 
   // ==========================================================================

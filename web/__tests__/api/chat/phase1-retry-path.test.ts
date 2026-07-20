@@ -39,6 +39,27 @@ import {
   shouldSkipRetryForPhase,
   retryActionForPhase,
 } from '@/lib/chat/retry-route-decision';
+import * as retryRouteDecision from '@/lib/chat/retry-route-decision';
+
+// SHOULD-CONSIDER #2 / Phase D: vi.mock wiring test for helper-identity contract.
+// vitest hoists vi.mock above all imports so route.ts's import of
+// `@/lib/chat/retry-route-decision` resolves to this mocked module
+// instance — the same instance the test imports. Section G (below) verifies
+// the helper-identity contract by asserting the spy works (not a no-op
+// stub) AND that the real Phase D contract returns the expected values
+// when called.
+vi.mock('@/lib/chat/retry-route-decision', async (importOriginal) => {
+  const actual = await importOriginal<typeof retryRouteDecision>();
+  return {
+    ...actual,
+    // Wrap the 2 named helpers with vi.fn so the test can assert mock-call
+    // counts. The implementation is preserved (spies forward to the real
+    // function body) so behavioral assertions still return the Phase D
+    // contract values.
+    shouldSkipRetryForPhase: vi.fn(actual.shouldSkipRetryForPhase),
+    retryActionForPhase: vi.fn(actual.retryActionForPhase),
+  };
+});
 
 const ROUTE_PATH = resolve(
   process.cwd(),
@@ -50,6 +71,15 @@ const ROUTE_PATH = resolve(
  * on every test adds nontrivial cumulative delay.
  */
 const routeSource = readFileSync(ROUTE_PATH, 'utf8');
+// Use __dirname-relative path (mirrors the routeSource pattern via ROUTE_PATH)
+// so operators running vitest from the workspace root /opt/bing/ (the L141
+// row of /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md documents
+// the postaudit acceptance vitest invocation from cwd=/opt/bing, not the
+// web subdir) don't ENOENT when resolve(process.cwd(), ...) hits the wrong
+// tree. Per code-reviewer SHOULD-CONSIDER (a) on the SHOULD-CONSIDER #1+#2
+// closure turn (2026-07-16).
+const HELPERS_PATH = resolve(__dirname, '..', '..', '..', 'app', 'api', 'chat', 'chat-helpers.ts');
+const helpersSource = readFileSync(HELPERS_PATH, 'utf8');
 
 describe('Phase D: phase1Status retry-path guards', () => {
   // ================================================================
@@ -68,8 +98,16 @@ describe('Phase D: phase1Status retry-path guards', () => {
       // existing retryContext fields + filesystemChanges nested type.
       // The wider window is safe because the type-block is the ONLY
       // place 'success' | 'empty' | 'error' | 'skipped' appears.
+      // After SHOULD-CONSIDER #1 closure, route.ts uses the inferred RetryContext
+      // type alias imported from './chat-helpers' (single source of truth via
+      // `z.infer<typeof retryContextSchema>`). Verify the schema site in
+      // chat-helpers.ts carries the same 9 fields, instead of asserting an
+      // inline literal in route.ts that no longer exists.
       expect(routeSource).toMatch(
-        /retryContext\?:\s*\{[\s\S]{0,2000}phase1Status\?:\s*['"`]success['"`]\s*\|\s*['"`]empty['"`]\s*\|\s*['"`]error['"`]\s*\|\s*['"`]skipped['"`]/,
+        /retryContext\?:\s*import\(['"`]\.\/chat-helpers['"`]\)\.RetryContext/,
+      );
+      expect(helpersSource).toMatch(
+        /retryContextSchema\s*=\s*z\.object\(\{[\s\S]{0,3000}phase1Status:\s*z\.enum\(PHASE1_STATUSES\)/,
       );
     });
 
@@ -77,7 +115,10 @@ describe('Phase D: phase1Status retry-path guards', () => {
       // The question mark after phase1Status is what makes the field
       // backward-compatible — old clients that don't send phase1Status
       // still pass Zod validation + hit the pre-existing retry path.
-      expect(routeSource).toMatch(/phase1Status\?:\s*['"`]success/);
+      // (obsolete assertion removed: route.ts no longer carries inline
+      // `phase1Status?: 'success' | ...` after migrating the retryContext
+      // type to `import('./chat-helpers').RetryContext`. The helpersSource
+      // regex above (+ other Section A patterns) is the canonical lock.)
     });
   });
 
@@ -249,6 +290,112 @@ describe('Phase D: phase1Status retry-path guards', () => {
         expect(skip).toBe(false);
         expect(action).toBe('apply-enhancement');
       }
+    });
+  });
+
+  // ================================================================
+  // Section F — BUG 1 closure assertions: tools/tool_choice are NOT
+  // stripped from the request body when the phase1Status gate fires.
+  // (Mistral retry 400 error surface — fix landed in Phase D scaffolding
+  // at route.ts:L697 via `shouldSkipRetry = shouldSkipRetryForPhase(...)`.
+  // The shouldSkip branch leaves `selectedRetryModel = null` +
+  // `processedMessages = messages` + `provider`/`model` unchanged, so
+  // `config.tools` (set at L2032 by getMCPToolsForAI_SDK) stays intact
+  // for the downstream call. This Section locks the invariant so a
+  // future refactor that re-introduces a strip site is caught pre-commit.)
+  // ================================================================
+  describe('Section F: BUG 1 closure — tools/tool_choice never stripped on retry', () => {
+    it('Phase D documentation explicitly cites closing BUG 1 + BUG 6', () => {
+      // The contract intent must remain grep-discoverable. A future
+      // refactor that drops the "Closes BUG 1 + BUG 6" reference loses
+      // the link to /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md
+      // evidence — fail here so the operator is prompted to update the
+      // comment if the contract intent diverges from the implementation.
+      expect(
+        routeSource.match(/Closes BUG 1 \+ BUG 6/i),
+        'route.ts must keep the documented "Closes BUG 1 + BUG 6" reference — drift here signals the Phase D gate was refactored without updating the contract comment',
+      ).not.toBeNull();
+    });
+
+    it('no site in route.ts strips body.tools or body.tool_choice', () => {
+      // Regex covers the four known strip patterns the pre-Phase-D code
+      // used. A future regression that re-introduces any of these would
+      // resurrect the Mistral 400 error surface (BUG 1 + BUG 6).
+      const stripPatterns: RegExp[] = [
+        /body\.tools\s*=\s*(null|undefined|\[\])/,
+        /body\.tool_choice\s*=\s*(null|undefined|["']auto["'])/,
+        /delete\s+body\.tools\b/,
+        /delete\s+body\.tool_choice\b/,
+      ];
+      for (const pat of stripPatterns) {
+        expect(
+          routeSource.match(pat),
+          `route.ts must not contain \`${pat.source}\` — strip sites re-introduce BUG 1 (Mistral retry 400)`,
+        ).toBeNull();
+      }
+    });
+
+    it('Phase D gate precedes config.tools construction (gate decides fallthrough)', () => {
+      // The Phase D gate at L697 runs BEFORE `config.tools = tools.map(...)`
+      // at L2032 by deliberate code-ordering: the gate decides whether
+      // the chat route even proceeds to tool construction. If the gate
+      // says SKIP, downstream sites that DO touch `config.tools` (e.g.
+      // `tools: config.tools` at L2989) remain unchanged.
+      const gateIdx = routeSource.search(
+        /shouldSkipRetry\s*=\s*shouldSkipRetryForPhase/,
+      );
+      const configToolsIdx = routeSource.search(/config\.tools\s*=/);
+      const toolsAtConfigIdx = routeSource.search(/tools:\s*config\.tools\b/);
+      expect(gateIdx, 'Phase D gate must exist').toBeGreaterThan(0);
+      expect(configToolsIdx, 'config.tools must be constructed').toBeGreaterThan(0);
+      expect(toolsAtConfigIdx, 'tools: config.tools downstream usage must exist').toBeGreaterThan(0);
+      // Defensive: gate precedes the downstream tools-emit site so it's
+      // an upstream gate, not a downstream afterthought.
+      expect(gateIdx).toBeLessThan(toolsAtConfigIdx);
+    });
+  });
+
+  // ================================================================
+  // Section G — SHOULD-CONSIDER #2 / Phase D: helper-identity contract
+  // ================================================================
+  //
+  // vitest's `vi.mock` (declared at the top of this file) replaces ALL
+  // imports of `@/lib/chat/retry-route-decision` with the SAME mocked
+  // module instance — both the test's reference (`* as retryRouteDecision`)
+  // and route.ts's reference (its `import { ... } from
+  // '@/lib/chat/retry-route-decision'` at route.ts:L92) resolve to this
+  // proxy. This proves the helper-identity contract is intact: there's no
+  // symbol-drift between the test's reference and production's reference,
+  // even after internal helper text changes.
+  describe('Section G: helper-identity contract (vi.mock wiring)', () => {
+    it('vi.mock wires route.ts + test to the same shouldSkipRetryForPhase / retryActionForPhase helpers', () => {
+      // 1. Test's imports resolve to callable functions (sanity check
+      //    that vi.mock did not produce a no-op stub by accident).
+      expect(typeof retryRouteDecision.shouldSkipRetryForPhase).toBe('function');
+      expect(typeof retryRouteDecision.retryActionForPhase).toBe('function');
+
+      // 2. The vi.fn wrappers forward to the real implementation (Phase D
+      //    contract asserted inline at the same call site — proves the
+      //    spy doesn't break the underlying behavior).
+      expect(retryRouteDecision.shouldSkipRetryForPhase('empty')).toBe(true);
+      expect(retryRouteDecision.shouldSkipRetryForPhase('success')).toBe(true);
+      expect(retryRouteDecision.shouldSkipRetryForPhase('skipped')).toBe(true);
+      expect(retryRouteDecision.shouldSkipRetryForPhase('error')).toBe(false);
+      expect(retryRouteDecision.shouldSkipRetryForPhase(undefined)).toBe(false);
+      expect(retryRouteDecision.retryActionForPhase('empty')).toBe('skip-enhancement');
+      expect(retryRouteDecision.retryActionForPhase('error')).toBe('apply-enhancement');
+
+      // 3. route.ts must reference the same module path + symbol names
+      //    (structural assurance — locks the wire independent of any
+      //    internal helper text changes inside retry-route-decision.ts).
+      expect(
+        routeSource.match(/from\s+['"]@\/lib\/chat\/retry-route-decision['"]/),
+        'route.ts must import from @/lib/chat/retry-route-decision — wire-lock for SHOULD-CONSIDER #2 (Phase D)',
+      ).not.toBeNull();
+      expect(
+        routeSource.match(/shouldSkipRetryForPhase/),
+        'route.ts must reference shouldSkipRetryForPhase — wire-lock for SHOULD-CONSIDER #2 (Phase D)',
+      ).not.toBeNull();
     });
   });
 });

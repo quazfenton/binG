@@ -342,6 +342,16 @@ export function classifyToolResult(toolResult: any): ToolResultClassification {
       errorMsg = toolResult
         ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}], no error field`
         : `Unknown error — tool result is ${typeof toolResult}`;
+      // BUG 4 fix — append _recoveryHint in the synthesize branch so the
+      // 100+ `Unknown error — tool result has keys: [..., _recoveryHint], no
+      // error field` log lines in production (visible in
+      // /opt/bing/web/logs/run.log around bash_execute / read_file / apply_diff
+      // failures) carry the actionable guidance the LLM injector attached.
+      // Mirrors the errorObj=object branch above (L338-L340) so every
+      // failure-classification path surfaces _recoveryHint consistently.
+      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
+        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
+      }
     }
     return { isFailure: true, reason: 'success_false', errorMsg };
   }

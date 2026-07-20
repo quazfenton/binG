@@ -10,13 +10,13 @@
  * - sandbox-heavy: For full-stack apps
  */
 
-import { createLogger } from '@/lib/utils/logger';
-import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
-import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
+import { createLogger } from '../../../web/lib/utils/logger';
+import { agentSessionManager } from '../../../web/lib/session/agent/agent-session-manager';
+import type { ExecutionPolicy } from '../../../web/lib/sandbox/types';
+import { determineExecutionPolicy } from '../../../web/lib/sandbox/types';
+import type { ToolIntegrationManager } from '../../../web/lib/tools/tool-integration-system';
 import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
-import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
+import { selectToolPlan, type SelectToolPlanResult } from '../../../web/lib/tools/select-tool-plan';
 
 const logger = createLogger('Agent:OpencodeDirect');
 
@@ -121,8 +121,8 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   );
 
   // Use OpencodeV2Provider directly
-  const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
-  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } = await import('@/lib/mcp');
+  const { OpencodeV2Provider } =    await import('../../../web/lib/sandbox/spawn/opencode-cli');
+  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } =    await import('../../../web/lib/mcp');
 
   const provider = new OpencodeV2Provider({
     session: {
@@ -216,7 +216,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   // Sync from sandbox to VFS
   try {
     if (session.sandboxHandle?.id) {
-      const { sandboxFilesystemSync } = await import('@/lib/virtual-filesystem/sync/sandbox-filesystem-sync');
+      const { sandboxFilesystemSync } =    await import('../../../web/lib/virtual-filesystem/sync/sandbox-filesystem-sync');
       await sandboxFilesystemSync.syncSandboxToVFS(session.sandboxHandle.id, userId);
     }
   } catch (syncError) {

@@ -162,6 +162,11 @@ cd /opt/bing/web && npx vitest run \\
 \`\`\`
 - [ ] `tsc --noEmit` from `/opt/bing` reports 0 NEW errors (pre-existing errors in `unified-agent.ts`/`opencode-direct.ts`/`task-router.ts` are out of scope).
 - [x] `CENTRALIZED_TODO_LIST.md` updated with `MCP-TOOL-SELECTION-POSTAUDIT` reference.
+- [x] **Part 3 closure (2026-07-16):** the user-explicit raw-string `taskFilter` site at `/opt/bing/web/.recovery-staging/route-bug86-full.ts:1408-1412` was ALREADY `SelectToolPlanResult`-migrated prior to this turn (L1408 declares `const toolPlan: SelectToolPlanResult = selectToolPlan({...})`, L1412 passes `toolPlan` into `getMCPToolsForAI_SDK`). The user's Part 3 ask is **CLOSED 2026-07-16**.
+
+  **Separate concern (out of scope for Part 3):** the same raw-string grep returns **4 hits inside `/opt/bing/web/.bing-shared/agent/{unified-agent,opencode-direct,task-router}.ts`** — a `physical COPY` of `/opt/bing/packages/shared/agent/` (verified via `ls -la` showing `drwxr-xr-x`, no `readlink` output). The `.bing-shared/` tree is divergent from the canonical `packages/shared/agent/` tree because they are independent filesystems, not a symlink. Part 1's 3-file altt-path refactor targeted the canonical source; the `.bing-shared/agent/` COPY retains `@/lib/*` aliased imports and still passes raw strings to `getMCPToolsForAI_SDK`. This is a separate migration ticket (not Part 3, not Part 1) — `web/app/api/chat/route.ts:1942` passes a `RetryContext`-typed variable (not a raw string), so it is correctly excluded from the user's Part 3 migration ask.
+
+  **Audit (2026-07-16):** the broader `grep -rnE 'getMCPToolsForAI_SDK\\([^,]+, [a-zA-Z_]+\\)'` literal would have returned the 4 `.bing-shared/agent/` sites as un-migrated, NOT `route-bug86-full.ts:1405` (which the user expected to be the 4th-and-last but is already `SelectToolPlanResult`-migrated). The user's literal `route-bug86-full.ts:1405` scope is **CLOSED**, the 4 `.bing-shared/agent/` sites are a separate migration — see `/opt/bing/.tickets/MIGRATE-WEB-BING-SHARED-AGENT-TO-RELATIVE-PATHS.md`.
 
 ---
 

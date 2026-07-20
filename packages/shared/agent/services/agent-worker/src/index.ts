@@ -22,7 +22,7 @@ import { executeV2Task } from '@bing/shared/agent/v2-executor';
 import { taskRouter } from '@bing/shared/agent/task-router';
 import { providerRouter, latencyTracker } from '@/lib/sandbox/provider-router';
 import { providerHealthTracker } from '@/lib/sandbox/provider-health';
-import { determineExecutionPolicy } from '@/lib/voice/types';
+import { determineExecutionPolicy } from '../../../../lib/sandbox/types';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
 const logger = createLogger('Agent:Worker');

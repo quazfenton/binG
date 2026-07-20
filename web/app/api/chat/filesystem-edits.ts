@@ -347,11 +347,8 @@ export async function applyFilesystemEditsFromResponse(input: {
     deleteTargets.length;
 
   if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
-    // Phase A — early return for invalid-paths case. The legacy status is
-    // 'none' (no mutating operations succeeded) but `phase1Status` correctly
-    // surfaces 'error' because the requester emitted invalid paths. Without
-    // the new field, downstream consumers see `applied: 0, errors: N` and
-    // historically treated this as 'empty' (BUG 6 retry surface).
+    // Phase A — early return for invalid-paths case.
+    // Phase F — same picker-layer integration as L828
     return {
       transactionId: null,
       status: 'none',
@@ -361,7 +358,7 @@ export async function applyFilesystemEditsFromResponse(input: {
       scopePath: input.scopePath,
       sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
       phase1Status: derivePhase1Status({
-        applied: 0,
+        applied: (input.alreadyWrittenPaths?.size || 0),
         errors: invalidPathErrors.length,
       }),
     };

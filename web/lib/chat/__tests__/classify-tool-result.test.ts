@@ -160,6 +160,41 @@ describe('classifyToolResult (Bug #83)', () => {
     }
   });
 
+  // BUG 4 fix — the synthesise branch (else) MUST also append _recoveryHint
+  // when present, mirroring the errorObj=object branch above. Without this,
+  // the 100+ `Unknown error — tool result has keys: [..., _recoveryHint], no
+  // error field` log lines in /opt/bing/web/logs/run.log fire without the
+  // actionable guidance the LLM injector attached (bash_execute, read_file,
+  // apply_diff all hit this path because the tool returns `success: false`
+  // without populating the `error` field).
+  it('success=false with _recoveryHint and no error field appends the recovery hint', () => {
+    const result = classifyToolResult({
+      success: false,
+      output: 'something',
+      _recoveryHint: 'use write_file with a different path on retry',
+    });
+    expect(result.isFailure).toBe(true);
+    if (result.isFailure) {
+      expect(result.reason).toBe('success_false');
+      expect(result.errorMsg).toContain('Unknown error');
+      expect(result.errorMsg).toContain('no error field');
+      // The recovery hint must be appended (with bracket + label prefix)
+      // so the LLM-facing block surfaces the actionable guidance.
+      expect(result.errorMsg).toContain('[recovery: use write_file with a different path on retry]');
+      // Format lock (code-reviewer SHOULD-CONSIDER b): the synthesise content
+      // (the keys list including `_recoveryHint`) must STILL appear alongside
+      // the appended recovery block — a future refactor that joins the append
+      // inside the keys-list shape would pass the substrings above but break
+      // the format operators grep on for the "Unknown error" line. Pin the
+      // full shape so operators can't accidentally lose grep-discoverability.
+      // Intentional-strict — do NOT relax to `\[.*\]` if a future field
+      // is added to the synthesise string: the exact shape is the lock.
+      expect(result.errorMsg).toMatch(
+        /tool result has keys: \[success, output, _recoveryHint\]/,
+      );
+    }
+  });
+
   it('null/undefined toolResult is treated optimistically (no failure signal)', () => {
     // Defensive: a null tool result shouldn't crash. The helper should
     // return a non-failure classification.
