@@ -2339,6 +2339,10 @@ export class CapabilityRouter {
   private initialized = false;
   /** Optional reference to bootstrapped agency for adaptive routing */
   private agency: any = null;
+  /** Bug #90 (Round 3): Cache for negative capability checks (not-available).
+   *  Prevents redundant provider scans on repeated checks. TTL of 5 minutes. */
+  private negativeCache = new Map<string, { timestamp: number }>();
+  private static NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000;
 
   /**
    * Check if any registered provider supports a given capability.
@@ -2348,11 +2352,23 @@ export class CapabilityRouter {
     if (!this.initialized) {
       await this.initialize();
     }
+
+    // Bug #90 (Round 3): Check negative cache first to avoid redundant provider scans
+    const cached = this.negativeCache.get(capabilityId);
+    if (cached && Date.now() - cached.timestamp < CapabilityRouter.NEGATIVE_CACHE_TTL_MS) {
+      return false;
+    }
+
     for (const provider of this.providers.values()) {
       if (provider.capabilities.includes(capabilityId)) {
+        // Positive result: clear any negative cache entry
+        this.negativeCache.delete(capabilityId);
         return true;
       }
     }
+
+    // Negative result: cache it
+    this.negativeCache.set(capabilityId, { timestamp: Date.now() });
     return false;
   }
 

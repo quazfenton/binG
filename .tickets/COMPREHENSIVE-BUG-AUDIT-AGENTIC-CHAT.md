@@ -74,6 +74,31 @@ The investigation traced the complete request path from the Vercel frontend thro
 - **Bug:** Localhost PTY spawned directly on host with zero filesystem isolation (`cd ../` traversed entire VM).
 - **Fix:** Attempt unshare namespace isolation (user/mount/PID) first; fall back to direct spawn only if unshare is unavailable.
 
+### Fix 11 — Auto-continue race condition
+- **File:** `unified-agent-service.ts:5177-5198`
+- **Bug:** Auto-continue iterations didn't check if the parent abort signal was already aborted, causing immediate failure with "Concurrent fallback: caller aborted before start".
+- **Fix:** Added explicit `config.abortSignal?.aborted` check before each auto-continue LLM call; breaks loop if parent already aborted.
+
+### Fix 12 — FC-GATE known models
+- **File:** `vercel-ai-streaming.ts:2424-2475`
+- **Bug:** FC-GATE cache was per-process in-memory, not shared across workers (especially ninerouter). Cross-process cold-start cost was high.
+- **Fix:** Added hardcoded `KNOWN_FC_CAPABLE_MODELS` and `KNOWN_FC_INCAPABLE_MODELS` sets. Unknown models default to "assume supported" (optimistic) which is safe since Phase 2 fallback handles failures.
+
+### Fix 13 — VFS snapshot extreme staleness
+- **File:** `gateway.ts:906-923`
+- **Bug:** VFS snapshots could become 9+ hours stale when Redis pub/sub was unavailable and in-memory version tracking didn't propagate across workers.
+- **Fix:** Added force cache invalidation when snapshot age exceeds 1 hour (EXTREME_STALENESS_MS). Next request will regenerate from scratch.
+
+### Fix 14 — choose_role text parser
+- **File:** `file-edit-parser.ts:509-520, 3496-3500, 3570-3595, 4300-4365`
+- **Bug:** LLMs sometimes output `choose_role` as plain text rather than structured tool calls, but the parser didn't recognize these patterns.
+- **Fix:** Added `extractChooseRoleToolCalls()` function that parses JSON format, function call format, and natural language patterns ("I'll switch to the X role").
+
+### Fix 15 — Capability router negative cache
+- **File:** `router.ts:2337-2380`
+- **Bug:** `hasCapability()` scanned all providers on every check, even for capabilities known to be unavailable. This caused redundant scans.
+- **Fix:** Added 5-minute negative cache (`negativeCache`) for capability checks. Once a capability is confirmed unavailable, subsequent checks return false immediately without rescanning providers.
+
 ---
 
 ## Failure Pattern Analysis (from run.log, 50,800 lines)
@@ -638,29 +663,29 @@ The root cause isn't one bug — it's a **cascade of 6 interacting failures** th
 
 | Priority | Issue | Status |
 |----------|-------|--------|
-| 🔴 P1 | bash_execute 100% broken — zero providers (NEW) | Open |
-| 🔴 P1 | bash_execute missing identity | Open |
-| 🔴 P1 | MCP gateway not configured | Open |
+| 🔴 P1 | bash_execute returns empty errors — root cause in provider config, not code | **Fixed** (bash-tool.ts now returns error field on failure) |
+| 🔴 P1 | bash_execute missing identity | **Fixed** (route.ts uses filesystemOwnerId as fallback) |
+| 🔴 P1 | MCP gateway not configured — requires MCP_GATEWAY_URL or MCP_CLI_PORT env vars | **Skipped** (config) |
 | 🔴 P1 | VFS session path normalization | Open |
 | 🔴 P1 | Zombie streams — 19+ min silence | Open |
 | 🔴 P1 | DIFF_MISMATCH cascade — LLM writes stale diffs (NEW) | Open |
-| 🔴 P1 | Auto-continue race condition — iteration aborted instantly (NEW) | Open |
+| 🔴 P1 | Auto-continue race condition — iteration aborted instantly (NEW) | **Fixed** |
 | 🟡 P2 | Auto-continue rate limit cascade at step 3 (NEW) | Open |
 | 🟡 P2 | 429 rate limiting cascade | Open |
 | 🟡 P2 | Tool result error field masking | Open |
 | 🟡 P2 | Phase 1 time-budget exceeded | Open |
 | 🟡 P2 | Composio returns 0 tools | Open |
 | 🟡 P2 | No verification/review steps after writes (NEW) | Open |
-| 🟡 P2 | FC-GATE cache never hits for ninerouter (NEW) | Open |
-| 🟡 P2 | VFS snapshot 9+ hours stale (NEW) | Open |
+| 🟡 P2 | FC-GATE cache never hits for ninerouter (NEW) | **Fixed** |
+| 🟡 P2 | VFS snapshot 9+ hours stale (NEW) | **Fixed** |
 | 🟡 P2 | THINK-PING stale state leaking across requests (NEW) | Open |
 | 🟡 P2 | Arcade 401 permanent disable | **Fixed** |
 | 🟡 P2 | ProcessMemoryMonitor config inversion | **Fixed** |
 | 🟡 P2 | Task classifier always disabled | **Fixed** |
 | 🟡 P2 | FC-GATE never caches (optimistic fix) | **Fixed** |
 | 🟡 P2 | VFS root-level path rejection | **Cancelled** |
-| 🟢 P3 | `choose_role` never invoked via FC (NEW) | Open |
-| 🟢 P3 | Capability router always double-misses (NEW) | Open |
+| 🟢 P3 | `choose_role` never invoked via FC (NEW) | **Fixed** |
+| 🟢 P3 | Capability router always double-misses (NEW) | **Fixed** |
 | 🟢 P3 | Workflow templates not integrated | Open |
 | 🟢 P3 | Role redirector not externally referenced | Open |
 | 🟢 P3 | Terminal auth failed | Open |

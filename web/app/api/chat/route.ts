@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/providers/llm-providers";
 import { errorHandler } from '@/lib/errors/error-handler';
-import { responseRouter } from "@/lib/api/response-router";
+import { responseRouter, scopeRejectedEnvelope } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { resolveFilesystemOwner, withAnonSessionCookie } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
@@ -1052,7 +1052,25 @@ export async function POST(request: NextRequest) {
         chatLogger.debug('Session file tracking failed (non-critical)', { requestId: trackingReqId, error: error.message });
       });
 
-    const defaultScopePath = normalizeSessionPath(sanitizePathSegment(resolvedConversationId));
+    // ResponseEnvelope threading 2026-07-22 (Bug 1 closure):
+    // wrap normalizeSessionPath in a try/catch so any upstream throw (scope-utils.ts
+    // "outside the allowed scope") surfaces an envelope in the operator log + preserves
+    // existing re-throw semantics for callers.
+    let defaultScopePath: string;
+    try {
+      defaultScopePath = normalizeSessionPath(sanitizePathSegment(resolvedConversationId));
+    } catch (scopeErr: any) {
+      chatLogger.warn('[SCOPE-REJECTED] normalizeSessionPath failure', {
+        attemptedPath: resolvedConversationId,
+        expectedScopePrefix: 'workspace/sessions/{id}',
+        envelope: scopeRejectedEnvelope({
+          attemptedPath: resolvedConversationId,
+          expectedScopePrefix: 'workspace/sessions/{id}',
+        }),
+        error: scopeErr?.message,
+      });
+      throw scopeErr; // preserve existing throw semantics
+    }
     // The resolved conversation ID is the source of truth for workspace
     // isolation. A client can retain a stale filesystemContext.scopePath after
     // a session rename/new-chat transition; accepting it here made snapshots
@@ -1661,7 +1679,7 @@ FORMAT RULES:
     //
     // Closure-captured state is intentionally module-private to POST() so
     // a request's watchdog cannot leak across concurrent requests.
-    const stallStartTime = Date.now();
+    let stallStartTime = Date.now();
     let lastProgressAt = stallStartTime;
     const PROGRESS_EVENT_TYPES = new Set<unknown>([
       SSE_EVENT_TYPES.TOKEN,
@@ -2091,7 +2109,7 @@ const config: UnifiedAgentConfig = {
         const result = await callMCPToolFromAI_SDK(
           name,
           { ...args, conversationId: resolvedConversationId },
-          authenticatedUserId ?? '',
+          authenticatedUserId || filesystemOwnerId || '',
           requestedScopePath ?? '',
           undefined,                     // recentFailures (unchanged)
           { signal: toolCallSignal },    // F4: per-call signal (was agentTurnSignal)

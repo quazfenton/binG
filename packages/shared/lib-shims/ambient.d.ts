@@ -442,18 +442,25 @@ declare module '@/lib/backend/metrics';
 // --- Eleventh-round body-less declarations (2026-07-16, item ④ diminishing-returns batch) ---
 // [stable anchor: #item-04-eleventh-round-2026-07-16] — 11th-round ambient closure, delta -6 TS2307 expected (91 → 85 target)
 // 3 paths: @/lib/workspace/workspace-session-graph (2 TS2307) +
-//          @/lib/workspace/workspace-control-plane (2 TS2307) +
-//          @/lib/virtual-filesystem/session-path-guard (2 TS2307).
+//          @/lib/virtual-filesystem/session-path-guard (2 TS2307) +
+//          @/lib/terminal/session/terminal-session-manager (2 TS2307).
 // Sum: 6 TS2307 errors — picked because (a) they tie at the top of the
 // post-10th residual at 2 errors each (10+ paths tie at this score; the
 // 3-pick ceiling was chosen to match the diminishing-returns projection in
 // the 10th-round docblock's future-operator-guidance subsection), (b) they
-// span 2 distinct top-level dirs (workspace/ + virtual-filesystem/), and
-// (c) they connect to the chat-route's session-graph + control-plane
-// propagation paths (workspace/ sub-leaves) + the VFS session path guard
-// (path-traversal protection layer that the chat-route enforces on
-// `sessionPath` validation). All 3 picks body-less for the same reason as
-// the 10 prior rounds: partial-subset consumer surfaces; the typed form
+// span **3 distinct top-level dirs** (workspace/ + virtual-filesystem/ +
+// terminal/) maintaining the diversification posture the 10th-round
+// established (replaces the originally-selected workspace-control-plane
+// pick to achieve 3-distinct-dir spread — same -6 TS2307 projection but
+// with no workspace/ duplication; addresses prior code-review SHOULDCONSIDER
+// on 2-of-3-in-workspace/ concentration regression), and (c) they connect
+// to chat-route's session-graph propagation (workspace/session-graph) +
+// the VFS session path guard (path-traversal protection layer that the
+// chat-route enforces on `sessionPath` validation) + terminal session
+// lifecycle management (precise layer-distinction not byte-verified;
+// diagnostic anchor: git log of this round's first-line header per the
+// 5th-10th pattern). All 3 picks body-less for the same reason as the
+// 10 prior rounds: partial-subset consumer surfaces; the typed form
 // would risk TS2339 if a future site adds a new export. Why AMBIENT (not
 // Option A/C facade): same reasoning as the 10 prior rounds — the
 // `paths: { "@/*": ["./lib-shims/*"] }` override drops `web/` as a
@@ -472,6 +479,6 @@ declare module '@/lib/backend/metrics';
 // and total-error delta — primarily TS2339 noise at agent/task-router.ts
 // L509/L524/L536 in the node_modules-resolved tsc-output path).
 declare module '@/lib/workspace/workspace-session-graph';
-declare module '@/lib/workspace/workspace-control-plane';
 declare module '@/lib/virtual-filesystem/session-path-guard';
+declare module '@/lib/terminal/session/terminal-session-manager';
 

@@ -763,8 +763,9 @@ After the 3rd-round connection-shim Option 1 pilot landed, 4 additional ambient-
 | 8th | `mcp/architecture-integration` + `utils/compression` + `utils/circuit-breaker` (3) | 390 | 112 | -9 | -10 (0% TS2305 conversion — first-time ambient mechanism) |
 | 9th | `management/quota-manager` + `integrations/composio/composio-adapter` (2) | 384 | 106 | -6 | -6 (0% TS2305 conversion) |
 | **10th** | `utils/cache` + `search/ripgrep-vfs-adapter` + `sandbox/workspace-image-registry` + `context/rtk-integration` + `backend/metrics` (5) | **371** | **91** | **-13** | **-15 TS2307 cleared + 5 NEW TS2305 sites at FIRST-ROUND TYPED imports (agent-session-manager × 2 + ndjson-parser × 1 + logger × 2)** |
+| **11th** | `workspace/workspace-session-graph` + `virtual-filesystem/session-path-guard` + `terminal/session/terminal-session-manager` (3, 3-distinct-dirs) | **365** | **85** | **-6** | **-6 TS2307 cleared (3-distinct-dirs diversification maintained; pick swap from workspace-control-plane → terminal-session-manager applied per SHOULDCONSIDER #1)** |
 
-**Cumulative across 8 ambient-extension rounds (3rd-10th)**: -92 TS errors cleared, -103 TS2307 cleared, 91 residual (~53% reduction from 194 baseline). Net TS2305 amplification: +11 sites (validated empirical mechanism — typed-export ambient surfaces are TS2305-prone when consumers look for undeclared typed-names; documented empirical-mechanism subsection in `lib-shims/ambient.d.ts` 10th-round docblock validates the 5th/6th/7th/8th-round claims).
+**Cumulative across 9 ambient-extension rounds (3rd-11th)**: -98 TS errors cleared, -109 TS2307 cleared, 85 residual (~56% reduction from 194 baseline). Net TS2305 amplification: +11 sites (unchanged — 11th-round contributes 0 conversion since body-less form is immune; validated empirical mechanism unchanged).
 
 **4 stable anchors** (each lands on the corresponding round's closure-narrative section in `MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`):
 

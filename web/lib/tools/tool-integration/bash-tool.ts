@@ -165,6 +165,7 @@ export class BashToolExecutor {
           stdout: result.output || '',
           stderr: result.error || '',
           exitCode: result.exitCode || 0,
+          error: result.error || undefined,
         };
       };
 
@@ -221,6 +222,7 @@ export class BashToolExecutor {
 
       return {
         success: execResult.success,
+        error: execResult.success ? undefined : (execResult.stderr || execResult.stdout || 'Command failed'),
         output: finalOutput,
         stdout: execResult.stdout,
         stderr: execResult.stderr,
@@ -239,6 +241,7 @@ export class BashToolExecutor {
 
       return {
         success: false,
+        error: error.message,
         output: error.message,
         stdout: '',
         stderr: error.message,

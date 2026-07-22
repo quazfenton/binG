@@ -46,6 +46,12 @@ import {
   getToolContext,
 } from './tool-context-store';
 
+// ResponseEnvelope threading 2026-07-22 (cross-bug closure):
+// Carry an envelope envelope as a sibling field of `error` for downstream consumers
+// that prefer `envelope.kind` discriminator over `error.code` parsing.
+// See /opt/bing/docs/CENTRALIZED_TODO_LIST.md (cross-bug unification narrative).
+import { errorRecoverableEnvelope } from '@/lib/api/response-router';
+
 // Re-export the same symbols (plus the ToolContext type) so existing
 // callers (`import { toolContextStore } from '@/lib/mcp/vfs-mcp-tools'`)
 // keep working unchanged.
@@ -844,6 +850,18 @@ export const applyDiffTool = (tool as any)({
     }).passthrough()
   ),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
+    // DIFF_MISMATCH augmentation 2026-07-22 (Bug 3 from COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT):
+    // hoist currentFile declaration so it is visible from BOTH the SAR-path read AND
+    // the outer DIFF_MISMATCH catch arm. TypeScript treats `const` declared inside a
+    // `try` block as invisible to that try's `catch` (block-scoped). Declaring `let
+    // currentFile = null` at execute-function scope and re-assigning from each readFile
+    // call site guarantees the catch handler at L1163+ can read currentFile.content.
+    //
+    // Type annotation narrowed to just the three fields actually read in this function:
+    // content (DIFF_MISMATCH augmentation + diff input + emit previousContent),
+    // version (DIFF_MISMATCH augmentation), language (success-path writeFile 4th arg).
+    // Compiler-verified narrowing inside the conditional spreads at L1004 / L1168.
+    let currentFile: { content: string; version: number; language: string } | null = null;
     try {
   if (!path || typeof path !== 'string' || !path.trim()) {
     return { success: false, path, error: { code: 'INVALID_PATH', message: 'Path is required (a non-empty string).', retryable: true, correctedExample: correctedExample('apply_diff') } };
@@ -923,8 +941,8 @@ export const applyDiffTool = (tool as any)({
     const context = getToolContext();
     const scopedPath = resolveScopedPath(path);
 
-    // Read the current file
-    const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
+    // Read the current file (assign-only: hoisted let at execute-function scope; see hoist comment)
+    currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
     let newContent = currentFile.content;
 
     // Reset lastIndex after .test()
@@ -970,8 +988,28 @@ export const applyDiffTool = (tool as any)({
           retryable: true,
           attemptedPath: path,
           failedSearches,
-          suggestedNextAction: `Call read_file("${path}") to see current content, then regenerate the diff.`,
+          // DIFF_MISMATCH augmentation 2026-07-22 (Bug 3 from COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT):
+          // include currentFileContent + currentFileVersion via conditional spread so the
+          // fields are present-iff-known (rather than always-present-with-falsy-fallback).
+          // currentFile already read at execute-function-scope hoist for SAR.
+          ...(currentFile && {
+            currentFileContent: currentFile.content,
+            currentFileVersion: currentFile.version,
+          }),
+          suggestedNextAction: `The exact current file content is included in currentFileContent -- compare your SEARCH block to that byte-exact content and retry with a single SEARCH/REPLACE block (or call read_file("${path}") to confirm).`,
         },
+        // ResponseEnvelope threading 2026-07-22 (cross-bug closure):
+        // sibling field of `error` — pre-existing consumers still work via `error.code`.
+        envelope: errorRecoverableEnvelope({
+          code: 'DIFF_MISMATCH',
+          message: `Search-and-replace: none of the ${failedSearches.length} SEARCH blocks matched the current file content.`,
+          attemptedPath: path,
+          suggestedNextAction: `The exact current file content is included in currentFileContent -- compare your SEARCH block to that byte-exact content and retry with a single SEARCH/REPLACE block (or call read_file("${path}") to confirm).`,
+          ...(currentFile && {
+            currentFileContent: currentFile.content,
+            currentFileVersion: currentFile.version,
+          }),
+        }),
       };
     }
 
@@ -1058,8 +1096,8 @@ export const applyDiffTool = (tool as any)({
     scopePath: context.scopePath,
   });
 
-  // First, read the current file to apply the diff
-  const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
+  // First, read the current file to apply the diff (assign-only: hoisted let; see hoist comment)
+  currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
   
   // Parse and apply the unified diff using existing file-diff-utils
   const { applyDiffToContent } = await import('../chat/file-diff-utils');
@@ -1147,13 +1185,27 @@ export const applyDiffTool = (tool as any)({
           suggestedNextAction: `Use write_file to create the file first, or check the path with list_files.`,
         }
       : isDiffMismatch
-        ? {
-            code: 'DIFF_MISMATCH',
-            message: msg,
-            retryable: true,
-            attemptedPath: path,
-            suggestedNextAction: `Call read_file("${path}") to see current content, then regenerate the diff.`,
-          }
+        ? (() => {
+            // ResponseEnvelope threading 2026-07-22 (cross-bug closure): DRY helper —
+            // compute the envelope `meta` once, then use the same fields for the inner
+            // `error` object AND the sibling `envelope` field. Future edits to message /
+            // suggestedNextAction stay in sync at one source.
+            const meta = {
+              code: 'DIFF_MISMATCH' as const,
+              message: msg,
+              attemptedPath: path,
+              suggestedNextAction: `The exact current file content is included in currentFileContent -- compare your SEARCH/REPLACE block to that byte-exact content and retry (or call read_file("${path}") to confirm).`,
+              ...(currentFile && {
+                currentFileContent: currentFile.content,
+                currentFileVersion: currentFile.version,
+              }),
+            };
+            return {
+              ...meta,
+              retryable: true,
+              envelope: errorRecoverableEnvelope(meta),
+            };
+          })()
         : { code: 'DIFF_ERROR', message: msg, retryable: false },
   };
     }

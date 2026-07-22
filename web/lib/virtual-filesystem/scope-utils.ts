@@ -97,6 +97,35 @@ export function normalizeScopePath(scopePath?: string): string {
   return `workspace/${path}`.replace(/\/{2,}/g, '/');
 }
 
+/**
+ * ROOT_READ_WHITELIST (Bug 1 closure 2026-07-22):
+ *
+ * Closes the VFS session path normalization bug from
+ * /opt/bing/.tickets/COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT.md. The LLM treats the
+ * workspace root as a flat filesystem and tries to read these configuration
+ * files directly (`package.json`, `tsconfig.json`, `README.md`), but VFS only
+ * allows session-scoped paths (`workspace/sessions/{id}/...`). Without this
+ * whitelist, the LLM has to round-trip through `list_files("/")` just to discover
+ * what exists before reading these files.
+ *
+ * The fix: synthesize a `workspace/${relative}` path so the LLM can read
+ * whitelisted root-level files directly. Synthesized paths are NOT session-scoped
+ * — they resolve at the workspace root — so they're distinguishable from real
+ * session-scoped paths in the LLM-facing response shape.
+ *
+ * Backward-compat: this is purely additive. Non-whitelisted bare filenames and
+ * subpaths still go through the default `${scope}/${relative}` synthesis.
+ *
+ * EXPORT: exported so test files + downstream observability can iterate the
+ * whitelist directly. Reads from @/__tests__/vfs/scope-utils.test.ts assert
+ * `expect(ROOT_READ_WHITELIST).toContain('package.json')` etc.
+ */
+export const ROOT_READ_WHITELIST: ReadonlySet<string> = new Set([
+  'package.json',
+  'tsconfig.json',
+  'README.md',
+]);
+
 export function resolveScopedPath(requestedPath: string, scopePath?: string): string {
   const scope = normalizeScopePath(scopePath);
   if (!requestedPath || !requestedPath.trim()) return scope;
@@ -112,6 +141,12 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
       return relative;
     }
     throw new Error(`Path "${relative}" is outside the allowed scope "${scope}"`);
+  }
+
+  // Bug 1 fix: synthesize whitelisted root-level files at workspace root (NOT session-scope).
+  // Closes the LLM round-trip on `read_file('package.json')` etc.
+  if (ROOT_READ_WHITELIST.has(relative)) {
+    return `workspace/${relative}`;
   }
 
   return `${scope}/${relative}`;
