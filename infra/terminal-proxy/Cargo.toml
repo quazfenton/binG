@@ -1,0 +1,31 @@
+[package]
+name = "terminal-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance WebSocket terminal proxy for binG - handles 10K+ concurrent terminal connections"
+
+[dependencies]
+tokio = { version = "1.35", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["full"] }
+futures-util = { version = "0.3", features = ["sink", "stream"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+dashmap = "5.5"
+base64 = "0.21"
+url = "2.5"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3

@@ -479,6 +479,37 @@ networks:
       config:
         - subnet: 172.28.0.0/16
 
+# Terminal WebSocket Proxy (Rust - handles 10K+ connections)
+  terminal-proxy:
+    build:
+      context: ../../terminal-proxy
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"  # WebSocket
+      - "9090:9090"  # Metrics
+    environment:
+      - RUST_LOG=${RUST_LOG:-info}
+      - TERMINAL_PROXY_LISTEN_ADDR=0.0.0.0:8080
+      - TERMINAL_PROXY_WORKERS=4
+      - TERMINAL_PROXY_MAX_CONNECTIONS=10000
+      - TERMINAL_PROXY_IDLE_TIMEOUT_MS=900000
+      - TERMINAL_PROXY_BACKEND_URL=http://app:5555
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:-change-me}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - bing-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 2  # Scale for high availability
+
 volumes:
   workspace_data:
     driver: local

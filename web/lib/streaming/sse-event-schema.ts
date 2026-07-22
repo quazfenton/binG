@@ -61,6 +61,8 @@ export const SSE_EVENT_TYPES = {
   LOOP_ABORT: 'loop_abort',
   /** Tool execution summary: total calls, succeeded, failed, duration */
   TOOL_SUMMARY: 'tool_summary',
+  /** Single tool call result emitted for client-side display */
+  TOOL_RESULT: 'tool_result',
   /** Auto-continuation progress: iteration, reason, requestId */
   CONTINUATION: 'continuation',
 } as const;
@@ -429,6 +431,17 @@ export interface SSEToolSummaryPayload {
   timestamp?: number;
 }
 
+/** Single tool call result — emitted via onStreamChunk for client-side display. */
+export interface SSEToolResultPayload {
+  tool: string;
+  success: boolean;
+  exitCode: number;
+  durationMs: number;
+  args: Record<string, unknown>;
+  error?: string;
+  errorCode?: string;
+}
+
 /** Auto-continuation progress update */
 export interface SSEContinuationPayload {
   /** Request ID for correlation */
@@ -472,6 +485,7 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.PROGRESSIVE_BUILD; data: SSEProgressiveBuildPayload }
   | { type: typeof SSE_EVENT_TYPES.LOOP_ABORT; data: SSELoopAbortPayload }
   | { type: typeof SSE_EVENT_TYPES.TOOL_SUMMARY; data: SSEToolSummaryPayload }
+  | { type: typeof SSE_EVENT_TYPES.TOOL_RESULT; data: SSEToolResultPayload }
   | { type: typeof SSE_EVENT_TYPES.CONTINUATION; data: SSEContinuationPayload };
 
 // ---------------------------------------------------------------------------

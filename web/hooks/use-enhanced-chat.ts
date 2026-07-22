@@ -14,6 +14,11 @@ import { voiceService } from '@/lib/voice/voice-service';
 import { streamingSpeaker } from '@/lib/voice/streaming-speaker';
 import { createLogger } from '@/lib/utils/logger';
 import { recordFallbackChainAttempt, recordFallbackChainExhausted } from '@/lib/chat/chat-metrics';
+// Phase C — Phase 1/Phase 2 success-signal architecture. `Phase1Status`
+// is type-only (consumed by the dispatch site via `messageMetadata.phase1Status`);
+// `PHASE1_STATUSES` is the runtime-evaluable tuple used as a whitelist
+// validator at the SSE metadata extraction site.
+import { PHASE1_STATUSES, type Phase1Status } from '@/lib/agent/phase-status';
 // F1 finding: SSE-stall discriminator lifted to a pure helper so it
 // can be unit-tested without React hook setup. The hook keeps the
 // F8 anchor (`const err = eventData;`) so `err.stack` substring
@@ -1467,6 +1472,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (typeof raw.anyToolFailed === 'boolean') doneMetadata.anyToolFailed = raw.anyToolFailed;
                   if (raw.isEmptyResponse === true) doneMetadata.isEmptyResponse = true;
                   if (typeof raw.emptyReason === 'string') doneMetadata.emptyReason = raw.emptyReason;
+                  // Phase C — whitelist `phase1Status` from `messageMetadata`
+                  // with a runtime validation against the 4-state enum tuple.
+                  // Strict string-typing (NOT subtype of `safeStringFields`)
+                  // because `phase1Status` must be one of the canonical 4
+                  // values; any other string (or a non-string) is dropped to
+                  // prevent the downstream 4-state dispatch from receiving
+                  // a malformed value and silently mis-routing UI/retry.
+                  if (typeof raw.phase1Status === 'string' && (PHASE1_STATUSES as readonly string[]).includes(raw.phase1Status)) {
+                    doneMetadata.phase1Status = raw.phase1Status as Phase1Status;
+                  }
                   if (typeof raw.sessionId === 'string') doneMetadata.sessionId = raw.sessionId;
                   if (typeof raw.conversationId === 'string') doneMetadata.conversationId = raw.conversationId;
 
@@ -1569,16 +1584,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   const hasFailedToolInvocations = failedToolInvocations.length > 0;
                   const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
                     eventData.fileEdits?.length > 0;
-                  // CRITICAL: honor server-side `isEmptyResponse` flag too.
-                  // The server emits this when it had to return a friendly-
-                  // fallback string ("I attempted to use a tool but the call
-                  // was rejected…") after SelfHeal couldn't recover. Without
-                  // this check, non-empty fallback text → isEmptyResponse=false
-                  // → no rotation → user stuck on a dead-end bubble.
+                  // CRITICAL: server-side `isEmptyResponse` flag honored too (fallback text path).
+                  // Phase C — 4-state success-signal dispatch (additive; backward-compat when phase1Status=undefined):
+                  //   'empty'| 'error' → trigger retry          ('error' rotates model + surfaces reason)
+                  //   'success'        → skip retry (edits already applied)
+                  //   'skipped'        → skip retry (bypassed path)
+                  // @see /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md (Phase C)
+                  const phase1Status = doneMetadata?.phase1Status as Phase1Status | undefined;
+                  const phase1StatusTriggersRetry =
+                    phase1Status === 'empty' || phase1Status === 'error';
                   const serverFlaggedEmpty =
                     doneMetadata?.isEmptyResponse === true ||
                     eventData?.messageMetadata?.isEmptyResponse === true;
                   const isEmptyResponse =
+                    phase1StatusTriggersRetry || // Phase C: 4-state enum
                     serverFlaggedEmpty ||
                     (!doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits);
 

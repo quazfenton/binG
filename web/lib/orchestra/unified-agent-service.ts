@@ -5228,11 +5228,11 @@ async function runV1ApiWithTools(
                 config.onProgress?.();
                 const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
                 let fallbackContContent = '';
-                const fallbackContToolInvocations: typeof contToolInvocations = [];
+                const fallbackContToolInvocations: typeof toolInvocations = [];
 
                 for await (const chunk of streamWithConcurrentFallback({
                   provider: nextPrimary,
-                  fallbackProviders: nextFallbacks,
+                  fallbackChain: nextFallbacks,
                   model: getModelForProvider(nextPrimary),
                   messages: contMessages as any,
                   temperature: config.temperature || 0.7,
@@ -5970,7 +5970,7 @@ async function runV1Orchestrated(
           log.error('[runV1Orchestrated] attemptFallback chain also failed', { error: chainErr?.message || String(chainErr) });
         }
         // Both fallbacks failed after budget exhaustion — return partial orchestrated result with budgetExhausted signal so callers can distinguish degraded response
-        const _resFallbackFailed = {
+        const _resFallbackFailed: UnifiedAgentResult = {
           success: true,
           response: stringifyMessageContent(cleanedResponse),
           steps,
@@ -6000,7 +6000,7 @@ async function runV1Orchestrated(
       }
     }
 
-    const _resSuccess = {
+    const _resSuccess: UnifiedAgentResult = {
       success: true,
       response: stringifyMessageContent(cleanedResponse),
       steps,

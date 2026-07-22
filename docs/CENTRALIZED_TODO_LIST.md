@@ -709,9 +709,9 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
 
 ### MCP-TOOL-SELECTION-POSTAUDIT (opened 2026-07-15)
 - **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).
-- **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure only — 19-line pilot residue)
+- **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure — 19-line pilot residue → 13 of 19 cleared via Connection-shim pilot 2026-07-16)
 - **Opened:** 2026-07-15
-- **Last updated:** 2026-07-16 — L141 acceptance-criterion doc-fix with corrected runner command + documented remaining gap.
+- **Last updated:** 2026-07-16 — Connection-shim pilot: 13 TS2307 errors cleared via ambient declaration at `lib-shims/ambient.d.ts` L207-L220 (tsc 463 → 450, 2.8% of baseline). User-requested Option A/C rejected because `connection-shim.ts` has a HARD static+dynamic dep on `./connection.ts` (L123 runtime require + L215 static re-exports) — co-move would inflate transitive errors and violate the packages/shared ↔ web/lib/* boundary. Ambient declaration is the architecturally-safer pilot path. Third-step redundancy: no stale `@/lib/database/connection-shim` declaration existed in `lib-shims/ambient.d.ts` pre-pilot (verified via grep); the parallel add was the operative change.
 
   1. **Corrected command**: vitest paths + cwd recommendation updated; produced 170/172 green.
   2. **OUTERCATCH-GAP**: 2 documented pre-existing failures at route.ts:L945 (expected HTTP 524 vs got 200 — pending OUTERCATCH-GAP closure).

@@ -221,11 +221,16 @@ describe('phase1Status cross-layer cascade', () => {
       },
     );
 
-    // TODO(Phase B: route.ts SSE phase1_status emission): flip it.todo → it when
-    // route.ts emits a serialization stream event of shape
-    // `type: 'phase1_status'` or `phase1Status: phase1Status`. Tracked in
-    // /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md Phase B.
-    it.todo('route.ts SSE emit site carries the phase1Status metadata key', () => {
+    // Phase B — route.ts SSE phase1_status emission landed (2026-07-16).
+    // The route.ts `done` event carries `phase1Status` as a self-named SSE
+    // payload key (e.g. `phase1Status: phase1Status`) via the renamed
+    // `phase1Status` local variable fed by the derivation pipeline. The
+    // hard assertion below checks for the SSE event-shape contract per
+    // option 3 of the regex pattern (object-literal self-named key).
+    //
+    // @see /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md (Phase B)
+    // @see /opt/bing/web/app/api/chat/route.ts (L3079 + L3093 emit sites)
+    it('route.ts SSE emit site carries the phase1Status metadata key (Phase B landed)', () => {
       // Narrows the contract: SSE events that include the success-signal
       // MUST carry the phase1Status property (canonical lowercase key
       // matches the snake_case SSE event-id convention used elsewhere
@@ -314,24 +319,50 @@ describe('phase1Status cross-layer cascade', () => {
       },
     );
 
-    // TODO(Phase C: chat hook per-status UI rendering): flip it.todo → it when
-    // use-enhanced-chat.ts dispatches SSE events through a switch on phase1Status
-    // mapping to the 4-state UI matrix (show-edits / show-empty / show-error /
-    // show-fallback). Tracked in /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md Phase C.
-    it.todo('use-enhanced-chat.ts reads phase1Status from SSE payload (if file present)', () => {
+    // Phase C — chat hook per-status UI rendering landed (2026-07-16).
+    // The hook now imports Phase1Status + PHASE1_STATUSES from phase-status.ts
+    // and dispatches on `eventData.messageMetadata.phase1Status` per the
+    // 4-state UI matrix (show-edits / show-empty / show-error / show-fallback),
+    // with backward-compat fallback to the legacy isEmptyResponse boolean
+    // when phase1Status is undefined (clients pre-dating Phase A).
+    //
+    // @see /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md (Phase C)
+    // @see /opt/bing/web/hooks/use-enhanced-chat.ts (lines 1487-1503 [whitelist] + 1619-1644 [dispatch])
+    it('use-enhanced-chat.ts reads phase1Status from SSE payload (Phase C landed)', () => {
       if (hookSource.length === 0) {
         // Tolerated — hooks directory may not be in the test cwd.
         expect(true).toBe(true);
         return;
       }
 
-      // Soft check: the hook must reference phase1Status somewhere; if it
-      // doesn't, the UI rendering migration hasn't started. The actual
-      // SWITCH-on-status logic check is in a follow-up once the migration lands.
+      // Phase C hard assertion: the hook must reference phase1Status in TWO
+      // distinct call surfaces — the type-only import + the runtime validator
+      // import anchor Phase A's contract in the bundle, while the dispatch
+      // site proves the 4-state enum is actually consumed (not just imported).
       expect(
         hookSource.match(/phase1Status/),
         'use-enhanced-chat.ts must reference phase1Status for UI per-status rendering (Phase C target)',
       ).not.toBeNull();
+
+      // Phase C stronger assertion: the runtime validator tuple (PHASE1_STATUSES)
+      // must be imported + used as a whitelist guard. A future regression that
+      // opens the validator (e.g., removes the tuple-include check accepting
+      // arbitrary strings as phase1Status values) breaks the UI dispatch
+      // contract silently — this test catches that drift.
+      expect(
+        /import\s*\{[^}]*\bPHASE1_STATUSES\b[^}]*\}\s*from\s*['"]@\/lib\/agent\/phase-status['"]/.test(hookSource),
+        'use-enhanced-chat.ts must import PHASE1_STATUSES for runtime validator (Phase C UI dispatch contract)',
+      ).toBe(true);
+
+      // Phase C strongest assertion: the hook must dispatch on phase1Status
+      // (either as a switch-on-status or as a ternary cascade). The current
+      // migration uses `phase1StatusTriggersRetry = phase1Status === 'empty'
+      // || phase1Status === 'error'` but a future refactor could collapse
+      // both into a single if-chain — this assertion covers either pattern.
+      expect(
+        /phase1Status\s*[!=]==\s*['"](?:empty|error|success|skipped)['"]/.test(hookSource),
+        'use-enhanced-chat.ts must dispatch on at least one phase1Status value (\'empty\', \'error\', \'success\', or \'skipped\')',
+      ).toBe(true);
     });
   });
 

@@ -202,3 +202,111 @@ declare module '@/lib/providers/model-ranker';
 declare module '@/lib/orchestra/unified-agent-service';
 declare module '@/lib/virtual-filesystem/filesystem-diffs';
 declare module '@/lib/crewai';
+
+
+// --- Third-round body-less declarations (2026-07-16, item ④ pilot) ---
+// 1 path discovered when the @/lib/database/connection-shim hot-spot was
+// audited for item ④'s "Pilot verification" pivot (13 TS2307 errors).
+// Body-less because consumers access a partial subset of connection-shim's
+// exported surface (`getDatabase`, `DatabaseOperations`, `encryptApiKey`,
+// `decryptApiKey`, `isDatabaseAvailable`, `callDatabase`, `withDatabase`);
+// typed form would risk TS2339 if a future site adds a new export. Same
+// permissive-any policy as the second-round block above.
+// Note: the `./connection` hard-dependency inside connection-shim.ts
+// (line 123 runtime require + line 215 static re-exports) precludes the
+// user-requested Option A/C physical move — connection.ts is a heavy
+// 215-line sibling with its own dep tree; co-move would inflate
+// transitive errors. Ambient is the architecturally-safer pilot path.
+declare module '@/lib/database/connection-shim';
+
+
+// --- Fourth-round body-less declarations (2026-07-16, item ④ co-staged) ---
+// 2 paths: @/lib/virtual-filesystem/index.server (8 TS2307) +
+//          @/lib/database/schema (8 TS2307).
+// Both body-less: consumers access partial subsets of the exported surfaces;
+// typed form would risk TS2339 if a future site adds new exports. Permissive-
+// any policy matches the second-round + third-round blocks.
+//
+// Why AMBIENT (not Option A/C physical-move + facade) for database/schema:
+// the facade at `web/lib/database/schema/index.ts → re-export from
+// packages/shared/lib/...` is INVISIBLE to packages/shared's tsc view because
+// the path-override `paths: { "@/*": ["./lib-shims/*"] }` drops web/ as a
+// resolution target. Verified empirically 2026-07-16: facade cleared 0/8
+// errors (delta was -7, not the targeted -8); ambient clears 8/8. Runtime
+// stays clean: loader.ts __dirname + relative SQL-path resolution preserved
+// by the ambient path (no .sql co-move needed — 12 .sql files remain in
+// web/lib/database/schema/ alongside loader.ts).
+declare module '@/lib/virtual-filesystem/index.server';
+declare module '@/lib/database/schema';
+
+
+// --- Fifth-round body-less declarations (2026-07-16, item ④ higher-leverage batch) ---
+// [stable anchor: #item-04-fifth-round-2026-07-16] — 5th-round ambient closure, delta -17 tsc errors (434 → 417)
+// 3 paths: @/lib/terminal/workspace-runtime-service (7 TS2307) +
+//          @/lib/terminal/terminal-manager (6 TS2307) +
+//          @/lib/sandbox/workspacefs-sync-service (6 TS2307).
+// Sum: 19 errors — selected for higher leverage than @/lib/agents/{contract,
+// argument-policy,tool-sentinel} (only 4 errors total per basher-verified
+// residual count this turn). All body-less for the same reason as 4th-round:
+// partial-subset consumer surfaces; typed form would risk TS2339 if a future
+// site adds a new export. Why AMBIENT (not Option A/C facade): same reasoning
+// as 4th-round — facade at web/.../ is INVISIBLE to packages/shared's tsc
+// view due to paths override dropping web/. Empirically validated: ambient
+// clears 7/8 per module; facade clears 0/6-7 (per the DATABASE-SCHEMA walk-back).
+declare module '@/lib/terminal/workspace-runtime-service';
+declare module '@/lib/terminal/terminal-manager';
+declare module '@/lib/sandbox/workspacefs-sync-service';
+
+
+// --- Sixth-round body-less declarations (2026-07-16, item ④ continued) ---
+// [stable anchor: #item-04-sixth-round-2026-07-16] — 6th-round ambient closure, delta -14 tsc errors (417 → 403)
+// 3 paths: @/lib/workspace/workspace-graph-service (5 TS2307) +
+//          @/lib/context/project-detection (5 TS2307) +
+//          @/lib/sandbox/sandbox-orchestrator (4 TS2307).
+// Sum: 14 errors — selected as next-highest-TS2307 after 5th-round's 19 cleared.
+// Picked `@/lib/sandbox/sandbox-orchestrator` (4) over the equally-scored
+// `@/lib/mcp/architecture-integration` (4) on domain-decoupling grounds —
+// keeps the 6th-round picks in distinct subsystems (workspace/context/
+// sandbox) rather than concentrating two in the mcp/ namespace alongside
+// the first-round umbrella. (Note: TS module specifiers are exact-match —
+// `declare module '@/lib/mcp'` does NOT umbrella-capture sub-paths like
+// `@/lib/mcp/architecture-integration`, so a co-pick would be technically
+// conflict-free. The pick is architectural, not conflict-driven.) All
+// body-less for the same reason as 4th-round + 5th-round: partial-subset
+// consumer surfaces mean typed form risks TS2339 if a future consumer
+// site adds a new export. Why AMBIENT (not Option A/C facade): same
+// reasoning — the `paths: { "@/*": ["./lib-shims/*"] }` override drops
+// web/ as a resolution target so a web/lib/.../X.ts facade is INVISIBLE
+// to packages/shared's tsc. Empirically validated in 4th-round
+// (DATABASE-SCHEMA walked back from facade to ambient after clearing
+// 0/6-7 errors).
+declare module '@/lib/workspace/workspace-graph-service';
+declare module '@/lib/context/project-detection';
+declare module '@/lib/sandbox/sandbox-orchestrator';
+
+
+// --- Seventh-round body-less declarations (2026-07-16, item ④ subsystem-spread batch) ---
+// [stable anchor: #item-04-seventh-round-2026-07-16] — 7th-round ambient closure, delta -4 tsc errors total (403 → 399), delta -10 TS2307 (132 → 122)
+// 3 paths: @/lib/database/sqlite-failure (4 TS2307) +
+//          @/lib/terminal/workspace-service-manager (3 TS2307) +
+//          @/lib/storage/content-addressable-storage (3 TS2307).
+// Sum: 10 TS2307 errors — picked on subsystem-spread grounds to avoid the same-domain
+// concentration seen in the 5th-round (which picked terminal/workspace-runtime-service
+// + terminal/terminal-manager from one terminal/* prefix for 13 errors). The
+// 7th-round distributes picks across database/, terminal/, and storage/ to span
+// 3 distinct top-level dirs (workspace, virtual-filesystem-service, persistence-manager).
+// Note on concentration: 1 of 3 picks is still in terminal/ (workspace-service-manager),
+// vs the 5th-round's 2-of-3 terminal/* picks — a partial-not-full diversification.
+// Each permissive-any declaration can also convert predecessors' TS2307 into TS2305
+// (typed-export mismatch on `any`-typed default-shape modules). The net 7th-round
+// delta is therefore TS2307 -10 + TS2305 +6 = total errors -4 — the apparent
+// "delta gap" between TS2307 cleared and total-errors cleared is expected, not
+// a regression. All body-less for the same reason as 4th–6th rounds:
+// partial-subset consumer surfaces; typed form would risk TS2339 if a future
+// site adds a new export. Why AMBIENT (not Option A/C facade): same reasoning
+// as the 4 prior rounds — the `paths: { "@/*": ["./lib-shims/*"] }` override
+// drops web/ as a resolution target so a web/lib/.../X.ts facade is INVISIBLE
+// to packages/shared's tsc view.
+declare module '@/lib/database/sqlite-failure';
+declare module '@/lib/terminal/workspace-service-manager';
+declare module '@/lib/storage/content-addressable-storage';

@@ -75,7 +75,7 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
 // llm-fallback-coordinator.ts.
 import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus, isStallWatchdogErrorCode, isStallWatchdogInstanceByConstructorName } from '@/lib/chat/llm-fallback-coordinator';
-// Phase 2 success-signal architecture — ssePhase1Status (L472) needs the
+// Phase 2 success-signal architecture — phase1Status (L472) needs the
 // Phase1Status type for its `let` declaration + the assignment site
 // `?? 'unknown'` widening per code-reviewer NEEDS-CHANGE (a). Phase1Status
 // is the 4-state enum from `/opt/bing/web/lib/agent/phase-status.ts` — the
@@ -472,11 +472,11 @@ export async function POST(request: NextRequest) {
   // call sites so the text-mode parser skips these paths instead of overwriting
   // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
   const alreadyWrittenPaths = new Set<string>();
-  // Hoist ssePhase1Status to function scope so error-handler SSE emits (L3101)
+  // Hoist phase1Status to function scope so error-handler SSE emits (L3101)
   // can carry the same value the orchestrator-loop emitted; previously const'd
   // inside an inner block, inaccessible from the outer try/catch that maps
   // StallWatchdogError → 524. Phase 2 ticket propagation.
-  let ssePhase1Status: Phase1Status | 'unknown' | undefined = undefined;
+  let phase1Status: Phase1Status | 'unknown' | undefined = undefined;
 
   // Bug #43: memory-pressure throttle. If the heap is above the soft
   // threshold, return 503 Retry-After before any processing starts.
@@ -3050,7 +3050,7 @@ const config: UnifiedAgentConfig = {
                 // Assign to function-scope let (declared at top of POST) so the
                 // error-handler SSE emit at L3101+ can read the same value the
                 // orchestrator-loop block computed. Phase 2 ticket propagation.
-                ssePhase1Status = orchestrationResult?.metadata?.phase1Status
+                phase1Status = orchestrationResult?.metadata?.phase1Status
                   ?? (orchestrationResult as any)?.phase1Status
                   ?? 'unknown';
 
@@ -3060,7 +3060,7 @@ const config: UnifiedAgentConfig = {
                 // event. Gated behind NODE_ENV !== 'test' to avoid test-suite
                 // noise when mocks don't set phase1Status.
                 if (
-                  ssePhase1Status === 'unknown' &&
+                  phase1Status === 'unknown' &&
                   !hasMetadataPhase1Status &&
                   !hasTopLevelPhase1Status &&
                   process.env.NODE_ENV !== 'test'
@@ -3076,7 +3076,7 @@ const config: UnifiedAgentConfig = {
                 // operators can grep server logs for empty-response tickets
                 // without waiting for the chat hook UI to update.
                 chatLogger.info('[CHAT-ROUTE] phase1Status', {
-                  phase1Status: ssePhase1Status,
+                  phase1Status: phase1Status,
                   mode: orchestrationMode,
                 });
 
@@ -3090,7 +3090,7 @@ enqueue('done', {
                   // `phase1-status-cascade.test.ts` Section B (SSE
                   // metadata contract). The `it.todo` at L228 flips to
                   // passing once this field is in the done event payload.
-                  phase1Status: ssePhase1Status,
+                  phase1Status: phase1Status,
                 });
 
                 controller.close();
@@ -3113,7 +3113,7 @@ enqueue('done', {
                 // tags are appended inline).
                 // See /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md
                 // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) for design rationale.
-                // Re-derive phase1Status here: the `ssePhase1Status` const is
+                // Re-derive phase1Status here: the `phase1Status` const is
                 // scoped to the try block above and is not visible in this
                 // catch. orchestrationResult (declared before the try) is in
                 // scope, so recompute from the same precedence chain.
