@@ -1882,7 +1882,7 @@ export async function* streamWithVercelAI(
           elapsedMs: silenceMs,
           lastActivityType: lastActivityType,
         });
-        chatLogger.debug('[THINK-PING] Model has been silent; emitting ping', {
+        chatLogger.info('[THINK-PING] Model has been silent; emitting ping', {
           silenceMs,
           lastActivityType,
           lastActivityDetail: lastActivityDetail.slice(0, 40),
@@ -2758,11 +2758,13 @@ export async function* streamWithVercelAI(
     // 'thinking' pings first. Pings accumulate when the stream has been silent
     // for thinkPingMs — yielding them here keeps the client UI responsive
 // without changing abort semantics.
-try {
-while (thinkPingQueue.length > 0) {
+try {    while (thinkPingQueue.length > 0) {
       if (signal?.aborted) return;
       const ping = thinkPingQueue.shift()!;
       if (ping.type === 'stall_steer') {
+        chatLogger.info('[THINK-PING] Emitting stall_steer to client', {
+          elapsedMs: ping.elapsedMs,
+        });
         yield {
           content: '[STEER] stall_detected: The model has been silent for 30s. If this was a thinking pause, continue with your response. If you were about to call a tool, invoke it now. If the response was already complete, re-state the conclusion.',
           isComplete: false,
@@ -2770,6 +2772,10 @@ while (thinkPingQueue.length > 0) {
           metadata: { type: 'stall_steer', elapsedMs: ping.elapsedMs },
         };
       } else {
+        chatLogger.info('[THINK-PING] Emitting thinking_ping to client', {
+          elapsedMs: ping.elapsedMs,
+          lastActivityType: ping.lastActivityType,
+        });
         yield {
           content: '',
           isComplete: false,

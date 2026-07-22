@@ -1833,7 +1833,7 @@ FORMAT RULES:
       const noProgressMs = Date.now() - lastProgressAt;
       const turnMs = Date.now() - stallStartTime;
       if (turnMs >= ROUTE_MAX_TURN_MS) {
-        fireStall('max-turn', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
+        fireStall('max-total-ms', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
       } else if (noProgressMs >= ROUTE_STALL_TIMEOUT_MS) {
         fireStall('no-progress', { idleMs: noProgressMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS });
       }
@@ -1865,7 +1865,11 @@ const config: UnifiedAgentConfig = {
       // Reset the stall watchdog when the auto-continuation loop starts a
       // new streaming call, preventing false timeouts during the gap between
       // the primary stream ending and the continuation's first token.
-      onProgress: () => { lastProgressAt = Date.now(); },
+      onProgress: () => {
+        const now = Date.now();
+        lastProgressAt = now;
+        stallStartTime = now;
+      },
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,

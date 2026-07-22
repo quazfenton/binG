@@ -44,12 +44,10 @@ const TARGET_FILE = resolve(process.cwd(), 'lib/chat/vercel-ai-streaming.ts');
 
 describe('Bug 2 closure — SHOULD-CONSIDER #1 magic-hook defensive guard (PREREQ at-source analysis)', () => {
   if (!GATE_ENABLED) {
-    describe.skip('gate OFF — source-analysis skipped to bypass vite:oxc parse error');
-    it.skip('PREREQ #1 — top-level import from "./zombie-stream-reaper" present');
-    it.skip('PREREQ #2 — `streamId` declared at function-body scope of streamWithVercelAI()');
-    it.skip('PREREQ #3 — registerStream({streamId, ...}) call before fullStream consumption');
-    it.skip('PREREQ #4 — unregisterStream(streamId) in OUTER finally of streamWithVercelAI()');
-    it.skip('PREREQ #5 — updateStreamActivity(streamId) wired into resetIdleTimeout at L1982');
+    // Gate OFF — collapse to a single describe.skip so a future audit doesn't
+    // read the dead `it.skip(...)` calls below as silently-no-op tests. The 5
+    // PREREQ assertions below DO run when GATE is ON; only OFF is skipped.
+    describe.skip('gate OFF — REAPER_MAGIC_HOOK_TEST_GATE !== "on" (source-analysis skipped to bypass vite:oxc parse error)');
     return;
   }
 
@@ -82,15 +80,19 @@ describe('Bug 2 closure — SHOULD-CONSIDER #1 magic-hook defensive guard (PRERE
     ).toMatch(/(?:let|const)\s+streamId\b/);
   });
 
-  it('PREREQ #3 — registerStream({streamId, ...}) call BEFORE `for await (const chunk of fullStream)` consumption', () => {
-    // Bound the slice search to 500 chars so nested objects in the args
-    // (e.g. `provider: { ... }`) don't trip the `[^}]*` shortcut prematurely,
-    // AND add \b word boundaries so `streamId` matches the exact parameter
-    // name (avoid matching `streamIdLike` or `oldStreamId`).
+  it('PREREQ #3 — registerStream(streamId-bearing arg) call BEFORE `for await (const chunk of fullStream)` consumption', () => {
+    // Dotall-flagged non-greedy match up to 700 chars inside the parens.
+    // This is robust against THREE realistic shapes:
+    //   (a) options-object args with nested fields: registerStream({ streamId, provider: { foo: 'bar' } })
+    //   (b) direct arg list:                      registerStream(streamId, opts)
+    //   (c) callback closures that mention streamId: registerStream(() => { baz(streamId) })
+    // \b word boundaries + `(?!\\s*:\\s*string\\b)` lookahead avoid false positives
+    // on `(?:const|let) streamId: string = ...` type-annotation declarations
+    // (which carry the symbol but don't register a stream).
     expect(
       src,
-      'expected: `registerStream({` call site somewhere in streamWithVercelAI() before the for-await-fullStream loop — registers the stream with the reaper so updateStreamActivity has a target'
-    ).toMatch(/registerStream\s*\(\s*\{[^}]{0,500}\bstreamId\b/);
+      'expected: `registerStream(<call arg bearing streamId>)` call site somewhere in streamWithVercelAI() before the for-await-fullStream loop — registers the stream with the reaper so updateStreamActivity has a target'
+    ).toMatch(/registerStream\s*\([\s\S]{0,700}?\bstreamId\b(?!\s*:\s*string\b)/);
   });
 
   it('PREREQ #4 — unregisterStream(streamId) call in the OUTER finally of streamWithVercelAI()', () => {

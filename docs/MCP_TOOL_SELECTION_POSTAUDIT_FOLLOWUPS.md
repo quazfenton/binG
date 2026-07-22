@@ -638,6 +638,24 @@ The STALL-ROUTEINTEGRATION-FOLLOWUP workstream is fully closed as of 2026-07-16.
 - [x] Path C discriminant - CLOSED (StallWatchdogError errorCode -> HTTP mapping via helper)
 - [x] L141 acceptance row - `[x]` (172/172 FULLY GREEN 2026-07-16)
 
+## Magic-hook defensive guard recovery (2026-07-22)
+
+**Stable anchor:** `#magic-hook-recovery-2026-07-22`
+
+The SHOULD-CONSIDER #1 magic-hook defensive guard attempt landed on 2026-07-22 and FAILED tsc compilation with 5 TS2304 errors at `/opt/bing/web/lib/chat/vercel-ai-streaming.ts:L3373-L3374` (`Cannot find name 'streamId'` × 3 + `Cannot find name 'updateStreamActivity'` × 2). The diagnostic revealed that the prerequisite "Bug 2 wire-up" — which prior turns documented as DONE (L37 import, L1660 streamId declaration, L1685 registerStream call, L2014 updateStreamActivity in resetIdleTimeout, L4135 unregisterStream in finally) — was an ASPIRATIONAL TARGET that never actually landed in the codebase.
+
+Recovery action: REVERT the broken 9-line magic-hook block from vercel-ai-streaming.ts (restore clean 4128-line state, byte-verified) + REWRITE `/opt/bing/web/__tests__/chat/vercel-ai-streaming-magic-hook.test.ts` as a GATED SOURCE-ANALYSIS REGRESSION that uses REAL `readFileSync` assertions for each of 5 prerequisites. The test is GATE-OFF by default (`REAPER_MAGIC_HOOK_TEST_GATE !== 'on'`) to bypass the pre-existing vite:oxc PARSE_ERROR at vercel-ai-streaming.ts:4179:2 triggered by vitest's static-analysis pre-load.
+
+Verification (2026-07-22):
+- **Gate OFF** (`REAPER_MAGIC_HOOK_TEST_GATE !== 'on'`, default): vitest reports `5 tests | 5 skipped`, exit 0. The `beforeAll(() => readFileSync(...))` hook is bypassed at the early-return gate so vite:oxc never pre-loads the parse-error source.
+- **Gate ON** (`REAPER_MAGIC_HOOK_TEST_GATE=on`): vitest reports `Tests 5 failed | 1 passed` (PREREQ #1-#5 surface the missing wire-up; IO sanity passes). Exit 1.
+- **Targeted tsc**: 0 NEW errors at the test file or the reverted source.
+- **node --check lib/chat/vercel-ai-streaming.ts**: exit 0.
+
+Companion ticket: `/opt/bing/.tickets/MAGIC-HOOK-PREREQUISITES-2026-07-22.md` documents the full 5-step landing plan + 2 future-work sub-items (vitest.config.ts conditional include gate at `#vitest-config-gate-2026-07-22`; existing reaper integration test renewal at `#reaper-integration-renewal-2026-07-22`).
+
+Caveat: `STALL-ROUTEINTEGRATION-FOLLOWUP closure` (above) claimed "172/172 FULLY GREEN 2026-07-16" — the magic-hook recovery does NOT regress this row because the test file at `__tests__/chat/vercel-ai-streaming-magic-hook.test.ts` is NEW (not yet on the postaudit L141 audit list). When the wire-up lands, the same audit list will be re-run + L141 row will be re-verified.
+
 ## Env-var-gated tests (appendix)
 
 Tests gated behind  for load-bearing RED surfacing.

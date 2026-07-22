@@ -63,7 +63,14 @@ export class OPFSStorageBackend implements VFSStorageBackend {
   private core: OPFSCore;
   private idbBackend: IndexedDBBackend;
   private initializedWorkspaces = new Set<string>();
-  private failedWorkspaces = new Set<string>();
+  // Bug #8: failedWorkspaces now stores {failedAt: epochMs} so the TTL
+  // check can skip stale entries (5 min) and allow retries. This prevents
+  // a workspace that failed OPFS init during a transient outage (disk
+  // pressure, DOMException SecurityError on cold start) from being stuck
+  // on IndexedDB forever. The TTL is checked in selectBackend() and
+  // shouldUseFallback() — see the helper `isWorkspaceFailed()`.
+  private failedWorkspaces = new Map<string, { failedAt: number }>();
+  private readonly FAILED_WORKSPACE_TTL_MS = 5 * 60 * 1000; // 5 minutes
   private metadataFile = '.vfs-metadata.json';
 
   constructor(core?: OPFSCore, idbBackend?: IndexedDBBackend) {
@@ -79,13 +86,28 @@ export class OPFSStorageBackend implements VFSStorageBackend {
    * 3. OPFS if available
    * 4. IDB as a guaranteed fallback
    */
+  /**
+   * Check if a workspace has failed within the TTL window. Stale entries
+   * (older than FAILED_WORKSPACE_TTL_MS) are evicted on check, allowing
+   * retries after transient outages.
+   */
+  private isWorkspaceFailed(ownerId: string): boolean {
+    const entry = this.failedWorkspaces.get(ownerId);
+    if (!entry) return false;
+    if (Date.now() - entry.failedAt >= this.FAILED_WORKSPACE_TTL_MS) {
+      this.failedWorkspaces.delete(ownerId);
+      return false;
+    }
+    return true;
+  }
+
   private selectBackend(ownerId: string): BackendType {
     // 1. Check sticky memory
     const sticky = getStickyBackend(ownerId);
-    if (sticky === 'indexeddb' && this.failedWorkspaces.has(ownerId)) {
+    if (sticky === 'indexeddb' && this.isWorkspaceFailed(ownerId)) {
       return 'indexeddb';
     }
-    if (sticky === 'opfs' && !this.failedWorkspaces.has(ownerId) && OPFSStorageBackend.isSupported()) {
+    if (sticky === 'opfs' && !this.isWorkspaceFailed(ownerId) && OPFSStorageBackend.isSupported()) {
       return 'opfs';
     }
 
@@ -95,7 +117,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
     }
 
     // 3. If OPFS previously failed for this owner, use IDB
-    if (this.failedWorkspaces.has(ownerId)) {
+    if (this.isWorkspaceFailed(ownerId)) {
       return 'indexeddb';
     }
 
@@ -108,7 +130,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
   }
 
   private markFailed(ownerId: string): void {
-    this.failedWorkspaces.add(ownerId);
+    this.failedWorkspaces.set(ownerId, { failedAt: Date.now() });
     this.initializedWorkspaces.delete(ownerId);
     logger.warn(`[VFS Storage] OPFS failed for workspace ${ownerId}, falling back to IndexedDB.`);
   }

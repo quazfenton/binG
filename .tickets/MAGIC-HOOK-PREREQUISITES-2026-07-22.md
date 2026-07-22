@@ -171,10 +171,49 @@ entry point is `registerStream({ streamId, ... })` from zombie-stream-reaper
      future audit needs (the green CI log) comes from an automated test,
      not an operator's terminal.
 
+## Future work (post-recovery)
+
+### F1 — vitest.config.ts conditional include gate (SHOULDCONSIDER #2 from REV 3 code-review)
+**Stable anchor: `#vitest-config-gate-2026-07-22`**
+The current gate is implemented via nested `describe.skip + it.skip + early-return`
+in the test file itself, which works but keeps the test file in the runtime
+collection tree at all times. A more robust convention — used elsewhere in this
+codebase for stage-gated tests — is to gate at the vitest.config.ts level:
+
+```ts
+// vitest.config.ts (or wherever projects root config lives)
+test: {
+  include: process.env.REAPER_MAGIC_HOOK_TEST_GATE === 'on'
+    ? ['__tests__/chat/vercel-ai-streaming-magic-hook.test.ts']
+    : [],
+  // ...
+}
+```
+
+Benefits: (a) vitest never even LOADS the file in gate-OFF mode (no vite:oxc
+parse-error risk even if vitest version later upgrades), (b) the file's source
+stays focused on the assertions (no gate plumbing), (c) matches the
+stage-gating convention used elsewhere. Track as a follow-up ticket.
+
+### F2 — Reaper integration test (existing) renew
+**Stable anchor: `#reaper-integration-renewal-2026-07-22`**
+(mirrors F1's `#vitest-config-gate-2026-07-22` so cross-references survive header text drift)
+**Committed approach: SAME vitest.config.ts gate as F1.** Do NOT widen the
+existing /opt/bing/web/__tests__/chat/vercel-ai-streaming-reaper-integration.test.ts
+regex. Instead, when F1 lands, move BOTH this test + the magic-hook test into
+the same vitest.config.ts conditional include block.
+
+Rationale: both tests assume the same wire-up (Bug 2 zombie-stream-reaper
+integration that hasn't landed) — guarding them under ONE config-side gate
+gives a single signal-flip point. Widening the existing test's regex is a
+real-but-distracting alternative that mixes two fix vectors for one root
+cause; the cleanest convention is "gated test = same config-side include
+trigger".
+
 ## Closure narrative (mirrors POSTAUDIT-FOLLOWUPS pattern)
 
 - Discovery date: 2026-07-22
 - Diagnostic authority: spawn_agents verifier + grep-verified byte-exact
 - Recovery action: REVERT + BLUEPRINT + ticket
-- Future landing: tracked here as 5 PREREQs + 1 GUARD
+- Future landing: tracked here as 5 PREREQs + 1 GUARD + 2 future-work sub-items
 - Stable anchor: `#magic-hook-prerequisites-2026-07-22`
