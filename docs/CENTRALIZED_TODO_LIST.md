@@ -711,7 +711,12 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
 - **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).
 - **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure — 19-line pilot residue → 13 of 19 cleared via Connection-shim pilot 2026-07-16)
 - **Opened:** 2026-07-15
-- **Last updated:** 2026-07-16 — Connection-shim pilot: 13 TS2307 errors cleared via ambient declaration at `lib-shims/ambient.d.ts` L207-L220 (tsc 463 → 450, 2.8% of baseline). User-requested Option A/C rejected because `connection-shim.ts` has a HARD static+dynamic dep on `./connection.ts` (L123 runtime require + L215 static re-exports) — co-move would inflate transitive errors and violate the packages/shared ↔ web/lib/* boundary. Ambient declaration is the architecturally-safer pilot path. Third-step redundancy: no stale `@/lib/database/connection-shim` declaration existed in `lib-shims/ambient.d.ts` pre-pilot (verified via grep); the parallel add was the operative change.
+- **Last updated:** 2026-07-16
+- **Cumulative:** 7 ambient-extension rounds landed. Connection-shim pilot (3rd-round) cleared 13 TS2307 (tsc 463 → 450, 2.8% of baseline) + 6 follow-on rounds (4th/5th/6th/7th/8th/9th) cleared an additional 75 TS2307 + cumulative -79 TS errors / -88 TS2307 / 106 residual / ~45% reduction from 194 baseline / 384 total. All 7 rounds live at `lib-shims/ambient.d.ts` (no separate file per round). NEW: 9th-round (2026-07-16, stable anchor [9th-round ambient extension](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-ninth-round-2026-07-16)) cleared an additional 6 TS2307 (390 → 384 / 112 → 106) with 0% measured TS2305 conversion rate + the same pre-existing TS2339 noise at `agent/task-router.ts` L509/L524/L536. The 9th-round hit the user's pre-round prediction target exactly AT the equality boundary (106 / 384 measured, not strictly under `<106 / <384`). Mathematically `106 < 106` is false under the strict less-than predicate; the bound is satisfied at the equality boundary but not strictly under. A future 10th-round ambient extension would need to push TS2307 to 105 or below to satisfy the strict predicate.
+- **Mechanism:** the 8-error gap between TS2307 cumulative-cleared (72) and total-error-delta (64) reflects +2 +6 TS2305 conversion expansion in the 5th and 7th rounds respectively (consumers reach for specific symbol names whose ambient body-less declarations don't surface as exportable — same mechanism as `agent-session-manager` / `ndjson-parser` / `logger` in earlier rounds; expected side effect, not a regression).
+- **Architecture:** User-requested Option A/C was rejected for the connection-shim because it has a HARD static+dynamic dep on `./connection.ts` (L123 runtime require + L215 static re-exports) — co-move would inflate transitive errors and violate the packages/shared ↔ web/lib/* boundary. Ambient declaration is the architecturally-safer pilot path; the same approach has now been applied successfully across 4 additional rounds.
+- **Pilot check:** no stale `@/lib/database/connection-shim` declaration existed in `lib-shims/ambient.d.ts` pre-pilot (verified via grep); the parallel add was the operative change.
+- **See:** [Per-round closure progression](#per-round-closure-progression-2026-07-16) sub-section below for the round-by-round table.
 
   1. **Corrected command**: vitest paths + cwd recommendation updated; produced 170/172 green.
   2. **OUTERCATCH-GAP**: 2 documented pre-existing failures at route.ts:L945 (expected HTTP 524 vs got 200 — pending OUTERCATCH-GAP closure).
@@ -738,6 +743,34 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` (closure narrative)
 - **Acceptance:** Full audit suite + new tests green; `pnpm --filter @bing/shared typecheck` PARTIAL exit (19 lines — Option 1 pilot cleared 40 of 59 baseline source-path errors; remaining 19 pre-existing mirror errors require wholesale packages/shared ↔ web/lib/* decoupling).
 
+
+### MCP-TOOL-SELECTION-POSTAUDIT — Per-round closure progression (item ④, 2026-07-16)
+
+**Stable anchor:** `#per-round-closure-progression-2026-07-16`
+
+After the 3rd-round connection-shim Option 1 pilot landed, 4 additional ambient-extension rounds were applied to close remaining TS2307 module-not-found errors. Each round adds 2-3 body-less `declare module '@/lib/...'` declarations to `packages/shared/lib-shims/ambient.d.ts`. Cross-reference the postaudit doc directly via stable anchors below — each anchor lands on the round's specific closure-narrative section.
+
+**Per-round progression table:**
+
+| Round | Modules added | tsc total | TS2307 residual | Round delta (total) | Round delta (TS2307) |
+|---|---|---|---|---|---|
+| Baseline (463) | — | 463 | 194 | — | — |
+| 3rd (connection-shim pilot) | `database/connection-shim` (1) | 450 | 181 | -13 | -13 |
+| 4th | `virtual-filesystem/index.server` + `database/schema/{index,loader}` (3) | 434 | 165 | -16 | -16 |
+| 5th | `terminal/workspace-runtime-service` + `terminal/terminal-manager` + `sandbox/workspacefs-sync-service` (3) | 417 | 146 | -17 | -19 (TS2305 +2 expansion) |
+| 6th | `workspace/workspace-graph-service` + `context/project-detection` + `sandbox/sandbox-orchestrator` (3) | 403 | 132 | -14 | -14 |
+| **7th** | `database/sqlite-failure` + `terminal/workspace-service-manager` + `storage/content-addressable-storage` (3) | **399** | **122** | **-4** | **-10 (TS2305 +6 expansion; 60% conversion rate)** |
+
+**Cumulative across 5 ambient-extension rounds**: -64 TS errors cleared, -72 TS2307 cleared, 122 residual (~37% reduction from 194 baseline).
+
+**4 stable anchors** (each lands on the corresponding round's closure-narrative section in `MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`):
+
+- [`#item-04-fifth-round-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-fifth-round-2026-07-16) — 5th-round ambient extension (terminal + sandbox sub-leaves)
+- [`#item-04-sixth-round-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-sixth-round-2026-07-16) — 6th-round ambient extension (workspace + context + sandbox orchestrator)
+- [`#item-04-seventh-round-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-seventh-round-2026-07-16) — 7th-round ambient extension (sqlite-failure + workspace-service-manager + content-addressable-storage)
+- [`#decoupling-epic-progress-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#decoupling-epic-progress-2026-07-16) — Historical progression narrative + 3-path forward-trajectory analysis
+
+**Selected-empirical-mechanism note (2026-07-16)**: The 7th-round's TS2305 conversion (6 of 10 TS2307 cleared = 60% conversion rate) is empirically the same body-less-ambient mechanism observed in earlier rounds at `agent-session-manager` (`AgentSession` / `AgentSessionConfig` / `AgentSessionManager`), `ndjson-parser` (`NDJSONParser`), `logger` (`Logger`) — consumers reference specific symbol names whose ambient body-less declarations don't surface them as exportable. Expected side effect, not a regression; the 122 TS2307 residual plus these TS2305 conversions is the next-decoupling-epic surface area.
 
 ### VITEST-WORKSPACE-DEDUPLICATION (opened 2026-07-15)
 - **Source:** Diagnostic from F1 + F2 followups — observed in vitest output that each canonical test failure + each canonical test pass coexists with stale node_modules duplicate runs (pnpm vendored `node_modules/bing/web/__tests__/**`). Inflates reported failures ~2-3x.

@@ -310,3 +310,61 @@ declare module '@/lib/sandbox/sandbox-orchestrator';
 declare module '@/lib/database/sqlite-failure';
 declare module '@/lib/terminal/workspace-service-manager';
 declare module '@/lib/storage/content-addressable-storage';
+
+// --- Eighth-round body-less declarations (2026-07-16, item ④ mcp+utils spread batch) ---
+// [stable anchor: #item-04-eighth-round-2026-07-16] — 8th-round ambient closure, delta -10 TS2307 (122 → 112 expected)
+// 3 paths: @/lib/mcp/architecture-integration (4 TS2307) +
+//          @/lib/utils/compression (3 TS2307) +
+//          @/lib/utils/circuit-breaker (3 TS2307).
+// Sum: 10 TS2307 errors — picked on mcp+utils spread grounds to continue
+// diversification past the 7th-round's database/terminal/storage batch. The
+// 8th-round crosses domain boundaries (mcp integration layer + utility-layer
+// primitives used widely by storage/session-store + reliability/circuit-breaker
+// sites in the retry/chat paths) for broader surface coverage. Note on
+// concentration: 2 of 3 picks live in utils/ (compression + circuit-breaker)
+// — partial-not-full diversification vs. an ideal cross-domain spread; the
+// single mcp/ pick (architecture-integration) deliberately balances against
+// the 2 utils/ picks to retain some cross-domain spread (1 mcp/ + 1 utils/ +
+// 1 utils/ — 2-prefix pick with a 1-prefix counterweight, vs. the 5th-round's
+// 2-prefix terminal/* + 1-prefix sandbox/ pattern). All body-less
+// for the same reason as the 7 prior rounds: partial-subset consumer surfaces;
+// the typed form would risk TS2339 if a future site adds a new export. Why
+// AMBIENT (not Option A/C facade): same reasoning as the 7 prior rounds — the
+// `paths: { "@/*": ["./lib-shims/*"] }` override drops web/ as a resolution
+// target so a web/lib/.../X.ts facade is INVISIBLE to packages/shared's tsc view.
+// Expected TS2305 conversion: ~ +0 NEW TS2305 site (predicted ~25%, measured
+// 0%). First-time ambient declarations cannot amplify TS2305 conversion (no
+// prior typed imports at their consumers to surface). The 1-error gap between
+// -10 TS2307 cleared and -9 total-error delta = pre-existing TS2339 noise
+// in `agent/task-router.ts` L509/L524/L536 (`'eventId' on 'void'`) — internal
+// pre-7th errors, NOT body-less-ambient artifacts. For the empirical mechanism
+// observed in prior rounds (the symbol-conversion pattern), see the
+// `agent-session-manager` / `ndjson-parser` / `logger` citations in the
+// 5th/6th/7th-round docblocks above. Total-error delta: -9 (measured) vs
+// "delta ~6-8" (user-predicted) — upper end of range, reflecting the
+// better-than-predicted 0% TS2305 conversion rate.
+declare module '@/lib/mcp/architecture-integration';
+declare module '@/lib/utils/compression';
+declare module '@/lib/utils/circuit-breaker';
+
+// --- Ninth-round body-less declarations (2026-07-16, item ④ management+integrations subscription-spread batch) ---
+// [stable anchor: #item-04-ninth-round-2026-07-16] — 9th-round ambient closure, delta -6 TS2307 expected (112 → 106 target)
+// 2 paths: @/lib/management/quota-manager (3 TS2307) +
+//          @/lib/integrations/composio/composio-adapter (3 TS2307).
+// Sum: 6 TS2307 errors — picked on subsystem-spread grounds (continuing the
+// 8th-round's diversification posture). The picks cross 2 distinct top-level
+// dirs (1 management/, 1 integrations/) and target external-integration
+// surface (composio) + locality-management surface (quota-manager) — surfaces
+// the chat-route's quota gating + composio MCP integration layer specifically.
+// Note on concentration: 1 of 2 picks each dir is ideal (vs. the 8th-round's
+// 2 of 3 in utils/) — the 9th-round is the cleanest diversification so far.
+// All body-less for the same reason as the 7 prior rounds: partial-subset
+// consumer surfaces; the typed form would risk TS2339 if a future site adds a
+// new export. Why AMBIENT (not Option A/C facade): same reasoning as the 8
+// prior rounds. Expected total-error delta: -5 to -6 (matches the user's
+// pre-round prediction of "cumulative TS2307 <106 / total <384" which implies
+// delta ~6-9 from the post-8th 390/112 baseline, accounting for the better-
+// than-expected 0% TS2305 conversion rate observed in 8th-round via first-time
+// declaration mechanism).
+declare module '@/lib/management/quota-manager';
+declare module '@/lib/integrations/composio/composio-adapter';

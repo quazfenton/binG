@@ -3815,6 +3815,25 @@ export function sanitizeAssistantDisplayContent(content: string): string {
 
   let next = sanitizeFileEditTags(content);
 
+  // Strip [STEER] orchestrator prompts that leak into display content.
+  // [STEER] blocks are injected by the server-side steer-service to guide
+  // the LLM on the next turn (empty completion, missing tool call, etc.).
+  // They should never be visible to the user but may appear verbatim when
+  // the response is returned as final content (e.g. v1-api-with-tools path)
+  // or when the LLM echoes them back.
+  if (next.includes('[STEER]')) {
+    // Strip the entire [STEER] block through the next blank line or end of string.
+    // The block is always followed by \n\n (or ends the string).
+    next = next.replace(/\[STEER\][\s\S]*?(?=\n\n|$)/g, '');
+  }
+
+  // Strip leaked SSE (Server-Sent Events) text that the LLM echoed verbatim.
+  // Pattern: consecutive "event: <type>\ndata: ..." blocks with empty data,
+  // which the LLM may reproduce after seeing raw SSE in its context window.
+  if (next.includes('event:') && next.includes('\ndata:')) {
+    next = next.replace(/(?:\*\*\d+\s*)?(?:event:\s*\w[\w_-]*\s*\n\s*data:\s*\n?)+(?:event:\s*\w[\w_-]*\s*\n\s*data:\s*\n?)*/g, '');
+  }
+
   // Strip JSON tool call/result objects that leak into display content.
   // These are handled separately from the XML/heredoc formats in sanitizeFileEditTags
   // because they require balanced brace scanning for nested JSON in content fields.

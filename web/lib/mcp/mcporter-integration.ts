@@ -128,13 +128,27 @@ class MCPorterIntegration {
       const servers = runtime.listServers()
       const entries: MCPorterToolEntry[] = []
 
+      // Per-server ceiling so a single hung server (dead npx, unreachable
+      // remote URL) can't block the entire sequential loop. Each server gets
+      // up to MCPORTER_PER_SERVER_TIMEOUT_MS; the outer 30s wrapper in
+      // architecture-integration.ts still caps the overall refresh.
+      const PER_SERVER_TIMEOUT_MS = Number(process.env.MCPORTER_PER_SERVER_TIMEOUT_MS || 8000)
+
       for (const server of servers) {
         try {
-          const tools = await runtime.listTools(server, {
-            includeSchema: true,
-            autoAuthorize: false,
-            allowCachedAuth: true,
-          })
+          const tools = await Promise.race([
+            runtime.listTools(server, {
+              includeSchema: true,
+              autoAuthorize: false,
+              allowCachedAuth: true,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error(`mcporter listTools timed out after ${PER_SERVER_TIMEOUT_MS}ms for server ${server}`)),
+                PER_SERVER_TIMEOUT_MS,
+              ),
+            ),
+          ])
 
           for (const tool of tools) {
             entries.push({

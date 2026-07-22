@@ -67,6 +67,13 @@ import {
 import { virtualPidRegistry } from '@/lib/terminal/virtual-pid-registry';
 import { sandboxOrchestrator } from '@/lib/sandbox/sandbox-orchestrator';
 import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
+import {
+  buildFishSafeShellWrapper,
+  isFishShell,
+  getShellBasename,
+  getEnvExportSyntax,
+  getSourceSyntax,
+} from '@/lib/terminal/shell-init-emitter';
 
 const logger = createLogger('LocalPTY');
 
@@ -154,10 +161,17 @@ async function createSafeShellWrapper(workspaceDir: string, shellPath: string): 
         args: ['-NoExit', '-NoLogo', '-NoProfile', '-Command', `& { . '${wrapperPath.replace(/'/g, "''")}' }`],
       };
     } else {
-      // Unix: Create POSIX-compatible cd override init script
-      // Uses ENV variable (sh/dash/ash), --init-file (bash), or -c sourcing (zsh/fish)
+      // Unix: Create shell-aware cd override init script.
+      //   Fish requires fish-native syntax (`set -gx`, `function ... end`); the
+      //   `'='`-assignment form is rejected at parse time with:
+      //     `~/.binG-temp/_safe_shell_init.sh (line 2): Unsupported use of '='`.
+      //   Bash / zsh / sh stay on the original bash template below for
+      //   byte-identical backward compat with existing sessions.
       const escapedWorkspaceDir = workspaceDir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const shellScript = `# Safe shell init - prevent cd from escaping workspace
+      const shellBasename = getShellBasename(shellPath);
+      const shellScript = isFishShell(shellBasename)
+        ? buildFishSafeShellWrapper(workspaceDir)
+        : `# Safe shell init - prevent cd from escaping workspace
 WORKSPACE_ROOT="${escapedWorkspaceDir}"
 
 # Override cd builtin — blocks path traversal including ~/ (home dir)
@@ -221,8 +235,8 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
 `;
       await fs.promises.writeFile(wrapperPath, shellScript, { mode: 0o755 });
 
-      // Detect shell type and use the correct init mechanism
-      const shellBasename = path.basename(shellPath).toLowerCase();
+      // Detect shell type and use the correct init mechanism.
+      // shellBasename bound above via the getShellBasename helper; do not re-bind.
       if (shellBasename === 'bash' || shellBasename.endsWith('-bash')) {
         // bash: use --init-file
         return {

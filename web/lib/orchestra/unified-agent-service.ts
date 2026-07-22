@@ -1544,6 +1544,16 @@ function auditResponseShape(
 }
 
 /**
+ * Strip [STEER] orchestrator prompts from response content before returning to client.
+ * [STEER] blocks are injected server-side to guide the LLM on the next turn but
+ * should never be visible to the user.  Preserves any content after the [STEER] block.
+ */
+function stripSteerFromResponse(content: string): string {
+  if (!content || !content.includes('[STEER]')) return content;
+  return content.replace(/\[STEER\][\s\S]*?(?=\n\n|$)/g, '').replace(/^\n+/, '').trim();
+}
+
+/**
  * Unified agent request processor
  *
  * Routes to OpenCode V2 Engine (primary) or V1 API (fallback) based on configuration.
@@ -4922,7 +4932,14 @@ async function runV1ApiWithTools(
 
         try {
           // FIX: Carry forward last successful provider/model so SelfHeal retries skip dead primary
-          const retryConfig = _selfHealProvider ? { ...config, provider: _selfHealProvider, model: _selfHealModel || config.model } : config;
+          // FIX: Create FRESH AbortController for each retry attempt to avoid
+          // "Concurrent fallback: caller aborted before start" error. The original
+          // config.abortSignal may be in an aborted state from prior attempts,
+          // causing the fallback coordinator to throw immediately.
+          const retryAbortController = new AbortController();
+          const retryConfig = _selfHealProvider 
+            ? { ...config, provider: _selfHealProvider, model: _selfHealModel || config.model, abortSignal: retryAbortController.signal } 
+            : { ...config, abortSignal: retryAbortController.signal };
           const retryResult = await runV1ApiWithTools(retryConfig, retryMessages, startTime);
           // If the retry produced something, use it. Otherwise fall through to
           // the friendly fallback below so the user still sees a message.
@@ -5302,7 +5319,7 @@ async function runV1ApiWithTools(
       if (autoContinueIteration > 0) {
         return {
           success: true,
-          response: accumulatedResponse,
+          response: stripSteerFromResponse(accumulatedResponse),
           steps: accumulatedSteps,
           totalSteps: accumulatedSteps.length,
           mode: 'v1-api',
@@ -5326,7 +5343,7 @@ async function runV1ApiWithTools(
       maybeResetBothTrackers(providerName);
       return {
         success: true,
-        response: finalResponse,
+        response: stripSteerFromResponse(finalResponse),
         steps,
         totalSteps: steps.length,
         mode: 'v1-api',
@@ -5884,8 +5901,17 @@ async function runV1Orchestrated(
         // The orchestrator may have timed out, but that doesn't mean the
         // fallback v1-api should be rejected without attempting it.
         const fallbackAbortController = new AbortController();
+        // When falling back due to orchestration failure (often a 400
+        // "model not supported" error), strip the invalid model so v1-api
+        // uses the provider's default instead of retrying the same bad model.
+        // The DEFAULT_MODEL env var is the canonical fallback; if unset, the
+        // provider's own default kicks in downstream.
+        const fallbackModel = (fallbackReason === 'orchestration_failed' && config.model)
+          ? (process.env.DEFAULT_MODEL || undefined)
+          : config.model;
         const fallbackConfig = {
           ...config,
+          model: fallbackModel,
           abortSignal: fallbackAbortController.signal,
         };
         
@@ -6648,7 +6674,14 @@ log.info('[Fallback] └──────────────────�
   if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
     fallbackOrder.push('v2-local');
   }
-  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && caps.v1Api) {
+  // v1-api is always a candidate in auto mode — the orchestrator's internal
+  // fallback already uses runV1Api regardless of v1ApiCap. When caps.v1Api
+  // is false (no provider API key detected at startup), we still include it
+  // as a last-resort entry so the chain isn't empty after v2 modes are
+  // excluded by forceV1Auto. The worst case is a duplicate attempt that
+  // fails fast; the best case is the runtime-resolved provider works
+  // despite the startup probe being wrong.
+  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api') {
     fallbackOrder.push('v1-api');
   }
 
