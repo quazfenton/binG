@@ -512,6 +512,7 @@ export interface ParsedFilesystemResponse {
   applyDiffs: ApplyDiffOperation[];
   deletes: string[];
   folders: string[];
+  toolCalls: Array<{ name: string; args: Record<string, unknown> }>;
 }
 
 function extractFencedBlocks(content: string, fenceName: string): string[] {
@@ -3492,6 +3493,7 @@ export function parseFilesystemResponse(
   const applyDiffs = new Map<string, ApplyDiffOperation>();
   const deletes = new Set<string>();
   const folders = new Set<string>();
+  const toolCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
 
   // When forceExtract is true, bypass deduplication to catch all edits
   // This is used for final parse after stream completes to catch any remaining edits.
@@ -3555,6 +3557,14 @@ export function parseFilesystemResponse(
   for (const edit of extractExplicitCreateCommands(sanitizedContent)) addWrite(edit);
   for (const edit of extractJsonLikePathContent(sanitizedContent)) addWrite(edit);
 
+  // Bug #90 (Round 3): Extract choose_role tool calls from text.
+  // LLMs sometimes output choose_role as plain text (e.g., "I'll switch to
+  // the reviewer role") rather than as a structured tool call. This parses
+  // those text patterns and converts them to tool calls.
+  for (const tc of extractChooseRoleToolCalls(sanitizedContent)) {
+    toolCalls.push(tc);
+  }
+
   // Bug #15: post-forceExtract dedup pass. When `forceExtract` is true,
   // we bypass per-key dedup to catch all edits, but this means duplicate
   // writes to the same path (with different content) all get added. This
@@ -3572,6 +3582,7 @@ export function parseFilesystemResponse(
     applyDiffs: finalApplyDiffs,
     deletes: finalDeletes,
     folders: finalFolders,
+    toolCalls,
   };
 }
 
@@ -4256,6 +4267,61 @@ export function extractIncrementalFileEdits(
   state.lastPosition = buffer.length;
 
   return newEdits;
+}
+
+/**
+ * Bug #90 (Round 3): Extract choose_role tool calls from plain text.
+ *
+ * LLMs sometimes output choose_role as text rather than structured tool calls.
+ * For example:
+ *   - "I'll switch to the reviewer role"
+ *   - "choose_role(role='debugger')"
+ *   - { "tool": "choose_role", "arguments": { "role": "researcher" } }
+ *
+ * This parser handles both structured JSON and natural language patterns.
+ */
+function extractChooseRoleToolCalls(
+  content: string
+): Array<{ name: string; args: Record<string, unknown> }> {
+  const results: Array<{ name: string; args: Record<string, unknown> }> = [];
+
+  // Pattern 1: JSON tool call format
+  // { "tool": "choose_role", "arguments": { "role": "..." } }
+  const jsonPattern = /"tool"\s*:\s*"(choose_role|role_selection)"\s*,\s*"arguments"\s*:\s*\{([^}]+)\}/gi;
+  let match;
+  while ((match = jsonPattern.exec(content)) !== null) {
+    const argsStr = match[2];
+    const roleMatch = /"role"\s*:\s*"([^"]+)"/.exec(argsStr);
+    if (roleMatch) {
+      results.push({ name: 'choose_role', args: { role: roleMatch[1] } });
+    }
+  }
+
+  // Pattern 2: Function call format
+  // choose_role(role="...") or choose_role(role='...')
+  const funcPattern = /choose_role\s*\(\s*role\s*=\s*["']([^"']+)["']\s*\)/gi;
+  while ((match = funcPattern.exec(content)) !== null) {
+    results.push({ name: 'choose_role', args: { role: match[1] } });
+  }
+
+  // Pattern 3: Natural language patterns
+  // "I'll switch to the X role" or "switch to the X role" or "use the X role"
+  const roleNames = ['coder', 'reviewer', 'planner', 'architect', 'researcher', 'debugger', 'specialist', 'orchestrator', 'simplifier'];
+  for (const role of roleNames) {
+    const nlPatterns = [
+      new RegExp(`(?:I'll switch to the|switch to the|use the|adopt the|change to the)\\s+${role}\\s+role`, 'i'),
+      new RegExp(`(?:switch|change|adopt)\\s+to\\s+${role}`, 'i'),
+      new RegExp(`(?:become|act as)\\s+${role}`, 'i'),
+    ];
+    for (const pattern of nlPatterns) {
+      if (pattern.test(content)) {
+        results.push({ name: 'choose_role', args: { role } });
+        break;
+      }
+    }
+  }
+
+  return results;
 }
 
 /**

@@ -149,6 +149,28 @@ const _fcGatePositiveCache = new Map<string, { confirmedAt: number; provider: st
 declare global { var __fcGatePositiveCache__: Map<string, { confirmedAt: number; provider: string }> | undefined; }
 const fcGatePositiveCache = globalThis.__fcGatePositiveCache__ ?? (globalThis.__fcGatePositiveCache__ = _fcGatePositiveCache);
 
+// Bug #88 (Round 3): Known FC-capable models — checked when the in-memory cache
+// is empty (e.g. cross-process requests via ninerouter). This avoids the cold-start
+// cost of "assuming supported → Phase 2 fallback" on every request.
+const KNOWN_FC_CAPABLE_MODELS = new Set([
+  'openrouter/arcee-ai/trinity-large-thinking:free',
+  'stepfun-ai/step-3.7-flash',
+  'mistral-large-latest',
+  'qwen/qwen3.5-122b-a10b',
+  'deepseek-ai/deepseek-v4-flash',
+  'gpt-4o',
+  'gpt-4o-mini',
+  'gpt-4-turbo',
+  'gpt-3.5-turbo',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-haiku-20240307',
+]);
+
+// Known FC-incapable models — skip Phase 1 entirely, go straight to text-mode
+const KNOWN_FC_INCAPABLE_MODELS = new Set([
+  'meta/llama-4-maverick-17b-128e-instruct',
+]);
+
 export function recordFCGatePositive(provider: string, modelName: string): void {
   const key = `${provider}/${modelName}`;
   fcGatePositiveCache.set(key, { confirmedAt: Date.now(), provider });
@@ -318,8 +340,11 @@ export function classifyToolResult(toolResult: any): ToolResultClassification {
   if (toolResult?.success === false) {
     const errorObj = toolResult?.error;
     const resultKeys = toolResult ? Object.keys(toolResult) : [];
+    const recoveryHint = typeof toolResult?._recoveryHint === 'string'
+      ? toolResult._recoveryHint.trim()
+      : '';
     let errorMsg: string;
-    if (typeof errorObj === 'string') {
+    if (typeof errorObj === 'string' && errorObj.trim()) {
       errorMsg = errorObj;
     } else if (errorObj?.message) {
       errorMsg = errorObj.message;
@@ -335,23 +360,18 @@ export function classifyToolResult(toolResult: any): ToolResultClassification {
           errorMsg = String(errorObj);
         }
       }
-      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
-        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
-      }
     } else {
-      errorMsg = toolResult
-        ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}], no error field`
-        : `Unknown error — tool result is ${typeof toolResult}`;
-      // BUG 4 fix — append _recoveryHint in the synthesize branch so the
-      // 100+ `Unknown error — tool result has keys: [..., _recoveryHint], no
-      // error field` log lines in production (visible in
-      // /opt/bing/web/logs/run.log around bash_execute / read_file / apply_diff
-      // failures) carry the actionable guidance the LLM injector attached.
-      // Mirrors the errorObj=object branch above (L338-L340) so every
-      // failure-classification path surfaces _recoveryHint consistently.
-      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
-        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
-      }
+      const output = typeof toolResult?.output === 'string' ? toolResult.output.trim() : '';
+      const exitCode = toolResult?.exitCode;
+      errorMsg = output
+        || (exitCode !== undefined ? `Tool exited with code ${String(exitCode)}` : '')
+        || recoveryHint
+        || (toolResult
+          ? `Tool reported failure without details (result keys: [${resultKeys.join(', ')}])`
+          : `Tool reported failure with a ${typeof toolResult} result`);
+    }
+    if (recoveryHint && !errorMsg.includes(recoveryHint)) {
+      errorMsg += ` [recovery: ${recoveryHint}]`;
     }
     return { isFailure: true, reason: 'success_false', errorMsg };
   }
@@ -2410,6 +2430,10 @@ export async function* streamWithVercelAI(
         const fcCacheEntry = fcGatePositiveCache.get(fcCacheKey);
         const fcCacheTtlMs = parseInt(process.env.FC_GATE_POSITIVE_TTL_MS || '1800000', 10);
         const fcCacheHit = !!(fcCacheEntry && (Date.now() - fcCacheEntry.confirmedAt) < fcCacheTtlMs);
+
+        // Bug #88 (Round 3): Check hardcoded known-model lists when cache misses.
+        // This avoids the cold-start cost for cross-process requests (ninerouter)
+        // and prevents wasting API calls on models known to lack FC support.
         if (fcCacheHit) {
           chatLogger.info('[FC-GATE] Function calling CONFIRMED via positive cache — skipping two-phase strategy', {
             provider,
@@ -2417,19 +2441,40 @@ export async function* streamWithVercelAI(
             toolCount,
             cacheAgeMs: Date.now() - fcCacheEntry.confirmedAt,
           });
-        } else {
-          // Model doesn't report this capability — could be unknown provider.
-          // POLICY: always let the model TRY tools first. Don't pre-emptively
-          // strip them based on telemetry. The Phase 2 fallback below already
-          // kicks in after the fact if Phase 1 produces zero usable output.
-          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+        } else if (KNOWN_FC_INCAPABLE_MODELS.has(modelName)) {
+          // Known FC-incapable: skip Phase 1 entirely, go straight to text-mode
+          chatLogger.info('[FC-GATE] Model known to lack FC support — using text-mode strategy', {
             provider,
             model: modelName,
             toolCount,
-            strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
+            strategy: 'text-mode only (known FC-incapable)',
+          });
+          if (streamOptions.system) {
+            streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
+          } else {
+            streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
+          }
+        } else if (KNOWN_FC_CAPABLE_MODELS.has(modelName)) {
+          // Known FC-capable: skip cache lookup, treat as confirmed
+          chatLogger.info('[FC-GATE] Function calling CONFIRMED via known-model list — skipping two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            source: 'KNOWN_FC_CAPABLE_MODELS',
+          });
+        } else {
+          // Bug #88: Assume FC is supported by default (optimistic). Most modern
+          // models support function calling. If Phase 1 fails (no tool calls),
+          // Phase 2 text-mode fallback kicks in automatically. This avoids the
+          // expensive two-phase strategy on every request while still providing
+          // a safety net. Cache will be populated after first successful tool call.
+          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — assuming supported (optimistic)', {
+            provider,
+            model: modelName,
+            toolCount,
+            strategy: 'Phase 1: tools only (optimistic); Phase 2: text-mode fallback if no tools called',
             fcCacheHit: false,
           });
-          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
         }
       }
       // === COMMENTED OUT: Auto text-mode based on telemetry ===

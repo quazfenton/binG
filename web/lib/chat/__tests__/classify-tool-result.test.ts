@@ -5,13 +5,14 @@
  * string whenever the `error` field was truthy/non-null, which mis-classified
  * successful tool results like `{ success: true, output, exitCode: 0, error: null,
  * _recoveryHint }` as failures. The new `classifyToolResult` helper inverts
- * the priority: `success: true` and `_recoveryHint` are positive signals.
+ * the priority: an explicit `success` field is authoritative and recovery
+ * hints enrich genuine failures instead of hiding them.
  *
  * These tests cover the 4 cases the audit specified:
  *   1. success=true with error=null  → success
  *   2. success=false with error set → failure
  *   3. success=true with _recoveryHint → success
- *   4. success=false with _recoveryHint → success
+ *   4. success=false with _recoveryHint → failure with actionable context
  * Plus a few extra regression cases (no success field, error object, etc.)
  * to lock in the legacy fallback path.
  */
@@ -36,10 +37,7 @@ describe('classifyToolResult (Bug #83)', () => {
     });
     expect(result.isFailure).toBe(false);
     if (!result.isFailure) {
-      // _recoveryHint takes priority over success:true per the helper's
-      // priority order (Bug #83 explicitly required checking _recoveryHint
-      // as a positive signal).
-      expect(result.reason).toBe('recovery_hint');
+      expect(result.reason).toBe('success_true');
     }
   });
 
@@ -70,25 +68,22 @@ describe('classifyToolResult (Bug #83)', () => {
     });
     expect(result.isFailure).toBe(false);
     if (!result.isFailure) {
-      expect(result.reason).toBe('recovery_hint');
+      expect(result.reason).toBe('success_true');
     }
   });
 
-  it('case 4: success=false with _recoveryHint is SUCCESS (recovery hint overrides)', () => {
-    // The audit explicitly required: "_recoveryHint as a positive signal"
-    // — even if success===false, the presence of _recoveryHint means the
-    // executor has a non-fatal recoverable path the LLM can use. The
-    // helper inverts the priority: _recoveryHint > success===true >
-    // success===false > legacy fallback.
+  it('case 4: success=false with _recoveryHint remains a failure with recovery context', () => {
     const result = classifyToolResult({
       success: false,
       output: 'partial',
       error: 'something went wrong',
       _recoveryHint: 'try write_file with a different path on retry',
     });
-    expect(result.isFailure).toBe(false);
-    if (!result.isFailure) {
-      expect(result.reason).toBe('recovery_hint');
+    expect(result.isFailure).toBe(true);
+    if (result.isFailure) {
+      expect(result.reason).toBe('success_false');
+      expect(result.errorMsg).toContain('something went wrong');
+      expect(result.errorMsg).toContain('[recovery: try write_file with a different path on retry]');
     }
   });
 
@@ -144,10 +139,7 @@ describe('classifyToolResult (Bug #83)', () => {
     expect(result.isFailure).toBe(false);
   });
 
-  it('success=false with no error field falls back to the synthesised "Unknown error" string', () => {
-    // Edge case: tool explicitly said failure but didn't provide an error
-    // object. The old code synthesised an "Unknown error" string; the new
-    // helper preserves that behaviour for genuine success:false cases.
+  it('success=false with no error field uses available tool output', () => {
     const result = classifyToolResult({
       success: false,
       output: 'something',
@@ -155,18 +147,11 @@ describe('classifyToolResult (Bug #83)', () => {
     expect(result.isFailure).toBe(true);
     if (result.isFailure) {
       expect(result.reason).toBe('success_false');
-      expect(result.errorMsg).toContain('Unknown error');
-      expect(result.errorMsg).toContain('no error field');
+      expect(result.errorMsg).toBe('something');
     }
   });
 
-  // BUG 4 fix — the synthesise branch (else) MUST also append _recoveryHint
-  // when present, mirroring the errorObj=object branch above. Without this,
-  // the 100+ `Unknown error — tool result has keys: [..., _recoveryHint], no
-  // error field` log lines in /opt/bing/web/logs/run.log fire without the
-  // actionable guidance the LLM injector attached (bash_execute, read_file,
-  // apply_diff all hit this path because the tool returns `success: false`
-  // without populating the `error` field).
+  // Empty error fields must not mask output or recovery instructions.
   it('success=false with _recoveryHint and no error field appends the recovery hint', () => {
     const result = classifyToolResult({
       success: false,
@@ -176,23 +161,18 @@ describe('classifyToolResult (Bug #83)', () => {
     expect(result.isFailure).toBe(true);
     if (result.isFailure) {
       expect(result.reason).toBe('success_false');
-      expect(result.errorMsg).toContain('Unknown error');
-      expect(result.errorMsg).toContain('no error field');
-      // The recovery hint must be appended (with bracket + label prefix)
-      // so the LLM-facing block surfaces the actionable guidance.
+      expect(result.errorMsg).toContain('something');
       expect(result.errorMsg).toContain('[recovery: use write_file with a different path on retry]');
-      // Format lock (code-reviewer SHOULD-CONSIDER b): the synthesise content
-      // (the keys list including `_recoveryHint`) must STILL appear alongside
-      // the appended recovery block — a future refactor that joins the append
-      // inside the keys-list shape would pass the substrings above but break
-      // the format operators grep on for the "Unknown error" line. Pin the
-      // full shape so operators can't accidentally lose grep-discoverability.
-      // Intentional-strict — do NOT relax to `\[.*\]` if a future field
-      // is added to the synthesise string: the exact shape is the lock.
-      expect(result.errorMsg).toMatch(
-        /tool result has keys: \[success, output, _recoveryHint\]/,
-      );
     }
+  });
+
+  it('success=false with an empty error uses exitCode before a generic fallback', () => {
+    const result = classifyToolResult({ success: false, error: '', exitCode: 127 });
+    expect(result).toEqual({
+      isFailure: true,
+      reason: 'success_false',
+      errorMsg: 'Tool exited with code 127',
+    });
   });
 
   it('null/undefined toolResult is treated optimistically (no failure signal)', () => {

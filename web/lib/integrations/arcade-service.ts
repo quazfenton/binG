@@ -16,7 +16,7 @@
 
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
-import { recordFailureBreaker } from '@/lib/utils/circuit-breaker';
+import { recordFailureBreaker, getBreakerCooldownUntil } from '@/lib/utils/circuit-breaker';
 
 const logger = createLogger('Integration:Arcade');
 
@@ -1297,7 +1297,17 @@ export function reenableArcadeService(): void {
  */
 export function getArcadeService(): ArcadeService | null {
   if (arcadeServiceDisabled) {
-    return null;
+    // Bug #88: Auto-reset disabled flag when circuit breaker cooldown has expired.
+    // This allows the service to retry after the 60s cooldown instead of being
+    // permanently disabled for the process lifetime.
+    const cooldownUntil = getBreakerCooldownUntil('arcade');
+    if (cooldownUntil === null || Date.now() > cooldownUntil) {
+      arcadeServiceDisabled = false;
+      arcadeServiceInstance = null;
+      logger.info('[ArcadeService] Auto-retrying after circuit breaker cooldown expired');
+    } else {
+      return null;
+    }
   }
   if (!arcadeServiceInstance) {
     const apiKey = process.env.ARCADE_API_KEY?.trim();

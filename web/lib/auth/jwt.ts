@@ -177,7 +177,10 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
             return [k, v.join('=')];
           })
         );
-        token = cookies['session_id'] || cookies['auth-token'] || cookies['token'] || null;
+        // Prioritize JWT cookies over session_id (UUID) — session_id always
+        // fails JWT decode, wasting a round-trip before falling back to
+        // session auth in resolveRequestAuth.
+        token = cookies['auth-token'] || cookies['token'] || cookies['session_id'] || null;
       }
     }
 

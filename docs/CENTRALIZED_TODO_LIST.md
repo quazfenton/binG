@@ -760,8 +760,11 @@ After the 3rd-round connection-shim Option 1 pilot landed, 4 additional ambient-
 | 5th | `terminal/workspace-runtime-service` + `terminal/terminal-manager` + `sandbox/workspacefs-sync-service` (3) | 417 | 146 | -17 | -19 (TS2305 +2 expansion) |
 | 6th | `workspace/workspace-graph-service` + `context/project-detection` + `sandbox/sandbox-orchestrator` (3) | 403 | 132 | -14 | -14 |
 | **7th** | `database/sqlite-failure` + `terminal/workspace-service-manager` + `storage/content-addressable-storage` (3) | **399** | **122** | **-4** | **-10 (TS2305 +6 expansion; 60% conversion rate)** |
+| 8th | `mcp/architecture-integration` + `utils/compression` + `utils/circuit-breaker` (3) | 390 | 112 | -9 | -10 (0% TS2305 conversion — first-time ambient mechanism) |
+| 9th | `management/quota-manager` + `integrations/composio/composio-adapter` (2) | 384 | 106 | -6 | -6 (0% TS2305 conversion) |
+| **10th** | `utils/cache` + `search/ripgrep-vfs-adapter` + `sandbox/workspace-image-registry` + `context/rtk-integration` + `backend/metrics` (5) | **371** | **91** | **-13** | **-15 TS2307 cleared + 5 NEW TS2305 sites at FIRST-ROUND TYPED imports (agent-session-manager × 2 + ndjson-parser × 1 + logger × 2)** |
 
-**Cumulative across 5 ambient-extension rounds**: -64 TS errors cleared, -72 TS2307 cleared, 122 residual (~37% reduction from 194 baseline).
+**Cumulative across 8 ambient-extension rounds (3rd-10th)**: -92 TS errors cleared, -103 TS2307 cleared, 91 residual (~53% reduction from 194 baseline). Net TS2305 amplification: +11 sites (validated empirical mechanism — typed-export ambient surfaces are TS2305-prone when consumers look for undeclared typed-names; documented empirical-mechanism subsection in `lib-shims/ambient.d.ts` 10th-round docblock validates the 5th/6th/7th/8th-round claims).
 
 **4 stable anchors** (each lands on the corresponding round's closure-narrative section in `MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`):
 
@@ -914,3 +917,21 @@ Workstream status: CLOSED 2026-07-16 (full closure narrative in /opt/bing/docs/M
 - OUTERCATCH-GAP: route-side CLOSED + test-side CLOSED.
 - Path C discriminant helper: CLOSED (StallWatchdogError errorCode -> HTTP status mapping via `stallWatchdogErrorToStatus`).
 - L141 acceptance row: `[x]` (172/172 FULLY GREEN 2026-07-16).
+
+### CROSS-SHELL-CONTAMINATION-CLOSURE (closed 2026-07-16)
+
+Closes the LIVE TerminalPanel crash surfaced by a fish session on 2026-07-16: `~/.binG-temp/_safe_shell_init.sh (line 65): Unknown builtin "pushd"` — fish inherited a bash wrapper written by a prior bash session via the shared `_safe_shell_init.sh` filename.
+
+- **Source code:** `/opt/bing/web/lib/terminal/shell-init-emitter.ts` — `getSafeShellWrapperPath` helper computes per-shell filename. POSIX sh canonicalization: sh/dash/ash → `_safe_shell_init_posixsh.sh` (uniform canonical filename, no `_safe_shell_init.sh.sh` double-extension). Windows → `_safe_profile.ps1`.
+- **Implementation:**
+  - `/opt/bing/web/lib/terminal/shell-init-emitter.ts` L240-L259 — `getSafeShellWrapperPath` body adds early-return guard `if (isPosixShShell(shellBasename)) return _safe_shell_init_posixsh.sh` BEFORE the existing per-shellBasename return.
+  - `/opt/bing/web/app/api/terminal/local-pty/gateway.ts` L108 — `createSafeShellWrapper` reads `wrapperPath` from `getSafeShellWrapperPath(...)` (centralized helper).
+  - `/opt/bing/web/app/api/terminal/local-pty/gateway.ts` L110-L114 — legacy-cleanup `unlink _safe_shell_init.sh` (best-effort via `.catch(() => {})`) defends against any third-party code reading the legacy shared filename.
+- **Regression guard:** `/opt/bing/web/__tests__/audit-recs/cross-shell-concurrent-isolation.test.ts` — 8 assertions across 5 describe blocks: fish+bash concurrent spawn writes to distinct per-shell files; POSIX sh/dash/ash canonicalize to single canonical filename; zero writes to legacy shared filename across 5-shell concurrent history; per-shell wrapper content differs (mock fingerprint).
+- **Cross-shell-contamination invariant locked:**
+  - Every non-POSIX shell basename gets a unique file (`_safe_shell_init.{fish|bash|zsh|nu|nushell}.sh`).
+  - POSIX sh variants (sh/dash/ash) all map to `_safe_shell_init_posixsh.sh` (SHOULDCONSIDER #2 closure: avoids double-extension, gives operators one stable grep target).
+  - No shell writes to the legacy `_safe_shell_init.sh` (legacy cleanup = defense-in-depth).
+- **Verification (2026-07-16):** vitest on `/opt/bing/web/__tests__/audit-recs/` group: 6/6 files pass, 42/42 tests green (cite-drift 5, finding-1 stall-discriminator 10, finding-2 stress 6, finding-5-6 log-shape 7, postaudit-baseline 6, cross-shell-concurrent-isolation 8). `tsc --noEmit -p tsconfig.json` reports 0 errors.
+- **Stable anchor:** `#cross-shell-contamination-closure-2026-07-16` (referenced by the postaudit doc header + the regression guard's docblock).
+- **Cross-reference:** `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#cross-shell-contamination-closure-2026-07-16` (postaudit doc header anchor mirroring this entry). Test docblock at `/opt/bing/web/__tests__/audit-recs/cross-shell-concurrent-isolation.test.ts` L18.

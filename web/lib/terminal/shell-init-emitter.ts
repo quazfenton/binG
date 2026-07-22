@@ -15,10 +15,24 @@
  *   ~/.binG-temp/_safe_shell_init.sh (line 2): Unsupported use of '='.
  *   In fish, please use 'set WORKSPACE_ROOT "..."'
  *
+ * And — because the shared filename was used by BOTH createSafeShellWrapper
+ * AND the runtime env-emit region in the gateway, a user-selected fish
+ * session running AFTER a bash session would inherit the bash wrapper
+ * (including `builtin pushd`) and crash at parse time:
+ *
+ *   ~/.binG-temp/_safe_shell_init.sh (line 65): Unknown builtin "pushd"
+ *
+ * `getSafeShellWrapperPath` (this module) is the single source of truth
+ * for the per-shell filename. Wrappers are now keyed by `shellBasename`
+ * so each shell gets its own file (`_safe_shell_init.fish.sh`,
+ * `_safe_shell_init.bash.sh`, etc.) — eliminating the cross-shell race.
+ *
  * This module provides a single helper surface the gateway can call when
  * emitting shell-specific syntax. All helpers are deterministic string
  * builders — no I/O, no side effects, fully unit-testable.
  */
+
+import * as path from 'path';
 
 /**
  * Return the lowercase basename of a shell executable path.
@@ -147,33 +161,27 @@ export function buildFishSafeShellWrapper(workspaceDir: string): string {
     '                return 1',
     '        end',
     '    end',
-    '    if not string match -r "^$WORKSPACE_ROOT(/|$)" "$resolved"',
+    '    # Path guard — use exact match OR anchored glob. Fish `string match -q`',
+    '    # is fully anchored, so "$WORKSPACE_ROOT/*" correctly excludes',
+    '    # "/workspace-fake" (the trailing "/" enforces path-boundary).',
+    '    # We AVOID `string match -r` because fish evaluates the parens in',
+    '    # `(/|$)` as command substitution AT PARSE TIME and crashes.',
+    '    if test "$resolved" != "$WORKSPACE_ROOT"',
+    '        and not string match -q "$WORKSPACE_ROOT/*" "$resolved"',
     '        echo "cd: Path traversal blocked - must stay within workspace" >&2',
     '        return 1',
     '    end',
     '    builtin cd "$resolved"',
     'end',
     '',
-    '# Override pushd',
-    'function pushd',
-    '    set target $argv[1]',
-    '    switch $target',
-    '        case "~"',
-    '            set target "$HOME"',
-    '        case "~/*"',
-    '            set target "$HOME/$target[3..-1]"',
-    '    end',
-    '    set -l resolved (path resolve --no-symlinks "$target" 2>/dev/null)',
-    '    if test -z "$resolved"',
-    '        echo "pushd: Path traversal blocked - must stay within workspace" >&2',
-    '        return 1',
-    '    end',
-    '    if not string match -r "^$WORKSPACE_ROOT(/|$)" "$resolved"',
-    '        echo "pushd: Path traversal blocked - must stay within workspace" >&2',
-    '        return 1',
-    '    end',
-    '    builtin pushd "$target"',
-    'end',
+    '# NOTE: `function pushd ... builtin pushd ... end` was REMOVED.',
+    '# Fish has no native `pushd` built-in (it is a bash/zsh concept); the',
+    '# previous emit caused a parse-time crash: `fish: Unknown builtin',
+    '# \'pushd\'`. We rely on fish\'s native "Unknown command" message so',
+    '# the user gets clear feedback on missing-command intent.',
+    '# Re-introduce the override in the SAME form as `function cd` if',
+    '# fish ever adds a native pushd (use `string match -q` glob +',
+    '# `test` exact-match path-guard — see cd override above for design).',
     '',
     '# Set initial directory',
     'cd "$WORKSPACE_ROOT" 2>/dev/null',
@@ -187,6 +195,142 @@ export function buildFishSafeShellWrapper(workspaceDir: string): string {
  */
 export function buildWorkspaceRootExport(shellBasename: string, workspaceDir: string): string {
   return getEnvExportSyntax(shellBasename, 'WORKSPACE_ROOT', workspaceDir);
+}
+
+/**
+ * Optional logger interface for runtime warning emission.
+ * Matches the shape of `@/lib/utils/logger`'s `createLogger` return type.
+ * Kept as a structural type so the helper has zero import dependencies.
+ */
+export interface TranslateRuntimeLogger {
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+}
+
+/**
+ * Compute the per-shell safe-shell wrapper script path. Each shell gets its
+ * own file so concurrent or sequential cross-shell sessions on the same
+ * workspace CANNOT overwrite each other's wrapper.
+ *
+ * Naming convention (anti-cross-shell-contamination):
+ *   Unix:    `<workspaceDir>/.binG-temp/_safe_shell_init.<shellBasename>.sh`
+ *            Examples:
+ *              _safe_shell_init.fish.sh       (fish)
+ *              _safe_shell_init.bash.sh       (bash)
+ *              _safe_shell_init.zsh.sh        (zsh)
+ *              _safe_shell_init_posixsh.sh    (POSIX sh/dash/ash — UNIFORM canonical
+ *                                              filename regardless of literal basename
+ *                                              to avoid the `_safe_shell_init.sh.sh`
+ *                                              awkwardness + to give operators one
+ *                                              stable grep target)
+ *   Windows: `<workspaceDir>/.binG-temp/_safe_profile.ps1`  (powershell — no
+ *              cross-shell concern since powershell is the only allowlisted
+ *              windows shell).
+ *
+ * Why per-shellBasename (closes the cross-shell-contamination bug):
+ *   Before this helper existed, BOTH `createSafeShellWrapper` AND the
+ *   runtime env-emit region in `gateway.ts` hardcoded the filename
+ *   `_safe_shell_init.sh`. Result: a fish user starting AFTER a bash user
+ *   would source the bash wrapper (with `builtin pushd`) at parse time and
+ *   crash with `fish: Unknown builtin 'pushd'`. The per-shellBasename
+ *   filename encoded in this helper makes that bug structurally impossible.
+ *
+ * Single source of truth: every site that reads or writes the safe-shell
+ * wrapper MUST call this helper. Adding new call sites without calling this
+ * helper will stand out in code review as a regression risk.
+ *
+ * @param workspaceDir  The real on-disk workspace directory (e.g. `/tmp/...`)
+ * @param shellBasename  Lowercase basename of the target shell (fish/bash/zsh/...)
+ * @param isWindows  Set to true on win32 to use the PowerShell profile path
+ */
+export function getSafeShellWrapperPath(
+  workspaceDir: string,
+  shellBasename: string,
+  isWindows = false,
+): string {
+  if (isWindows) return path.join(workspaceDir, '.binG-temp', '_safe_profile.ps1');
+  // POSIX sh canonicalization: sh/dash/ash all map to a single canonical
+  // filename `_safe_shell_init_posixsh.sh` regardless of the literal basename.
+  // Reasons: (a) avoids the awkward `_safe_shell_init.sh.sh` double-extension,
+  // (b) gives operators one stable grep target (`grep _safe_shell_init_posixsh.sh`),
+  // (c) preserves the cross-shell-contamination invariant — a POSIX sh session
+  // cannot collide with a fish/bash/zsh session that uses its basenamed filename.
+  if (isPosixShShell(shellBasename)) {
+    return path.join(workspaceDir, '.binG-temp', '_safe_shell_init_posixsh.sh');
+  }
+  const safeShellBasename = shellBasename || 'unknown';
+  return path.join(workspaceDir, '.binG-temp', `_safe_shell_init.${safeShellBasename}.sh`);
+}
+
+/**
+ * Re-translate a runtime workspace env-script from bash-format
+ * (`export VAR="value"`) into the target shell's native export syntax.
+ *
+ * Use case (closes OUTERCATCH-PROD-REACHABILITY follow-up): the runtime
+ * service's `buildShellInitScript()` returns a fixed bash-syntax string
+ * (`export WORKSPACE_ROOT="/path"\nexport FOO="bar"\n`...). When the target
+ * shell is fish, nu, or any non-bash dialect, that content would crash
+ * the shell parser when sourced from `.workspace_env` (fish would reject
+ * `export` at line 2 with "Unsupported use of '='", nu would reject
+ * similarly). This helper re-emits each line in shell-correct syntax
+ * via the existing `getEnvExportSyntax` dispatch.
+ *
+ * Line classification (SHOULDCONSIDER a fail-loud semantics):
+ *   - Canonical `export VAR="value"`     → re-translate to target shell
+ *   - Begins with `export` but malformed  → DROP + record in `malformed`
+ *     + warn (latent regression vector: silently passing them through to
+ *     fish's `.workspace_env` would re-trigger OUTERCATCH-PROD-REACHABILITY
+ *     if runtime ever emits non-canonical (single-quote / no-quote) forms)
+ *   - Anything else (comments, blanks)   → pass through unchanged
+ *
+ * Returns: `{ content; count; malformed }`
+ *   - content: translated script with malformed lines EXCLUDED
+ *   - count: number of cleanly re-translated lines
+ *   - malformed: lines that started with `export` but failed canonical
+ *     regex — the caller can decide whether to surface as a runtime error
+ */
+export function translateRuntimeEnvScript(
+  workspaceEnvScript: string,
+  shellBasename: string,
+  logger?: TranslateRuntimeLogger,
+): { content: string; count: number; malformed: string[] } {
+  const lines = workspaceEnvScript.split('\n');
+  const out: string[] = [];
+  let count = 0;
+  const malformed: string[] = [];
+  // Canonical regex: `export VAR="value"` with optional leading/trailing
+  // whitespace. Var names: uppercase letters, digits, underscores,
+  // MUST start with letter or underscore (env-var convention).
+  // Value: double-quoted, may contain `\"` and `\\` escapes.
+  const exportRegex = /^\s*export\s+([A-Z_][A-Z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"\s*$/;
+  // Detection regex: any line that begins with `export` keyword —
+  // distinguishes export-prefixed malformed lines from benign non-export
+  // lines (comments, blanks) that should pass through.
+  const exportPrefixRegex = /^\s*export\b/;
+  for (const line of lines) {
+    const match = line.match(exportRegex);
+    if (match) {
+      const varName = match[1];
+      // Unescape bash-string escapes (&quot; \&quot;) before re-translation.
+      // The receiving helper will re-escape per the target shell's syntax.
+      const escapedValue = match[2];
+      const unescapedValue = escapedValue.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+      out.push(getEnvExportSyntax(shellBasename, varName, unescapedValue));
+      count++;
+    } else if (exportPrefixRegex.test(line)) {
+      // Latent regression vector: if we silently passthrough this line,
+      // fish's .workspace_env will contain bash-syntax that fish rejects
+      // at parse time. Drop + record + warn (fail-loud).
+      malformed.push(line);
+      logger?.warn(
+        '[translateRuntimeEnvScript] dropped malformed `export` line — runtime may emit non-canonical syntax that could re-trigger OUTERCATCH-PROD-REACHABILITY',
+        { line, shellBasename },
+      );
+    } else {
+      // Non-export line (comment, blank, etc.): pass through unchanged.
+      out.push(line);
+    }
+  }
+  return { content: out.join('\n'), count, malformed };
 }
 
 /**

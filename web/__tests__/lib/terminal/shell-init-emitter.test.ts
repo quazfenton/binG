@@ -43,6 +43,8 @@ import {
   buildFishSafeShellWrapper,
   buildNuSafeShellWrapper,
   buildWorkspaceRootExport,
+  translateRuntimeEnvScript,
+  getSafeShellWrapperPath,
 } from '@/lib/terminal/shell-init-emitter';
 
 describe('shell-init-emitter', () => {
@@ -204,9 +206,37 @@ describe('shell-init-emitter', () => {
       expect(wrapper).toContain('\nend\n');
       expect(wrapper).not.toMatch(/cd\s*\(\s*\)/); // bash form must be absent
     });
-    it('emits fish-native `function pushd; ...; end`', () => {
+    // REGRESSION (fish parse-time crash): emit MUST NOT define `function pushd`.
+    // Fish has no native pushd built-in — the prior emit caused a parse-time
+    // crash: `fish: Unknown builtin 'pushd'`. We rely on fish's native
+    // "Unknown command" error so the user gets clear feedback. If fish ever
+    // adds built-in pushd, re-introduce the override in the SAME form as
+    // `function cd` (path-guard via `string match -q` glob + `test` exact-match).
+    // REGRESSION (fish parse-time crash): emit MUST NOT define a `function pushd`
+    // directive. Fish has no native `pushd` built-in (it's a bash/zsh concept) and
+    // emits `fish: Unknown builtin 'pushd'` at parse time, blocking the entire
+    // PTY session from starting. The assertion uses line-start regex (`^...$`
+    // per line, multiline mode) so documentation comments that REFER to
+    // "function pushd" as a string don't false-positive — only ACTUAL fish
+    // directives are forbidden.
+    it('does NOT emit `function pushd` directive (fish has no built-in pushd)', () => {
       const wrapper = buildFishSafeShellWrapper('/tmp/ws');
-      expect(wrapper).toContain('function pushd');
+      // (a) Line-start regex: catches ACTUAL fish directives; ignores doc-comments.
+      expect(wrapper).not.toMatch(/^function pushd$/m);
+      expect(wrapper).not.toMatch(/^builtin pushd$/m);
+      // (b) Substring guard: catches any inline `builtin pushd` directive
+      // inside ANY function body (forward-protection against stream-merge edits).
+      expect(wrapper).not.toContain('builtin pushd');
+      // (c) End-count forward-protection: a stream-merge edit that adds an extra
+      // unpaired `end` would split the cd function body in two. Assert the emit
+      // has AT LEAST one `^end$` line (closes `function cd`). Use `>= 1` instead
+      // of `=== 1` to future-proof against legitimate cd-function evolution
+      // (e.g., adding a switch/case block — fish's `end` is shared between
+      // function + switch closures). Future operators may add new `end` lines
+      // intentionally; the assertion flags UNEXPECTED removal (count 0) but
+      // does NOT flag legitimate growth (count > 1).
+      const standaloneEnds = (wrapper.match(/^end$/gm) || []).length;
+      expect(standaloneEnds).toBeGreaterThanOrEqual(1);
     });
     it('contains the path-traversal message that the bash version emits', () => {
       const wrapper = buildFishSafeShellWrapper('/tmp/ws');
@@ -219,6 +249,59 @@ describe('shell-init-emitter', () => {
     it('escapes workspace dir quotes in emit', () => {
       const wrapper = buildFishSafeShellWrapper('/p"a"th');
       expect(wrapper).toContain('set -gx WORKSPACE_ROOT "/p\\"a\\"th"');
+    });
+
+    // REGRESSION (real fish parse-time crash): emit MUST NOT use
+    // `string match -r` with regex parens in the path guard — fish evaluates
+    // the `(/|$)` parens as command substitution AT PARSE TIME (before any
+    // runtime options are read) and crashes. We deliberately switched to
+    // anchored-glob + exact-match so the emit works on real fish 3.7.0.
+    it('cd path guard avoids fish parse-time regex-paren crash', () => {
+      const wrapper = buildFishSafeShellWrapper('/tmp/ws');
+      // (1) Old broken form MUST be GONE — broadly: ANY use of `string match -r`
+      //     triggers the same parse-time hazard regardless of the regex pattern.
+      //     Scope the check to the path-guard region so unrelated `-r` patterns
+      //     elsewhere don't false-positive.
+      const guardRegion = wrapper.split('\n').filter((l) => l.includes('"$resolved"'));
+      expect(guardRegion.length).toBeGreaterThan(0);
+      expect(guardRegion.join('\n')).not.toMatch(/string match -r\b/);
+      // (2) New safe glob form MUST be present (in the cd override)
+      expect(wrapper).toContain('string match -q "$WORKSPACE_ROOT/*"');
+      // (3) Exact-match fallback MUST be present (in the cd override)
+      expect(wrapper).toContain('test "$resolved" != "$WORKSPACE_ROOT"');
+      // (4) Guard cardinality: each guard appears at least once (cd ONLY —
+      //     the fish pushd override was dropped because fish has no native
+      //     pushd; the mirror fix to the bash template at gateway.ts is via
+      //     runtime detection at source-time that bypasses `builtin pushd`
+      //     for sh/dash/ash).
+      const globCount = wrapper.match(/string match -q "\$WORKSPACE_ROOT\/\*"/g)?.length ?? 0;
+      const exactCount = wrapper.match(/test "\$resolved" != "\$WORKSPACE_ROOT"/g)?.length ?? 0;
+      expect(globCount).toBeGreaterThanOrEqual(1);
+      expect(exactCount).toBeGreaterThanOrEqual(1);
+    });
+
+    it('cd path guard has zero parse-time regex/grouping chars (fish-safe)', () => {
+      const wrapper = buildFishSafeShellWrapper('/tmp/ws');
+      // Parse-time hazards in the path-guard region:
+      //   - `(` ... `)` would be evaluated as command substitution at PARSE TIME
+      //     (the original crash vector for the regex `(/|$)`)
+      //   - `|` (bare in double-quoted glob) is a pipe-of-patterns marker that
+      //     fish treats as alternation at parse time
+      // We assert NONE of the active guard lines contain these chars in the
+      // pattern position (i.e., the substring between the opening `"` and the
+      // closing `"` of the glob argument).
+      const guardLines = wrapper.split('\n').filter((l) =>
+        l.includes('string match -q "$WORKSPACE_ROOT') ||
+        l.includes('test "$resolved" != "$WORKSPACE_ROOT"'),
+      );
+      expect(guardLines.length).toBeGreaterThanOrEqual(1); // cd only (fish pushd was dropped: fish has no `pushd` built-in; cf. test above)
+      for (const line of guardLines) {
+        // No `(` or `)` ANYWHERE in the guard line — parens anywhere inside the
+        // double-quoted argument region will be mis-parsed as command sub.
+        expect(line).not.toMatch(/[()]/);
+        // No bare `|` inside the glob pattern — fish alternation marker.
+        expect(line).not.toMatch(/\|/);
+      }
     });
   });
 
@@ -346,4 +429,258 @@ describe('shell-init-emitter', () => {
         .toBe('$env.WORKSPACE_ROOT = "/tmp/ws"');
     });
   });
-});
+
+  describe('getSafeShellWrapperPath', () => {
+    // Closes the cross-shell-contamination bug surfaced by a real fish
+    // TerminalPanel session on 2026-07-16: a fish user inherited a bash
+    // wrapper (with `builtin pushd`) via the shared `_safe_shell_init.sh`
+    // filename, crashing at parse time. The per-shellBasename filename
+    // scheme makes that bug structurally impossible.
+    it('returns per-shellBasename filename for fish (NOT shared _safe_shell_init.sh)', () => {
+      const p = getSafeShellWrapperPath('/workspace', 'fish', false);
+      // The filename MUST include `fish` in it so concurrent bash+fish
+      // sessions don't share the same wrapper file.
+      expect(p).toContain('_safe_shell_init.fish.sh');
+      // And MUST NOT be the legacy shared filename (exact match OR regex).
+      expect(p).not.toBe('/workspace/.binG-temp/_safe_shell_init.sh');
+      // The basename tail is `_safe_shell_init.{shellBasename}.sh` — never
+      // exactly `_safe_shell_init.sh` (the legacy shape).
+      expect(p).not.toMatch(/\/[^/]*_safe_shell_init\.sh$/);
+    });
+
+    it('differentiates non-POSIX shell basenames — every fish/bash/zsh/nu variant is unique', () => {
+      const nonPosixShells = ['fish', 'bash', 'zsh', 'nu', 'nushell'];
+      const paths = new Set(nonPosixShells.map((s) => getSafeShellWrapperPath('/workspace', s, false)));
+      // Each non-POSIX shell basenamed path MUST be unique. If any two collide,
+      // the cross-shell-contamination bug is still possible.
+      expect(paths.size).toBe(nonPosixShells.length);
+    });
+
+    it('POSIX sh canonicalizes sh/dash/ash to single uniform filename (no double `_safe_shell_init.sh.sh`)', () => {
+      // SHOULDCONSIDER #2: POSIX sh variants (sh, dash, ash) all map to a single
+      // canonical filename `_safe_shell_init_posixsh.sh`. This avoids the
+      // awkward `_safe_shell_init.sh.sh` double-extension + gives operators one
+      // stable grep target. The cross-shell-contamination invariant is still
+      // preserved — the POSIX sh path MUST NOT equal any non-POSIX shell path.
+      const sh = getSafeShellWrapperPath('/workspace', 'sh', false);
+      const dash = getSafeShellWrapperPath('/workspace', 'dash', false);
+      const ash = getSafeShellWrapperPath('/workspace', 'ash', false);
+      expect(sh).toBe('/workspace/.binG-temp/_safe_shell_init_posixsh.sh');
+      expect(dash).toBe(sh);
+      expect(ash).toBe(sh);
+      // Distinct from the legacy shared filename (the cross-shell-contamination
+      // invariant — a fish session running AFTER a POSIX sh session must not
+      // pick up the POSIX wrapper).
+      expect(sh).not.toBe('/workspace/.binG-temp/_safe_shell_init.sh');
+      // Distinct from the non-POSIX shell basenamed filenames.
+      expect(sh).not.toMatch(/\/[^/]*_safe_shell_init\.(fish|bash|zsh|nu|nushell)\.sh$/);
+    });
+
+    it('POSIX sh filename is still distinguishable from each non-POSIX shell (no cross-shell collision)', () => {
+      // Belt-and-suspenders: even though sh/dash/ash all collapse to one file,
+      // that file MUST still differ from every non-POSIX shell path so a
+      // concurrent fish/bash/zsh session never sources a POSIX sh wrapper.
+      const posixPath = getSafeShellWrapperPath('/workspace', 'sh', false);
+      for (const nonPosix of ['fish', 'bash', 'zsh', 'nu', 'nushell']) {
+        expect(getSafeShellWrapperPath('/workspace', nonPosix, false)).not.toBe(posixPath);
+      }
+    });
+
+    it('Windows path uses PowerShell profile, independent of shellBasename', () => {
+      const win1 = getSafeShellWrapperPath('C:\\Users\\test', 'powershell.exe', true);
+      expect(win1).toContain('_safe_profile.ps1');
+      expect(win1).toContain('C:');
+      const win2 = getSafeShellWrapperPath('C:\\Users\\test', 'fish', true);
+      // Both PowerShell and any other shellBasename collapse to _safe_profile.ps1
+      // on Windows — there's only one allowlisted windows shell.
+      expect(win2.replace(/\\/g, '/')).toBe(win1.replace(/\\/g, '/'));
+    });
+
+    it('falls back to `unknown` shellBasename when input is empty (forward-protection)', () => {
+      const p = getSafeShellWrapperPath('/workspace', '', false);
+      // Must still be unique — not legacy shared filename.
+      expect(p).toBe('/workspace/.binG-temp/_safe_shell_init.unknown.sh');
+    });
+
+    it('honors the codebase path-join convention for trailing slashes (no double-slash)', () => {
+      // path.join already handles this; regression-locked here so a future
+      // refactor away from path.join doesn't regress.
+      const p = getSafeShellWrapperPath('/workspace/', 'fish', false);
+      expect(p).not.toMatch(/\/{2,}/);
+    });
+
+    it('idempotent: same inputs always produce the same path (regression-locks path normalization)', () => {
+      const a = getSafeShellWrapperPath('/workspace', 'fish', false);
+      const b = getSafeShellWrapperPath('/workspace', 'fish', false);
+      // Three calls with aligned shapes should all yield byte-identical
+      // strings — protects against accidental non-determinism from
+      // timestamp / random suffix drift in future refactors.
+      expect(a).toBe(b);
+      expect(a).toBe(getSafeShellWrapperPath('/workspace', 'fish', false));
+    });
+  });
+
+  describe('translateRuntimeEnvScript (closes OUTERCATCH-PROD-REACHABILITY)', () => {
+    it('rewrites bash `export VAR="val"` to fish `set -gx VAR "val"` for fish target', () => {
+      const bashScript = 'export WORKSPACE_ROOT="/tmp/ws"\nexport FOO="bar"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'fish');
+      expect(result.content).toBe('set -gx WORKSPACE_ROOT "/tmp/ws"\nset -gx FOO "bar"\n');
+      expect(result.count).toBe(2);
+    });
+    it('preserves bash `export VAR="val"` byte-identical when target is bash', () => {
+      const bashScript = 'export WORKSPACE_ROOT="/tmp/ws"\nexport FOO="bar"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'bash');
+      expect(result.content).toBe('export WORKSPACE_ROOT="/tmp/ws"\nexport FOO="bar"\n');
+      expect(result.count).toBe(2);
+    });
+    it('rewrites to nu `$env.VAR = "val"` for nushell target', () => {
+      const bashScript = 'export FOO="bar"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'nu');
+      expect(result.content).toBe('$env.FOO = "bar"\n');
+      expect(result.count).toBe(1);
+    });
+    it('rewrites to POSIX sh `VAR=""; export VAR` for sh target', () => {
+      const bashScript = 'export FOO="bar"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'sh');
+      expect(result.content).toBe('FOO="bar"; export FOO\n');
+      expect(result.count).toBe(1);
+    });
+    it('rewrites to zsh-compatible `export VAR="val"` for zsh target', () => {
+      const bashScript = 'export FOO="bar"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'zsh');
+      expect(result.content).toBe('export FOO="bar"\n');
+      expect(result.count).toBe(1);
+    });
+    it('preserves non-export lines unchanged (comments + blanks)', () => {
+      const mixed = '# This is a comment\nexport FOO="bar"\n\n# Another comment\nexport BAZ="qux"\n';
+      const result = translateRuntimeEnvScript(mixed, 'fish');
+      expect(result.content).toBe('# This is a comment\nset -gx FOO "bar"\n\n# Another comment\nset -gx BAZ "qux"\n');
+      expect(result.count).toBe(2);
+    });
+    it('handles escape sequences in values (\\" and \\\\) round-trip correctly', () => {
+      // Bash value `path with \"quoted\"` -> unescape -> `path with "quoted"`
+      // -> re-translate via getEnvExportSyntax -> shell-correct escape form.
+      const bashScript = 'export PATH="/usr/bin:\\"quoted\\""\n';
+      const result = translateRuntimeEnvScript(bashScript, 'fish');
+      // fish: set -gx PATH "/usr/bin:\"quoted\""
+      expect(result.content).toBe('set -gx PATH "/usr/bin:\\"quoted\\""\n');
+      expect(result.count).toBe(1);
+    });
+    it('returns empty content + zero count for empty input', () => {
+      const result = translateRuntimeEnvScript('', 'fish');
+      expect(result.content).toBe('');
+      expect(result.count).toBe(0);
+      expect(result.malformed).toEqual([]);
+    });
+    it('FAIL-LOUD: drops malformed `export` lines (no-quote) + records them in malformed[] + warns', () => {
+      // Missing quotes — the runtime is emitting non-canonical bash form.
+      // Per SHOULDCONSIDER (a): never pass malformed export-prefixed lines through
+      // (that would re-trigger OUTERCATCH-PROD-REACHABILITY if target is fish).
+      const loggedWarns: { msg: string; meta?: Record<string, unknown> }[] = [];
+      const testLogger = {
+        warn: (msg: string, meta?: Record<string, unknown>) => {
+          loggedWarns.push({ msg, meta });
+        },
+      };
+      const bashScript = 'export NO_QUOTES=plain\nexport FOO="bar"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'fish', testLogger);
+      // NO_QUOTES line is malformed (no `="..."` wrapper) — DROPPED from content,
+      // recorded in malformed array; FOO line is well-formed — re-translates cleanly.
+      expect(result.content).toBe('set -gx FOO "bar"\n');
+      expect(result.count).toBe(1);
+      expect(result.malformed).toEqual(['export NO_QUOTES=plain']);
+      // Logger was called exactly once with the dropped line as metadata.
+      expect(loggedWarns).toHaveLength(1);
+      expect(loggedWarns[0].meta).toMatchObject({
+        line: 'export NO_QUOTES=plain',
+        shellBasename: 'fish',
+      });
+      expect(loggedWarns[0].msg).toContain('dropped malformed');
+    });
+    it('FAIL-LOUD: handles single-quote export form (export FOO=\'val\') as malformed', () => {
+      // Single-quote is a bash-legal `export` form but NOT our canonical
+      // double-quoted regex. Must be dropped + recorded to prevent leaking
+      // bash-syntax lines into fish/nu's `.workspace_env`.
+      const bashScript = `export FOO='bar'\nexport BAZ="qux"\n`;
+      const result = translateRuntimeEnvScript(bashScript, 'fish');
+      expect(result.content).toBe('set -gx BAZ "qux"\n');
+      expect(result.count).toBe(1);
+      expect(result.malformed).toEqual([`export FOO='bar'`]);
+    });
+    it('returns empty malformed[] when all lines are well-formed', () => {
+      const bashScript = 'export A="1"\nexport B="2"\n';
+      const result = translateRuntimeEnvScript(bashScript, 'fish');
+      expect(result.malformed).toEqual([]);
+      expect(result.count).toBe(2);
+    });
+    it('does NOT warn when logger is not provided (silent mode for tests)', () => {
+      // Empty logger / undefined logger must NOT throw. The malformed lines
+      // are still detected + recorded in malformed[]; only the warn() call is skipped.
+      const bashScript = 'export NO_QUOTES=plain\n';
+      expect(() => translateRuntimeEnvScript(bashScript, 'fish')).not.toThrow();
+      const result = translateRuntimeEnvScript(bashScript, 'fish');
+      expect(result.malformed).toEqual(['export NO_QUOTES=plain']);
+      expect(result.count).toBe(0);
+    });
+    it('CRITICAL ANTI-REGRESSION: fish target emits ONLY fish-syntax lines, no bash `export ` lines', () => {
+      // The whole point of OUTERCATCH-PROD-REACHABILITY closure:
+      // when target is fish, the resulting content must NEVER contain bare
+      // bash `export VAR="..."` lines — fish would reject at parse time
+      // (the exact bug the original report flagged).
+      const workspaceEnvScript = [
+        'export WORKSPACE_ROOT="/tmp/ws"',
+        'export FOO="bar"',
+        'export PATH="$HOME/bin:/usr/bin"',
+        'export SECRET_API_KEY="abc123"',
+      ].join('\n') + '\n';
+      const result = translateRuntimeEnvScript(workspaceEnvScript, 'fish');
+      // Every translated line should start with fish's `set -gx` or be a non-export line.
+      const translatedLines = result.content.split('\n').filter((l) => l.trim().length > 0);
+      for (const line of translatedLines) {
+        expect(line).not.toMatch(/^\s*export\s+[A-Z_]/);
+      }        expect(result.count).toBe(4);
+      });
+    });
+  });
+
+  // REGRESSION (explicit user ask from prior turn): spawn REAL `fish -n` against
+  // the wrapper emit so a parse-time hazard re-introduction is caught even if
+  // vitest unit assertions pass. The only class of bug this catches is
+  // emission-level parse failures — unit assertions can pass while the real
+  // fish parser still rejects the emit on `builtin <unknown>` etc.
+  // Use `it.skip()` (NOT a bare `return`) so CI surfaces 'skipped' vs. 'passed'
+  // distinctly — the prior `return`-as-skip pattern would mask a missing-fish-binary
+  // environment as a passing test (false-green for CI badge purposes).
+  describe('real-fish REPL parse integration (parse-time hazard regression)', () => {
+    // PRECHECK: lint once — if fish binary present, run; otherwise skip via
+    // vitest's `it.skip` so the test is reported as skipped (not silently
+    // passed-as-green).
+    let fishAvailable = false;
+    try {
+      const probe = require('child_process').execFileSync('command', ['-v', 'fish'], { encoding: 'utf-8' });
+      fishAvailable = !!probe.trim();
+    } catch { fishAvailable = false; }
+    const itFish = fishAvailable ? it : it.skip;
+
+    itFish('fish -n <wrapper.fish> exits 0', () => {
+      const wrapper = buildFishSafeShellWrapper('/tmp/ws');
+      const { writeFileSync, unlinkSync } = require('fs') as typeof import('fs');
+      const { tmpdir } = require('os') as typeof import('os');
+      const { spawnSync } = require('child_process') as typeof import('child_process');
+      const tmpFile = `${tmpdir()}/bing-fish-wrapper-${process.pid}-${Date.now()}.fish`;
+      writeFileSync(tmpFile, wrapper, 'utf-8');
+      try {
+        const result = spawnSync('fish', ['-n', tmpFile], { encoding: 'utf-8', timeout: 30000 });
+        if (result.status !== 0) {
+          throw new Error(
+            `fish -n <wrapper> failed (exit ${result.status}). ` +
+              `Stderr: ${result.stderr}. ` +
+              `Wrapper first 500 chars: ${wrapper.substring(0, 500)}`,
+          );
+        }
+        expect(result.status).toBe(0);
+      } finally {
+        try { unlinkSync(tmpFile); } catch { /* best-effort cleanup */ }
+      }
+    });
+  });

@@ -1,81 +1,81 @@
 {
   "version": 2,
-  "updatedAt": "2026-06-16T02:39:50.678Z",
+  "updatedAt": "2026-07-22T19:09:31.578Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "arcade": {
       "monthlyLimit": 10000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "nango": {
       "monthlyLimit": 10000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "daytona": {
       "monthlyLimit": 5000,
       "currentUsage": 70,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "runloop": {
       "monthlyLimit": 5000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "microsandbox": {
       "monthlyLimit": 10000,
-      "currentUsage": 22,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "currentUsage": 23,
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "e2b": {
       "monthlyLimit": 1000,
       "currentUsage": 562,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "mistral": {
       "monthlyLimit": 2000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "blaxel": {
       "monthlyLimit": 5000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "sprites": {
       "monthlyLimit": 2000,
       "currentUsage": 0,
-      "resetDate": "2026-07-01T00:00:00.000Z",
+      "resetDate": "2026-08-01T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "monthly"
     },
     "google_imagen": {
       "monthlyLimit": 500,
       "currentUsage": 0,
-      "resetDate": "2026-06-17T00:00:00.000Z",
+      "resetDate": "2026-07-23T00:00:00.000Z",
       "isDisabled": false,
       "resetPeriod": "daily"
     }

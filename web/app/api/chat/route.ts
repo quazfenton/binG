@@ -14,7 +14,7 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
-import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId, normalizeSessionPath } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
@@ -33,6 +33,8 @@ import {
   getOrchestrationModeFromRequest,
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
+import { generateRoleInjectionSection, generateWeightedRoleSelection } from '@bing/shared/agent/role-redirector';
+import { workflowTemplateService } from '@bing/shared/agent/workflow-templates';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
@@ -313,7 +315,9 @@ async function classifyRequest(
   try {
     const classifier = getTaskClassifier({ provider: process.env.DEFAULT_PROVIDER || 'mistral' });
     if (!classifier) {
-      throw new Error('Task classifier disabled');
+      // Bug #88: skip silently when classifier is disabled — don't throw and
+      // generate a noisy warn log on every multi-turn request.
+      return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
     }
     const result = await classifier.classify(content, {
       projectSize: process.env.PROJECT_SIZE as any,
@@ -1048,12 +1052,23 @@ export async function POST(request: NextRequest) {
         chatLogger.debug('Session file tracking failed (non-critical)', { requestId: trackingReqId, error: error.message });
       });
 
-    const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
-    // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
-    // e.g., "workspace/sessions/anon:1774710784761_6TB03h8Ow:002" -> "workspace/sessions/002"
+    const defaultScopePath = normalizeSessionPath(sanitizePathSegment(resolvedConversationId));
+    // The resolved conversation ID is the source of truth for workspace
+    // isolation. A client can retain a stale filesystemContext.scopePath after
+    // a session rename/new-chat transition; accepting it here made snapshots
+    // read one session while tools and sandboxes wrote another.
     const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
       ? filesystemContext.scopePath.trim()
       : defaultScopePath;
+    const sanitizedClientScopePath = sanitizeScopePath(rawScopePath);
+    if (sanitizedClientScopePath !== defaultScopePath) {
+      chatLogger.warn('Ignoring filesystem scope that does not match the resolved conversation', {
+        requestId,
+        clientScopePath: sanitizedClientScopePath,
+        resolvedScopePath: defaultScopePath,
+        resolvedConversationId,
+      });
+    }
     
     // Log scopePath for debugging session folder naming issues
     chatLogger.debug('Scope path handling:', {
@@ -1064,7 +1079,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Make it 'let' so it can be updated when session is renamed
-    let requestedScopePath = sanitizeScopePath(rawScopePath);
+    let requestedScopePath = defaultScopePath;
 
     // Log sanitized result
     chatLogger.debug('Sanitized scope path:', {
@@ -1517,6 +1532,13 @@ export async function POST(request: NextRequest) {
 // — adding it would waste tokens and degrade response quality.
 if (isCodeRequest || enableFilesystemEdits) {
   baseSystemPrompt += generateDynamicInjection();
+  const roleSelection = generateWeightedRoleSelection({ taskDescription: task });
+  const workflowOptions = workflowTemplateService
+    .listTemplates()
+    .map((template) => `${template.id}: ${template.description}`)
+    .join('\n- ');
+  baseSystemPrompt += generateRoleInjectionSection(roleSelection);
+  baseSystemPrompt += `\n## Available Workflow Templates\nRecommend or select a template when it clearly fits the task; never execute approval, deployment, or memory-wipe steps without explicit user confirmation.\n- ${workflowOptions}\n`;
 }
 
     // CRITICAL: Unified tool usage instructions with ENFORCED output formats.
@@ -2068,7 +2090,7 @@ const config: UnifiedAgentConfig = {
       try {
         const result = await callMCPToolFromAI_SDK(
           name,
-          args,
+          { ...args, conversationId: resolvedConversationId },
           authenticatedUserId ?? '',
           requestedScopePath ?? '',
           undefined,                     // recentFailures (unchanged)
@@ -7987,6 +8009,4 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
-
-
 

@@ -4,6 +4,7 @@
 #
 # Routes based on URL path prefixes:
 #   /api/*, /health*  → bing backend (Hono orchestrator)
+#   /mcp*             → bing MCP HTTP endpoint
 #   /nocturne/*       → nocturne FastAPI backend
 #   /copa/*           → CopaMundial (Next.js + Socket.IO)
 #   /novnc/*        → noVNC web-based VNC client (on Docker host, basic_auth required)
@@ -25,11 +26,26 @@
         }
     }
 
+    # Public MCP HTTP transport. Keep this ahead of both the 9Router API
+    # matcher and the dashboard catch-all; otherwise /api/mcp was captured by
+    # 9Router and never reached binG's MCP endpoint.
+    @bing_mcp path /mcp /mcp/*
+    handle @bing_mcp {
+        uri replace /mcp /api/mcp
+        reverse_proxy backend:3001 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
+        }
+    }
+
     # 9Router dashboard API routes (must come before /api/* catch-all)
     # NOTE: The Host header is passed through as the original tunnel host so
     #       9Router returns dashboard configuration for the correct hostname.
     #       The -l flag is just --log (server logs), NOT "require localhost".
-    @ninerouter_api path /api/auth/* /api/combos* /api/init /api/keys* /api/locale /api/mcp/* /api/media-providers/* /api/models* /api/oauth/* /api/pricing /api/provider-nodes/* /api/providers* /api/proxy-pools/* /api/cli-tools/* /api/settings* /api/shutdown /api/tags /api/translator/* /api/tunnel/* /api/usage/* /api/version*
+    @ninerouter_api path /api/auth/* /api/combos* /api/init /api/keys* /api/locale /api/media-providers/* /api/models* /api/oauth/* /api/pricing /api/provider-nodes/* /api/providers* /api/proxy-pools/* /api/cli-tools/* /api/settings* /api/shutdown /api/tags /api/translator/* /api/tunnel/* /api/usage/* /api/version*
     handle @ninerouter_api {
         reverse_proxy ninerouter:3000 {
             flush_interval -1

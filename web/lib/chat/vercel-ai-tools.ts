@@ -143,7 +143,12 @@ function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
       description: (mcpTool as any).description,
       inputSchema: (mcpTool as any).inputSchema || (mcpTool as any).parameters || z.object({}),
       execute: async (args: any) => {
-        return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
+        return await callMCPToolFromAI_SDK(
+          name,
+          { ...args, conversationId: context.conversationId },
+          context.userId,
+          context.scopePath,
+        );
       },
     } as any);
   }
@@ -184,7 +189,12 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
         description: mcpTool.function.description,
         inputSchema: mcpTool.function.parameters || z.object({}),
         execute: async (args: any) => {
-          return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
+          return await callMCPToolFromAI_SDK(
+            name,
+            { ...args, conversationId: context.conversationId },
+            context.userId,
+            context.scopePath,
+          );
         },
       } as any);
     }

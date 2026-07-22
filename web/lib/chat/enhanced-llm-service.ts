@@ -2429,7 +2429,12 @@ export class EnhancedLLMService {
               metadata: { source: 'llm_tool_use' }
             }
           )
-        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId, scopePath);
+        : await callMCPToolFromAI_SDK(
+            selectedTool,
+            { ...call.arguments, conversationId },
+            userId,
+            scopePath,
+          );
 
       toolResults.push({
         name: selectedTool,

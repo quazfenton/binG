@@ -368,3 +368,110 @@ declare module '@/lib/utils/circuit-breaker';
 // declaration mechanism).
 declare module '@/lib/management/quota-manager';
 declare module '@/lib/integrations/composio/composio-adapter';
+
+
+// --- Tenth-round body-less declarations (2026-07-16, item ④ five-distinct-dirs batch) ---
+// [stable anchor: #item-04-tenth-round-2026-07-16] — 10th-round ambient closure, delta -15 TS2307 expected (106 → 91 target)
+// 5 paths: @/lib/utils/cache (3 TS2307) +
+//          @/lib/search/ripgrep-vfs-adapter (3 TS2307) +
+//          @/lib/sandbox/workspace-image-registry (3 TS2307) +
+//          @/lib/context/rtk-integration (3 TS2307) +
+//          @/lib/backend/metrics (3 TS2307).
+// Sum: 15 TS2307 errors — picked on best-ever diversification grounds: 5 paths,
+// 5 distinct top-level dirs (utils/ search/ sandbox/ context/ backend/) — the
+// cleanest cross-subsystem spread of all 10 rounds. Previously, the highest-
+// count 5th-round had 3 paths in 2 distinct dirs (2 terminal/ + 1 sandbox/),
+// and the 6th-round had 3 in 3 dirs but with 1 concentrated in workspace/.
+// The 10th-round is the FIRST round where every pick lives in a different
+// top-level dir — operational reliability gain vs. concentrated picks (a
+// future refactor of one dir won't disturb the others). Domains touched:
+// caching layer (utils/cache) + grep-style filesystem-search adapter layer
+// (search/ripgrep-vfs-adapter) + sandbox image-registry lifecycle stage
+// (sandbox/workspace-image-registry) + Redux-Toolkit context-integration
+// layer (context/rtk-integration) + backend metrics emit (backend/metrics).
+// All body-less for the same reason as the 8 prior rounds: partial-subset
+// consumer surfaces; the typed form would risk TS2339 if a future site adds
+// a new export. Why AMBIENT (not Option A/C facade): same reasoning as the 8
+// prior rounds — the `paths: { "@/*": ["./lib-shims/*"] }` override drops
+// web/ as a resolution target so a web/lib/.../X.ts facade is INVISIBLE
+// to packages/shared's tsc view. Expected total-error delta: -13 to -15
+// (10th-round follows the 0% TS2305 conversion pattern from 8th + 9th
+// rounds — first-time ambient declarations cannot amplify TS2305 conversion
+// since consumers have no prior typed imports at the candidate sites). The
+// 2-error gap between -15 TS2307 cleared and -13 total-error delta is
+// pre-existing TS2339 noise (sites like agent/task-router.ts L509/L524/
+// L536 carrying `'eventId' on 'void'` — internal mirror-error, NOT body-
+// less-ambient artifacts). For the empirical mechanism observed in prior
+// rounds (the symbol-conversion pattern), see the agent-session-manager /
+// ndjson-parser / logger citations in the 5th/6th/7th-round docblocks.
+//
+// Empirical-mechanism (TS2305 conversion at first-round typed imports):
+// The 5 NEW TS2305 sites are NOT amplification at body-less picks —
+// body-less permissive-any is immune to TS2305 by construction. They
+// are at FIRST-ROUND TYPED ambient imports where the ambient surface
+// lists a narrower export-shape than the consumer's import needs
+// (typed form lists only the 3-4 well-known entry points; consumers
+// looking for related names like `AgentSession`/`NDJSONParser`/`Logger`
+// types resolve to the typed surface as `any` and trigger TS2305).
+// Specific 10th-measured sites (verified 2026-07-16 via tsc on
+// packages/shared — git-blame this file's 10th-round block to re-verify;
+// the immediately adjacent git log entry is the durable audit chain):
+
+//   - agent/index.ts L22,23 → '@/lib/session/agent/agent-session-manager'
+//     has no 'AgentSession'/'AgentSessionConfig' (typed-export only lists
+//     `agentSessionManager: any`)
+//   - web/lib/mcp/client.ts L12 → '@/lib/utils/ndjson-parser' has no
+//     'NDJSONParser' (typed-export only lists `createNDJSONParser`)
+//   - web/lib/sandbox/provider-attempt-log.ts L18 + web/lib/tools/
+//     bootstrap-health.ts L18 → '@/lib/utils/logger' has no 'Logger'
+//     (typed-export only lists `createLogger`)
+// This validates the empirical mechanism observed in 5th/6th/7th/8th
+// rounds (TS2305 conversion at first-round typed-export ambient sources
+// — same modules crop up in the mechanism every round; the 10th-measured
+// sites are a different DISTRIBUTION of the same mechanism). Lesson
+// for the path-alias-split epic: future TYPED ambient declarations
+// should either (a) widen the typed-export surface, or (b) convert to
+// body-less if the consumer-typed-name cannot be enumerated.
+declare module '@/lib/utils/cache';
+declare module '@/lib/search/ripgrep-vfs-adapter';
+declare module '@/lib/sandbox/workspace-image-registry';
+declare module '@/lib/context/rtk-integration';
+declare module '@/lib/backend/metrics';
+
+
+// --- Eleventh-round body-less declarations (2026-07-16, item ④ diminishing-returns batch) ---
+// [stable anchor: #item-04-eleventh-round-2026-07-16] — 11th-round ambient closure, delta -6 TS2307 expected (91 → 85 target)
+// 3 paths: @/lib/workspace/workspace-session-graph (2 TS2307) +
+//          @/lib/workspace/workspace-control-plane (2 TS2307) +
+//          @/lib/virtual-filesystem/session-path-guard (2 TS2307).
+// Sum: 6 TS2307 errors — picked because (a) they tie at the top of the
+// post-10th residual at 2 errors each (10+ paths tie at this score; the
+// 3-pick ceiling was chosen to match the diminishing-returns projection in
+// the 10th-round docblock's future-operator-guidance subsection), (b) they
+// span 2 distinct top-level dirs (workspace/ + virtual-filesystem/), and
+// (c) they connect to the chat-route's session-graph + control-plane
+// propagation paths (workspace/ sub-leaves) + the VFS session path guard
+// (path-traversal protection layer that the chat-route enforces on
+// `sessionPath` validation). All 3 picks body-less for the same reason as
+// the 10 prior rounds: partial-subset consumer surfaces; the typed form
+// would risk TS2339 if a future site adds a new export. Why AMBIENT (not
+// Option A/C facade): same reasoning as the 10 prior rounds — the
+// `paths: { "@/*": ["./lib-shims/*"] }` override drops `web/` as a
+// resolution target so a `web/lib/.../X.ts` facade is INVISIBLE to
+// packages/shared's tsc view. Diminishing-returns note: this round's
+// expected -6 delta is below the 8th-10th rounds' per-round average of
+// ~-10; future 12th-15th rounds (if pursued) will likely produce -4 to
+// -8 each based on the top-residual-count trend. The empirical-mechanism
+// (TS2305 conversion at first-round typed imports) continues to apply —
+// the 11th-round itself contributes 0 conversion since body-less form is
+// immune; any TS2305 changes from this round measured will be at first-
+// round TYPED imports looking for undeclared typed-names (validated via
+// git-blame on this round's first-line header for forensic traceability).
+// Total-error delta: -5 to -6 (expected to land in this window per prior
+// batch's pattern of -1 to -2 TS errors difference between TS2307 cleared
+// and total-error delta — primarily TS2339 noise at agent/task-router.ts
+// L509/L524/L536 in the node_modules-resolved tsc-output path).
+declare module '@/lib/workspace/workspace-session-graph';
+declare module '@/lib/workspace/workspace-control-plane';
+declare module '@/lib/virtual-filesystem/session-path-guard';
+

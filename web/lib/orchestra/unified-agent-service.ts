@@ -653,6 +653,34 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
   return 'transient';
 }
 
+async function waitForRateLimitBackoff(
+  error: any,
+  providerIndex: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return;
+
+  const retryAfterValue = error?.response?.headers?.get?.('retry-after')
+    ?? error?.headers?.get?.('retry-after')
+    ?? error?.response?.headers?.['retry-after']
+    ?? error?.headers?.['retry-after'];
+  const retryAfterSeconds = Number(retryAfterValue);
+  const exponentialDelayMs = Math.min(500 * Math.pow(2, providerIndex), 4000);
+  const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+    ? Math.min(retryAfterSeconds * 1000, 5000)
+    : exponentialDelayMs;
+
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    }
+  });
+}
+
 /**
  * Track providers that have permanently failed in this request.
  * Once a provider returns a permanent error, we skip it in subsequent
@@ -3698,6 +3726,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'workspace_graph_find_process': 'workspace.graph_find_process',
       // Legacy mappings (from extended-sandbox-tools EXTENDED_TOOL_TO_CAPABILITY)
       'exec_shell': 'bash.execute',
+      'bash_execute': 'bash.execute',
     };
 
     const capabilityId = capabilityMap[name] || name;
@@ -5151,6 +5180,19 @@ async function runV1ApiWithTools(
           { role: 'user', content: autoDecision.continuationPrompt },
         ];
 
+        // Bug #88 (Round 3): Check if parent request was aborted before starting
+        // a new LLM call. Without this check, auto-continue fires LLM requests
+        // that waste tokens and provider quota when the parent is already dead.
+        // The stall watchdog or user-initiated abort may have already fired
+        // between the previous iteration finishing and this iteration starting.
+        if (config.abortSignal?.aborted) {
+          log.info('[V1-API-WITH-TOOLS] Auto-continuation skipped — parent request already aborted', {
+            iteration: autoContinueIteration,
+            reason: autoDecision.reason,
+          });
+          break;
+        }
+
         try {
           const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
           // Signal progress to the route's stall watchdog before starting the
@@ -5381,6 +5423,15 @@ async function runV1ApiWithTools(
       };
     } catch (error: any) {
       lastError = error;
+      const errorClass = classifyProviderError(error);
+      if (errorClass === 'rate_limit') {
+        const providerIndex = uniqueProviders.indexOf(providerName);
+        log.warn('[V1-API-WITH-TOOLS] Rate limited; backing off before provider fallback', {
+          provider: providerName,
+          providerIndex,
+        });
+        await waitForRateLimitBackoff(error, Math.max(providerIndex, 0), config.abortSignal);
+      }
       // PR-E + PR-H: both trackers fire here in parallel — pure
       // record-or-noop, NEVER cross-wipe each other's Map. Parallels
       // lib/chat/enhanced-llm-service.ts:746. Non-matching error
@@ -5408,7 +5459,6 @@ async function runV1ApiWithTools(
           // If this is a permanent error (missing API key, invalid auth, model not found),
           // skip model-ranker recording entirely — the provider is misconfigured, not
           // performing poorly. Mark it so subsequent iterations skip it immediately.
-          const errorClass = classifyProviderError(error);
           if (errorClass === "permanent") {
             markProviderPermanentlyFailed(providerName);
             log.error("[V1-API-WITH-TOOLS] ┌─ PERMANENT ERROR ────────────");

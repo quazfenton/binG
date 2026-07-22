@@ -36,7 +36,6 @@ interface ResolveRequestAuthOptions {
   bearerToken?: string | null;
   allowAnonymous?: boolean;
   anonymousHeaderName?: string;
-  anonymousSessionId?: string | null;
 }
 
 function normalizeAnonymousId(raw: string): string | null {

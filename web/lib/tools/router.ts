@@ -519,7 +519,9 @@ class MCPFilesystemProvider implements CapabilityProvider {
         }
         // Inject sessionId from context so trackMcpFileEdit stores the edit for SSE event emission
         const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
-        const enhancedInput = sessionId ? { ...input, sessionId } : input;
+        const enhancedInput = sessionId
+          ? { ...input, sessionId, conversationId: context.conversationId || sessionId }
+          : input;
         const result = await callMCPToolFromAI_SDK(toolName, enhancedInput, context.userId, context.scopePath);
       return {
         success: result.success,

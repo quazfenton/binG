@@ -98,9 +98,13 @@ async function getAuthToken(): Promise<string | null> {
   }
 }
 
-function getAnonymousSessionId(): string | null {
+function getAnonymousSessionId(userId?: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
+    // Authenticated users should never use an anonymous identity — their
+    // real userId is resolved server-side from session/JWT cookies.
+    // Only generate for anonymous (first-visit) users who lack a stored ID.
+    if (userId) return null;
     let sessionId = localStorage.getItem('anonymous_session_id');
     if (!sessionId) {
       sessionId = generateSecureId('anon');
@@ -879,7 +883,7 @@ export default function TerminalPanel({
       sendResize: sendResize,
       getAuthToken: getAuthToken as any,
       getAuthHeaders: getAuthHeaders,
-      getAnonymousSessionId: getAnonymousSessionId,
+      getAnonymousSessionId: () => getAnonymousSessionId(userId),
       toSandboxScopedPath: toSandboxScopedPath,
       getCommandHistory: (terminalId) => commandHistoryRef.current[terminalId] || [],
       setCommandHistory: (terminalId, history) => { commandHistoryRef.current[terminalId] = history },
@@ -917,6 +921,7 @@ export default function TerminalPanel({
     getAuthToken,
     getAuthHeaders,
     getAnonymousSessionId,
+    userId,
     saveTerminalSession,
     sandboxStatus,
     setSandboxStatus,

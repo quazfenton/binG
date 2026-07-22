@@ -909,6 +909,17 @@ export async function GET(req: NextRequest) {
       logWarn(`[${requestId}] STALE SNAPSHOT: last updated ${Math.round(snapshotAge / 1000)}s ago`);
     }
 
+    // Bug #90 (Round 3): Force cache invalidation when snapshot is extremely stale
+    // (older than 1 hour). This handles the case where the VFS version didn't bump
+    // (e.g., Redis pub/sub failed, or write didn't trigger emitSnapshotChange).
+    // The next request will re-generate the snapshot from scratch.
+    const EXTREME_STALENESS_MS = 60 * 60 * 1000; // 1 hour
+    if (snapshotAge > EXTREME_STALENESS_MS) {
+      logWarn(`[${requestId}] EXTREME STALENESS: snapshot is ${Math.round(snapshotAge / 1000 / 60)}min old — forcing cache invalidation`);
+      snapshotCache.delete(cacheKey);
+      vfsSnapshotCacheMetrics.recordInvalidation();
+    }
+
     // Cache with ETag
     const etag = `"${snapshot.version}-${snapshot.updatedAt}"`;
     const responseData = {
