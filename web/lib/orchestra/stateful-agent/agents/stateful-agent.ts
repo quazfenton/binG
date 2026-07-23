@@ -18,6 +18,7 @@ import { createCapabilityChain, type CapabilityChain } from '@bing/shared/agent/
 import { createBootstrappedAgency, type BootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
 import { chatRequestLogger } from '../../../chat/chat-request-logger';
 import { sanitizeMessages } from '@/lib/chat/message-sanitizer';
+import { selectToolPlan } from '@/lib/tools/select-tool-plan';
 
 const log = createLogger('StatefulAgent');
 
@@ -1575,12 +1576,17 @@ export async function* runStatefulAgentStreaming(
     : ['openai', modelString];
   const model = getVercelModel(provider, modelName);
 
+  // Compute a tool plan for plan-based capability filtering.
+  const toolPlan = selectToolPlan(userMessage);
+
   // Initialize tools from vercel-ai-tools
   const { getAllTools } = await import('@/lib/chat/vercel-ai-tools');
   const tools = await getAllTools({
     userId: agent['userId'],
     conversationId: agent['conversationId'],
     sessionId: agent['sessionId'],
+    toolPlan,
+    lastUserMessage: userMessage,
   });
 
   // Convert tools to Vercel AI SDK format

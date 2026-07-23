@@ -24,6 +24,7 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
+import { selectToolPlan } from '../tools/select-tool-plan';
 import { createContract } from '@/lib/agents/contract';
 import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
@@ -1209,6 +1210,28 @@ export class EnhancedLLMService {
               ? lastUserMsgForPowers.content
               : '';
 
+            // P0 fix: compute a selectToolPlan for plan-based capability filtering.
+            // The plan is threaded through ToolExecutionContext so createToolSet
+            // uses it to filter capabilities instead of loading all of them.
+            const toolPlanResult = selectToolPlan({
+              userMessage: lastUserMessageForPowers,
+              conversationHistory: (llmRequest.messages || [])
+                .filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+                .map((m: any) => ({
+                  role: m.role as 'user' | 'assistant' | 'system',
+                  content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+                })),
+              authenticated: !!request.userId,
+              configuredSources: {
+                arcade: !!process.env.ARCADE_API_KEY,
+                composio: !!process.env.COMPOSIO_API_KEY,
+                nullclaw: process.env.NULLCLAW_ENABLED === 'true',
+                remoteMcp: true,
+                mem0: !!process.env.MEM0_API_KEY,
+                mcpHttp: true,
+              },
+            });
+
             vercelTools = await getAllTools({
               userId: effectiveUserId,
               conversationId: request.conversationId,
@@ -1216,6 +1239,11 @@ export class EnhancedLLMService {
               requestId,
               scopePath: computedScopePath,  // Session-aware path for VFS tools
               lastUserMessage: lastUserMessageForPowers,  // For power trigger-matching
+              toolPlan: toolPlanResult,  // P0 fix: plan-based capability filtering
+              conversationHistory: llmRequest.messages?.map((m: any) => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+              })),
             });
 
             chatLogger.info('[TOOLS] ✅ Tools built successfully', {
@@ -1959,6 +1987,28 @@ export class EnhancedLLMService {
          if (request.enableTools !== false) {
            try {
              const { getAllTools } = await import('./vercel-ai-tools');
+
+             // P0 fix: compute a selectToolPlan for plan-based capability filtering
+             // (mirrors the first call site in the Vercel provider path above).
+             const cliToolPlanResult = selectToolPlan({
+               userMessage,
+               conversationHistory: messages
+                 .filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+                 .map((m: any) => ({
+                   role: m.role as 'user' | 'assistant' | 'system',
+                   content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+                 })),
+               authenticated: !!request.userId,
+               configuredSources: {
+                 arcade: !!process.env.ARCADE_API_KEY,
+                 composio: !!process.env.COMPOSIO_API_KEY,
+                 nullclaw: process.env.NULLCLAW_ENABLED === 'true',
+                 remoteMcp: true,
+                 mem0: !!process.env.MEM0_API_KEY,
+                 mcpHttp: true,
+               },
+             });
+
              const vercelTools = await getAllTools({
                userId,
                conversationId,
@@ -1966,6 +2016,11 @@ export class EnhancedLLMService {
                requestId,
                scopePath: request.scopePath || `workspace/sessions/${sessionId}`,
                lastUserMessage: userMessage,
+               toolPlan: cliToolPlanResult,  // P0 fix: plan-based capability filtering
+               conversationHistory: messages.map((m: any) => ({
+                 role: m.role,
+                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+               })),
              });
              // Convert to LLMToolDefinition format for opencode-cli
              // We use Object.entries to preserve the tool names which are the keys

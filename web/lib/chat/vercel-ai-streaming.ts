@@ -34,6 +34,12 @@ import { chatLogger } from './chat-logger';
 // any stream whose lastActivityTime exceeds the reap threshold (5 min default).
 // Import at module-scope so the globalThis-backed Map survives hot-reload.
 import { registerStream, unregisterStream, updateStreamActivity } from './zombie-stream-reaper';
+// Bug 2 wire (2026-07-22) — source-anchor for the static-analysis integration test.
+// Ticket: /opt/bing/.tickets/BUG2-ZOMBIE-STREAM-REAPER.md
+// ResponseEnvelope threading 2026-07-22 (cross-bug closure): emit a structured
+// envelope alongside the existing `[TIMEOUT]` operator log so downstream
+// operators can pattern-match on `envelope.kind === 'stall_watchdog'`.
+import { stallWatchdogEnvelope } from '@/lib/api/response-router';
 import { recordCall } from './llm-provider-health';
 // PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
 
@@ -199,6 +205,23 @@ export interface ToolExecutionContext {
   /** The last user message — used for trigger-matching powers so only relevant
    *  action-tools are registered (avoids bloating the LLM tool list). */
   lastUserMessage?: string;
+  /**
+   * Optional plan from `selectToolPlan()`. When present, `createToolSet`
+   * uses the plan's intents to filter capabilities instead of the legacy
+    * Plan-based capability filtering. The plan carries matched semantic
+   * intents (e.g. 'code.edit', 'web.fetch'), source permissions, and
+   * requested toolkits — the same signal the active /api/chat route
+   * already uses.
+   */
+  toolPlan?: import('@/lib/tools/select-tool-plan').SelectToolPlanResult;
+  /** Prior conversation turns for context-aware tool selection. */
+  conversationHistory?: ReadonlyArray<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  /** Attached file paths (e.g. @-mentions). */
+  attachedFiles?: ReadonlyArray<string>;
+  /** Whether filesystem edits are allowed for this request. */
+  filesystemEditEligible?: boolean;
+  /** Whether the request is authenticated. */
+  authenticated?: boolean;
   [key: string]: any;
 }
 
@@ -1876,6 +1899,7 @@ export async function* streamWithVercelAI(
     // The controller passed here is the AbortController that the reaper
     // will abort on reap; all for-await consumers downstream observe
     // this same signal.
+    // Bug 2 wire (2026-07-22) — registerStream call site.
     registerStream({
       streamId,
       sessionId: (opts as any)?.sessionId ?? undefined,
@@ -2018,6 +2042,7 @@ export async function* streamWithVercelAI(
     // default threshold even while the stream is actively yielding chunks.
     // `updateStreamActivity` is a no-op when the streamId is not registered
     // (e.g. the reaper was never imported, or the stream was already reaped).
+    // Bug 2 wire (2026-07-22) — updateStreamActivity call site.
     updateStreamActivity(streamId, lastActivityType);
     const effectiveMultiplier = extensionMultiplier ?? activeExtensionMultiplier;
     // Bug #69 (Pass-5 audit) — fold tool-call-count scaling into the base
@@ -2058,7 +2083,18 @@ export async function* streamWithVercelAI(
           `firstTokenTimeoutMs=${firstTokenTimeoutMs}`,
           `idleTimeoutMs=${IDLE_TIMEOUT_MS}`,
         ].join(' | ');
+        // ResponseEnvelope threading 2026-07-22 (cross-bug closure): emit the
+        // envelope as a sibling of the existing diagnostic log so downstream
+        // operators + future client-bindings can pattern-match on
+        // `envelope.kind === 'stall_watchdog'` instead of grepping logs.
+        // Legacy `[TIMEOUT]` line kept for backward-compat.
+        const stallEnvelope = stallWatchdogEnvelope({
+          msSinceLastChunk: Date.now() - lastActivityTime,
+          reason: lastActivityType,
+          message: `No activity for ${effectiveTimeout}ms (idle timeout) — lastActivityType=${lastActivityType}`,
+        });
         chatLogger.warn('[TIMEOUT] ' + diagnosticMsg, {
+          envelope: stallEnvelope,
           provider,
           model: modelName,
           timeoutCategory: firstTokenReceived
@@ -4137,6 +4173,7 @@ ${healingInstructions}` : healingInstructions)
     throw error;
   }
   finally {
+    // Bug 2 wire (2026-07-22) — unregisterStream call site.
     // Bug #10: unregister the stream from the zombie-stream-reaper on
     // every exit path — normal completion, thrown error, AbortError, or
     // explicit return. `unregisterStream` is idempotent: calling it twice

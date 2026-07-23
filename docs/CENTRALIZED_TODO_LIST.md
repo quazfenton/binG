@@ -835,6 +835,27 @@ After the 3rd-round connection-shim Option 1 pilot landed, 4 additional ambient-
 
 ---
 
+## MCP-POST-CALL-WIRING — Task #1 post-call pipeline (CLOSED 2026-07-23)
+
+- **Source:** MCP-POST-CALL-WIRING.md — companion ticket to the Contract-aware MCP tool pipeline.
+- **Status:** ✅ CLOSED 2026-07-23
+- **Priority:** P1 (audit-trail completeness — pre-call only was half the contract)
+- **Closure evidence:** The production `applyPostCallPipeline` in `architecture-integration.ts:L2078-L2170` already had ALL 5 post-call audit appends wired:
+  - [x] 1. `gatePostCall(contract, { toolName, args, result, errorCount })` invoked AFTER dispatch returns, BEFORE the final return
+  - [x] 2. `wrapWithSentinel(result.output, { toolCallId, onDrop })` invoked AFTER gatePostCall succeeds
+  - [x] 3. Audit append `note: "post-call: success"` / `note: "post-call: failure (err)"` appended after dispatch
+  - [x] 4. Audit append `note: "sentinel-dropped: PATTERN"` appended when `wrapWithSentinel.dropped[]` is non-empty
+  - [x] 5. Audit append `note: "post-gate-rejected: REASON"` appended when gatePostCall returns `{ allowed: false }`
+  - [x] 6. All 5 audit appends use `contract.audit = contract.audit.append(...)` immutable-getter capture pattern
+  - [x] 7. `__tests__/mcp/contract-gated-call.test.ts` extended with 4 new tests (T, U, V, W) asserting the post-call audit sequence + sentinel-drop audit entry
+  - [x] 8. `tsc --noEmit` — 0 errors on `architecture-integration.ts`
+- **Files modified:** `web/__tests__/mcp/contract-gated-call.test.ts` only (production code was already fully wired)
+  - Added `gatePostCall` to test `runPipeline` helper (removed deferred TODO)
+  - Added 4 new tests: T (post-gate invariant rejection), U (post-gate kill-switch), V (failure audit entry), W (sentinel-dropped audit)
+- **Verification:** `npx vitest run __tests__/mcp/contract-gated-call.test.ts` — 23/23 PASS; `npx tsc --noEmit` — 0 errors
+
+---
+
 ## MCP-CAPBYPASS — `requireFullCatalog` sentinel cap-bypass (RESOLVED 2026-07-16)
 
 - **Source:** code-reviewer-minimax-m3 SHOULD-CONSIDER flagged during the audit follow-up review of the `requireFullCatalog` typed-sentinel strengthening (2026-07-16). The sentinel name (`requireFullCatalog`) implied full-catalog delivery, but the cap portion of `normalizeAndCapTools` (env `MCP_TOOLS_MAX_TOTAL`, default 25) STILL APPLIED after the per-source filter helpers returned `[...all]`.

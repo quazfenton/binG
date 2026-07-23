@@ -82,6 +82,7 @@ const DRY_RUN = hasFlag('dry-run');
 const SYNC_TS = hasFlag('sync-ts');
 const REVERSE = hasFlag('reverse');
 const VERBOSE = hasFlag('verbose');
+const TEST_WRITE = hasFlag('test-write') || !hasFlag('dry-run');
 
 // ── Parse model IDs from a TS provider file ───────────────────────────────
 
@@ -314,16 +315,19 @@ function main() {
 
   // Apply sync to opencode.json
   const { toAdd: added, toRemove: removed } = syncOpencode(sourceModels, opencodeConfig, PROVIDER_KEY);
-  writeFileSync(TARGET_FILE, JSON.stringify(opencodeConfig, null, 2) + '\n');
-  console.log(`\nWrote ${TARGET_FILE}`);
+
+  const outPath = resolve(homedir(), '.config/opencode/opencode-new.json');
+  writeFileSync(outPath, JSON.stringify(opencodeConfig, null, 2) + '\n');
+  console.log(`\nWrote ${outPath}`);
   console.log(`  Added: ${added.length}, Removed: ${removed.length}`);
 
   // Optionally sync TS provider file
   if (SYNC_TS) {
     const tsContent2 = readFileSync(SYNC_TS_FILE, 'utf-8');
     const updated = reverseSyncToTs(opencodeModels, tsContent2);
-    writeFileSync(SYNC_TS_FILE, updated);
-    console.log(`\nWrote ${SYNC_TS_FILE} (synced from opencode.json)`);
+    const tsOutPath = SYNC_TS_FILE + '.new';
+    writeFileSync(tsOutPath, updated);
+    console.log(`\nWrote ${tsOutPath} (synced from opencode.json)`);
   }
 }
 
