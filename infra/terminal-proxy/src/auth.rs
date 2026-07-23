@@ -29,27 +29,41 @@ impl Claims {
 }
 
 /// Verify a JWT token and extract claims
-pub fn verify_token(token: &str, _secret: &str) -> Result<Claims> {
+pub fn verify_token(token: &str, secret: &str) -> Result<Claims> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err(anyhow!("Invalid JWT format"));
     }
-    
+
+    // Verify HMAC-SHA256 signature
+    let signing_input = format!("{}.{}", parts[0], parts[1]);
+    let expected_signature = decode_base64url(parts[2])
+        .map_err(|e| anyhow!("Failed to decode JWT signature: {}", e))?;
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|e| anyhow!("Invalid HMAC key: {}", e))?;
+    mac.update(signing_input.as_bytes());
+    mac.verify_slice(&expected_signature)
+        .map_err(|_| anyhow!("Invalid JWT signature"))?;
+
     let payload = decode_base64url(parts[1])
         .map_err(|e| anyhow!("Failed to decode JWT payload: {}", e))?;
-    
+
     let claims: Claims = serde_json::from_slice(&payload)
         .map_err(|e| anyhow!("Failed to parse JWT claims: {}", e))?;
-    
+
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| anyhow!("Time error: {}", e))?
         .as_secs() as usize;
-    
+
     if claims.exp < now {
         return Err(anyhow!("Token expired"));
     }
-    
+
     Ok(claims)
 }
 

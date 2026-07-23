@@ -40,6 +40,9 @@ impl Connection {
         // Accept WebSocket connection
         let ws_stream = accept_async(stream).await?;
         let (mut write, mut read) = ws_stream.split();
+
+        // Enforce connection and rate limits before auth
+        router.enforce_connection_limit(&addr.ip().to_string())?;
         
         // Read the first message to get headers and authenticate
         let first_msg = match tokio::time::timeout(
@@ -113,14 +116,8 @@ impl Connection {
         let client_to_backend = async {
             let mut local_read = read;
             let mut remote_write = backend_write;
-            
-            // Handle the first message we already read
-            let first = Message::Text(first_msg);
-            if remote_write.send(first).await.is_err() {
-                return;
-            }
-            
-            // Continue with remaining messages
+
+            // Skip auth message, start relay from next message
             while let Some(msg) = local_read.next().await {
                 match msg {
                     Ok(Message::Text(t)) => {
@@ -187,9 +184,9 @@ impl Connection {
         }
         
         // Cleanup
-        router.sessions.touch(&session_id);
-        if let Err(e) = router.redis.touch_session(&session_id).await {
-            debug!("Failed to touch session in Redis: {}", e);
+        router.sessions.remove(&session_id);
+        if let Err(e) = router.redis.delete_session(&session_id, claims.user_id()).await {
+            debug!("Failed to delete session in Redis: {}", e);
         }
         
         metrics::decrement_connections();

@@ -28,6 +28,12 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
+// Bug #10 (zombie-stream-reaper wiring): register stream lifecycle so the
+// reaper's sweep interval can catch per-stream timer escapes and orphaned
+// streams. The reaper module is a process-scoped backstop that force-aborts
+// any stream whose lastActivityTime exceeds the reap threshold (5 min default).
+// Import at module-scope so the globalThis-backed Map survives hot-reload.
+import { registerStream, unregisterStream, updateStreamActivity } from './zombie-stream-reaper';
 import { recordCall } from './llm-provider-health';
 // PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
 
@@ -1609,6 +1615,10 @@ export async function* streamWithVercelAI(
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
+  // Bug #10: streamId for zombie-stream-reaper registration.
+  // Declared as `let` (not `const`) to allow future reassignment if
+  // a fallback provider path assigns a new streamId mid-request.
+  let streamId = requestId;
 
   // Start pre-fetch health check speculatively — runs in parallel with
   // synchronous setup (getVercelModel, convertMessages, build streamOptions).
@@ -1856,8 +1866,25 @@ export async function* streamWithVercelAI(
   // Bug #17: previously, a 60+ second thinking pause looked identical to a hung
   // stream to the client (no chunks, no progress). The think-ping fixes that
   // without changing abort semantics.
-  const thinkPingQueue: Array<{ type: 'thinking_ping' | 'stall_steer'; elapsedMs: number; lastActivityType: string }> = [];
-  let thinkPingIntervalId: NodeJS.Timeout | null = null;
+    const thinkPingQueue: Array<{ type: 'thinking_ping' | 'stall_steer'; elapsedMs: number; lastActivityType: string }> = [];
+    let thinkPingIntervalId: NodeJS.Timeout | null = null;
+
+    // Bug #10: register this stream with the zombie-stream-reaper so the
+    // module-level sweep interval can force-abort it if the per-stream
+    // timer escapes (e.g. setTimeout-TIMEOUT not reaching the consumer).
+    // `sessionId` is best-effort — derived from opts or requestId.
+    // The controller passed here is the AbortController that the reaper
+    // will abort on reap; all for-await consumers downstream observe
+    // this same signal.
+    registerStream({
+      streamId,
+      sessionId: (opts as any)?.sessionId ?? undefined,
+      abortController: timeoutController ?? new AbortController(),
+      lastActivityTime: Date.now(),
+      lastActivityType: 'init',
+      provider,
+      modelName,
+    });
   const THINK_PING_MS = thinkPingMs;
   const STALL_STEER_MS = STREAM_TIMEOUTS.stallSteerMs;
   // Bug #17 (active-text override): higher threshold for streams that are
@@ -1984,6 +2011,14 @@ export async function* streamWithVercelAI(
       clearTimeout(idleTimeoutId);
     }
     if (!timeoutController) return;
+
+    // Bug #10: bump the reaper's lastActivityTime on every idle timeout
+    // reset — this is the activity pump that keeps the stream alive.
+    // Without this call, the reaper would reap the stream after its 5 min
+    // default threshold even while the stream is actively yielding chunks.
+    // `updateStreamActivity` is a no-op when the streamId is not registered
+    // (e.g. the reaper was never imported, or the stream was already reaped).
+    updateStreamActivity(streamId, lastActivityType);
     const effectiveMultiplier = extensionMultiplier ?? activeExtensionMultiplier;
     // Bug #69 (Pass-5 audit) — fold tool-call-count scaling into the base
     // resetIdleTimeout so we never have two timers racing per tool-call event.
@@ -3006,8 +3041,16 @@ try {    while (thinkPingQueue.length > 0) {
                   }
                 }
               }
-            } catch {
-              // Validation is best-effort
+            } catch (validationErr) {
+              // Bug #14: log validation crashes so operators can detect
+              // when validateToolArgs throws (e.g. requiredFields is
+              // undefined for an unknown tool name). Previously the empty
+              // catch silently dropped all validation errors, meaning a
+              // model that calls a non-existent tool got no steer feedback.
+              chatLogger.warn('[TOOL-VALIDATION] validateToolArgs threw', {
+                toolName,
+                error: validationErr instanceof Error ? validationErr.message : String(validationErr),
+              });
             }
 
             const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
@@ -3367,6 +3410,12 @@ try {    while (thinkPingQueue.length > 0) {
           break;
         case 'start':
         case 'finish':
+          // Bug 2 closure (2026-07-22) — SHOULD-CONSIDER #1: magic-hook defensive guard.
+          // Bump reaper activity on case-bypass chunks so the reaper's lastActivityTime
+          // cannot desync from resetIdleTimeout().
+          if (typeof streamId === 'string' && streamId) {
+            updateStreamActivity(streamId, 'text');
+          }
           // Skip these event types — handled elsewhere
   break;
 }
@@ -4088,6 +4137,14 @@ ${healingInstructions}` : healingInstructions)
     throw error;
   }
   finally {
+    // Bug #10: unregister the stream from the zombie-stream-reaper on
+    // every exit path — normal completion, thrown error, AbortError, or
+    // explicit return. `unregisterStream` is idempotent: calling it twice
+    // on the same streamId is a no-op, and calling it on an already-reaped
+    // stream is also a no-op. This guarantees the reaper doesn't force-abort
+    // a stream that already completed normally.
+    unregisterStream(streamId);
+
     // Always clear timer handles to prevent leaks — these are independent
     // of the think-ping gate below. Only the think-ping interval is gated
     // by `STREAM_TIMER_FINALIZE_ENABLED` so operators who disable it

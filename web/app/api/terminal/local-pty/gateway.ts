@@ -79,6 +79,15 @@ import {
 
 const logger = createLogger('LocalPTY');
 
+// Bug #4 (audit): Workspace-switch grace window — when the OPFS adapter is
+// mid-switch (ownerId changed), the PTY gateway's resolveFilesystemOwner may
+// return the NEW ownerId while the session was created with the OLD ownerId.
+// This produces a 400 Bad Request because the workspace validation fails.
+// The grace window allows both old and new ownerIds for 30 seconds after the
+// switch is detected, so in-flight PTY requests during a workspace transition
+// succeed without requiring a client retry.
+const WORKSPACE_SWITCH_GRACE_WINDOW_MS = 30_000;
+const workspaceSwitchTimestamps = new Map<string, { newOwnerId: string; switchedAt: number }>();
 
 
 // ============================================================
@@ -1203,7 +1212,67 @@ export async function POST(req: NextRequest) {
     // Safe to call for anonymous users (returns `anon:<sessionId>` ownerId).
     // When this throws (e.g. DB unavailable), the orchestrator's session
     // lookup will fall back to `authResult.userId` as before.
-    const ownerResolution = await resolveFilesystemOwner(req);
+    // Bug #4 (audit): Attempt to resolve the filesystem owner. If it fails
+    // (e.g., OPFS mid-switch), check the workspace-switch grace window: if a
+    // switch for this session happened within the last 30s, use the new ownerId
+    // from the grace window so the PTY creation doesn't get a 400 mismatch.
+    let ownerResolution: FilesystemOwnerResolution;
+    try {
+      ownerResolution = await resolveFilesystemOwner(req);
+      // Record the switch if ownerId changed from the last known value.
+      // Use the session cookie / auth header as the key so we track per-session.
+      const sessionKey = authResult.userId;
+      if (sessionKey) {
+        const prevSwitch = workspaceSwitchTimestamps.get(sessionKey);
+        if (prevSwitch && prevSwitch.newOwnerId !== ownerResolution.ownerId) {
+          // OwnerId changed — update the grace window.
+          workspaceSwitchTimestamps.set(sessionKey, {
+            newOwnerId: ownerResolution.ownerId,
+            switchedAt: Date.now(),
+          });
+          logger.info('[Local PTY] Workspace switch detected for session', {
+            sessionKey,
+            previousOwnerId: prevSwitch.newOwnerId,
+            newOwnerId: ownerResolution.ownerId,
+          });
+        } else if (!prevSwitch) {
+          // First resolution for this session — seed the cache.
+          workspaceSwitchTimestamps.set(sessionKey, {
+            newOwnerId: ownerResolution.ownerId,
+            switchedAt: Date.now(),
+          });
+        }
+      }
+    } catch (ownerResolutionError: any) {
+      // resolveFilesystemOwner failed — check the grace window for a recent
+      // workspace switch. If found, use the ownerId from the grace window
+      // so the PTY creation doesn't fault with 400.
+      const sessionKey = authResult.userId;
+      const graceEntry = sessionKey ? workspaceSwitchTimestamps.get(sessionKey) : undefined;
+      if (graceEntry && (Date.now() - graceEntry.switchedAt) < WORKSPACE_SWITCH_GRACE_WINDOW_MS) {
+        logger.warn('[Local PTY] resolveFilesystemOwner failed, using grace-window ownerId', {
+          sessionKey,
+          graceOwnerId: graceEntry.newOwnerId,
+          error: ownerResolutionError?.message,
+        });
+        ownerResolution = {
+          ownerId: graceEntry.newOwnerId,
+          source: 'anonymous',
+          isAuthenticated: false,
+          anonSessionId: undefined,
+        } as unknown as FilesystemOwnerResolution;
+      } else {
+        throw ownerResolutionError;
+      }
+    }
+
+    // Purge stale entries from the grace-window Map (entries older than 2× the grace window)
+    const now = Date.now();
+    for (const [key, entry] of workspaceSwitchTimestamps) {
+      if (now - entry.switchedAt > WORKSPACE_SWITCH_GRACE_WINDOW_MS * 2) {
+        workspaceSwitchTimestamps.delete(key);
+      }
+    }
 
     // === Isolation mode: unshare (Linux user namespaces) ===
     if (ENABLE_LOCAL_PTY === 'unshare') {

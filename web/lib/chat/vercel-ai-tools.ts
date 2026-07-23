@@ -12,6 +12,7 @@ import type { ToolExecutionContext } from './vercel-ai-streaming';
 import type { ToolExecutionContext as RouterToolContext } from '@/lib/tools/tool-integration/types';
 import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
+import { createContract } from '@/lib/agents/contract';
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { getCapabilityRouter } from '@/lib/tools/router';
@@ -148,6 +149,18 @@ function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
           { ...args, conversationId: context.conversationId },
           context.userId,
           context.scopePath,
+          undefined,
+          undefined,
+          createContract({
+            intent: name,
+            scope: { paths: [], exclude: [] },
+            capabilities: [name],
+            budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+            invariants: [],
+            acceptanceCriteria: [],
+            killSwitches: [],
+            escalationGraph: {},
+          }),
         );
       },
     } as any);
@@ -194,6 +207,18 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
             { ...args, conversationId: context.conversationId },
             context.userId,
             context.scopePath,
+            undefined,
+            undefined,
+            createContract({
+              intent: name,
+              scope: { paths: [], exclude: [] },
+              capabilities: [name],
+              budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+              invariants: [],
+              acceptanceCriteria: [],
+              killSwitches: [],
+              escalationGraph: {},
+            }),
           );
         },
       } as any);

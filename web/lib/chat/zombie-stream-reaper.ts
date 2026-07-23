@@ -42,7 +42,7 @@ export interface ActiveStream {
   /** Epoch ms of the last registered "I just did something" event. */
   lastActivityTime: number;
   /** Coarse type of the last activity — used in diagnostic logs. */
-  lastActivityType: 'init' | 'text' | 'tool-call' | 'tool-result';
+  lastActivityType: 'init' | 'text' | 'tool-call' | 'tool-result' | 'reasoning' | 'step' | 'ttft-waiting';
   provider: string;
   modelName: string;
   /** Epoch ms of the registration — used for registry-cap eviction tiebreak. */

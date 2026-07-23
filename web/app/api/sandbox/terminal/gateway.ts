@@ -34,7 +34,7 @@ async function syncSandboxBindingToRedis(
     sessionId,
     userId,
     sandboxId,
-    wsUrl: `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}`,
+    wsUrl: `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}`,
     provider,
     createdAt: now,
     expiresAt: now + ttlSeconds * 1000,

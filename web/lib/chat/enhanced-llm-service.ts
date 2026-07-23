@@ -24,6 +24,7 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
+import { createContract } from '@/lib/agents/contract';
 import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
@@ -2434,6 +2435,18 @@ export class EnhancedLLMService {
             { ...call.arguments, conversationId },
             userId,
             scopePath,
+            undefined,
+            undefined,
+            createContract({
+              intent: selectedTool,
+              scope: { paths: [], exclude: [] },
+              capabilities: [selectedTool],
+              budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+              invariants: [],
+              acceptanceCriteria: [],
+              killSwitches: [],
+              escalationGraph: {},
+            }),
           );
 
       toolResults.push({

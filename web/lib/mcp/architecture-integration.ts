@@ -2081,6 +2081,7 @@ function applyPostCallPipeline(
   toolName: string,
   toolCallId: string,
   args?: Readonly<Record<string, unknown>>,
+  recentFailures?: string[],
 ): { success: boolean; output: string; error?: string } {
   // 1. gatePostCall — post-invocation invariant + kill-switch check.
   //    Mirrors runPipeline's gatePostCall usage (the test helper invokes
@@ -2094,7 +2095,7 @@ function applyPostCallPipeline(
     toolName,
     args: args ?? {},
     result,
-    errorCount: 0,
+    errorCount: recentFailures?.length ?? 0,
   });
   if (!postGate.allowed) {
     contract.audit = contract.audit.append({
@@ -2203,8 +2204,9 @@ function wrapDispatch(
   toolCallId: string,
   args: Readonly<Record<string, unknown>> | undefined,
   result: { success: boolean; output: string; error?: string },
+  recentFailures?: string[],
 ): { success: boolean; output: string; error?: string } {
-  return contract ? applyPostCallPipeline(result, contract, toolName, toolCallId, args) : result;
+  return contract ? applyPostCallPipeline(result, contract, toolName, toolCallId, args, recentFailures) : result;
 }
 
 /**
@@ -2383,7 +2385,7 @@ export async function callMCPToolFromAI_SDK(
             } else {
               logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
               const __dispatchResult: { success: boolean; output: string; error?: string } = { success: true, output: cachedData };
-              return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+              return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
             }
           } else {
             // Fully cacheable: list_files, search_files
@@ -2392,7 +2394,7 @@ export async function callMCPToolFromAI_SDK(
               success: true,
               output: typeof cached === 'string' ? cached : JSON.stringify(cached),
             };
-            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
           }
         }
       }
@@ -2402,14 +2404,14 @@ export async function callMCPToolFromAI_SDK(
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
       const result = await executeBlaxelCodegenTool(toolName, args)
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return wrapDispatch(contract, toolName, toolCallId, args, result);
+      return wrapDispatch(contract, toolName, toolCallId, args, result, recentFailures);
     }
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
       const result = await executeArcadeTool(toolName, args, userId);
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return wrapDispatch(contract, toolName, toolCallId, args, result);
+      return wrapDispatch(contract, toolName, toolCallId, args, result, recentFailures);
     }
 
     // NEW: Check if it's a provider-specific advanced tool
@@ -2420,13 +2422,13 @@ export async function callMCPToolFromAI_SDK(
       toolName.startsWith('sprites_')
     ) {
       const __dispatchResult = await executeProviderAdvancedTool(toolName, args);
-      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
     }
 
     // NEW: Check if it's a Nullclaw tool
     if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
       const __dispatchResult = await nullclawMCPBridge.executeTool(toolName, args, userId);
-      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
     }
 
     // NEW: Check if it's a remote MCP tool (from HTTP transport servers)
@@ -2436,7 +2438,7 @@ export async function callMCPToolFromAI_SDK(
       for (const serverName of remoteServerNames) {
         if (toolName.startsWith(`${serverName}_`)) {
           const __dispatchResult = await callRemoteMCPTool(toolName, args, { signal: options?.signal });
-          return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+          return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
         }
       }
     }
@@ -2534,7 +2536,7 @@ export async function callMCPToolFromAI_SDK(
         output: resultOutput,
         error: (result as any)?.error,
       };
-      return wrapDispatch(contract, toolName, toolCallId, undefined, dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, dispatchResult, recentFailures);
     }
 
     // Check if it's the web_search tool
@@ -2568,7 +2570,7 @@ export async function callMCPToolFromAI_SDK(
               success: true,
               output: JSON.stringify({ results, query: args.query, source: 'searxng' }),
             };
-            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
           }
         }
 
@@ -2584,7 +2586,7 @@ export async function callMCPToolFromAI_SDK(
           success: true,
           output: JSON.stringify({ ...result, source: 'duckduckgo' }),
         };
-        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
       } catch (error: any) {
         logger.error('[WebSearch] Failed', { error: error.message });
         const __dispatchResult: { success: boolean; output: string; error?: string } = {
@@ -2592,7 +2594,7 @@ export async function callMCPToolFromAI_SDK(
           output: '',
           error: error.message || 'Web search failed',
         };
-        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
       }
     }
 
@@ -2664,7 +2666,7 @@ export async function callMCPToolFromAI_SDK(
           output: (result as any)?.output || JSON.stringify(result),
           error: (result as any)?.error,
         };
-        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
       }
     }
 
@@ -2696,7 +2698,7 @@ export async function callMCPToolFromAI_SDK(
         output: nativeResult.content,
         error: nativeResult.isError ? nativeResult.content : undefined,
       }
-      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
     }
 
     const mcporterResult = await callMCPorterTool(toolName, args);
@@ -2706,7 +2708,7 @@ export async function callMCPToolFromAI_SDK(
       invalidateToolResultCache(args?.path);
     }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
-    return wrapDispatch(contract, toolName, toolCallId, args, mcporterResult);
+    return wrapDispatch(contract, toolName, toolCallId, args, mcporterResult, recentFailures);
   } catch (error: any) {
     logger.error(`MCP tool call failed: ${toolName}`, error)
     const __dispatchResult: { success: boolean; output: string; error?: string } = {
@@ -2714,7 +2716,7 @@ export async function callMCPToolFromAI_SDK(
       output: '',
       error: error.message || 'Tool call failed',
     }
-    return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+    return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
   }
 }
 

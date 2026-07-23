@@ -472,17 +472,10 @@ services:
       retries: 5
     restart: unless-stopped
 
-networks:
-  bing-network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.28.0.0/16
-
-# Terminal WebSocket Proxy (Rust - handles 10K+ connections)
+  # Terminal WebSocket Proxy (Rust - handles 10K+ connections)
   terminal-proxy:
     build:
-      context: ../../terminal-proxy
+      context: ../terminal-proxy
       dockerfile: Dockerfile
     ports:
       - "8080:8080"  # WebSocket
@@ -509,6 +502,13 @@ networks:
       retries: 3
     deploy:
       replicas: 2  # Scale for high availability
+
+networks:
+  bing-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
 
 volumes:
   workspace_data:

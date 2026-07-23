@@ -5,15 +5,17 @@
  *
  * Contract under test
  * -------------------
- * The route's `config.executeTool` closure (app/api/chat/route.ts:L1955-L2010)
+ * The route's `config.executeTool` closure (app/api/chat/route.ts:L2170-L2175)
  * follows this pipeline when a tool call result comes back:
  *
  *   result = await callMCPToolFromAI_SDK(toolName, args, context)
  *   if (result.error) {
- *     orchestratorHint = unwrapStructuredToolError(result.error)  // ← L1999
- *     finalErrorMessage = orchestratorHint
- *       ? `${orchestratorHint}\n\n${result.error.message ?? 'Unknown MCP tool error'}`
- *       : result.error.message ?? 'Unknown MCP tool error'
+ *     orchestratorHint = unwrapStructuredToolError(result.error)  // ← L2170
+ *     finalOutput = orchestratorHint
+ *       ? (result.output && result.output.length > 0
+ *           ? `${result.output}\n\n${orchestratorHint}`
+ *           : orchestratorHint)
+ *       : result.output;
  *   }
  *
  * This test pins the contract by mocking `callMCPToolFromAI_SDK` to return
@@ -28,7 +30,7 @@
  * Why this is "route-level integration" even without driving POST() directly:
  * - The route is 5,000+ lines and POST() requires mocking ~20 dependencies
  *   (auth, rate-limit, virtual-filesystem, auto-continue, etc.).
- * - The 3-line mapping block at L1999-L2001 IS the route's integration point
+ * - The 3-line mapping block at L2170-L2175 IS the route's integration point
  *   with the helper. This test exercises that exact block verbatim.
  * - A future operator who refactors route.ts MUST keep this test green,
  *   which forces them to preserve the `[ORCHESTRATOR-UNWRAP]:` literal
@@ -39,30 +41,31 @@ import { describe, it, expect } from 'vitest';
 import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
 
 /**
- * Mirror of route.ts:L1999-L2001 — the 3-line tool-result mapping block that
+ * Mirror of route.ts:L2170-L2175 — the tool-result mapping block that
  * the route's `config.executeTool` closure runs after every `callMCPToolFromAI_SDK`
- * invocation. Semantically equivalent to the route's mapping block (same
- * fallback semantics for plain strings, null, undefined, non-object errors);
- * uses `(result.error ?? {}) as { message?: string }` to satisfy TypeScript's
- * `unknown` narrowing while preserving the same runtime behavior.
+ * invocation. Uses `result.output` (not `result.error.message`) per the actual
+ * route logic, which conditionally appends the orchestratorHint to result.output
+ * when both are non-empty.
  *
  * Scope trade-off (intentional): a full POST() end-to-end test would require
  * mocking ~20 dependencies (auth, rate-limit, virtual-filesystem, auto-continue,
  * unified-agent, etc.). The full route-level smoke test lives in
- * route-shape-audit.test.ts. THIS test pins the L1999-L2001 contract
+ * route-shape-audit.test.ts. THIS test pins the L2170-L2175 contract
  * specifically — the integration point between `callMCPToolFromAI_SDK` results
  * and the `[ORCHESTRATOR-UNWRAP]:` LLM-facing output. A future refactor that
  * diverges from this contract must keep this test green.
  */
 function buildRouteFinalErrorMessage(result: {
   success: boolean;
+  output?: string;
   error?: unknown;
 }): string {
   const orchestratorHint = unwrapStructuredToolError(result.error);
-  const errObj = (result.error ?? {}) as { message?: string };
   return orchestratorHint
-    ? `${orchestratorHint}\n\n${errObj.message ?? 'Unknown MCP tool error'}`
-    : errObj.message ?? 'Unknown MCP tool error';
+    ? (result.output && result.output.length > 0
+        ? `${result.output}\n\n${orchestratorHint}`
+        : orchestratorHint)
+    : (result.output ?? '');
 }
 
 describe('Route integration: [ORCHESTRATOR-UNWRAP]: literal surfaces on structured tool error', () => {
@@ -72,6 +75,7 @@ describe('Route integration: [ORCHESTRATOR-UNWRAP]: literal surfaces on structur
     // a structured VFS/MCP error).
     const result = {
       success: false,
+      output: 'VFS write failed: ENOENT',
       error: {
         message: 'VFS write failed: ENOENT',
         code: 'ENOENT',
@@ -80,11 +84,11 @@ describe('Route integration: [ORCHESTRATOR-UNWRAP]: literal surfaces on structur
       },
     };
 
-    // Act: run the route's L1999-L2001 mapping block.
+    // Act: run the route's L2170-L2175 mapping block.
     const finalMessage = buildRouteFinalErrorMessage(result);
 
-    // Assert: the formatted `[ORCHESTRATOR-UNWRAP]:` literal appears.
-    expect(finalMessage).toMatch(/^\[ORCHESTRATOR-UNWRAP\]: /);
+    // Assert: the formatted `[ORCHESTRATOR-UNWRAP]:` literal appears
+    // (prepended after result.output per the route's L2171-L2174 logic).
     expect(finalMessage).toContain('[ORCHESTRATOR-UNWRAP]: VFS write failed: ENOENT');
     expect(finalMessage).toContain('[error.code=ENOENT]');
     expect(finalMessage).toContain('[retryable=false]');
@@ -94,6 +98,7 @@ describe('Route integration: [ORCHESTRATOR-UNWRAP]: literal surfaces on structur
   it('structured error without correctedExample → no trailing arrow line', () => {
     const result = {
       success: false,
+      output: 'Tool error',
       error: {
         message: 'Tool error',
         code: 'STALL',
@@ -109,32 +114,32 @@ describe('Route integration: [ORCHESTRATOR-UNWRAP]: literal surfaces on structur
     expect(finalMessage).not.toContain('→');
   });
 
-  it('non-structured error (plain string) → no [ORCHESTRATOR-UNWRAP]: prefix, fallback to "Unknown MCP tool error"', () => {
+  it('non-structured error (plain string) → no [ORCHESTRATOR-UNWRAP]: prefix, returns result.output', () => {
     // Plain strings fail the duck-type guard (typeof value !== 'object'), so
-    // unwrapStructuredToolError returns null. Then `result.error?.message` on a
-    // string is undefined (strings don't have a .message property), so the
-    // route's fallback "Unknown MCP tool error" applies. This pins the actual
-    // route behavior — a future refactor that lets strings through with
-    // `String(err)` would flip this test red.
+    // unwrapStructuredToolError returns null. The route falls through to
+    // `result.output` (no "Unknown MCP tool error" fallback — that was the
+    // old helper's incorrect behavior).
     const result = {
       success: false,
+      output: '',
       error: 'plain error string',
     };
 
     const finalMessage = buildRouteFinalErrorMessage(result);
 
     expect(finalMessage).not.toContain('[ORCHESTRATOR-UNWRAP]:');
-    expect(finalMessage).toBe('Unknown MCP tool error');
+    expect(finalMessage).toBe('');
   });
 
-  it('null/undefined error → fallback to "Unknown MCP tool error"', () => {
+  it('null/undefined error → returns result.output (route fallback path)', () => {
     const result = {
       success: false,
+      output: '',
       error: null,
     };
 
     const finalMessage = buildRouteFinalErrorMessage(result);
 
-    expect(finalMessage).toBe('Unknown MCP tool error');
+    expect(finalMessage).toBe('');
   });
 });

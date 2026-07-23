@@ -110,7 +110,7 @@ export class SnapshotPortability {
       const handle = await provider.getSandbox(session.sandboxId);
       
       // List files in sandbox
-      const listResult = await handle.listDirectory(session.cwd || '/tmp');
+      const listResult = await handle.listDirectory(session.cwd || '/workspace');
       
       if (!listResult.success) {
         throw new Error('Failed to list directory');

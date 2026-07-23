@@ -238,6 +238,12 @@ export interface SSEDAGTaskStatusPayload {
 export interface SSEDonePayload {
   success: boolean;
   content: string;
+  /** Bug #16 (audit): Reasoning/thinking tokens from the final response,
+   *  accumulated during streaming and emitted in the done event so client
+   *  consumers (e.g. the UI diff viewer, log pipelines) can access the full
+   *  reasoning trace after the stream closes. Models that do not emit
+   *  reasoning (e.g. non-reasoning models) will omit this field entirely. */
+  reasoningContent?: string;
   messageMetadata?: Record<string, unknown> & {
     /** Routing metadata from first-response parsing (when present, enables multi-step auto-continue) */
     routing?: {

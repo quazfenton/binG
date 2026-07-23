@@ -310,7 +310,14 @@ class McpAgentFs implements AgentFilesystem {
 
   async readFile(path: string): Promise<string> {
     const { callMCPToolFromAI_SDK } = await import('@/lib/mcp/architecture-integration');
-    const result = await callMCPToolFromAI_SDK('read_file', { path }, this.userId);
+    const { createContract } = await import('@/lib/agents/contract');
+    const contract = createContract({
+      intent: 'read_file', scope: { paths: [], exclude: [] },
+      capabilities: ['read_file'],
+      budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+      invariants: [], acceptanceCriteria: [], killSwitches: [], escalationGraph: {},
+    });
+    const result = await callMCPToolFromAI_SDK('read_file', { path }, this.userId, undefined, undefined, undefined, contract);
     if (!result.success) {
       throw new Error(result.error || 'Failed to read file');
     }
@@ -319,7 +326,13 @@ class McpAgentFs implements AgentFilesystem {
 
   async writeFile(path: string, content: string): Promise<void> {
     const { callMCPToolFromAI_SDK } = await import('@/lib/mcp/architecture-integration');
-    const result = await callMCPToolFromAI_SDK('write_file', { path, content }, this.userId);
+    const { createContract } = await import('@/lib/agents/contract');
+    const result = await callMCPToolFromAI_SDK('write_file', { path, content }, this.userId, undefined, undefined, undefined, createContract({
+      intent: 'write_file', scope: { paths: [], exclude: [] },
+      capabilities: ['write_file'],
+      budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+      invariants: [], acceptanceCriteria: [], killSwitches: [], escalationGraph: {},
+    }));
     if (!result.success) {
       throw new Error(result.error || 'Failed to write file');
     }
@@ -327,7 +340,13 @@ class McpAgentFs implements AgentFilesystem {
 
   async listDirectory(path: string): Promise<DirEntry[]> {
     const { callMCPToolFromAI_SDK } = await import('@/lib/mcp/architecture-integration');
-    const result = await callMCPToolFromAI_SDK('list_files', { path }, this.userId);
+    const { createContract } = await import('@/lib/agents/contract');
+    const result = await callMCPToolFromAI_SDK('list_files', { path }, this.userId, undefined, undefined, undefined, createContract({
+      intent: 'list_files', scope: { paths: [], exclude: [] },
+      capabilities: ['list_files'],
+      budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+      invariants: [], acceptanceCriteria: [], killSwitches: [], escalationGraph: {},
+    }));
     if (!result.success) return [];
     try {
       const data = JSON.parse(result.output);
@@ -354,12 +373,18 @@ class McpAgentFs implements AgentFilesystem {
   async search(query: string, options?: { path?: string; limit?: number }): Promise<DirEntry[]> {
     // Use grep_code tool for better performance
     const { callMCPToolFromAI_SDK } = await import('@/lib/mcp/architecture-integration');
+    const { createContract } = await import('@/lib/agents/contract');
     const result = await callMCPToolFromAI_SDK('grep_code', {
       query,
       path: options?.path || '.',
       maxResults: options?.limit || 50,
       fixedString: false, // Allow regex by default
-    }, this.userId);
+    }, this.userId, undefined, undefined, undefined, createContract({
+      intent: 'grep_code', scope: { paths: [], exclude: [] },
+      capabilities: ['grep_code'],
+      budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+      invariants: [], acceptanceCriteria: [], killSwitches: [], escalationGraph: {},
+    }));
     
     if (!result.success) return [];
     

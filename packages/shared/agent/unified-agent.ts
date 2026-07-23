@@ -45,6 +45,7 @@ import { enhancedTerminalManager } from '../../../web/lib/terminal/enhanced-term
 import { getSandboxProvider } from '../../../web/lib/sandbox/providers'
 import { sandboxBridge } from '../../../web/lib/sandbox/sandbox-service-bridge'
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '../../../web/lib/mcp'
+import { createContract } from '../../../web/lib/agents/contract'
 import { selectToolPlan, type SelectToolPlanResult } from '../../../web/lib/tools/select-tool-plan'
 import type { PreviewInfo } from '../../../web/lib/sandbox/types'
 import type { DesktopHandle } from '../../../web/lib/computer/e2b-desktop-provider-enhanced'
@@ -683,6 +684,16 @@ export class UnifiedAgent {
       this.session?.sessionId,
       undefined,
       { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+      createContract({
+        intent: toolName,
+        scope: { paths: [], exclude: [] },
+        capabilities: [toolName],
+        budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+        invariants: [],
+        acceptanceCriteria: [],
+        killSwitches: [],
+        escalationGraph: {},
+      }),
     );
   }
 

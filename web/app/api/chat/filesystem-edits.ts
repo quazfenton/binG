@@ -346,7 +346,13 @@ export async function applyFilesystemEditsFromResponse(input: {
     applyDiffOperations.length +
     deleteTargets.length;
 
-  if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
+  // Bug #11 fix: add pendingEdits check so the early return doesn't fire when
+  // the BUG #48 alreadyWrittenPaths filter blocked all writes. When pendingEdits
+  // is populated, the parser successfully extracted paths that were skipped by
+  // the dedup filter — this is NOT an all-invalid case, so we must NOT return
+  // status:'none' / phase1Status:'empty' which would cause downstream
+  // hasFilesystem: false and skip the UI update path.
+  if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0 && pendingEdits.length === 0) {
     // Phase A — early return for invalid-paths case.
     // Phase F — same picker-layer integration as L828
     return {

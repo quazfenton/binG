@@ -2437,7 +2437,14 @@ ${stepReprompt}`;
                   }
 
                   if (process.env.NODE_ENV === 'development') {
-                    logger.info('[Chat] Progressive file edit detected:', {
+                    // Bug #9 (audit): Prefix the log line with (full overwrite) when
+                    // the operation is 'write' and content is large (>5K chars) so
+                    // operators can immediately distinguish full-file overwrites from
+                    // surgical patch operations without inspecting hasDiff/contentLength.
+                    const isFullOverwrite = fileEditData.operation === 'write' && (fileEditData.content?.length ?? 0) > 5_000;
+                    logger.info(isFullOverwrite
+                      ? '[Chat] (full overwrite) Progressive file edit detected:'
+                      : '[Chat] Progressive file edit detected:', {
                       path: eventData.path,
                       operation: fileEditData.operation,
                       hasDiff: !!fileEditData.diff,

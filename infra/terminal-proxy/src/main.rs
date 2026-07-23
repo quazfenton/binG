@@ -49,7 +49,23 @@ async fn main() -> Result<()> {
 
     // Initialize Redis connection pool
     let redis_store = redis_store::RedisStore::new(&config.redis_url).await?;
-    info!("Connected to Redis: {}", config.redis_url);
+    let redis_url_redacted = {
+        let url = &config.redis_url;
+        if let Some(at) = url.find('@') {
+            if let Some(scheme_end) = url.find("://") {
+                if scheme_end < at {
+                    format!("{}://***@{}", &url[..scheme_end + 3], &url[at + 1..])
+                } else {
+                    url.clone()
+                }
+            } else {
+                url.clone()
+            }
+        } else {
+            url.clone()
+        }
+    };
+    info!("Connected to Redis: {}", redis_url_redacted);
 
     // Create shared router
     let router = Arc::new(Router::new(redis_store.clone(), config.clone()));
@@ -68,6 +84,11 @@ async fn main() -> Result<()> {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
+                    if !router_clone.can_accept_connection() {
+                        warn!("Connection rejected from {} - max connections reached", addr);
+                        drop(stream);
+                        continue;
+                    }
                     let router = router_clone.clone();
                     tokio::spawn(async move {
                         if let Err(e) = connection::handle_connection(stream, addr, &router).await {

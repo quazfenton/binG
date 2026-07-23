@@ -251,11 +251,21 @@ class VFSProvider implements CapabilityProvider {
       // Delegate to the MCP batch_write tool which handles per-file validation,
       // scope path resolution, and event emission atomically
       const { callMCPToolFromAI_SDK } = await import('../mcp');
+      const { createContract } = await import('@/lib/agents/contract');
       const scopePath = context?.scopePath || input.scopePath;
       // Inject sessionId into input so callMCPToolFromAI_SDK can use it for VFS event tracking
       const sessionId = (context as any)?.sessionId || (context as any)?.conversationId || input.sessionId;
       const batchWriteInput = sessionId ? { ...input, sessionId } : input;
-      const result = await callMCPToolFromAI_SDK('batch_write', batchWriteInput, ownerId, scopePath);
+      const result = await callMCPToolFromAI_SDK('batch_write', batchWriteInput, ownerId, scopePath, undefined, undefined, createContract({
+        intent: 'batch_write',
+        scope: { paths: [], exclude: [] },
+        capabilities: ['batch_write'],
+        budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+        invariants: [],
+        acceptanceCriteria: [],
+        killSwitches: [],
+        escalationGraph: {},
+      }));
       // Check both top-level success AND dual-status pattern
       const innerFailure = result.output && typeof result.output === 'object' && !Array.isArray(result.output) && (result.output as any).success === false;
       if (!result.success || innerFailure) {
@@ -491,8 +501,8 @@ class MCPFilesystemProvider implements CapabilityProvider {
     capabilityId: string,
     input: any,
     context: ToolExecutionContext
-  ): Promise<ToolExecutionResult> {
-    const { callMCPToolFromAI_SDK } = await import('../mcp');
+  ): Promise<ToolExecutionResult> {        const { callMCPToolFromAI_SDK } = await import('../mcp');
+        const { createContract } = await import('@/lib/agents/contract');
 
     // Map capability to MCP tool name
     const toolMap: Record<string, string> = {
@@ -522,7 +532,16 @@ class MCPFilesystemProvider implements CapabilityProvider {
         const enhancedInput = sessionId
           ? { ...input, sessionId, conversationId: context.conversationId || sessionId }
           : input;
-        const result = await callMCPToolFromAI_SDK(toolName, enhancedInput, context.userId, context.scopePath);
+        const result = await callMCPToolFromAI_SDK(toolName, enhancedInput, context.userId, context.scopePath, undefined, undefined, createContract({
+          intent: toolName,
+          scope: { paths: [], exclude: [] },
+          capabilities: [toolName],
+          budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+          invariants: [],
+          acceptanceCriteria: [],
+          killSwitches: [],
+          escalationGraph: {},
+        }));
       return {
         success: result.success,
         output: result.output,

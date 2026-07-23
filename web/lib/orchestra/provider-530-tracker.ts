@@ -92,11 +92,12 @@ export function record530Error(provider: string): void {
  * recover immediately on the very next successful call, rather than
  * staying blacklisted until a subsequent non-530 error rolls the counter.
  *
- * Default OFF. Operators can enable with ENABLE_530_RESET_ON_SUCCESS=1.
- * The fix is purely a recovery-latency improvement; no observable
- * behavior change beyond faster recovery from transient 530 storms.
+ * Bug #13 fix: default ON (changed from `=== '1'` to `!== '0'`) so a
+ * transient Cloudflare tunnel blip (2 consecutive 530s in <1s) does NOT
+ * permanently blacklist the provider for the process lifetime. The env var
+ * still allows operators to disable with ENABLE_530_RESET_ON_SUCCESS=0.
  */
-export const ENABLE_530_RESET_ON_SUCCESS = process.env.ENABLE_530_RESET_ON_SUCCESS === '1';
+export const ENABLE_530_RESET_ON_SUCCESS = process.env.ENABLE_530_RESET_ON_SUCCESS !== '0';
 
 /**
  * Helper wrapper exported so call sites don't need to re-check the flag

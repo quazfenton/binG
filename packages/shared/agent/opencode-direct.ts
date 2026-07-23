@@ -123,6 +123,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   // Use OpencodeV2Provider directly
   const { OpencodeV2Provider } =    await import('../../../web/lib/sandbox/spawn/opencode-cli');
   const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } =    await import('../../../web/lib/mcp');
+  const { createContract } = await import('../../../web/lib/agents/contract');
 
   const provider = new OpencodeV2Provider({
     session: {
@@ -204,6 +205,16 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
         session.id,
         undefined,
         { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+        createContract({
+          intent: name,
+          scope: { paths: [], exclude: [] },
+          capabilities: [name],
+          budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+          invariants: [],
+          acceptanceCriteria: [],
+          killSwitches: [],
+          escalationGraph: {},
+        }),
       );
       return {
         success: toolResult.success,

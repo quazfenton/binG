@@ -31,6 +31,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    wget \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -51,7 +52,7 @@ ENV TERMINAL_PROXY_IDLE_TIMEOUT_MS=900000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD ["wget", "-q", "--spider", "http://localhost:9090/metrics"] || exit 1
+    CMD wget -q --spider http://localhost:9090/metrics || exit 1
 
 EXPOSE 8080 9090
 

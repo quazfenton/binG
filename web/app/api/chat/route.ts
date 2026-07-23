@@ -53,6 +53,7 @@ import { bumpProgress, getLastProgressAt } from '@/lib/chat/enhanced-llm-service
 import { isStructuredMcpError } from '@/lib/mcp/architecture-integration';
 import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
 import { selectToolPlan } from '@/lib/tools/select-tool-plan';
+import { createContract, type Contract } from '@/lib/agents/contract';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
@@ -1756,19 +1757,38 @@ FORMAT RULES:
       process.env.CHAT_ROUTE_MAX_TURN_MS || '120000',
       10,
     );
+    // Per-step accounting (Bug #1 closure): each agent step (tool call, LLM
+    // response) is budgeted a per-step window so a legitimate 12-step model
+    // doesn't hit the max-total-ms false-positive at 120s wall time.
+    // Default 60s/step × 12 steps = 720s (12 min). Operators can tune via
+    // CHAT_ROUTE_PER_STEP_BUDGET_MS and CHAT_ROUTE_MAX_STEPS env vars for
+    // exceptionally long-running agents.
+    const CHAT_ROUTE_PER_STEP_BUDGET_MS = parseInt(
+      process.env.CHAT_ROUTE_PER_STEP_BUDGET_MS || '60000',
+      10,
+    );
+    const CHAT_ROUTE_MAX_STEPS = parseInt(
+      process.env.CHAT_ROUTE_MAX_STEPS || '12',
+      10,
+    );
+    const perStepTurnCap = CHAT_ROUTE_PER_STEP_BUDGET_MS * CHAT_ROUTE_MAX_STEPS;
     const ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS = 7;
     const isNinerouterClassProvider = ['ninerouter', 'ollama', 'kiro'].includes(provider);
     const effectiveSilenceMs = isNinerouterClassProvider ? 5000 : 20000;
     const ROUTE_MAX_TURN_MS = Math.max(
       ROUTE_MAX_TURN_MS_ENV,
       Math.ceil(ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS * effectiveSilenceMs * 1.5) + 30000,
+      perStepTurnCap,
     );
-    chatLogger.debug('[CHAT-ROUTE] computed max-turn from chain.length + silenceMs', {
+    chatLogger.debug('[CHAT-ROUTE] computed max-total-ms from per-step accounting + chain.length + silenceMs', {
       requestId,
       provider,
       isNinerouterClassProvider,
       effectiveSilenceMs,
       ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS,
+      perStepTurnCap,
+      CHAT_ROUTE_PER_STEP_BUDGET_MS,
+      CHAT_ROUTE_MAX_STEPS,
       ROUTE_MAX_TURN_MS,
       ROUTE_MAX_TURN_MS_ENV,
     });
@@ -1968,6 +1988,25 @@ const config: UnifiedAgentConfig = {
       requestedToolkits: toolPlan.requestedToolkits,
       authenticatedUser: !!authenticatedUserId,
     });
+
+    // ── Contract construction from toolPlan ──────────────────────────────
+    // Build a minimal Contract from the route-level pure-planner signal so
+    // the MCP tool pipeline (callMCPToolFromAI_SDK → gatePreCall /
+    // gatePostCall / wrapWithSentinel / contract.audit) activates for the
+    // primary production path. Round-1 wiring: killSwitches + invariants are
+    // empty (no op-restrictive gating yet); round-2 will populate them from
+    // escalationGraph / kill-switch config.
+    const contract: Contract = createContract({
+      intent: toolPlan.intents[0] ?? 'tool-execution',
+      scope: { paths: [], exclude: [] },
+      capabilities: toolPlan.intents,
+      budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+      invariants: [],
+      acceptanceCriteria: [],
+      killSwitches: [],
+      escalationGraph: {},
+    });
+
     // Tier 1: abort signal for Phase 2 internal degradation.
     const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
     // Boundary #4 timestamp — measured AT try-entry so duration includes
@@ -2117,6 +2156,7 @@ const config: UnifiedAgentConfig = {
           requestedScopePath ?? '',
           undefined,                     // recentFailures (unchanged)
           { signal: toolCallSignal },    // F4: per-call signal (was agentTurnSignal)
+          contract,
         );
 
       // F1 fix: structured-error unwrap. VFS tools (vfs-mcp-tools.ts:640+) return
@@ -2708,6 +2748,7 @@ const config: UnifiedAgentConfig = {
                     prompt: (autoDecision.continuationPrompt ?? '').slice(0, 200),
                     timestamp: Date.now(),
                   });
+                  const toolCallNow = Date.now();
                   currentConfig = {
                     ...currentConfig,
                     conversationHistory: [
@@ -2722,11 +2763,26 @@ const config: UnifiedAgentConfig = {
            *   );
            * Until then, the do/while(false) shape preserves the single-shot
            * by-break bound here.
-           */
-                      ...(currentConfig.conversationHistory || []),
-                      { role: 'assistant', content: previousAssistantContent },
-                      { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
-                    ],
+           */                       ...(currentConfig.conversationHistory || []),
+                       { role: 'assistant', content: previousAssistantContent },
+                       // Bug #6 (audit): Carry forward tool results so the LLM knows
+                       // which tools were already executed. Without these tool role
+                       // messages, the re-invoked LLM doesn't see the tool outputs and
+                       // re-attempts the same tool calls, creating an endless loop or
+                       // terminating at maxSteps=12 without emitting [BUILD_COMPLETE].
+                       // Date.now() is hoisted before the spread so all tool_call_id
+                       // suffixes within one update share the same timestamp.
+                       ...(accumulatedSteps.length > 0
+                         ? accumulatedSteps.map((step: any, idx: number) => ({
+                             role: 'tool' as const,
+                             tool_call_id: `${step.toolName ?? 'tool'}-${idx}-${toolCallNow}`,
+                             content: typeof step.result === 'object'
+                               ? JSON.stringify(step.result)
+                               : String(step.result ?? ''),
+                           }))
+                         : []),
+                       { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
+                     ],
                   };
                   iteration++;
                 } else {
@@ -2904,6 +2960,20 @@ const config: UnifiedAgentConfig = {
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
                 content: finalContent,
+                // Bug #16 (audit): Surface accumulated reasoning content in the
+                // final DONE event so downstream consumers (UI diff viewers, log
+                // pipelines) can access the full reasoning trace after the stream
+                // closes. Uses the main requestId (in scope across all streaming
+                // paths) as the globalThis accumulator key. After reading, the
+                // accumulator entry is deleted to prevent globalThis memory leaks
+                // across long-lived server processes.
+                ...(requestId && (globalThis as any)[`__reasoning_${requestId}`]
+                  ? (() => {
+                      const content = (globalThis as any)[`__reasoning_${requestId}`];
+                      delete (globalThis as any)[`__reasoning_${requestId}`];
+                      return { reasoningContent: content };
+                    })()
+                  : {}),
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
@@ -5173,15 +5243,28 @@ enqueue('done', {
                         } catch {
                           // Non-critical
                         }
-                      }
-                    } else if (chunk.type === 'reasoning') {
-                      const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
-                        requestId: streamRequestId,
-                        reasoning: chunk.reasoning,
-                        timestamp: Date.now(),
-                      })}\n\n`;
-                      safeEnqueue(encoderRef, controller, reasoningEvent);
-                      chunkCount++;
+                      }    } else if (chunk.type === 'reasoning') {
+      // Bug #16 (audit): Accumulate reasoning content during streaming using
+      // a module-level accumulator. The accumulated content is emitted in the
+      // final DONE event so downstream consumers (UI diff viewers, log
+      // pipelines) can access the full reasoning trace after the stream
+      // closes. Non-reasoning models produce no accumulation.
+      if (chunk.reasoning) {
+        // Use a simple globalThis-based accumulator keyed by the main
+        // requestId (in scope across all streaming paths). The DONE event
+        // reads from this same key and then deletes it to prevent memory
+        // leaks across long-lived server processes.
+        const reasoningKey = `__reasoning_${requestId}`;
+        const existing = (globalThis as any)[reasoningKey] || '';
+        (globalThis as any)[reasoningKey] = existing + chunk.reasoning;
+      }
+      const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
+        requestId: streamRequestId,
+        reasoning: chunk.reasoning,
+        timestamp: Date.now(),
+      })}\n\n`;
+      safeEnqueue(encoderRef, controller, reasoningEvent);
+      chunkCount++
                     } else if (chunk.type === 'text-delta') {
                       // Accumulate text deltas and emit in batches
                       tokenBuffer += chunk.textDelta;
@@ -7952,7 +8035,11 @@ export async function GET(request: NextRequest) {
       // surface as HTTP 524 with the x-stall-fired signal — not the
       // generic 500 fallback below. Closes STALL-524-OUTERCATCH-GAP for the
       // warmup route; the active /api/chat route was already covered.
-      if (error instanceof StallWatchdogError) {
+      // Bug #12: add cross-realm-safe isStallWatchdogInstanceByConstructorName
+      // fallback so StallWatchdogErrors thrown across Worker boundaries or
+      // deserialized via structuredClone/postMessage still map to 524 instead
+      // of falling through to the generic 500 handler.
+      if (error instanceof StallWatchdogError || isStallWatchdogInstanceByConstructorName(error)) {
         return NextResponse.json(
           {
             success: false,

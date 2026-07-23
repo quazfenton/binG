@@ -105,7 +105,7 @@ describe('Bug 2 closure — SHOULD-CONSIDER #1 magic-hook defensive guard (PRERE
   it('PREREQ #5 — updateStreamActivity(streamId) wired into resetIdleTimeout (declared as arrow function `const resetIdleTimeout = (...) => {` at L1982)', () => {
     expect(
       src,
-      'expected: `updateStreamActivity(streamId)` call site somewhere INSIDE the resetIdleTimeout function body (or anywhere inside streamWithVercelAI — final placement is inside resetIdleTimeout for SHOULD-CONSIDER #1)'
-    ).toMatch(/updateStreamActivity\s*\(\s*streamId\s*\)/);
+      'expected: `updateStreamActivity(streamId, ...)` call site somewhere INSIDE the resetIdleTimeout function body (or anywhere inside streamWithVercelAI — final placement is inside resetIdleTimeout for SHOULD-CONSIDER #1)'
+    ).toMatch(/updateStreamActivity\s*\(\s*streamId\b/);
   });
 });

@@ -106,8 +106,12 @@ export function wrapWithSentinel(
   // preserves the rest of the content for legitimate tool data that just
   // happened to mention a system role inline.
   for (const pattern of DROP_PATTERNS) {
-    cleaned = cleaned.replace(pattern, '[REDACTED]');
+    const globalPattern = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+    cleaned = cleaned.replace(globalPattern, '[REDACTED]');
   }
+
+  cleaned = cleaned.split(TOOL_SENTINEL_OPEN).join('[ESCAPED-TOOL-OPEN]')
+    .split(TOOL_SENTINEL_CLOSE).join('[ESCAPED-TOOL-CLOSE]');
 
   return {
     wrapped: `${TOOL_SENTINEL_OPEN}${cleaned}${TOOL_SENTINEL_CLOSE}`,

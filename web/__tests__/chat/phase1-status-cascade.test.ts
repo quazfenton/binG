@@ -176,6 +176,12 @@ function expectedLoopGuardVerb(status: Phase1Status): 'skip' | 'evaluate' {
 // ============================================================================
 
 describe('phase1Status cross-layer cascade', () => {
+  beforeAll(() => {
+    // If these files fail to load, tests pass vacuously — fail loudly instead.
+    expect(routeSource.length).toBeGreaterThan(0);
+    // sharedAgentSource is optional (may not exist in all CI envs)
+  });
+
   // ==========================================================================
   // Section A — Derivation × Retry propagation (Phase A + D, both shipped ✅)
   // ==========================================================================
