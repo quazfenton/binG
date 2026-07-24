@@ -631,5 +631,7 @@ describe('Chat Route System Prompt Leak Fix', () => {
     );
     expect(source).toContain('const v1AgentPrompt = v1AgentTask;');
     expect(source).not.toContain('v1AgentPrompt = v1AgentContext');
+    expect(source).toContain('systemPrompt: v1AgentSystemPrompt');
+    expect(source).toContain('conversationHistory: v1AgentConversation');
   });
 });

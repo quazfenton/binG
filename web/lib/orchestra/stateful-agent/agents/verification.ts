@@ -733,12 +733,12 @@ export async function runCodeQualityChecks(
     const ext = path.split('.').pop()?.toLowerCase();
     
     // Skip non-code files
-    if (!['.ts', '.tsx', '.js', '.jsx', '.json'].includes(ext || '')) {
+    if (!['ts', 'tsx', 'js', 'jsx', 'json'].includes(ext || '')) {
       continue;
     }
 
     // Run enhanced checks based on file type
-    if (['.ts', '.tsx', '.js', '.jsx'].includes(ext || '')) {
+    if (['ts', 'tsx', 'js', 'jsx'].includes(ext || '')) {
       const result = await runEnhancedJavaScriptChecks(path, content);
       errors.push(...result.errors);
       warnings.push(...result.warnings);

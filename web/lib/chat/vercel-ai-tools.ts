@@ -138,8 +138,20 @@ function createCapabilityTool(
 
 function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
-  
+
+  // Review comment #5: VFS mutation tools (write_file, apply_diff, batch_write)
+  // were previously added UNCONDITIONALLY — the planner's
+  // `filesystemEditEligible: false` gate only filtered capability IDs, and
+  // `file.*` capabilities are skipped anyway (VFS dedup at L372), so the gate
+  // never reached the tools the model actually sees. Honor the plan's flag
+  // here as the load-bearing mutation gate. `delete_file` is intentionally
+  // kept (matches the planner's STRIPPED set which keeps file.delete for
+  // destructive-but-useful cleanup).
+  const editEligible = context.toolPlan?.filesystemEditEligible !== false;
+  const VFS_MUTATION_TOOLS = new Set(['write_file', 'apply_diff', 'batch_write']);
+
   for (const [name, mcpTool] of Object.entries(mcpVFSTools)) {
+    if (!editEligible && VFS_MUTATION_TOOLS.has(name)) continue;
     tools[name] = tool({
       description: (mcpTool as any).description,
       inputSchema: (mcpTool as any).inputSchema || (mcpTool as any).parameters || z.object({}),
@@ -165,7 +177,7 @@ function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
       },
     } as any);
   }
-  
+
   return tools;
 }
 

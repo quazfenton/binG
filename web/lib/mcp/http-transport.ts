@@ -131,7 +131,17 @@ export async function getRemoteMCPTools(
   );
   const allTools = transportResults.flat();
 
-  // Update cache
+  // Update cache — BUT only if the discovery wasn't aborted mid-flight.
+  // Review comment #23: an aborted discovery (caller's timeout/turn watchdog
+  // firing while some transports were still resolving) would poison the
+  // shared TTL cache with partial results, causing later NON-aborted turns to
+  // lose remote tools until the cache expired. Skip cache write + reset the
+  // freshness timestamp on abort so the next call re-discovers cleanly.
+  if (options?.signal?.aborted) {
+    cachedRemoteTools = null;
+    lastToolFetch = 0;
+    return allTools;
+  }
   cachedRemoteTools = allTools;
   lastToolFetch = now;
 

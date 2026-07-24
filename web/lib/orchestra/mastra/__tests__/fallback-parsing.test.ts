@@ -19,6 +19,27 @@ vi.mock('@/lib/virtual-filesystem/sync/sync-events', () => ({
 }));
 
 describe('Fallback Text-Based Tool Call Parsing', () => {
+  it('keeps route context in the system prompt and prior turns in history', async () => {
+    const { AgentLoop } = await import('../agent-loop');
+    const agent = new AgentLoop('test-user', 'test-path', 5, {}, 'test-model', {
+      systemPrompt: 'SMART_CONTEXT_SENTINEL',
+      conversationHistory: [
+        { role: 'user', content: 'prior question' },
+        { role: 'assistant', content: 'prior answer' },
+      ],
+    });
+    (agent as any).cachedWorkspaceSnapshot = 'src/existing.ts';
+
+    const systemPrompt = (agent as any).buildSystemPrompt();
+
+    expect(systemPrompt).toContain('SMART_CONTEXT_SENTINEL');
+    expect(systemPrompt).toContain('src/existing.ts');
+    expect(agent.getContext().conversationHistory).toEqual([
+      { role: 'user', content: 'prior question' },
+      { role: 'assistant', content: 'prior answer' },
+    ]);
+  });
+
   describe('parseTextToolCalls pattern matching', () => {
     it('should parse write_file with JSON object syntax', async () => {
       const { AgentLoop } = await import('../agent-loop');

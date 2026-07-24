@@ -11,9 +11,17 @@ const nextConfig = {
   // F8: Audit-grade source-map config — preserves stack frames in browser
   // console errors so `[F8] err.stack` in use-enhanced-chat.ts can resolve
   // minified line numbers back to source. Default off in production
-  // (Next 14.x default is false). Without this: error.stack in prod shows
-  // "<anonymous>:1:1" — useless for triage.
-  productionBrowserSourceMaps: true,
+  // (Next 14.x default is false); shipping source maps to all production
+  // users exposes the full application source (components, API call
+  // structure, business logic, internal comments) to anyone opening
+  // DevTools AND bloats JS bundles ~50-100%. Review comment #22: gate the
+  // production build behind `ENABLE_PROD_SOURCE_MAPS=true` so it can be
+  // turned on transiently for a debugging session instead of always on.
+  // Dev (NODE_ENV !== 'production') keeps source maps — the dev server
+  // already serves unminified source, so there's no new exposure there.
+  productionBrowserSourceMaps:
+    process.env.NODE_ENV !== 'production' ||
+    process.env.ENABLE_PROD_SOURCE_MAPS === 'true',
   // Static export — Vercel only serves frontend assets
   // Backend API routes are handled externally (OCI, 9router, etc.)
   // Disabled during dev so API routes work locally without 500 errors.

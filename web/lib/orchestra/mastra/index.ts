@@ -8,4 +8,4 @@ export { createFilesystemTools, getFilesystemTools, getFilesystemTool } from './
 export type { FilesystemTool } from './tools/filesystem-tools';
 
 export { AgentLoop, createAgentLoop } from './agent-loop';
-export type { AgentContext, AgentResult, AgentIterationResult, LLMResponse } from './agent-loop';
+export type { AgentContext, AgentInitialContext, AgentResult, AgentIterationResult, LLMResponse } from './agent-loop';

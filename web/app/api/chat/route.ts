@@ -3904,12 +3904,23 @@ enqueue('done', {
       const v1AgentTask = typeof lastUserMessage === 'string'
         ? lastUserMessage
         : JSON.stringify(lastUserMessage || '');
-      const v1AgentContext = buildAgenticContext(contextualMessages);
       // FIX: Do NOT prepend filesystem context to the task — the LLM already sees it
-      // via contextualMessages in conversationHistory. Prepending it caused the
+      // through the agent loop's dedicated initial context. Prepending it caused the
       // StatefulAgent/BootstrappedAgency to receive the system prompt as the task,
       // leading it to write "SYSTEM: Virtual filesystem tools..." to a file.
       const v1AgentPrompt = v1AgentTask;
+      const v1AgentSystemPrompt = contextualMessages
+        .filter(message => message.role === 'system')
+        .map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content))
+        .join('\n\n');
+      const v1AgentConversation = contextualMessages
+        .filter(message => message.role === 'user' || message.role === 'assistant')
+        .map(message => ({
+          role: message.role as 'user' | 'assistant',
+          content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+        }));
+      const currentTaskIndex = v1AgentConversation.map(message => message.role).lastIndexOf('user');
+      if (currentTaskIndex >= 0) v1AgentConversation.splice(currentTaskIndex, 1);
 
       // V1 agentic tools: reuse existing Mastra tool loop for coding/tool requests.
       let agentToolResults = null;
@@ -3969,6 +3980,10 @@ enqueue('done', {
               workspacePath: sandboxSession?.workspacePath || requestedScopePath,
             },
             actualModel, // user-selected model
+            {
+              systemPrompt: v1AgentSystemPrompt,
+              conversationHistory: v1AgentConversation,
+            },
           );
 
           // Check if agent supports streaming (ToolLoopAgent integration)
@@ -6948,16 +6963,6 @@ function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
   return THIRD_PARTY_OAUTH_RE.test(content);
 }
 
-function buildAgenticContext(messages: LLMMessage[]): string {
-  const systemMessages = messages.filter(m => m.role === 'system');
-  const recent = messages.slice(-8);
-  const parts = [
-    ...systemMessages.map(m => `SYSTEM: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
-    ...recent.map(m => `${m.role.toUpperCase()}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
-  ];
-  return parts.join('\n\n');
-}
-
 /**
  * Per-request dedup guard: each request id is allowed to write to mem0 once.
  * Multiple stream paths (regular streaming, tool-loop, fallback, non-streaming)
@@ -8126,4 +8131,3 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
-

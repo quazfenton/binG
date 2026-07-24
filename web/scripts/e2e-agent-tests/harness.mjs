@@ -91,9 +91,15 @@ async function login() {
  */
 async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL, agentMode = 'auto', extra = {} }) {
   const started = Date.now();
+  // Capture the requested stream mode up-front (extra.stream overrides the
+  // body default below) so the reader can branch on it: streaming responses
+  // are consumed as SSE; non-streaming responses are consumed as a single
+  // JSON body. Pre-fix every response went through the SSE parser, so the
+  // T0_nonstream_json scenario silently got zero events (review #29).
+  const requestedStream = extra.stream !== undefined ? !!extra.stream : true;
   const body = {
     messages: [{ role: 'user', content: prompt }],
-    provider, model, stream: true, agentMode,
+    provider, model, stream: requestedStream, agentMode,
     conversationId,
     ...extra,
   };
@@ -110,7 +116,8 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
     });
   } catch (e) {
     clearTimeout(chatTimer);
-    return { httpStatus: 0, headers: {}, events: [], tokens: '', rawBytes: 0, toolCalls: [], errors: ['FETCH_ABORTED_OR_FAILED: ' + e.message], done: null, durationMs: Date.now() - started, ttfbMs: 0 };
+    return { httpStatus: 0, headers: {}, events: [], tokens: '', rawBytes: 0, toolCalls: [], errors: ['FETCH_ABORTED_OR_FAILED: ' + e.message], done: null, durationMs: Date.now() - started, ttfbMs: 0, stream: requestedStream };
+
   }
 
   const result = {
@@ -124,7 +131,39 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
     done: null,
     durationMs: 0,
     ttfbMs: 0,
+    stream: requestedStream,
   };
+
+  // Non-streaming JSON path: consume the body as a single JSON document and
+  // surface it as one synthetic 'json' event so summarize() / validate() can
+  // inspect the actual response shape instead of mis-parsing it through the
+  // SSE framer (which previously reported 0 events for T0_nonstream_json).
+  if (!requestedStream) {
+    const text = await res.text();
+    clearTimeout(chatTimer);
+    result.bytes = text.length;
+    result.rawBytes = text.length;
+    result.durationMs = Date.now() - started;
+    result.ttfbMs = result.durationMs;
+    if (text) {
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+        result.events.push({ event: 'json', data: parsed });
+        if (parsed && typeof parsed === 'object') {
+          if (typeof parsed.content === 'string') result.tokens = parsed.content;
+          if (parsed.error) result.errors.push(String(parsed.error));
+          if (parsed.toolCalls) result.toolCalls.push(...(Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [parsed.toolCalls]));
+        }
+      } catch {
+        // Not JSON despite stream:false — surface the raw text so the failure
+        // is visible in the summary instead of being silently dropped.
+        result.events.push({ event: 'raw', data: text });
+        result.errors.push('NON_JSON_RESPONSE: ' + text.slice(0, 200));
+      }
+    }
+    return result;
+  }
 
   if (!res.body) { clearTimeout(chatTimer); result.durationMs = Date.now() - started; return result; }
 
@@ -268,13 +307,28 @@ async function main() {
   const only = process.argv[2];
   await login();
   const list = only ? [only] : Object.keys(scenarios);
+  // Review comment #4: previously scenario failures were only logged and
+  // discarded, so the harness reported success even when every chat request
+  // failed or expected VFS side effects were missing. Validate each result
+  // and exit with a nonzero status so this can serve as a real E2E gate.
+  let failed = 0;
   for (const name of list) {
     if (!scenarios[name]) { log(`no scenario ${name}`); continue; }
-    try { await scenarios[name](); }
-    catch (e) { log(`✗ ${name} threw: ${e.stack || e.message}`); }
+    let r;
+    try {
+      r = await scenarios[name]();
+    } catch (e) {
+      log(`✗ ${name} threw: ${e.stack || e.message}`);
+      failed++;
+      continue;
+    }
+    const v = validateResult(name, r || {});
+    if (v.reasons.length) log(`  validate[${name}]: ${v.pass ? 'PASS' : 'FAIL'} — ${v.reasons.join('; ')}`);
+    if (!v.pass) failed++;
   }
   hr();
-  log('DONE');
+  log(failed === 0 ? 'DONE — all scenarios passed' : `DONE — ${failed} scenario(s) FAILED`);
+  if (failed > 0) process.exit(1);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

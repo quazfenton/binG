@@ -71,6 +71,13 @@ export interface AgentMessage {
   toolName?: string;
 }
 
+export interface AgentInitialContext {
+  /** Route-built workspace, retrieval, memory, and role context. */
+  systemPrompt?: string;
+  /** Prior user/assistant turns; the current task is appended by executeTask. */
+  conversationHistory?: AgentMessage[];
+}
+
 export interface AgentResult {
   success: boolean;
   results: AgentIterationResult[];
@@ -125,6 +132,7 @@ export class AgentLoop {
   private toolLoopAgent: any | null = null;
   private useToolLoopAgent: boolean = false;
   private configuredModel?: string;
+  private initialSystemPrompt = '';
   /** Optional bootstrapped agency for learned tool selection */
   private agency: any = null;
   // Track tool invocations manually since ToolLoopAgent may not populate result.toolInvocations
@@ -171,12 +179,16 @@ export class AgentLoop {
     maxIterations: number = 10,
     toolOptions: FilesystemToolOptions = {},
     model?: string,
+    initialContext: AgentInitialContext = {},
   ) {
     this.context = {
       userId,
       workspacePath,
-      conversationHistory: [],
+      conversationHistory: (initialContext.conversationHistory || [])
+        .filter(message => message.role === 'user' || message.role === 'assistant')
+        .map(message => ({ ...message })),
     };
+    this.initialSystemPrompt = initialContext.systemPrompt || '';
     this.maxIterations = maxIterations;
     this.configuredModel = model;
     this.tools = createFilesystemTools(userId, {
@@ -220,6 +232,7 @@ export class AgentLoop {
    * Execute a task using ToolLoopAgent (if available) or fallback to manual loop
    */
   async executeTask(task: string): Promise<AgentResult> {
+    await this.ensureWorkspaceSnapshot();
     if (this.useToolLoopAgent && !this.toolLoopAgent) {
       // Lazy initialize ToolLoopAgent with user's configured provider
       await this.initializeToolLoopAgent();
@@ -239,6 +252,7 @@ export class AgentLoop {
     // Reset tracking array for each execution to avoid stale data from prior tasks
     this.lastExecutedToolCalls = [];
 
+    await this.ensureWorkspaceSnapshot();
     if (this.useToolLoopAgent && !this.toolLoopAgent) {
       // Lazy initialize ToolLoopAgent with user's configured provider
       await this.initializeToolLoopAgent();
@@ -551,8 +565,8 @@ export class AgentLoop {
     
     log.info(`Executing task with Vercel AI SDK: ${task.substring(0, 100)}${task.length > 100 ? '...' : ''}`);
 
-    // Pre-build workspace snapshot before constructing system prompt
-    this.cachedWorkspaceSnapshot = await buildWorkspaceSnapshot(this.context.userId);
+    // Pre-build workspace snapshot before constructing system prompt.
+    await this.ensureWorkspaceSnapshot();
 
     // Add system prompt first
     const systemPrompt = this.buildSystemPrompt();
@@ -936,6 +950,12 @@ export class AgentLoop {
    */
   private cachedWorkspaceSnapshot: string | null = null;
 
+  private async ensureWorkspaceSnapshot(): Promise<void> {
+    if (this.cachedWorkspaceSnapshot === null) {
+      this.cachedWorkspaceSnapshot = await buildWorkspaceSnapshot(this.context.userId);
+    }
+  }
+
   /**
    * Build system prompt for agent using shared prompt builder.
    */
@@ -946,6 +966,7 @@ export class AgentLoop {
       currentFile: this.context.currentFile,
       lastAction: this.context.lastAction,
       toolDescriptions: this.tools.map(t => `- **${t.name}**: ${t.description}`).join('\n'),
+      extraInstructions: this.initialSystemPrompt,
     });
   }
 
@@ -1467,6 +1488,7 @@ export function createAgentLoop(
   maxIterations?: number,
   toolOptions?: FilesystemToolOptions,
   model?: string,
+  initialContext?: AgentInitialContext,
 ): AgentLoop {
-  return new AgentLoop(userId, workspacePath, maxIterations, toolOptions, model);
+  return new AgentLoop(userId, workspacePath, maxIterations, toolOptions, model, initialContext);
 }

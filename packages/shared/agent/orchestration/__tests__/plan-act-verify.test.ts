@@ -131,7 +131,7 @@ describe('callLLM retry wrapper', () => {
       { role: 'user', content: 'test prompt' },
     ]);
     expect(fallbackCallArgs.tools).toBeUndefined();
-    expect(fallbackCallArgs.maxSteps).toBe(1);
+    expect(fallbackCallArgs.maxOutputTokens).toBe(4000);
   });
 
   it('succeeds on first attempt when history has no system messages', async () => {
@@ -146,6 +146,50 @@ describe('callLLM retry wrapper', () => {
 
     expect(result.text).toBe('first-try success');
     expect(mockGenerateText).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes caller workspace context through the system channel', async () => {
+    const orchestrator = new PlanActVerifyOrchestrator({
+      iterationConfig: { maxIterations: 5, maxTokens: 10000, maxDurationMs: 60000 },
+      tools: [],
+      executeTool: vi.fn().mockResolvedValue({ ok: true }),
+      systemPrompt: 'SMART_CONTEXT_SENTINEL',
+    });
+    mockGenerateText.mockResolvedValue({ text: 'ok', usage: { totalTokens: 1 } });
+
+    await (orchestrator as any).callLLM('ORIGINAL_TASK_SENTINEL', historyWithSystem);
+
+    const args = mockGenerateText.mock.calls[0][0];
+    expect(args.system).toContain('SMART_CONTEXT_SENTINEL');
+    expect(args.messages.some((message: any) => message.role === 'system')).toBe(false);
+    expect(args.messages.at(-1)).toEqual({ role: 'user', content: 'ORIGINAL_TASK_SENTINEL' });
+  });
+
+  it('applies an adopted role to subsequent system prompts', async () => {
+    const orchestrator = makeOrchestrator();
+    const adopted = (orchestrator as any).adoptRole({
+      role: 'reviewer',
+      reason: 'Review the completed change for quality',
+    });
+    mockGenerateText.mockResolvedValue({ text: 'ok', usage: { totalTokens: 1 } });
+
+    await (orchestrator as any).callLLM('next turn', []);
+
+    expect(adopted.success).toBe(true);
+    expect(mockGenerateText.mock.calls[0][0].system).toContain('### Active Expert Role');
+    expect(mockGenerateText.mock.calls[0][0].system.toLowerCase()).toContain('review');
+  });
+});
+
+describe('verification coverage', () => {
+  it('tracks common single-file and batch write aliases', () => {
+    const orchestrator = makeOrchestrator();
+
+    expect((orchestrator as any).getModifiedPaths('write_file', { path: 'src/a.ts' })).toEqual(['src/a.ts']);
+    expect((orchestrator as any).getModifiedPaths('apply_diff', { file: 'src/b.ts' })).toEqual(['src/b.ts']);
+    expect((orchestrator as any).getModifiedPaths('batch_write', {
+      files: [{ path: 'src/a.ts' }, { path: 'src/c.ts' }],
+    })).toEqual(['src/a.ts', 'src/c.ts']);
   });
 });
 
@@ -203,14 +247,10 @@ describe('stepHistory threading', () => {
     const step2Messages = mockGenerateText.mock.calls[2][0].messages;
 
     // Should contain the assistant message from step 1
-    expect(step2Messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: 'assistant',
-          content: 'Let me read the source files first.',
-        }),
-      ]),
-    );
+    const step1Assistant = step2Messages.find((message: any) => message.role === 'assistant');
+    expect(step1Assistant.content).toEqual(expect.arrayContaining([
+      { type: 'text', text: 'Let me read the source files first.' },
+    ]));
 
     // Should contain the tool result from step 1 (read_file call)
     expect(step2Messages).toEqual(
@@ -282,6 +322,12 @@ describe('stepHistory threading', () => {
       errors: [],
     });
 
+    // Independent reviewer passes after deterministic verification.
+    mockGenerateText.mockResolvedValueOnce({
+      text: JSON.stringify({ passed: true, issues: [] }),
+      usage: { totalTokens: 5 },
+    });
+
     // Respond phase
     mockGenerateText.mockResolvedValueOnce({
       text: 'Fixed the file after verification failure.',
@@ -293,19 +339,18 @@ describe('stepHistory threading', () => {
       events.push(event);
     }
 
-    // Plan: call 0, Step 1 attempt 1: call 1, Step 1 attempt 2: call 2, Respond: call 3
+    expect(events).toContainEqual({ type: 'review_passed' });
+    expect(mockGenerateText.mock.calls[3][0].messages.at(-1).content).toContain('ORIGINAL REQUEST:\ntest task');
+
+    // Plan: call 0, attempts: calls 1-2, review: call 3, respond: call 4.
     // Step 1 attempt 2 should have history from attempt 1
     const retryMessages = mockGenerateText.mock.calls[2][0].messages;
 
     // Should contain assistant message from first attempt
-    expect(retryMessages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: 'assistant',
-          content: 'Writing the changes.',
-        }),
-      ]),
-    );
+    const firstAttemptAssistant = retryMessages.find((message: any) => message.role === 'assistant');
+    expect(firstAttemptAssistant.content).toEqual(expect.arrayContaining([
+      { type: 'text', text: 'Writing the changes.' },
+    ]));
 
     // Should contain tool result from first attempt (writeFile call-v1)
     expect(retryMessages).toEqual(
@@ -329,10 +374,12 @@ describe('stepHistory threading', () => {
     expect(lastMsg.content).toContain('Verification failed');
 
     // Final respond phase should have BOTH attempts' history
-    const respondMessages = mockGenerateText.mock.calls[3][0].messages;
+    const respondMessages = mockGenerateText.mock.calls[4][0].messages;
     const assistantTexts = respondMessages
       .filter((m: any) => m.role === 'assistant')
-      .map((m: any) => m.content);
+      .flatMap((m: any) => Array.isArray(m.content)
+        ? m.content.filter((part: any) => part.type === 'text').map((part: any) => part.text)
+        : [m.content]);
 
     expect(assistantTexts).toContain('Writing the changes.');
     expect(assistantTexts).toContain('Fixing the syntax issue.');
@@ -398,6 +445,8 @@ describe('stepHistory threading', () => {
 
     // Later steps should still be present
     const lastAssistantContent = allAssistantContents[allAssistantContents.length - 1];
-    expect(lastAssistantContent).toBe('Processing step 18...');
+    expect(lastAssistantContent).toEqual(expect.arrayContaining([
+      { type: 'text', text: 'Processing step 18...' },
+    ]));
   });
 });

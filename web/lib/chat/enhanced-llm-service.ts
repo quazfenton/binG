@@ -3026,6 +3026,10 @@ export async function* streamWithConcurrentFallback(
     fallbackChain,
     ...rest
   } = options;
+  // Track whether the CALLER explicitly set concurrentFallbackMs so we can
+  // decide whether to override the coordinator's silenceMs default. Default
+  // destructuring above can't distinguish "user set 20000" from "default".
+  const concurrentFallbackMsExplicit = 'concurrentFallbackMs' in options;
   const { streamWithVercelAI } = await import('./vercel-ai-streaming');
 
   // Disabled: delegate so the internal speculative fallback runs as before.
@@ -3080,11 +3084,19 @@ export async function* streamWithConcurrentFallback(
   // safe to treat as `StreamingResponse` at this boundary. The cast is
   // localized to the call site rather than baked into the factory's public
   // contract (which would be a type lie — the envelope yields Vercel chunks).
+  //
+  // Review comment #18: only pass `silenceMs` when the caller EXPLICITLY set
+  // `concurrentFallbackMs`. The previous unconditional `silenceMs:
+  // concurrentFallbackMs` (default 20000) always overrode the coordinator's
+  // own ninerouter-class default (5s) — so ninerouter-class production
+  // streams still waited the full 20s before walking the fallback chain,
+  // defeating the provider-specific tuning in coordinateConcurrentFallback.
+  // When unspecified, the coordinator applies its internal default itself.
   yield* coordinateConcurrentFallback<StreamingResponse>({
     primaryProvider: options.provider,
     model: options.model,
     fallbackChain,
-    silenceMs: concurrentFallbackMs,
+    ...(concurrentFallbackMsExplicit ? { silenceMs: concurrentFallbackMs } : {}),
     signal: options.signal,
     requestId: `ellm-${Date.now()}`,
     createPrimaryStream: () => wrapAsHandle() as unknown as Promise<StreamHandle<StreamingResponse>>,

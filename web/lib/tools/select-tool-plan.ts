@@ -143,6 +143,17 @@ export interface SelectToolPlanResult {
   fallbackUsed: boolean;
   /** Total raw positive-intent matches before any trimming. */
   matchCount: number;
+  /**
+   * Whether mutating file tools (VFS write/apply_diff/batch_write) should be
+   * exposed to the model this turn. Propagated from the caller's
+   * `filesystemEditEligible` input so the tool assembler (which only the
+   * plan reaches) can actually gate VFS mutation tools. Pre-fix this flag
+   * lived only on the planner and the assembler had no signal, so
+   * `filesystemEditEligible: false` did NOT prevent VFS write tools from
+   * reaching the model (review comment #5). Defaults to `true` so the
+   * baseline mutation capability is preserved when the caller opts out.
+   */
+  filesystemEditEligible: boolean;
 }
 
 // ============================================================================
@@ -847,6 +858,9 @@ export function selectToolPlan(
     reasons,
     fallbackUsed,
     matchCount,
+    // Default to "edits allowed" — matches the input's documented default
+    // and preserves baseline behavior when the caller doesn't opt in.
+    filesystemEditEligible: input.filesystemEditEligible !== false,
   };
 }
 

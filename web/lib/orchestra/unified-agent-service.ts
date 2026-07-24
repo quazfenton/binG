@@ -2012,22 +2012,16 @@ log.info('[UnifiedAgent] ┌─ MODE SELECTED ───────────�
               orchNonSystem.push(msg);
             }
           }
-          // NOTE: System messages are intentionally discarded here — not
-          // passed to runV1Orchestrated. The PlanActVerifyOrchestrator
-          // does not accept a separate system-prompt parameter; it receives
-          // all context through the messages array. System-role messages
-          // cannot be included there because they trigger Vercel AI SDK
-          // ModelMessage[] schema validation errors inside callLLM.
-          //
-          // On the fallback path (Phase 2 → runV1Api), system messages
-          // are re-extracted from config.conversationHistory and merged
-          // into the `system` parameter of generateText/streamText, where
-          // the AI SDK accepts them.
+          // System-role messages cannot be included in the AI SDK messages
+          // array. Preserve them through the orchestrator's dedicated system
+          // context channel instead of discarding workspace retrieval, memory,
+          // and role instructions before planning.
           const orchMessages = [
             ...orchNonSystem,
             { role: 'user', content: config.userMessage },
           ];
-          return await runV1Orchestrated(config, orchMessages, startTime);
+          const orchSystemPrompt = [...new Set([config.systemPrompt, ...orchSystemParts].filter(Boolean))].join('\n\n');
+          return await runV1Orchestrated(config, orchMessages, startTime, orchSystemPrompt);
         }
 
         case 'v2-native':
@@ -5662,7 +5656,8 @@ async function runV1ApiWithTools(
 async function runV1Orchestrated(
   config: UnifiedAgentConfig,
   messages: any[],
-  startTime: number
+  startTime: number,
+  systemPrompt: string = '',
 ): Promise<UnifiedAgentResult> {
   // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
   const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -5708,6 +5703,7 @@ async function runV1Orchestrated(
     },
     tools: config.tools || [],
     executeTool: capabilityExecuteTool,
+    systemPrompt,
   };
 
   const orchestrator = new PlanActVerifyOrchestrator(orchestratorConfig);
