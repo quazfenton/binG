@@ -13,7 +13,7 @@ const BASE_URL = 'http://127.0.0.1:3000';
 function curlPost(url, data, headers = {}) {
   return new Promise((resolve, reject) => {
     const headerArgs = Object.entries(headers).flatMap(([k, v]) => ['-H', `${k}: ${v}`]);
-    const args = ['-X', 'POST', url, '-H', 'Content-Type: application/json', ...headerArgs, '-d', JSON.stringify(data), '-m', '120', '-v'];
+    const args = ['-f', '-X', 'POST', url, '-H', 'Content-Type: application/json', ...headerArgs, '-d', JSON.stringify(data), '-m', '120', '-v'];
     
     const proc = spawn('curl', args);
     let stdout = '';

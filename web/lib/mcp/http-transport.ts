@@ -162,6 +162,7 @@ export function clearRemoteToolsCache(): void {
  */
 export function clearAllHTTPTransports(): void {
   connectedTransports.clear();
+  clearRemoteToolsCache();
 }
 
 /**

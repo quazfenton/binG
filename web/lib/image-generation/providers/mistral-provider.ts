@@ -18,7 +18,7 @@ import type {
 import { ASPECT_RATIO_DIMENSIONS, ImageGenerationErrorType as ErrorType } from '../types';
 import { createLogger } from '@/lib/utils/logger';
 
-const logger = createLogger('MistralProvider');
+const logger = createLogger('MistralProvider', { secure: true });
 
 export class MistralImageProvider implements ImageGenerationProvider {
   readonly id = 'mistral';

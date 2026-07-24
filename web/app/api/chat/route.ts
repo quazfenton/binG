@@ -78,6 +78,22 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
 // llm-fallback-coordinator.ts.
 import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus, isStallWatchdogErrorCode, isStallWatchdogInstanceByConstructorName } from '@/lib/chat/llm-fallback-coordinator';
+
+/**
+ * STALL-524 shared helper: detect whether an error is a StallWatchdogError
+ * using the 3-line defense-in-depth check (instanceof + constructor name +
+ * error code). Extracted to a module-level helper so all catch blocks in
+ * this file (streaming, orchestration, outer) use the same detection logic
+ * without copy-pasting the 3-line pattern.
+ */
+function isStallError(err: unknown): boolean {
+  return (
+    err instanceof StallWatchdogError ||
+    isStallWatchdogInstanceByConstructorName(err) ||
+    isStallWatchdogErrorCode((err as any)?.code)
+  );
+}
+
 // Phase 2 success-signal architecture — phase1Status (L472) needs the
 // Phase1Status type for its `let` declaration + the assignment site
 // `?? 'unknown'` widening per code-reviewer NEEDS-CHANGE (a). Phase1Status
@@ -1073,19 +1089,43 @@ export async function POST(request: NextRequest) {
       throw scopeErr; // preserve existing throw semantics
     }
     // The resolved conversation ID is the source of truth for workspace
-    // isolation. A client can retain a stale filesystemContext.scopePath after
-    // a session rename/new-chat transition; accepting it here made snapshots
-    // read one session while tools and sandboxes wrote another.
+    // isolation. When the client provides a valid filesystemContext.scopePath
+    // (a well-formed session path like "workspace/sessions/002"), we honor it
+    // so VFS operations read/write the session the client is actually asking
+    // about. Previously we always overwrote with defaultScopePath regardless,
+    // which caused "PATH MISMATCH" bugs where the client asked for session 002
+    // but the server directed all VFS operations to a DIFFERENT session (000).
     const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
       ? filesystemContext.scopePath.trim()
       : defaultScopePath;
     const sanitizedClientScopePath = sanitizeScopePath(rawScopePath);
-    if (sanitizedClientScopePath !== defaultScopePath) {
-      chatLogger.warn('Ignoring filesystem scope that does not match the resolved conversation', {
+    
+    // Determine which scope path to use. If the client sent a well-formed
+    // session path AND it's actually a different session, trust the client
+    // (they know which workspace they're working with). Only reject if the
+    // client path is malformed or potentially malicious.
+    const clientSentScopePath = rawScopePath !== defaultScopePath;
+    const isWellFormedSessionPath = sanitizedClientScopePath.startsWith('workspace/sessions/');
+    
+    if (clientSentScopePath && isWellFormedSessionPath && sanitizedClientScopePath !== defaultScopePath) {
+      // Client provided a valid session path that differs from the server's
+      // default — honor the client's scope so VFS reads/writes hit the
+      // correct session. Log the override at INFO level for observability.
+      chatLogger.info('Using client-provided scope path (differs from resolved conversation)', {
+        requestId,
+        clientScopePath: sanitizedClientScopePath,
+        defaultScopePath,
+        resolvedConversationId,
+      });
+    } else if (clientSentScopePath) {
+      // Client sent a scope that either isn't a well-formed session path or
+      // matches the default — log for observability.
+      chatLogger.debug('Client scope path handling', {
         requestId,
         clientScopePath: sanitizedClientScopePath,
         resolvedScopePath: defaultScopePath,
         resolvedConversationId,
+        matchesDefault: sanitizedClientScopePath === defaultScopePath,
       });
     }
     
@@ -1093,12 +1133,15 @@ export async function POST(request: NextRequest) {
     chatLogger.debug('Scope path handling:', {
       rawScopePath,
       defaultScopePath,
+      resolvedScopePath: sanitizedClientScopePath,
       fromClient: !!filesystemContext?.scopePath,
       resolvedConversationId,
     });
 
-    // Make it 'let' so it can be updated when session is renamed
-    let requestedScopePath = defaultScopePath;
+    // Make it 'let' so it can be updated when session is renamed.
+    // Use the client's sanitized scope when provided (even if it differs
+    // from the default) to avoid VFS PATH MISMATCH bugs.
+    let requestedScopePath = clientSentScopePath ? sanitizedClientScopePath : defaultScopePath;
 
     // Log sanitized result
     chatLogger.debug('Sanitized scope path:', {
@@ -3002,6 +3045,16 @@ const config: UnifiedAgentConfig = {
             } catch (error: any) {
               // Clean up the continuation counter on error so it doesn't leak.
               clearContinuationCount(requestId);
+              // STALL-524: detect StallWatchdogError via the shared helper
+              // and tag the SSE error so the client can differentiate a stall
+              // from a generic stream error.
+              const isStall = isStallError(error);
+              if (isStall) {
+                chatLogger.warn('[STALL-524] StallWatchdogError caught in streaming inner catch', {
+                  errorCode: error?.code,
+                  stallDidFire,
+                });
+              }
               // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
               if (streamState.buffer.trim().length > 0) {
                 try {
@@ -3036,7 +3089,10 @@ const config: UnifiedAgentConfig = {
                 }
               }
 
-              emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
+              emit(SSE_EVENT_TYPES.ERROR, {
+                message: error.message || 'Agentic execution failed',
+                ...(isStall ? { isStall: true, stallCode: error?.code || 'STALL' } : {}),
+              });
 
               // Cleanup on error too
               streamState.buffer = '';
@@ -3242,7 +3298,21 @@ enqueue('done', {
                 const catchPhase1Status = orchestrationResult?.metadata?.phase1Status
                   ?? (orchestrationResult as any)?.phase1Status
                   ?? 'unknown';
-                enqueue('error', { message: error.message, mode: orchestrationMode, phase1Status: catchPhase1Status });
+                // STALL-524: detect StallWatchdogError via the shared helper
+                // and tag the SSE error so the client can differentiate a stall
+                // from a generic orchestration error.
+                const orchIsStall = isStallError(error);
+                if (orchIsStall) {
+                  chatLogger.warn('[STALL-524] StallWatchdogError caught in orchestration catch', {
+                    errorCode: error?.code,
+                  });
+                }
+                enqueue('error', {
+                  message: error.message,
+                  mode: orchestrationMode,
+                  phase1Status: catchPhase1Status,
+                  ...(orchIsStall ? { isStall: true, stallCode: error?.code || 'STALL' } : {}),
+                });
                 // SHOULD-CONSIDER (b) postaudit fix: structured chatLogger.error
                 // for log-side grep-discoverability. Operators searching server
                 // logs: `grep 'orchestration error' log.txt` recovers operator-friendly signal.

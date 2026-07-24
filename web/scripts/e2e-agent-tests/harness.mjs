@@ -221,6 +221,59 @@ async function vfsRead(filePath, ownerId = USER_ID) {
   try { return await res.json(); } catch { return { error: 'bad json', status: res.status }; }
 }
 
+// Validate a scenario result against the route's HTTP contract so a logged
+// (but failed) run actually fails the harness (review comment #4). Streaming
+// and non-streaming responses have different success shapes:
+//   - stream:  HTTP 200, at least one event, and no error events (a server
+//              error is reported either via status !== 200 or an 'error'
+//              event; a 524/500 with zero events is a fail).
+//   - non-stream: HTTP 200 and a parseable JSON body with content (chat result).
+function validateResult(name, r) {
+  const reasons = [];
+  if (!r || typeof r !== 'object') return { pass: false, reasons: ['no result'] };
+
+  if (r.aborted) reasons.push('request aborted (CHAT_TIMEOUT_MS fired)');
+
+  // Best-effort stream mode detection. When summarize() is called on a
+  // helper result (vfsRead/probe), skip HTTP contract validation.
+  const isChatResult =
+    'httpStatus' in r && 'events' in r && 'tokens' in r && 'toolCalls' in r;
+  if (!isChatResult) return { pass: true, reasons: ['non-chat result — skipped'] };
+
+  if (!r.httpStatus || r.httpStatus === 0) {
+    return { pass: false, reasons: [...reasons, `http=${r.httpStatus} (fetch failed)`] };
+  }
+
+  const isStream = r.stream !== false;
+
+  if (r.httpStatus !== 200) {
+    // 524 (stall) and 5xx are acceptable per the route's documented contract
+    // (logged + tracked) but still indicate the scenario did not succeed —
+    // surface them as a failure reason so the operator sees the route
+    // classified the turn as degraded.
+    reasons.push(`http=${r.httpStatus}`);
+  }
+
+  const meaningfulEvents = (r.events || []).filter(
+    (e) => e && e.event && e.event !== 'DONE_SENTINEL',
+  );
+  if (isStream) {
+    if ((r.events || []).length === 0) reasons.push('stream: zero events (response not consumed)');
+    if ((r.tokens || '').length === 0 && meaningfulEvents.length === 0 && r.httpStatus === 200) {
+      reasons.push('stream: no tokens and no meaningful events on HTTP 200');
+    }
+  } else {
+    if ((r.events || []).length === 0) reasons.push('non-stream: no JSON body captured');
+    if ((r.tokens || '').length === 0 && (r.errors || []).length === 0) {
+      reasons.push('non-stream: empty content and no error in JSON body');
+    }
+  }
+
+  if ((r.errors || []).length) reasons.push(`errors=[${(r.errors || []).slice(0, 3).join(', ')}]`);
+
+  return { pass: reasons.length === 0, reasons };
+}
+
 function summarize(name, r) {
   hr();
   log(`SCENARIO: ${name}`);

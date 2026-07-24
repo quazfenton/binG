@@ -1034,7 +1034,45 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             rtkStats,
           };
         } catch (error: any) {
-          let errorMessage = error.message || 'Unknown error';
+          // Bug #77/#83: never surface an empty error on failure — the chat
+          // layer would log "Unknown error" and the LLM cannot self-correct.
+          // When error.message is empty, extract meaningful info from other
+          // error fields (stderr, exitCode, code, statusCode, reason) to give
+          // the LLM actionable feedback instead of the generic fallback.
+          let errorMessage: string;
+          if (error.message) {
+            errorMessage = error.message;
+          } else {
+            // Error object has no .message — build from available fields
+            const parts: string[] = [];
+            if (typeof error.stderr === 'string' && error.stderr.trim()) {
+              parts.push(error.stderr.trim());
+            }
+            if (typeof error.code === 'string' && error.code.trim()) {
+              parts.push(`[${error.code}]`);
+            }
+            if (typeof error.statusCode === 'number' || typeof error.status === 'number') {
+              const sc = error.statusCode ?? error.status;
+              parts.push(`HTTP ${sc}`);
+            }
+            if (typeof error.reason === 'string' && error.reason.trim()) {
+              parts.push(error.reason.trim());
+            }
+            if (typeof error.exitCode === 'number' && error.exitCode !== 0) {
+              parts.push(`exit code ${error.exitCode}`);
+            }
+            if (typeof error.signal === 'string') {
+              parts.push(`signal ${error.signal}`);
+            }
+            if (parts.length > 0) {
+              errorMessage = `Command failed: ${parts.join(' — ')}`;
+            } else {
+              // Truly nothing to extract — give the LLM the result keys and a nudge
+              const keys = error ? Object.keys(error) : [];
+              errorMessage = `Command failed without details` +
+                (keys.length > 0 ? ` (available fields: [${keys.join(', ')}])` : '');
+            }
+          }
 
           // Bug #39: If the command was blocked by the safety/router layer
           // (routeDecision.mode === 'blocked' or 'confirm'), surface a

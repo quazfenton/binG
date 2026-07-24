@@ -65,6 +65,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // CLI parser
@@ -93,7 +94,7 @@ const topN = parseInt(getOpt('top', String(50)) ?? '50', 10);
 // Paths + ANSI helpers
 // ---------------------------------------------------------------------------
 
-const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');
 
 const c = {

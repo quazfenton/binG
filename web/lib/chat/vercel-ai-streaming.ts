@@ -3253,11 +3253,32 @@ try {    while (thinkPingQueue.length > 0) {
                       });
                       return helperPrompt || `Re-read the tool description and provide all required fields.`;
                     })()
-                  : (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined);
+                  : (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined);            // Bug #3 (DIFF_MISMATCH cascade from COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT):
+            // inject a forceful recovery steer when applyDiff fails with a
+            // mismatch. The LLM should regenerate the SEARCH block using the
+            // currentFileContent provided in the error, NOT try bash_execute.
+            if (errObj?.code === 'DIFF_MISMATCH') {
+              const cf = typeof errObj?.currentFileContent === 'string' && errObj.currentFileContent.length > 0
+                ? errObj.currentFileContent.slice(0, 1000) + (errObj.currentFileContent.length > 1000 ? '...' : '')
+                : null;
+              const path = errObj?.attemptedPath || errObj?.path || '';
+              toolResult._recoveryHint =
+                `DIFF_MISMATCH on "${path}". ` +
+                `The file was already modified since the SEARCH block was generated. ` +
+                (cf
+                  ? `Current content (first ~1000 chars):\n${cf}`
+                  : `Call read_file("${path}") to get the current content first.`) +
+                ` Regenerate the SEARCH/REPLACE block to match the current content exactly. ` +
+                `Do NOT try bash_execute — it will NOT fix a diff mismatch. ` +
+                `Use the current content above to fix the SEARCH block and re-apply.`;
+            } else {
               toolResult._recoveryHint = errObj?.suggestedNextAction
-                || (errObj?.code === 'PATH_NOT_FOUND' ? `Check the path and call list_files on the parent directory.` : undefined)
+                || (errObj?.code === 'PATH_NOT_FOUND'
+                  ? `Check the path and call list_files on the parent directory.`
+                  : undefined)
                 || invalidArgsHint
                 || `Read the error carefully. Do NOT retry the exact same call — try a different approach.`;
+            }
             }
             // Wrap plain-string errors into structured format for consistency
             if (typeof errObj === 'string') {
