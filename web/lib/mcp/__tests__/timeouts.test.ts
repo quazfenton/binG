@@ -43,8 +43,13 @@ const CALLERS = [
   { path: '../packages/shared/agent/unified-agent.ts',      pattern: /MCP_AGENT_TIMEOUT_MS/ },
   { path: '../packages/shared/agent/task-router.ts',         pattern: /MCP_AGENT_TIMEOUT_MS/ },
   { path: '../packages/shared/agent/opencode-direct.ts',     pattern: /MCP_AGENT_TIMEOUT_MS/ },
-  // route.ts agentTurnSignal
-  { path: 'app/api/chat/route.ts',                           pattern: /MCP_AGENT_TIMEOUT_MS/ },
+  // NOTE: route.ts is deliberately NOT in this list. The per-turn agent
+  // signal used to bundle `AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)`,
+  // but doing so capped the whole agent turn (and the 240s fallback chain
+  // budget) at 60s and bypassed the route's stall-watchdog 524 mapping.
+  // `MCP_AGENT_TIMEOUT_MS` now stays scoped to INDIVIDUAL MCP tool calls,
+  // enforced at the tool-call layer (callMCPToolFromAI_SDK + task-router).
+  // The route's own ROUTE_MAX_TURN_MS stall watchdog bounds the turn.
   // http-transport.ts re-exports INIT_PROBE_TIMEOUT_MS from timeouts.ts
   { path: 'lib/mcp/http-transport.ts',                       pattern: /INIT_PROBE_TIMEOUT_MS/ },
   // architecture-integration.ts uses INIT_PROBE_TIMEOUT_MS

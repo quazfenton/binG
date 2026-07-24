@@ -152,8 +152,10 @@ describe('Unified Agent Mode Routing - Brevity Fix', () => {
 
       const result = decideRouteMode(signals);
       // Note: This would depend on other routing rules (stronglyAgentic, etc.)
-      // Just ensure it doesn't prevent routing based on brevity alone
-      expect(result).toBeDefined();
+      // Ensure the mutation-verb signal routes to the heavier v1-agent-loop
+      // path rather than the brevity v1-api shortcut, matching the sibling
+      // assertion above for the non-brevity-bypass case.
+      expect(result.mode).toBe('v1-agent-loop');
     });
   });
 

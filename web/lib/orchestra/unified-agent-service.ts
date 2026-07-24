@@ -272,7 +272,14 @@ const log = createLogger('UnifiedAgentService');
 // In-process orchestrator concurrency limiter to prevent "All workers are busy" failures.
 // Simple FIFO queue with a configurable max concurrency. This is an additive safety
 // layer that queues requests when the orchestrator is saturated instead of failing.
-const ORCH_MAX_CONCURRENCY = Number.parseInt(process.env.ORCH_MAX_CONCURRENCY || '3', 10);
+const ORCH_MAX_CONCURRENCY = (() => {
+  const parsed = Number.parseInt(process.env.ORCH_MAX_CONCURRENCY || '3', 10);
+  // Guard against a malformed/non-positive env value. NaN (e.g. "abc") or
+  // a value <= 0 (e.g. "0", "-1") would make the `_orchCurrent < cap` gate
+  // always false, queueing EVERY orchestrated request forever. Fall back to
+  // the documented default of 3 so the limiter is always safe to acquire.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+})();
 let _orchCurrent = 0;
 const _orchQueue: Array<() => void> = [];
 async function acquireOrchSlot(): Promise<void> {
@@ -5950,7 +5957,22 @@ async function runV1Orchestrated(
         // was fired due to orchestrator timeout (not user abort).
         // The orchestrator may have timed out, but that doesn't mean the
         // fallback v1-api should be rejected without attempting it.
+        //
+        // HOWEVER the previous implementation discarded `config.abortSignal`
+        // entirely, so a genuine user cancellation no longer stopped the
+        // fallback. Compose the fresh fallback controller WITH the caller's
+        // signal so: (a) an orchestrator-timeout (fired only on the fresh
+        // controller's sibling state) does NOT prematurely abort the
+        // fallback, and (b) the user's own abort still propagates. The
+        // fresh controller is kept as a no-op here for API symmetry with
+        // the original comment; the load-bearing cancellation path is the
+        // composed signal below. (AbortSignal.any is supported on the same
+        // runtime the route already relies on it — Node 20+/Edge.)
         const fallbackAbortController = new AbortController();
+        const composedFallbackSignal =
+          config.abortSignal
+            ? AbortSignal.any([config.abortSignal, fallbackAbortController.signal])
+            : fallbackAbortController.signal;
         // When falling back due to orchestration failure (often a 400
         // "model not supported" error), strip the invalid model so v1-api
         // uses the provider's default instead of retrying the same bad model.
@@ -5962,7 +5984,7 @@ async function runV1Orchestrated(
         const fallbackConfig = {
           ...config,
           model: fallbackModel,
-          abortSignal: fallbackAbortController.signal,
+          abortSignal: composedFallbackSignal,
         };
         
         const fallbackResult = await runV1Api(fallbackConfig);
@@ -6008,8 +6030,6 @@ async function runV1Orchestrated(
             : (config.conversationId || config.userId || 'default'),
           budgetExhausted,
         });
-        // Release orchestrator slot before returning
-        try { releaseOrchSlot(); } catch { /* best-effort */ }
         return _tagged;
       } catch (fbError: any) {
         log.error('[runV1Orchestrated] v1-api fallback also failed', { error: fbError?.message || String(fbError) });
@@ -6071,7 +6091,6 @@ async function runV1Orchestrated(
             }} : {}),
           },
         };
-        try { releaseOrchSlot(); } catch { /* best-effort */ }
         return _resFallbackFailed;
       }
     }
@@ -6100,7 +6119,6 @@ async function runV1Orchestrated(
         } : undefined,
       },
     };
-    try { releaseOrchSlot(); } catch { /* best-effort */ }
     return _resSuccess;
   } catch (err: any) {
     invalidateDynamicDefaultsCache();
@@ -6120,8 +6138,16 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
-    try { releaseOrchSlot(); } catch { /* best-effort */ }
     throw err;
+  } finally {
+    // Single slot-release site covering EVERY exit (success-returns inside
+    // the try, the early v1-api-fallback return, the re-thrown error path,
+    // and any uncaught throw). Previously the per-acquire slot was released
+    // ad-hoc in four separate branches, and the v1-api-fallback-chain
+    // success return missed a release — permanently exhausting the limiter.
+    // `releaseOrchSlot` is idempotent-safe (it clamps via Math.max(0, ...)),
+    // so a finally-only release guarantees exactly one decrement per acquire.
+    try { releaseOrchSlot(); } catch { /* best-effort */ }
   }
 }
 
@@ -6869,6 +6895,7 @@ function modeToCapFlag(mode: string): keyof StartupCapabilities | null {
     case 'v2-native': return 'v2Native';
     case 'v2-containerized': return 'v2Containerized';
     case 'v2-local': return 'v2Local';
+    case 'v1-api': return 'v1Api';
     case 'v1-agent-loop': return 'statefulAgent';
     case 'mastra-workflow': return 'mastraWorkflows';
     default: return null;

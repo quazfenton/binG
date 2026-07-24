@@ -120,14 +120,14 @@ async function invokeGatewayAndCaptureB1(): Promise<number> {
 
   const b1LogCall = infoSpy.mock.calls.find(
     (c) =>
-      typeof c[0] === 'object' &&
-      c[0] !== null &&
-      (c[0] as { boundary?: string }).boundary === 'pre_response',
+      typeof c[1] === 'object' &&
+      c[1] !== null &&
+      (c[1] as { boundary?: string }).boundary === 'pre_response',
   );
   if (!b1LogCall) {
     throw new Error('b1 elapsedMs log not captured — gateway L288 marker missing or signature changed');
   }
-  return (b1LogCall[0] as { elapsedMs: number }).elapsedMs;
+  return (b1LogCall[1] as { elapsedMs: number }).elapsedMs;
 }
 
 describe('/api/auth/login cold-vs-warm micro-benchmark (b0/b1 boundary capture)', () => {

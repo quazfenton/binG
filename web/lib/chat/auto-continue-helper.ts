@@ -282,6 +282,7 @@ export const SHOULD_AUTO_CONTINUE_REASONS: Set<string> = new Set<string>([
   'single_step_read_pattern',
   'plan_steps_remaining',
   'single_write_then_stop',
+  'llm_continue_token_detected',
   'no_continuation_needed',
   'max_continuations_reached',
   'max_iterations',

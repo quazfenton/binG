@@ -957,13 +957,20 @@ export class EnhancedLLMService {
           // matching error signatures (4xx, 5xx-mismatch, 530-mismatch)
           // leave both counters untouched; only the corresponding
           // success-path helpers decrement them on a successful
-          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
-              record530ErrorIfApplicable(fallbackProvider, fallbackError);
-              // F3 fix: also track 429 rate-limit responses so the
-              // next fallback iteration skips the rate-limited provider
-              // instead of re-trying it. Tracker is independent;
-              // 429/5xx/530 counters do not interfere.
-              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
+          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).
+          //
+          // Restoration (review comment #13): the 5xx/530 calls below were
+          // accidentally merged into the comment above (the code text ran off
+          // the comment line) so they never executed — fallback 5xx failures
+          // stopped being recorded for blacklist tracking. Restored as real
+          // statements so the per-provider blacklists stay accurate.
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
+          // F3 fix: also track 429 rate-limit responses so the
+          // next fallback iteration skips the rate-limited provider
+          // instead of re-trying it. Tracker is independent;
+          // 429/5xx/530 counters do not interfere.
+          recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,
@@ -1624,18 +1631,19 @@ export class EnhancedLLMService {
             latencyMs: fallbackLatency,
             error: errorMsg,
           });
-          // Record error for blacklist tracking (mirrors non-streaming fallback)          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          // Record error for blacklist tracking (mirrors non-streaming fallback).
+          // Restoration (review comment #14): the 5xx call below was merged into
+          // the comment line so it never executed, and `recordRateLimitedIfApplicable`
+          // fired TWICE (lines 1639 + 1645) double-counting 429s. Restored the 5xx
+          // call, kept the 530 call, and collapsed the duplicate 429 record to one
+          // so blacklist state and rate-limit counters stay accurate.
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
           // F3 fix: also track 429 rate-limit responses so the
           // next fallback iteration skips the rate-limited provider
-          // instead of re-trying it. Tracker is independent;
-          // 429/5xx/530 counters do not interfere.
+          // instead of re-trying it. Tracker is independent (its own Map);
+          // 429/5xx/530 counters don't interfere.
           recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
-              record530ErrorIfApplicable(fallbackProvider, fallbackError);
-              // F3 fix: also track 429 rate-limit responses so the next
-              // fallback iteration skips the rate-limited provider instead
-              // of re-trying it. Tracker is independent (its own Map), so
-              // 429/5xx/530 counters don't interfere.
-              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
           lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
           // Continue to next fallback in chain

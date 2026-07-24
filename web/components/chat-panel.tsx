@@ -244,7 +244,7 @@ export function ChatPanel({
           </div>
         )}
 
-        {messages.map((m: Message) => {
+        {messages.map((m: Message, index: number) => {
           // `lastAssistantId` is memoised above — reuse it to avoid an
           // O(n²) `[...messages].reverse().find(...)` per message in
           // the render loop.
@@ -266,7 +266,7 @@ export function ChatPanel({
             showSuggestionsUnderThis && m.id === lastAssistantId;
           
           return (
-            <div key={m.id}>
+            <div key={m.id ?? `msg-${index}`}>
               <MessageBubble
                 message={m}
                 isStreaming={isCurrentlyStreaming}

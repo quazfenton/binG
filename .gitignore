@@ -9,6 +9,8 @@
 **/node_modules/
 
 
+pr-comments**/
+
 # next.js
 **/.next/
 /out/

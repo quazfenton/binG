@@ -1151,7 +1151,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             model: this.validatedConfig.model,
             provider: this.validatedConfig.provider,
             toolName: name,
-            redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+            redactedArgs: JSON.stringify(redactArgsForLogging(args, { deep: true })),
             originStack: createOriginStack(),
             toolCallId,
           });
@@ -1180,7 +1180,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               model: this.validatedConfig.model,
               provider: this.validatedConfig.provider,
               toolName: name,
-              redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+              redactedArgs: JSON.stringify(redactArgsForLogging(args, { deep: true })),
               originStack: createOriginStack(),
               toolCallId,
             });

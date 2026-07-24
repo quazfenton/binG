@@ -38,7 +38,7 @@ import { workflowTemplateService } from '@bing/shared/agent/workflow-templates';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 // F2 minimal-fix Change C — bumpProgress observability helper. The existing
 // `lastProgressAt` module-local variable is preserved (it's the watchdog's
 // primary read at route.ts L2056/L2065/L2071); bumpProgress is additive —
@@ -1663,8 +1663,8 @@ FORMAT RULES:
     // response is freed even if the underlying SDK/provider ignores the abort.
     const agentTurnAbort = new AbortController();
     const agentTurnSignal: AbortSignal = request.signal
-      ? AbortSignal.any([request.signal, agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)])
-      : AbortSignal.any([agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)]);
+      ? AbortSignal.any([request.signal, agentTurnAbort.signal])
+      : agentTurnAbort.signal;
 
     // Chat-hang-fix #3 — HOISTED route-level stall watchdog.
     //
@@ -2355,6 +2355,14 @@ const config: UnifiedAgentConfig = {
                   // requestId into a closure-local BEFORE the void chain keeps
                   // correlation even when chatLogger's ALS scope is gone.
                   const toolTelemetryReqId = requestId;
+                  // TODO: migrate to unwrapStructuredToolError when V2-path
+                  // surfaces tool errors to LLM. Currently recordToolCall logs
+                  // result.error for telemetry but does NOT surface the
+                  // structured error to the LLM-facing message. When it does,
+                  // use unwrapStructuredToolError(result.error) from
+                  // @/lib/mcp/orchestrator-error-unwrap rather than building
+                  // the [ORCHESTRATOR-UNWRAP]: block inline.
+                  // Tracked in /opt/bing/.tickets/UNWRAP-HELPER-MIGRATION.md
                   void import('@/lib/tools/tool-call-tracker')
                     .then(({ toolCallTracker }) => {
                       toolCallTracker.recordToolCall({

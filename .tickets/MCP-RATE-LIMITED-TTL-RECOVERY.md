@@ -1,6 +1,19 @@
 # MCP-RATE-LIMITED-TTL-RECOVERY — TTL-based blacklist recovery design
 
-**Status**: 🟡 OPEN (2026-07-16)
+**Status**: ✅ CLOSED (2026-07-23)
+
+**Closure evidence:**
+
+- [x] 1. `recordRateLimitedIfApplicable` now accepts optional 3rd arg `retryAfterMs` for Retry-After header capture
+- [x] 2. `_blacklist` entries auto-evict after `RATE_LIMIT_BLACKLIST_TTL_MS` (default 5 min) via periodic `setInterval` clear at `RATE_LIMIT_CLEAR_INTERVAL_MS` (default 1 min)
+- [x] 3. When `RATE_LIMIT_USE_RETRY_AFTER=true` (default) and `Retry-After` is present, entry uses `retryAfterMs` instead of global TTL
+- [x] 4. The clear-interval handle is `.unref()`-ed so it doesn't keep the event loop alive
+- [x] 5. Vitest test: auto-eviction after TTL (fake timers) — passed
+- [x] 6. Vitest test: Retry-After override (60s Retry-After wins over 5min global TTL) — passed
+- [x] 7. Vitest test: `RATE_LIMIT_USE_RETRY_AFTER=false` uses global TTL regardless of Retry-After — passed
+- [x] 8. Vitest test: `setInterval` dedup guard (only 1 interval created for 2 calls) — passed
+- [x] 9. All 10 existing tests pass (boolean contract preserved, backward compatible)
+- [x] 10. Header JSDoc updated to reflect TTL recovery (removed "no built-in TTL recovery" admission)
 **Parent**: F3 rate-limit circuit breaker audit thread (companion to the F3 fallback-chain blacklist fix at enhanced-llm-service.ts:L880 + L1467)
 **Owner**: TBD
 **Priority**: P2 (no immediate user impact — the blacklist works, but operators have no built-in way to recover a provider after the upstream rate limit clears short of a process restart)

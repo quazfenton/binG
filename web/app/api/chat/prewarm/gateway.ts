@@ -28,9 +28,16 @@ export async function GET(request?: Request) {
       timestamp: Date.now(),
     });
   } catch (error) {
-    logger.error("Prewarm error:", error);
+    // Logger stores the Error in the entry's `error` field (only printed with
+    // includeStack=true, default false), so folding the error message into the
+    // message string guarantees console shows it. Keep the Error as the 2nd
+    // arg so Sentry/structured entry still captures the stack.
+    logger.error(
+      'Prewarm error: ' + (error instanceof Error ? error.message : String(error)),
+      error instanceof Error ? error : undefined,
+    );
     return NextResponse.json(
-      { error: "Failed to pre-warm" },
+      { error: 'Failed to pre-warm' },
       { status: 500 }
     );
   }

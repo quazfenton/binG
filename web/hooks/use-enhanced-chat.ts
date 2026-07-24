@@ -1434,9 +1434,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   enhancedBufferManager.completeSession(sessionId);
 
                   // Update message with metadata and content from done event
-                  // CRITICAL FIX: Use done event content as PRIMARY (it has the complete content)
-                  // accumulatedContent may be incomplete if stream parsing got stuck
-                  const doneContent = eventData.content || accumulatedContent || '';
+                  // CRITICAL FIX: Use done event content as PRIMARY only when
+                  // it's longer than or equal to accumulatedContent. The done
+                  // event's `content` field is the tool output summary but may
+                  // be shorter than the full text stream (the 121-vs-2124 bug).
+                  // accumulatedContent is built from every `data: {content}...`
+                  // token in the SSE stream, so it's the authoritative full
+                  // response text. Only prefer doneContent when accumulated is
+                  // empty or the done event has a superset of the text.
+                  const doneContent = (eventData.content && accumulatedContent &&
+                    eventData.content.length >= accumulatedContent.length)
+                    ? eventData.content
+                    : (accumulatedContent || eventData.content || '');
 
                   // Debug: Log if done event content differs from accumulated (indicates streaming issue)
                   const contentSource = eventData.content ? 'done-event' : 'accumulated';

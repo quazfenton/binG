@@ -841,7 +841,11 @@ export default {
           ct === 'application/zip' || ct === 'application/gzip' ||
           ct === 'application/x-tar';
         if (!isBinary) {
-          responseBody = createKeepAliveStream(responseBody, 10_000);
+          // 5s heartbeat (down from 10s) — cloudflared tunnel idle timeout
+          // is ~15s on many deployments. A 10s heartbeat meant the timer
+          // only had one 5s grace period before the tunnel dropped. With
+          // 5s heartbeats, we get three chances before the 15s mark.
+          responseBody = createKeepAliveStream(responseBody, 5_000);
         }
       }
 
@@ -935,10 +939,19 @@ function createKeepAliveStream(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let reader: ReadableStreamDefaultReader<Uint8Array>;
   let lastWrite = Date.now();
+  let upstreamAlive = true;
 
   const heartbeat = encoder.encode(':\n\n');
 
   function watchDog(controller: ReadableStreamDefaultController): void {
+    if (!upstreamAlive) {
+      // Upstream fetch has already dropped. Don't keep injecting heartbeats
+      // into a dead connection — close the stream cleanly so the client sees
+      // natural end-of-stream (done event) instead of an error.
+      if (timer) clearTimeout(timer);
+      try { controller.close(); } catch { /* already closed */ }
+      return;
+    }
     if (Date.now() - lastWrite >= idleTimeoutMs) {
       try {
         lastWrite = Date.now();
@@ -960,6 +973,7 @@ function createKeepAliveStream(
       function pump(): void {
         reader.read().then(({ done, value }) => {
           if (done) {
+            upstreamAlive = false;
             if (timer) clearTimeout(timer);
             controller.close();
             return;
@@ -968,8 +982,19 @@ function createKeepAliveStream(
           controller.enqueue(value);
           pump();
         }).catch(err => {
+          // UPSTREAM FETCH FAILED (tunnel dropped, backend went away, idle
+          // timeout exceeded). Mark the upstream as dead, then close the
+          // controller cleanly so the client sees natural EOF instead of a
+          // stream error. The SSE client's 'done' handler will fire and the
+          // app can gracefully handle a truncated response (e.g. auto-retry
+          // with the context it has so far).
+          //
+          // Do NOT call controller.error(err) — that propagates a stream
+          // error to the client, which triggers error handlers in fetch()
+          // consumers and prevents the ~'done'~ handler from ever firing.
+          upstreamAlive = false;
           if (timer) clearTimeout(timer);
-          controller.error(err);
+          try { controller.close(); } catch { /* already closed */ }
         });
       }
 
@@ -977,6 +1002,7 @@ function createKeepAliveStream(
     },
     cancel() {
       if (timer) clearTimeout(timer);
+      upstreamAlive = false;
       reader?.cancel();
     },
   });

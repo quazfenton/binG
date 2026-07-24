@@ -1,6 +1,16 @@
 # TO-NU-INTERACTIVE-INJECT — Nushell Interactive Init Injection
 
-**Status**: OPEN (2026-07-16)
+**Status**: ✅ CLOSED (2026-07-23)
+
+**Closure evidence:**
+- [x] `/usr/bin/nu` + `/bin/nu` + `nushell` added to `ALLOWED_SHELLS` (gateway.ts)
+- [x] `buildNuSafeShellWrapper` imported from `@/lib/terminal/shell-init-emitter`
+- [x] `createSafeShellWrapper` return type extended with `preInitLines?: string[]`
+- [x] Nu branch returns `preInitLines: buildNuSafeShellWrapper(workspaceDir).split('\n')`
+- [x] `createDirectPtySession` writes `preInitLines` to `pty.write()` immediately after `pty.spawn()`
+- [x] New test file: `__tests__/api/terminal/local-pty-nu-init.test.ts` (9/9 assertions, static source analysis)
+- [x] `tsc --noEmit` — 0 errors on `gateway.ts`
+- [x] Existing bash/zsh/fish paths byte-identical (no regression)
 **Priority**: P2 (correctness/security boundary)
 **Owner**: Terminal Panel team
 **Origin**: Nushell extension build cycle (see `/opt/bing/web/lib/terminal/shell-init-emitter.ts`)

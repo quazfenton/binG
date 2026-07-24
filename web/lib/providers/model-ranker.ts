@@ -100,13 +100,19 @@ export async function refreshModelTelemetryCache(): Promise<void> {
 
     // Rec #3 fix: previously this line was `toolCallTracker.getModelToolStats(10).catch(() => [])`
     // which silently swallowed telemetry-read errors and made rotation blind
-    // when tracker access failed. Removing the inner .catch(() => []) means
-    // any tracker rejection now propagates to the outer catch and gets a
-    // visible logger.error — operator can correlate the rotation quality drop
-    // with a real telemetry-read failure rather than guessing.
+    // when tracker access failed. Removing the inner .catch(() => []) meant
+    // any tracker rejection propagated to the outer catch — visible, but it
+    // ALSO aborted the whole refresh, so the fresh `getModelPerformance()`
+    // data was discarded and the cache stayed STALE on a tracker hiccup.
+    // Compromise: a localized catch that logs the failure (operator visibility
+    // preserved) and falls back to [] (so fresh provider-level performance
+    // still refreshes the cache). Best of both — see review comment #11.
     const [performance, toolStats] = await Promise.all([
       chatRequestLogger.getModelPerformance(10),
-      toolCallTracker.getModelToolStats(10),
+      toolCallTracker.getModelToolStats(10).catch((error) => {
+        logger.error('[ModelRanker] getModelToolStats failed — continuing without tool telemetry', { error });
+        return [];
+      }),
     ]);
 
     // Index tool stats by provider:model key for O(1) merge

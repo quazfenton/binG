@@ -69,6 +69,7 @@ import { sandboxOrchestrator } from '@/lib/sandbox/sandbox-orchestrator';
 import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
 import {
   buildFishSafeShellWrapper,
+  buildNuSafeShellWrapper,
   isFishShell,
   getShellBasename,
   getEnvExportSyntax,
@@ -104,7 +105,7 @@ const workspaceSwitchTimestamps = new Map<string, { newOwnerId: string; switched
 async function createSafeShellWrapper(
   workspaceDir: string,
   shellPath: string,
-): Promise<{ cmd: string; args: string[]; env?: Record<string, string>; shellBasename: string } | null> {
+): Promise<{ cmd: string; args: string[]; env?: Record<string, string>; shellBasename: string; preInitLines?: string[] } | null> {
   const isWindows = process.platform === 'win32';
   // Hoisted from the Unix branch so EVERY return path can thread `shellBasename`
   // back to the caller — single source of truth for the target shell across
@@ -316,6 +317,20 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
           cmd: shellPath,
           args: ['--init-command', `source '${wrapperPath}'`],
           shellBasename,
+        };
+      } else if (shellBasename === 'nu' || shellBasename === 'nushell') {
+        // Nushell: no --init-file / --init-command equivalent. We use
+        // post-spawn stdin injection instead: return the init script as
+        // preInitLines so createDirectPtySession writes them to pty.write()
+        // within 50ms of pty.spawn(). Nu is a REPL — it processes stdin
+        // lines as commands sequentially, so the init script runs before
+        // the user can type anything.
+        const nuInit = buildNuSafeShellWrapper(workspaceDir);
+        return {
+          cmd: shellPath,
+          args: ['-i'],
+          shellBasename,
+          preInitLines: nuInit.split('\n'),
         };
       } else {
         // sh/dash/ash/unknown: use ENV environment variable
@@ -1189,7 +1204,7 @@ export async function POST(req: NextRequest) {
     // Determine shell — SECURITY: validate against allowlist to prevent arbitrary binary execution
     const ALLOWED_SHELLS: string[] = process.platform === 'win32'
       ? ['powershell.exe', 'cmd.exe', 'pwsh.exe', 'pwsh']
-      : ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/zsh', '/usr/bin/fish'];
+      : ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/nu', '/bin/nu', 'nushell'];
     const defaultShell = process.platform === 'win32'
       ? 'powershell.exe'
       : (process.env.SHELL && process.env.SHELL.length > 0) ? process.env.SHELL : '/bin/bash';
@@ -1916,6 +1931,21 @@ async function createDirectPtySession(
       cwd: workspaceDir,
       env: mergedEnv,
     });
+
+    // nushell: write preInitLines to PTY immediately after spawn so the init
+    // script (env-set + cd-override + initial cd) runs before the user can
+    // type anything. Nu is a REPL — it processes stdin lines as commands
+    // sequentially. `preInitLines` is only present for shells that need
+    // post-spawn stdin injection (currently only nu/nushell).
+    if (safeShell?.preInitLines && safeShell.preInitLines.length > 0) {
+      // Write each line synchronously — no inter-line delay needed because
+      // node-pty's internal buffer and nu's REPL handle line-at-a-time input
+      // without dropping data. The loop runs in the same microtask as the
+      // spawn, so all init lines are queued before the user can type.
+      for (const line of safeShell.preInitLines) {
+        pty.write(line + '\r\n');
+      }
+    }
   } catch (spawnError: any) {
     // Spawn failed — stop the file watcher to avoid leaks
     vfsWatcher.stop();
