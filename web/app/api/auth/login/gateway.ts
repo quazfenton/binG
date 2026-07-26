@@ -294,12 +294,14 @@ export async function POST(request: NextRequest) {
     });
 
     // COLD-PATH BOUNDARY (b1): log the post-bcrypt, post-audit,
-    // post-VFS-fire-and-forget delta so the next 5380ms observation
-    // can isolate whether the remaining latency is in:
-    //   - authService.login (bcryptjs verify) — expected ~4.2 s on cost-12
+    // post-VFS-fire-and-forget delta so the next measurement can isolate
+    // whether the remaining latency is in:
+    //   - authService.login (bcrypt verify) — expected ~4.2 s (bcryptjs
+    //     pure-JS, cost-12) or ~250ms (native bcrypt addon, cost-12) —
+    //     controlled by BCRYPT_NATIVE_ENABLED env flag (see bcrypt-provider.ts)
     //   - this gateway wrapper (audit + cookies) — should be ~ms-level
-    // When subtracting bcryptjs from this delta, the residual is the
-    // true cold-path tightness of the gateway itself.
+    // When subtracting bcrypt from this delta, the residual is the true
+    // cold-path tightness of the gateway itself.
     logger.info('login gateway cold-path timing', {
       boundary: 'pre_response',
       elapsedMs: Number(process.hrtime.bigint() - tLoginStart) / 1e6,

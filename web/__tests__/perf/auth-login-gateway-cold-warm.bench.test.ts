@@ -57,7 +57,13 @@
 import { describe, it, expect, vi } from 'vitest';
 
 const MOCK_DB_MS = 10;
-const MOCK_BCRYPT_MS = 100;
+// MOCK_BCRYPT_MS reduced from 100 → 30 to reflect native bcrypt speed.
+// The benchmark isolates the gateway wrapper + module-load cost; the mock
+// value only needs to be large enough to be measurable above noise but
+// small enough to keep total runtime low. Native bcrypt at cost-12 is
+// ~250ms in production; bcryptjs is ~4200ms. The mock decouples the test
+// from either real implementation.
+const MOCK_BCRYPT_MS = 30;
 const N = 20;
 const SAMPLE_LABEL = 'auth-login-gateway-cold-warm';
 

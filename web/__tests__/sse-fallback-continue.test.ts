@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
 // environment supports the required mocks.
 
 describe('SSE fallback-continue semantics (placeholder)', () => {
-  it('intended: single "continuing" metadata SSE with fallbackChain + merged content', () => {
+  it.skip('intended: single "continuing" metadata SSE with fallbackChain + merged content', () => {
     const sseEvent = {
       type: 'continuing',
       metadata: {

@@ -93,7 +93,7 @@ file — with no compiler warning, no test failure, no PR-comment signal.
 ### Worked example (hypothetical)
 
 Before the PR: `@bing/shared/agent/services/scheduler/triggers/marker-scanner`
-resolves to `web/.bing-shared/services/scheduler/triggers/marker-scanner.ts`.
+resolves to `web/.bing-shared/agent/services/scheduler/triggers/marker-scanner.ts`.
 
 A PR adds `packages/shared/agent/services/scheduler/triggers/marker-scanner.ts`.
 

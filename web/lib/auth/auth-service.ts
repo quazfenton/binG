@@ -1,7 +1,7 @@
 // Server-only module - do not import directly in Client Components
 export const runtime = 'nodejs';
 
-import * as bcrypt from 'bcryptjs';
+import { hash as bcryptHash, compare as bcryptCompare } from '@/lib/auth/bcrypt-provider';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '@/lib/database/connection-shim';
 import { DatabaseOperations } from '../database/connection-shim';
@@ -810,14 +810,14 @@ export class AuthService {
    */
   private async hashPassword(password: string): Promise<string> {
     const saltRounds = 12;
-    return bcrypt.hash(password, saltRounds);
+    return bcryptHash(password, saltRounds);
   }
 
   /**
    * Verify password
    */
   private async verifyPassword(password: string, hash: string): Promise<boolean> {
-    return bcrypt.compare(password, hash);
+    return bcryptCompare(password, hash);
   }
 
   /**

@@ -1,6 +1,6 @@
 # ARCH-001 — Three architectural followups surfaced by the SEV-12 / SEV-13 / SEV-15 audit chain
 
-**Status:** Open (work intentionally deferred — see §"Not in this commit")
+**Status:** Open — Flag 1 (PICKUP LANDED), Flag 2 (IMPLEMENTED 2026-07-23), Flag 3 (PICKUP LANDED). Remaining: Flag 2 test environment follow-up.
 **ID:** ARCH-001 (first of a new ticket family; orthogonal to the RT-001..RT-005 routing/threshold family)
 **Severity:** low (latent — each flag is a workaround that today keeps residual tsc errors out of CI; long-term blast radius is "the workaround calcifies into a permanent fixture")
 **Type:** architecture / refactor / CI guardrail
@@ -144,12 +144,12 @@ Coordinate a SINGLE vaul version pin across `/opt/bing/web/components/ui/` so th
 
 ### Acceptance criteria (when the fix lands)
 
-- [ ] Single vaul version pin across `web/components/ui/` (exact-version range, no `^`/`~`).
-- [ ] `pnpm ls vaul` returns exactly one vaul version (no duplication across `/opt/bing`, `/opt/bing/web`, `/opt/bing/desktop`, etc.).
-- [ ] Zero `as any` casts in `drawer.tsx`.
-- [ ] Zero `@ts-expect-error` directives in `drawer.tsx`.
-- [ ] No TS2322 errors in `drawer.tsx` after the version pin (verifiable via targeted tsc).
-- [ ] At least one vitest added covering: Drawer Root → renders, Drawer Trigger → opens overlay, shouldScaleBackground → propagates `boolean | undefined` without cast. Path: `/opt/bing/web/components/ui/__tests__/drawer.test.tsx`.
+- [x] Single vaul version pin across `web/components/ui/` (exact-version range, no `^`/`~`). — `0.9.9` pinned in `web/package.json` + `desktop/package.json`.
+- [x] `pnpm ls vaul` returns exactly one vaul version (no duplication across `/opt/bing`, `/opt/bing/web`, `/opt/bing/desktop`, etc.). — Verified: single copy in root `node_modules/vaul` (`0.9.9`).
+- [x] Zero `as any` casts in `drawer.tsx`. — VaulComponent adapter (8 `any` casts) + `shouldScaleBackground as any` removed. `Omit<..., 'key'>` uses type-level omission, not `as any`.
+- [x] Zero `@ts-expect-error` directives in `drawer.tsx`. — All 4 removed with adapter.
+- [x] No TS2322 errors in `drawer.tsx` after the version pin (verifiable via targeted tsc). — Zero errors in `tsc --noEmit`.
+- [ ] At least one vitest added covering: Drawer Root → renders, Drawer Trigger → opens overlay, shouldScaleBackground → propagates `boolean | undefined` without cast. Path: `/opt/bing/web/components/ui/__tests__/drawer.test.tsx`. — Test file EXISTS (3 tests), but fails due to pre-existing React jsdom environment issue (`Cannot read properties of null (reading 'useState')`) — jsdom installed but vitest config needs setupFiles for React component tests. Tracked as follow-up.
 
 ### Out of scope / not in this commit
 

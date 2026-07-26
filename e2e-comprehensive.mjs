@@ -25,13 +25,20 @@ import path from 'path';
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function login() {
-  const r = await (await fetch(`${BASE}/api/auth/login`, {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(CREDS)
-  })).json();
-  token = r.token || r.authToken || '';
-  sessionId = `e2e-${Date.now()}`;
-  if (!token) throw new Error(`Login failed: ${JSON.stringify(r)}`);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30000);
+  try {
+    const r = await (await fetch(`${BASE}/api/auth/login`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(CREDS),
+      signal: ac.signal
+    })).json();
+    token = r.token || r.authToken || '';
+    sessionId = `e2e-${Date.now()}`;
+    if (!token) throw new Error(`Login failed: ${JSON.stringify(r)}`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function chat(prompt, opts = {}) {

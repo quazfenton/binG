@@ -468,12 +468,12 @@ describe('selectToolPlan — telemetry reasons', () => {
     const result = selectToolPlan({
       userMessage: 'do not modify src/auth.ts',
     });
+    // The negative regex suppresses code.edit entirely (score → 0 → excluded
+    // from intents + reasons). The meaningful assertion is that the intent
+    // was dropped, not that it lingers with score 0.
+    expect(result.intents).not.toContain('code.edit');
     const edit = result.reasons.find((r) => r.intent === 'code.edit');
-    // If the negative suppressed the intent, the score should be 0.
-    if (edit) {
-      expect(edit.score).toBe(0);
-      expect(edit.negatedSignals.length).toBeGreaterThan(0);
-    }
+    expect(edit).toBeUndefined();
   });
 });
 

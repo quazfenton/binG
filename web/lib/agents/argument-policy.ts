@@ -173,6 +173,15 @@ export function validateArguments(
   args: Readonly<Record<string, unknown>>,
   options?: { roleName?: string },
 ): GateResult {
+  // Normalize known arg aliases so policies cannot be bypassed via alternate
+  // parameter names. Comment #56: bash_execute accepts `code` as an alias for
+  // `command`; without this normalization, `{ code: 'rm -rf /' }` evades every
+  // rule keyed on `argName: 'command'`.
+  let effectiveArgs = args;
+  if (toolName === 'bash_execute' && args.code !== undefined && args.command === undefined) {
+    effectiveArgs = { ...args, command: args.code };
+  }
+
   const policies = DEFAULT_POLICIES.get(toolName);
   if (!policies || policies.length === 0) return { ok: true };
 
@@ -193,7 +202,7 @@ export function validateArguments(
   for (let i = 0; i < policies.length; i++) {
     if (disabledByIndex.has(i)) continue;
     const policy = policies[i];
-    const argValue = args[policy.argName];
+    const argValue = effectiveArgs[policy.argName];
     const verdict = checkOne(policy, argValue);
     if (!verdict.ok) {
       const failureMsg = (verdict as Extract<ReturnType<typeof checkOne>, { ok: false }>).message;

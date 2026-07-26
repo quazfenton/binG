@@ -186,6 +186,7 @@ const nextConfig = {
     'microsandbox',
     '@blaxel/core',
     'better-sqlite3',
+    'bcrypt',
     'ioredis',
     'bullmq',
     'nodemailer',

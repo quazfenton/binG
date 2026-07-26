@@ -134,8 +134,14 @@ function findEnclosingTestBlock(
   for (let i = lineNumber - 1; i >= 0; i--) {
     const line = fileLines[i] ?? '';
     const closes = (line.match(/\}\)/g) ?? []).length;
-    const opens = (line.match(/\b(it|describe)(\s*\.skip)?\s*\(/g) ?? []).length;
-    depth += closes - opens;
+    const testOpens = (line.match(/\b(it|describe)(\s*\.skip)?\s*\(/g) ?? []).length;
+    // Arrow/callback closures like `() => { ... });` produce unmatched `})`
+    // close tokens because the open `() => {` is not a test-block opener.
+    // Count arrow-function opens so the depth counter stays balanced, preventing
+    // false-negatives where valid test blocks with nested callbacks are
+    // incorrectly treated as "not enclosed" (Comment #57).
+    const arrowOpens = (line.match(/=>\s*\{/g) ?? []).length;
+    depth += closes - testOpens - arrowOpens;
     if (depth < 0) {
       return { lineNumber: i + 1, line };
     }

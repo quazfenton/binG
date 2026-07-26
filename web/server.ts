@@ -133,6 +133,44 @@ async function startup() {
       }
     }
 
+    // Pre-warm the bcrypt native binding — mirrors the warmup in
+    // instrumentation.ts for the default `next dev`/`next start` path.
+    // Runs BEFORE server.listen(port) so the very first inbound HTTP
+    // request sees a warm binding if BCRYPT_NATIVE_ENABLED=true.
+    //
+    // Shared globalThis.__bcryptNativeWarmed__ flag dedups against the
+    // instrumentation.ts warmup if both boot paths evaluate in a single
+    // process (e.g., manual tsx server.ts experiment on an already-running
+    // next dev instance).
+    const __bcryptState__ = (globalThis as unknown as {
+      __bcryptNativeWarmed__?: boolean;
+    });
+    if (!__bcryptState__.__bcryptNativeWarmed__) {
+      __bcryptState__.__bcryptNativeWarmed__ = true;
+      const __t1__ = process.hrtime.bigint();
+      try {
+        const { hash: warmBcryptHash } = await import(
+          '@/lib/auth/bcrypt-provider'
+        );
+        await warmBcryptHash('warmup-payload', 4);
+        const __elapsedMs__ = Number(process.hrtime.bigint() - __t1__) / 1e6;
+        if (process.env.BCRYPT_NATIVE_ENABLED === 'true') {
+          logger.info(
+            `Native bcrypt binding pre-loaded (${__elapsedMs__.toFixed(1)}ms) — /api/auth/login bcrypt verify will use native addon (≈250ms at cost-12)`,
+          );
+        } else {
+          logger.info(
+            `bcrypt warmup (${__elapsedMs__.toFixed(1)}ms) — BCRYPT_NATIVE_ENABLED not set, will use bcryptjs pure-JS (≈4200ms at cost-12)`,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          `bcrypt warmup threw after ${(Number(process.hrtime.bigint() - __t1__) / 1e6).toFixed(1)}ms — boot continues; login will use bcryptjs fallback`,
+          err as Error,
+        );
+      }
+    }
+
     // Start provider health checking
     const { startProviderHealthCheck } = await import('@/lib/management/health-checker');
     await startProviderHealthCheck();

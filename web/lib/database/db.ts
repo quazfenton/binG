@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import bcrypt from 'bcryptjs';
+import { hash as bcryptHash, compare as bcryptCompare, genSalt as bcryptGenSalt } from '@/lib/auth/bcrypt-provider';
 
 export type BetterSqlite3Database = ReturnType<typeof Database>;
 
@@ -38,10 +38,10 @@ export async function initializeDatabase(): Promise<BetterSqlite3Database> {
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  const salt = await bcrypt.genSalt(10);
-  return bcrypt.hash(password, salt);
+  const salt = await bcryptGenSalt(10);
+  return bcryptHash(password, salt);
 }
 
 export async function comparePassword(password: string, hash: string): Promise<boolean> {
-  return bcrypt.compare(password, hash);
+  return bcryptCompare(password, hash);
 }

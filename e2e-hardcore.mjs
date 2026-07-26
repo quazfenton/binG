@@ -16,7 +16,7 @@ const WORKSPACE = '/tmp/workspaces';
 
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -126,6 +126,15 @@ function exec(cmd, opts = {}) {
   }
 }
 
+function execFile(cmd, args, opts = {}) {
+  try {
+    const out = execFileSync(cmd, args, { timeout: opts.timeout || 15000, encoding: 'utf-8', ...opts });
+    return { ok: true, stdout: out.trim(), stderr: '' };
+  } catch (err) {
+    return { ok: false, stdout: err.stdout?.toString().trim() || '', stderr: err.stderr?.toString().trim() || err.message };
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TESTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -176,7 +185,7 @@ async function T1_createAndVerify() {
   }
 
   return {
-    pass: anyCreated || (textMentions && r.text.length > 50),
+    pass: anyCreated && (textMentions || contentMatch),
     reason: `diskCreated=${anyCreated} (${found.length} files) mention=${textMentions} contentMatch=${contentMatch} textLen=${r.text.length}`,
     detail: { diskFiles: found, text: r.text.slice(0, 300) }
   };
@@ -204,7 +213,7 @@ async function T2_createAndRunPython() {
   let runResult = null;
   for (const f of diskFiles) {
     if (f.endsWith('.py')) {
-      runResult = exec(`python3 "${f}"`);
+      runResult = execFile('python3', [f]);
       break;
     }
   }
@@ -215,7 +224,7 @@ async function T2_createAndRunPython() {
     if (allPy.ok && allPy.stdout) {
       const fibFiles = allPy.stdout.split('\n').filter(Boolean);
       for (const ff of fibFiles.slice(0, 2)) {
-        runResult = exec(`python3 "${ff}"`);
+        runResult = execFile('python3', [ff]);
         if (runResult.ok) break;
       }
     }

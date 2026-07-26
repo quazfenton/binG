@@ -72,6 +72,14 @@ const HEALTH_PATHS = new Set(['/health', '/api/health']);
  *
  * `ctx` is used to async-cache via waitUntil() so cache.put() doesn't add
  * latency to the response.
+ *
+ * BUG FIX: `fresh.body` is a single ReadableStream — consuming it via the
+ * `cacheable` Response and then handing the same reference to the returned
+ * Response causes a "ReadableStream is locked" error on a locked stream or
+ * an immediately-closed (empty) body on an unlocked one.  The fix: clone
+ * the stream first (via `.clone()`), hand the clone to the cache, and keep
+ * the original for the caller.  The clone is non-destructive: both sides
+ * read their own copy of the same underlying data.
  */
 async function cacheGetOrSet(
   cacheKey: string,
@@ -91,7 +99,13 @@ async function cacheGetOrSet(
     const fresh = await build();
     // Only cache 2xx responses — never cache 4xx/5xx (would mask real errors)
     if (fresh.ok && ttlSeconds > 0) {
-      const cacheable = new Response(fresh.body, fresh);
+      // Clone the body before handing either side away — .clone() splits the
+      // stream so each copy reads independently from the same source.
+      // Without this, `new Response(fresh.body, fresh)` locks the body and
+      // the second `new Response(fresh.body, ...)` sees a closed/locked stream.
+      const bodyForReturn = fresh.clone().body;
+      const bodyForCache = fresh.clone().body;
+      const cacheable = new Response(bodyForCache, fresh);
       // Override the response's own Cache-Control to match our TTL so the
       // Cache API respects it (otherwise it falls back to the response's
       // own header, which may be shorter or longer).
@@ -103,7 +117,7 @@ async function cacheGetOrSet(
         // Fallback: store synchronously (small extra latency, no ctx)
         try { await cache.put(cacheReq, cacheable); } catch { /* ignore */ }
       }
-      return new Response(fresh.body, cacheable);
+      return new Response(bodyForReturn, fresh);
     }
     fresh.headers.set('X-Cache-Status', 'MISS');
     return fresh;
@@ -827,26 +841,30 @@ export default {
       // (hard limit, not configurable).  Once the backend sends its first
       // byte downstream heartbeats keep the edge connection alive
       // indefinitely.
-      if (isStreamingPath && responseBody) {
-        // Only inject heartbeats for text-based content types — binary
-        // (images, audio, video, PDF, ZIP, octet-stream, fonts) would be
-        // corrupted by `:\n\n`. An empty/missing content-type defaults to
-        // allowed (some upstream SSE responses omit the header).
-        const raw = (proxyResponse.headers.get('content-type') ?? '').toLowerCase();
-        const ct = raw.split(';')[0].trim();
-        const isBinary = ct.startsWith('image/') || ct.startsWith('audio/') ||
-          ct.startsWith('video/') || ct.startsWith('font/') ||
-          ct.startsWith('multipart/') || ct.startsWith('application/x-') ||
-          ct === 'application/octet-stream' || ct === 'application/pdf' ||
-          ct === 'application/zip' || ct === 'application/gzip' ||
-          ct === 'application/x-tar';
-        if (!isBinary) {
-          // 5s heartbeat (down from 10s) — cloudflared tunnel idle timeout
-          // is ~15s on many deployments. A 10s heartbeat meant the timer
-          // only had one 5s grace period before the tunnel dropped. With
-          // 5s heartbeats, we get three chances before the 15s mark.
-          responseBody = createKeepAliveStream(responseBody, 5_000);
-        }
+      //
+      // IMPORTANT: only wrap a genuine SSE stream — never wrap error
+      // responses (4xx/5xx) or non-event-stream bodies.  A 429 from a
+      // subprovider arrives as a short finite JSON document (NOT an
+      // SSE stream).  Wrapping it in a heartbeat-injecting stream:
+      //   1. corrupts the JSON body with `:\n\n` heartbeats,
+      //   2. closes the controller on upstream EOF, so the client sees
+      //      the truncated JSON as partial SSE tokens then an early end
+      //      (this is the "a few words come in, then it drops" symptom).
+      // Worse, once an HTTP/2 RST_STREAM from the upstream propagates back
+      // through cloudflared, the poisoned keep-alive connection can
+      // persist on subsequent retries — so the bug reproduces for every
+      // request afterward until the tunnel recycles. Letting errors pass
+      // through untouched keeps the 429 status code intact so the client
+      // can apply its own backoff logic.
+      const isEventStream = (proxyResponse.headers.get('content-type') ?? '')
+        .toLowerCase()
+        .includes('event-stream');
+      if (isStreamingPath && responseBody && proxyResponse.ok && isEventStream) {
+        // 5s heartbeat (down from 10s) — cloudflared tunnel idle timeout
+        // is ~15s on many deployments. A 10s heartbeat meant the timer
+        // only had one 5s grace period before the tunnel dropped. With
+        // 5s heartbeats, we get three chances before the 15s mark.
+        responseBody = createKeepAliveStream(responseBody, 5_000);
       }
 
       // ─── Observability: trace response status ──────────────────
@@ -992,6 +1010,15 @@ function createKeepAliveStream(
           // Do NOT call controller.error(err) — that propagates a stream
           // error to the client, which triggers error handlers in fetch()
           // consumers and prevents the ~'done'~ handler from ever firing.
+          //
+          // LOG the error to console before closing. A silent close on an
+          // upstream failure leaves no observability signal — this was the
+          // root cause of the "drops a few words then disconnects" symptom
+          // disappearing from logs. Surface the message + name so operators
+          // can correlate tunnel drops / idle timeouts / provider 429s in
+          // `wrangler tail` and/or the trace R2 bucket.
+          console.error('[edge-gateway] createKeepAliveStream upstream error (closing stream cleanly):',
+            err instanceof Error ? `${err.name}: ${err.message}` : String(err));
           upstreamAlive = false;
           if (timer) clearTimeout(timer);
           try { controller.close(); } catch { /* already closed */ }

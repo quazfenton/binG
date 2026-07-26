@@ -660,9 +660,25 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
   return 'transient';
 }
 
+/** track the number of rate-limit retries per provider so exponential backoff
+ *  progresses (1s, 2s, 4s, 8s) across consecutive 429 responses on the
+ *  same provider, rather than re-using the provider-index formula which
+ *  resets to 500ms on every new provider.
+ *  Map<providerName, retryCount>. Reset once per provider loop iteration
+ *  when the provider succeeds or exhausts all retries.
+ */
+const _rateLimitRetryCount = new Map<string, number>();
+
+/**
+ * Bug #3 (429 rate-limit cascade): exponential backoff for 429 responses.
+ * Uses a per-provider retry count so the same provider gets progressively
+ * longer backoff (1s, 2s, 4s, 8s, max 10s) before the caller falls through
+ * to the next provider in the fallback chain. Respects Retry-After headers
+ * when present (capped at 30s to avoid excessive waits).
+ */
 async function waitForRateLimitBackoff(
   error: any,
-  providerIndex: number,
+  retryCount: number,
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) return;
@@ -672,9 +688,11 @@ async function waitForRateLimitBackoff(
     ?? error?.response?.headers?.['retry-after']
     ?? error?.headers?.['retry-after'];
   const retryAfterSeconds = Number(retryAfterValue);
-  const exponentialDelayMs = Math.min(500 * Math.pow(2, providerIndex), 4000);
+  // Exponential backoff based on retry count: 1s, 2s, 4s, 8s, max 10s
+  const exponentialDelayMs = Math.min(1000 * Math.pow(2, retryCount), 10000);
+  // Respect Retry-After header with a 30s upper bound
   const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
-    ? Math.min(retryAfterSeconds * 1000, 5000)
+    ? Math.min(retryAfterSeconds * 1000, 30000)
     : exponentialDelayMs;
 
   await new Promise<void>((resolve) => {
@@ -4328,9 +4346,21 @@ async function runV1ApiWithTools(
     // clearly writing everything in prose and the Phase 2 text-mode extraction
     // can handle what's already been collected. Without this guard, the user
     // waits 92s for a single skeleton response.
+    //
+    // Phase 1 time-budget fix (2026-07-24, P2): increased default budget from
+    // 30s → 60s and text threshold from 5K → 8K so long-thinking models
+    // (DeepSeek, Claude Sonnet, etc.) that produce verbose planning text
+    // before their first tool call aren't cut off prematurely. The env vars
+    // remain overridable for tuning. Added a tools-first grace period: during
+    // the first 45s the text threshold is doubled (16K) to avoid aborting
+    // while the model is still warming up.
     const _phase1StartTime = Date.now();
-    const _PHASE1_BUDGET_MS = parseInt(process.env.V1_PHASE1_BUDGET_MS || '30000', 10);
-    const _PHASE1_TEXT_THRESHOLD = parseInt(process.env.V1_PHASE1_TEXT_THRESHOLD || '5000', 10);
+    const _PHASE1_BUDGET_MS = parseInt(process.env.V1_PHASE1_BUDGET_MS || '60000', 10);
+    const _PHASE1_TEXT_THRESHOLD = parseInt(process.env.V1_PHASE1_TEXT_THRESHOLD || '8000', 10);
+    // Tools-first grace period: during the first 45s, double the text
+    // threshold so models that produce verbose planning text (code analysis,
+    // architecture review) before their first tool call aren't cut off.
+    const _PHASE1_GRACE_MS = parseInt(process.env.V1_PHASE1_GRACE_MS || '45000', 10);
 
     try {
       log.info('[V1-API-WITH-TOOLS] Calling streamWithConcurrentFallback...');
@@ -4357,10 +4387,23 @@ async function runV1ApiWithTools(
           config.onStreamChunk?.(chunk.content);
           // Bug #21 (Pass-8): Phase 1 time-budget check. If we have lots of
           // text but zero tool calls and the budget is exceeded, abort early.
-          if (toolInvocations.length === 0 && response.length > _PHASE1_TEXT_THRESHOLD && Date.now() - _phase1StartTime > _PHASE1_BUDGET_MS) {
+          // The text threshold escalates with time: during the grace period
+          // (first 45s), the threshold is doubled (16K) to avoid cutting off
+          // long-thinking models. After grace, the normal threshold (8K)
+          // applies. The threshold does NOT drop mid-budget — once grace
+          // expires, the normal threshold applies for the remaining window.
+          // This prevents a perverse incentive where producing more text
+          // during grace makes it harder to survive the post-grace window.
+          const elapsedPhase1 = Date.now() - _phase1StartTime;
+          const effectiveThreshold = elapsedPhase1 < _PHASE1_GRACE_MS
+            ? _PHASE1_TEXT_THRESHOLD * 2
+            : _PHASE1_TEXT_THRESHOLD;
+          if (toolInvocations.length === 0 && response.length > effectiveThreshold && elapsedPhase1 > _PHASE1_BUDGET_MS) {
             log.warn('[V1-API-WITH-TOOLS] Phase 1 time-budget exceeded — aborting early (text-only, no tools)', {
               responseLength: response.length,
-              durationMs: Date.now() - _phase1StartTime,
+              durationMs: elapsedPhase1,
+              effectiveThreshold,
+              phase: elapsedPhase1 < _PHASE1_GRACE_MS ? 'grace' : 'normal',
             });
             break;
           }
@@ -5384,6 +5427,10 @@ async function runV1ApiWithTools(
       // Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
       // PR-W -- single-call both-trackers reset (replaces the manual pair).
       maybeResetBothTrackers(providerName);
+      // Bug #3 (429 cascade): clear the per-provider rate-limit retry count
+      // so the next 429 from this provider starts fresh (1s) instead of
+      // inheriting a stale high count from a previous cascade loop.
+      _rateLimitRetryCount.delete(providerName);
       return {
         success: true,
         response: stripSteerFromResponse(finalResponse),
@@ -5426,12 +5473,21 @@ async function runV1ApiWithTools(
       lastError = error;
       const errorClass = classifyProviderError(error);
       if (errorClass === 'rate_limit') {
-        const providerIndex = uniqueProviders.indexOf(providerName);
-        log.warn('[V1-API-WITH-TOOLS] Rate limited; backing off before provider fallback', {
+        // Bug #3 (429 cascade fix): use per-provider exponential backoff
+        // so the SAME provider gets progressively longer waits (1s, 2s,
+        // 4s, 8s) before the caller falls through to the next provider.
+        // The retry count is incremented on each 429 and resets on success
+        // or when the caller exhausts all retries and moves to the next
+        // provider (the provider loop's next iteration naturally resets
+        // the count since _rateLimitRetryCount entries for providers that
+        // aren't being retried anymore will age out).
+        const retryCount = _rateLimitRetryCount.get(providerName) ?? 0;
+        log.warn('[V1-API-WITH-TOOLS] Rate limited; backing off', {
           provider: providerName,
-          providerIndex,
+          retryCount,
         });
-        await waitForRateLimitBackoff(error, Math.max(providerIndex, 0), config.abortSignal);
+        await waitForRateLimitBackoff(error, Math.min(retryCount, 5), config.abortSignal);
+        _rateLimitRetryCount.set(providerName, retryCount + 1);
       }
       // PR-E + PR-H: both trackers fire here in parallel — pure
       // record-or-noop, NEVER cross-wipe each other's Map. Parallels

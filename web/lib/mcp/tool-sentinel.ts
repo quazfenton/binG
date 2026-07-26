@@ -38,11 +38,11 @@ export const TOOL_RESULT_SENTINEL_CLOSE = '</|tool|>';
  * forensics-log keys investigators search by.
  */
 const INJECTION_PATTERNS: ReadonlyArray<{ name: string; regex: RegExp }> = [
-  { name: 'ignore-previous-instructions', regex: /(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|earlier|system|earlier)\s+(?:instructions?|prompts?|directives?|rules?)/i },
-  { name: 'you-are-now', regex: /(?:you\s+are\s+now|from\s+now\s+on\s+you\s+(?:are|must)|act\s+as\s+if\s+you\s+are)/i },
-  { name: 'system-role-marker', regex: /(?:system|assistant|user|tool)\s*:/i },
-  { name: 'markdown-role-emulator', regex: /(?:```\s*(?:system|assistant|user|chat|conversation)|<\|\s*(?:im_start|im_end|endoftext|pad|ref|system)\s*\|>)/i },
-  { name: 'system-prompt-leak', regex: /(?:my\s+(?:system|initial)\s+(?:prompt|instructions?)\s+(?:is|says|reads)|reveal\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?))/i },
+  { name: 'ignore-previous-instructions', regex: /(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|earlier|system|earlier)\s+(?:instructions?|prompts?|directives?|rules?)/gi },
+  { name: 'you-are-now', regex: /(?:you\s+are\s+now|from\s+now\s+on\s+you\s+(?:are|must)|act\s+as\s+if\s+you\s+are)/gi },
+  { name: 'system-role-marker', regex: /(?:system|assistant|user|tool)\s*:/gi },
+  { name: 'markdown-role-emulator', regex: /(?:```\s*(?:system|assistant|user|chat|conversation)|<\|\s*(?:im_start|im_end|endoftext|pad|ref|system)\s*\|>)/gi },
+  { name: 'system-prompt-leak', regex: /(?:my\s+(?:system|initial)\s+(?:prompt|instructions?)\s+(?:is|says|reads)|reveal\s+(?:your|the)\s+(?:system|initial)\s+(?:prompt|instructions?))/gi },
 ];
 
 // ───── Sentinel envelope ─────────────────────────────────────────────────────
@@ -130,8 +130,9 @@ export function wrapWithSentinel(
     }
   }
 
-  // 4. Compose the sentinel envelope.
-  const raw = `${TOOL_RESULT_SENTINEL_OPEN}${scrubbed}${TOOL_RESULT_SENTINEL_CLOSE}`;
+  // 4. Compose the sentinel envelope (escaping inner sentinel-delimiter markers).
+  const escapedBody = scrubbed.replaceAll('</|tool|>', '<\\/|tool|>').replaceAll('<|tool|>', '<\\|tool|>');
+  const raw = `${TOOL_RESULT_SENTINEL_OPEN}${escapedBody}${TOOL_RESULT_SENTINEL_CLOSE}`;
   return {
     raw,
     sanitized: safeParse(scrubbed),
