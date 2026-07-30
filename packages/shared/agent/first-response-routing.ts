@@ -318,9 +318,13 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       // resolveDefaultContinue() contract — see docblock.
       // Multi-step plans force continuation even when the parsed payload
       // explicitly says continue: false (conflicting signal from the LLM).
+      // RT-001 Option C hardening: when normalizeBoolean returns undefined
+      // (e.g. unrecognized string like "yes"), fall back to the env-aware
+      // default instead of hardcoding false — a benign LLM typo should not
+      // kill continuation when the operator's env-default is "on".
       continue: Array.isArray(parsed.planSteps) && parsed.planSteps.length >= MULTI_STEP_PLAN_THRESHOLD
         ? true
-        : (parsed.continue !== undefined ? (normalizeBoolean(parsed.continue) ?? false) : resolveDefaultContinue()),
+        : (parsed.continue !== undefined ? (normalizeBoolean(parsed.continue) ?? resolveDefaultContinue()) : resolveDefaultContinue()),
     };
 
     return {

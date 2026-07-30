@@ -33,6 +33,11 @@ const DOCS = [
   '/opt/bing/docs/CENTRALIZED_TODO_LIST.md',
 ];
 const PROJECT_ROOT = '/opt/bing';
+const KNOWN_SOURCE_ROOTS = [
+  path.join(PROJECT_ROOT, 'packages'),
+  path.join(PROJECT_ROOT, 'web'),
+  path.join(PROJECT_ROOT, 'infra'),
+];
 
 interface Cite {
   doc: string;
@@ -67,14 +72,12 @@ function extractCites(docPath: string): Cite[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Code-reviewer S1 (2026-07-16): skip markdown BLOCKQUOTE lines (whose
-    // first non-whitespace char is `>`). Drift-correction notes that are
-    // intentional forensic records (and the historical L5560 + L7362
-    // numbers they reference) live inside `>` blockquotes in the postaudit
-    // doc — they should be skipped from the cite-drift audit so the
-    // regression guard doesn't flag them as new evidence needing drift
-    // correction.
-    if (line.trimStart().startsWith('>')) continue;
+    // Code-reviewer S1 (2026-07-16): skip markdown BLOCKQUOTE lines that
+    // contain drift-correction notes (historical forensic records with
+    // intentional L5560 + L7362 numbers). Do NOT skip all blockquotes —
+    // stale :L... references inside non-drift blockquotes must still be
+    // caught by the cite-drift guard (Comment #65).
+    if (/>\s*Drift correction/i.test(line.trimStart())) continue;
     // Code-reviewer S1 (2026-07-16): skip the drift-correction NOTE line itself
     // (distinct from the `>` blockquote skip above — fenced `>` lines inside
     // code blocks could otherwise accidentally match the first skip rule and
@@ -99,6 +102,30 @@ function extractCites(docPath: string): Cite[] {
 }
 
 /**
+ * Search known source directories for a bare filename (e.g., `route.ts`
+ * without a directory prefix). Returns the first match found via
+ * recursive directory listing, or null if no match is found.
+ */
+function resolveBareFilename(filename: string): string | null {
+  for (const root of KNOWN_SOURCE_ROOTS) {
+    if (!fs.existsSync(root)) continue;
+    try {
+      const entries = fs.readdirSync(root, { recursive: true }) as string[];
+      for (const entry of entries) {
+        if (typeof entry === 'string' && entry.endsWith('/' + filename)) {
+          return path.join(root, entry);
+        }
+      }
+    } catch {
+      // Skip directories that can't be read
+    }
+  }
+  // eslint-disable-next-line no-console
+  console.warn(`[cite-drift] Could not resolve bare filename: ${filename}`);
+  return null;
+}
+
+/**
  * Resolve a cited file path relative to /opt/bing if not absolute.
  * Returns the absolute path or null if the path is unresolvable
  * (e.g., a bare filename without enough context).
@@ -115,9 +142,9 @@ function resolveFilePath(filePath: string): string | null {
   }
   // Truly absolute path (not under /opt/bing) → use as-is
   if (path.isAbsolute(filePath)) return filePath;
-  // Skip bare filenames (e.g., `route.ts` without directory prefix) —
-  // those have no deterministic base for resolution.
-  if (!filePath.includes('/')) return null;
+  // Bare filenames (e.g., `route.ts` without directory prefix) —
+  // search known source directories for a match.
+  if (!filePath.includes('/')) return resolveBareFilename(filePath);
   return path.join(PROJECT_ROOT, filePath);
 }
 

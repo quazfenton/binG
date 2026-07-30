@@ -775,6 +775,56 @@ export function buildDecision(
 }
 
 /**
+ * Build a [AUTO-CONTINUE] steer that proactively tells the LLM to
+ * `read_file` on any path it plans to edit BEFORE generating a diff.
+ * This prevents the DIFF_MISMATCH cascade that occurs when the LLM
+ * generates a SEARCH/REPLACE block against stale file content from an
+ * earlier turn.
+ *
+ * The instruction is injected when the previous turn had at least one
+ * file-write tool call (write_file, writeFile, apply_diff, str_replace,
+ * batch_write) OR when result.fileEdits (text-mode parsed edits) is
+ * non-empty. Both paths can produce the DIFF_MISMATCH cascade.
+ * Pass `undefined` inputs to skip — never throws.
+ *
+ * @param steps — Tool-call steps from the PREVIOUS turn (the turn that
+ *   just completed).
+ * @param fileEdits — Text-mode file-edit entries from the previous
+ *   turn (parsed by file-edit-parser.ts). Non-empty when the LLM
+ *   emitted fenced-code-block edits in text mode.
+ * @returns A `[AUTO-CONTINUE]`-prefixed steer prompt, or empty string
+ *   when no file writes were detected.
+ */
+function buildProactiveReadBeforeDiffSteer(
+  steps: AutoContinueStep[] | undefined,
+  fileEdits?: ReadonlyArray<{ path: string }> | undefined,
+): string {
+  const writeTools = new Set([
+    'write_file',
+    'writeFile',
+    'apply_diff',
+    'str_replace',
+    'batch_write',
+  ]);
+  const hadFileWrites = steps
+    ? steps.some((s) => s.toolName && writeTools.has(s.toolName))
+    : false;
+  const hadTextModeEdits = fileEdits
+    ? fileEdits.length > 0
+    : false;
+  if (!hadFileWrites && !hadTextModeEdits) return '';
+  return (
+    '[AUTO-CONTINUE] Your previous turn wrote files' +
+    (hadTextModeEdits ? ' (including text-mode edits)' : '') +
+    '. Before applying any diff or edit in THIS turn, first call ' +
+    'read_file on the target file to get its CURRENT content. Diffs ' +
+    'generated against stale file content will fail with ' +
+    'DIFF_MISMATCH errors. Always verify the current file state ' +
+    'before modifying it.'
+  );
+}
+
+/**
  * Decide whether to auto-continue. This is the single source of truth
  * for the auto-continue decision used by both route.ts and
  * unified-agent-service.ts.
@@ -873,6 +923,18 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
     continuationDecision.continue || (activeOverride !== null);
 
   if (shouldContinue) {
+    // DIFF_MISMATCH prevention: detect file writes (both tool-call and
+    // text-mode) in the previous turn and prepend a proactive read-before-
+    // diff steer to the continuation prompt. This prevents the LLM from
+    // generating diffs against stale content in the next turn.
+    const proactiveSteer = buildProactiveReadBeforeDiffSteer(
+      steps ?? result?.steps as AutoContinueStep[] | undefined,
+      result?.fileEdits,
+    );
+    const enhancedPrompt = proactiveSteer
+      ? `${proactiveSteer}\n\n${continuationDecision.continuationPrompt}`
+      : continuationDecision.continuationPrompt;
+
     const newCount = incrementContinuationCount(requestId);
     log_('[AutoContinue] triggered', {
       requestId,
@@ -881,6 +943,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
       advancedReason: advancedOverride?.reason,
       forceSignal: activeOverride !== null,
       continuationsSoFar: newCount,
+      proactiveSteerApplied: !!proactiveSteer,
     });
     return buildDecision({
       shouldContinue: true,
@@ -891,7 +954,7 @@ export function decideAutoContinue(input: AutoContinueInput): AutoContinueDecisi
         : undefined,
       continuationsSoFar: newCount,
       finalIteration: MAX_CONTINUATIONS,
-      continuationPrompt: continuationDecision.continuationPrompt,
+      continuationPrompt: enhancedPrompt,
       // POST-increment: clearedCount = continuationsSoFar (= newCount) AFTER
       // incrementContinuationCount returns. The discriminator union (Step C)
       // catches any PRE-on-continue-true inversion attempt at compile time.

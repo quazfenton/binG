@@ -2216,7 +2216,7 @@ export async function callMCPToolFromAI_SDK(
     const preGate = gatePreCall(contract!, {
       toolName,
       args,
-      errorCount: recentFailures?.length ?? 0,
+    errorCount: (recentFailures?.length ?? 0) + (result.success ? 0 : 1),
     });
     if (!preGate.allowed) {
       contract!.audit = contract!.audit.append({
@@ -2390,11 +2390,11 @@ export async function callMCPToolFromAI_SDK(
           errors: validationErrors.join('; '),
           inputKeys: Object.keys(args || {}),
         });
-        return {
+        return wrapDispatch(contract, toolName, toolCallId, args, {
           success: false,
           output: '',
           error: validationErrors.join('; '),
-        };
+        }, recentFailures);
       }
 
       // Redacted payload dump for tracing origin of malformed tool calls

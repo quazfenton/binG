@@ -706,7 +706,7 @@ describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () =
   // This pins the opt-in semantics — if a future change inverts the
   // default, this test will fail (because `web.fetch` would no longer
   // require the explicit option).
-  it('item ⑤ opt-in — agentTaskUrlReadsEnabled=true: agentTask URL DOES promote web.fetch', () => {
+  it('item ⑤ opt-in — agentTaskUrlReadsEnabled=true: agentTask URL promotes nullclaw + fallbackUsed=false', () => {
     const result = selectToolPlan(
       {
         userMessage: 'thanks',
@@ -714,7 +714,10 @@ describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () =
       },
       { agentTaskUrlReadsEnabled: true },
     );
-    expect(result.coreTools).toContain('web.fetch');
+    // nullclaw is set by the URL explicit-signal boost, not by baseline;
+    // fallbackUsed flips to false when urlMatch fires.
+    expect(result.sourcePermissions.nullclaw).toBe(true);
+    expect(result.fallbackUsed).toBe(false);
   });
 
   // (⑤ opt-in) Symmetric: when the flag is unset, the agentTask URL is
@@ -726,6 +729,7 @@ describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () =
       userMessage: 'thanks',
       agentTask: 'browse https://example.com/article',
     });
-    expect(result.coreTools).not.toContain('web.browse');
+    expect(result.sourcePermissions.nullclaw).toBe(false);
+    expect(result.fallbackUsed).toBe(true);
   });
 });

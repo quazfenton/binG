@@ -13,6 +13,13 @@
  */
 
 import { createLogger } from '../utils/logger';
+// DIFF_MISMATCH recovery helpers: detect and provide file-specific recovery
+// context when a SEARCH/REPLACE diff fails. Imported here so the self-heal
+// path can detect DIFF_MISMATCH errors and include the file path in the
+// retry prompt, rather than retrying with a stale diff.
+import {
+  hasDiffMismatchTag,
+} from '../chat/diff-mismatch-recovery';
 import {
   CapabilityDefinition,
   getCapability,
@@ -2803,6 +2810,33 @@ export class CapabilityRouter {
     };
   }
 
+  /** Extract a DIFF_MISMATCH file path from the error string.
+   *
+   *  The error from vfs-mcp-tools.ts is a JSON-serialized object like:
+   *    {"code":"DIFF_MISMATCH","message":"...","attemptedPath":"src/file.ts",...}
+   *  This method tries JSON.parse first, then falls back to a regex on
+   *  the formatted `DIFF_MISMATCH on "path"` pattern (from older error
+   *  formats). Returns null when no path can be extracted. */
+  private _extractDiffMismatchPathFromErrorString(error: string): string | null {
+    // Strategy 1: Try JSON.parse (vfs-mcp-tools.ts format)
+    try {
+      const parsed = JSON.parse(error);
+      if (parsed && typeof parsed === 'object') {
+        const path = parsed.attemptedPath || parsed.path;
+        if (typeof path === 'string' && path.length > 0) return path;
+      }
+    } catch {
+      // Not JSON — fall through to regex
+    }
+    // Strategy 2: Regex on formatted string (older error format)
+    const match = error.match(/DIFF_MISMATCH on "([^"]+)"/);
+    if (match) return match[1];
+    // Strategy 3: Generic path extraction from error message
+    const pathMatch = error.match(/"?attemptedPath"?\s*[:=]\s*"([^"]+)"/);
+    if (pathMatch) return pathMatch[1];
+    return null;
+  }
+
   /**
    * LLM-based self-healing: analyze the error and produce fixed input.
    * Uses a lightweight model for fast healing.
@@ -2820,9 +2854,35 @@ export class CapabilityRouter {
       const { createMistral } = await import('@ai-sdk/mistral');
       const model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })('mistral-small-latest');
 
-      const result = await generateText({
-        model,
-        prompt: `A tool call failed. Fix the input arguments.
+      // Detect DIFF_MISMATCH — when the error is a diff mismatch, enhance the
+      // retry prompt with file path + recovery instructions so the LLM knows
+      // it MUST read_file before generating a new SEARCH/REPLACE block.
+      // Check the tool result for a _diffMismatchPath tag first (set by the
+      // streaming layer's tagToolResultWithDiffMismatchRecovery), then fall
+      // back to scanning the error string for "DIFF_MISMATCH on \"path\"".
+      const taggedPath = hasDiffMismatchTag(originalInput);
+      const diffMismatchPath = error.includes('DIFF_MISMATCH')
+        ? (taggedPath || this._extractDiffMismatchPathFromErrorString(error) || originalInput?.path || null)
+        : null;
+
+      let prompt: string;
+      if (diffMismatchPath) {
+        prompt = `A SEARCH/REPLACE diff failed because the file was modified since the SEARCH block was generated.
+
+Capability: ${capabilityId}
+Description: ${capability.description}
+DIFF_MISMATCH on: ${diffMismatchPath}
+Error: ${error}
+
+CRITICAL: The file "${diffMismatchPath}" does not match the SEARCH block you attempted.
+Before generating a new SEARCH/REPLACE block, you MUST:
+  1. Call read_file on "${diffMismatchPath}" to get the CURRENT file content.
+  2. Use that content as the SEARCH block — it must EXACTLY match the file on disk.
+  3. Only then apply the new SEARCH/REPLACE block.
+
+Return ONLY the corrected input object as JSON.`;
+      } else {
+        prompt = `A tool call failed. Fix the input arguments.
 
 Capability: ${capabilityId}
 Description: ${capability.description}
@@ -2832,7 +2892,12 @@ Error: ${error}
 Expected Schema:
 ${JSON.stringify(capability.inputSchema, null, 2)}
 
-Return ONLY the corrected input object as JSON.`,
+Return ONLY the corrected input object as JSON.`;
+      }
+
+      const result = await generateText({
+        model,
+        prompt,
         output: Output.object({ schema: capability.inputSchema }),
         maxOutputTokens: 500,
         temperature: 0.1,

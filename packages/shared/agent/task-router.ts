@@ -4,10 +4,10 @@
  * hardcoded keyword arrays.
  */
 
-// Option 1 (postaudit item ④): migrated from `@/lib/utils/logger` to
-// direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
-// — a real file inside this package, NOT a cross-package reference into
-// web/lib/*.
+// Postaudit item ④: imports `createLogger` via relative path into web/lib
+// (NOT a local packages/shared/ import — `packages/shared/lib/utils/logger.ts`
+// does NOT exist; resolution goes through lib-shims/ambient.d.ts).
+// See comment #73 for why the previous doc was misleading.
 import { createLogger } from '../../../web/lib/utils/logger';
 import type { AgentPriority, AgentType } from './agent-kernel';
 import { getAgentKernel } from './agent-kernel';

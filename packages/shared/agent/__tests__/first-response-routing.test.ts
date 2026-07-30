@@ -174,10 +174,13 @@ describe('computeShouldContinue', () => {
     expect(computeShouldContinue(baseRouting)).toBe(false);
   });
 
-  it('ignores the continue field — reads explicitContinue only for the explicit check', () => {
-    // continue=true but explicitContinue=false + no planSteps → must be false
+  it('returns true when routing.continue === true (env-default or normalized explicit), even without explicitContinue or planSteps', () => {
+    // computeShouldContinue checks all three conditions:
+    //   explicitContinue || hasMultiplePlanSteps || routing.continue === true
+    // This test covers the third gate: routing.continue alone is enough to
+    // signal "should continue" (e.g. env-default-on with no plan steps).
     const routing = { ...baseRouting, explicitContinue: false, continue: true, planSteps: [] };
-    expect(computeShouldContinue(routing)).toBe(false);
+    expect(computeShouldContinue(routing)).toBe(true);
   });
 
   it('planSteps exactly 2 crosses the multi-step threshold', () => {

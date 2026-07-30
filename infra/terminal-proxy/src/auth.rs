@@ -29,7 +29,7 @@ impl Claims {
 }
 
 /// Verify a JWT token and extract claims
-pub fn verify_token(token: &str, secret: &str) -> Result<Claims> {
+pub fn verify_token(token: &str, secret: &str, issuer: Option<&str>) -> Result<Claims> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
@@ -62,6 +62,18 @@ pub fn verify_token(token: &str, secret: &str) -> Result<Claims> {
 
     if claims.exp < now {
         return Err(anyhow!("Token expired"));
+    }
+
+    if let Some(expected) = issuer {
+        match &claims.iss {
+            Some(actual) if actual == expected => {}
+            _ => {
+                return Err(anyhow!(
+                    "Invalid token issuer: expected '{}'",
+                    expected
+                ));
+            }
+        }
     }
 
     Ok(claims)

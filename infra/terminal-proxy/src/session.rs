@@ -129,10 +129,13 @@ impl SessionStore {
     }
     
     pub fn remove_by_user(&self, user_id: &str) {
-        // Get session IDs from user_sessions, then drop that lock
-        let session_ids = self.user_sessions.write()
-            .remove(user_id)
-            .unwrap_or_default();
+        // Acquire locks in the same order as create/remove: sessions first,
+        // then user_sessions, to prevent deadlocks.
+        let session_ids: Vec<String>;
+        {
+            let mut user_sessions = self.user_sessions.write();
+            session_ids = user_sessions.remove(user_id).unwrap_or_default();
+        }
 
         // Remove from sessions
         {

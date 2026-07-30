@@ -49,23 +49,7 @@ async fn main() -> Result<()> {
 
     // Initialize Redis connection pool
     let redis_store = redis_store::RedisStore::new(&config.redis_url).await?;
-    let redis_url_redacted = {
-        let url = &config.redis_url;
-        if let Some(at) = url.find('@') {
-            if let Some(scheme_end) = url.find("://") {
-                if scheme_end < at {
-                    format!("{}://***@{}", &url[..scheme_end + 3], &url[at + 1..])
-                } else {
-                    url.clone()
-                }
-            } else {
-                url.clone()
-            }
-        } else {
-            url.clone()
-        }
-    };
-    info!("Connected to Redis: {}", redis_url_redacted);
+    info!("Connected to Redis");
 
     // Create shared router
     let router = Arc::new(Router::new(redis_store.clone(), config.clone()));

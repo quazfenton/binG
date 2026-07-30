@@ -868,6 +868,13 @@ export interface UnifiedAgentConfig {
   // Streaming
   onStreamChunk?: (chunk: string) => void;
   /**
+   * Direct SSE event emitter — bypasses the stream chunk handler's buffer
+   * accumulation and TOKEN re-emission. Used for structured SSE events
+   * (TOOL_RESULT, etc.) that should be forwarded to the client as-is
+   * rather than treated as raw token content.
+   */
+  onSSEEvent?: (eventType: string, payload: Record<string, unknown>) => void;
+  /**
    * Progress heartbeat — called when the service is about to start a new
    * streaming phase (e.g. auto-continuation re-invocation). The route uses
    * this to reset its stall watchdog's lastProgressAt so the watchdog
@@ -3605,6 +3612,7 @@ function logToolCall(
   result: { success: boolean; output?: string; error?: any; exitCode?: number },
   durationMs: number,
   onStreamChunk?: (chunk: string) => void,
+  onSSEEvent?: (eventType: string, payload: Record<string, unknown>) => void,
 ): void {
   const redactedArgs = redactToolArgs(toolName, rawArgs || {});
   
@@ -3651,16 +3659,21 @@ function logToolCall(
   );
 
   // SSE event for client-side display (if streaming is available)
-  if (onStreamChunk) {
+  if (onSSEEvent || onStreamChunk) {
+    const payload = {
+      tool: toolName,
+      success: result.success,
+      exitCode: result.exitCode ?? (result.success ? 0 : 1),
+      durationMs,
+      args: redactedArgs,
+      ...(errorDetail ? { error: errorDetail, errorCode } : {}),
+    };
     try {
-      onStreamChunk(sseEncode(SSE_EVENT_TYPES.TOOL_RESULT, {
-        tool: toolName,
-        success: result.success,
-        exitCode: result.exitCode ?? (result.success ? 0 : 1),
-        durationMs,
-        args: redactedArgs,
-        ...(errorDetail ? { error: errorDetail, errorCode } : {}),
-      }));
+      if (onSSEEvent) {
+        onSSEEvent(SSE_EVENT_TYPES.TOOL_RESULT, payload);
+      } else {
+        onStreamChunk!(sseEncode(SSE_EVENT_TYPES.TOOL_RESULT, payload));
+      }
     } catch { /* best effort */ }
   }
 }
@@ -3779,7 +3792,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 
       const toolDuration = Date.now() - toolStartTime;
       const toolResult: ToolResult = { success: capResult.success, output: (typeof capOutputRaw === 'string' ? capOutputRaw : JSON.stringify(capOutputRaw)) + scopeNote, exitCode: capResult.exitCode };
-      logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk);
+      logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk, config.onSSEEvent);
       return toolResult;
     }
 

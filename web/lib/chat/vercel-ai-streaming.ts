@@ -88,6 +88,15 @@ import {
   recordToolOnlyCompletion,
 } from './chat-metrics';
 import { createLogger } from '@/lib/utils/logger';
+// DIFF_MISMATCH recovery utilities (self-heal/recovery flow):
+// Provides buildRecoverySteer, extractMeta, tagToolResult helpers so the
+// streaming layer injects forceful, path-tagged recovery steer into the
+// LLM's very next turn instead of delegating read_file to the model.
+import {
+  buildDiffMismatchRecoverySteer,
+  extractDiffMismatchMeta,
+  tagToolResultWithDiffMismatchRecovery,
+} from './diff-mismatch-recovery';
 
 const logger = createLogger('Chat:Streaming');
 import { getModelsForPurpose } from './model-capability-registry';
@@ -1671,6 +1680,14 @@ export async function* streamWithVercelAI(
   // net for the case where BOTH primary and fallback are silent for too long.
   let hardDeadlineTimeoutId: NodeJS.Timeout | null = null;
   let timeoutController: AbortController | null = null;
+  // Dedicated AbortController for the zombie-stream reaper.
+  // ALWAYS created (unlike timeoutController which is conditional on
+  // firstTokenTimeoutMs > 0). The reaper's forceReap aborts THIS
+  // controller, which is wired into effectiveSignal below so the
+  // stream consumer sees the abort even when timeoutController was
+  // already aborted by a per-stream timeout.
+  // See COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT P1 Issue 1 (zombie streams).
+  const reaperAbortController = new AbortController();
   let firstTokenReceived = false;
   
   // ── Activity tracker for differentiated timeout diagnostics ──────────
@@ -1814,7 +1831,7 @@ export async function* streamWithVercelAI(
   // signal is optional (typed `signal?: AbortSignal`), so we can't pass
   // it to AbortSignal.any unconditionally — that throws TypeError on
   // `undefined`. Filter to defined sources only.
-  const primaryAbortSources: AbortSignal[] = [signal, timeoutController?.signal].filter(
+  const primaryAbortSources: AbortSignal[] = [signal, timeoutController?.signal, reaperAbortController.signal].filter(
     (s): s is AbortSignal => !!s,
   );
   const effectiveSignal =
@@ -1903,7 +1920,7 @@ export async function* streamWithVercelAI(
     registerStream({
       streamId,
       sessionId: (opts as any)?.sessionId ?? undefined,
-      abortController: timeoutController ?? new AbortController(),
+      abortController: reaperAbortController,
       lastActivityTime: Date.now(),
       lastActivityType: 'init',
       provider,
@@ -3257,20 +3274,34 @@ try {    while (thinkPingQueue.length > 0) {
             // inject a forceful recovery steer when applyDiff fails with a
             // mismatch. The LLM should regenerate the SEARCH block using the
             // currentFileContent provided in the error, NOT try bash_execute.
+            // Enhanced 2026-07-28: uses the diff-mismatch-recovery module to
+            // build a three-tier steer (error content → proactive read → forceful
+            // LLM instruction) and tags the result with _diffMismatchPath so the
+            // auto-continue / self-heal flow can detect it without re-parsing.
             if (errObj?.code === 'DIFF_MISMATCH') {
-              const cf = typeof errObj?.currentFileContent === 'string' && errObj.currentFileContent.length > 0
-                ? errObj.currentFileContent.slice(0, 1000) + (errObj.currentFileContent.length > 1000 ? '...' : '')
-                : null;
-              const path = errObj?.attemptedPath || errObj?.path || '';
-              toolResult._recoveryHint =
-                `DIFF_MISMATCH on "${path}". ` +
-                `The file was already modified since the SEARCH block was generated. ` +
-                (cf
-                  ? `Current content (first ~1000 chars):\n${cf}`
-                  : `Call read_file("${path}") to get the current content first.`) +
-                ` Regenerate the SEARCH/REPLACE block to match the current content exactly. ` +
-                `Do NOT try bash_execute — it will NOT fix a diff mismatch. ` +
-                `Use the current content above to fix the SEARCH block and re-apply.`;
+              const meta = extractDiffMismatchMeta(errObj as Record<string, unknown>);
+              if (meta) {
+                // Build the strongest possible recovery steer using the new module.
+                // This is a synchronous call (uses existing error content only — no
+                // readFileFn callback here because the streaming layer doesn't have
+                // direct VFS access; the LLM instruction fallback is appropriate).
+                const { steer } = await buildDiffMismatchRecoverySteer(meta);
+                tagToolResultWithDiffMismatchRecovery(toolResult, errObj as Record<string, unknown>, steer);
+                logger.info('[DIFF-MISMATCH-RECOVERY] Injected recovery steer via streaming layer', {
+                  filePath: meta.filePath,
+                  hasContent: !!meta.currentFileContent,
+                  steerLength: steer.length,
+                });
+              } else {
+                // Fallback: meta extraction failed (no path found) — emit a generic hint.
+                const path = errObj?.attemptedPath || errObj?.path || '(unknown path)';
+                toolResult._recoveryHint =
+                  `DIFF_MISMATCH on "${path}". ` +
+                  `The file was already modified since the SEARCH block was generated. ` +
+                  `Call read_file("${path}") to get the current content first. ` +
+                  `Regenerate the SEARCH/REPLACE block to match the current content exactly. ` +
+                  `Do NOT try bash_execute — it will NOT fix a diff mismatch.`;
+              }
             } else {
               toolResult._recoveryHint = errObj?.suggestedNextAction
                 || (errObj?.code === 'PATH_NOT_FOUND'

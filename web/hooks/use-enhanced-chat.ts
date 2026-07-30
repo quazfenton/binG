@@ -1819,6 +1819,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                               toolExecutionSummary: toolContext.summary,
                               failedToolCalls: toolContext.failedToolCalls,
                               filesystemChanges: toolContext.filesystemChanges,
+                              phase1Status: doneMetadata.phase1Status,
                             },
                           };
 

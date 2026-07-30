@@ -190,12 +190,15 @@ export function validateArguments(
   const disabledByIndex = new Set<number>();
   for (const o of overrides) {
     if (o.toolName !== toolName || !o.disabled) continue;
-    // Match by stable id when supplied, else fall back to index-based
-    // resolve: the caller's override MUST use index-based resolution
-    // unless they explicitly copy the policy id.
+    // Match by stable id when supplied; auto-derive when absent by
+    // checking each policy's stablePolicyId (Comment #74: doc says
+    // "Auto-derived if omitted" but implementation used -1, meaning
+    // overrides without policyId could never actually disable anything).
     const idx = o.policyId
       ? policies.findIndex((p) => stablePolicyId(toolName, p) === o.policyId)
-      : -1;
+      : policies.length === 1
+        ? 0  // unambiguous: only one policy in this tool → auto-select it
+        : -1;
     if (idx >= 0) disabledByIndex.add(idx);
   }
 

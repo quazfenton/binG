@@ -106,5 +106,26 @@ export async function initializeServer(): Promise<void> {
     }
   }
 
+  // Register pre-built Composio workflows so they are available to
+  // executeWorkflowById() and the workflow registry on first request.
+  try {
+    const {
+      createCrossRepoIssueSearch,
+      createReleasePipeline,
+      createSlackToGithubBridge,
+      registerWorkflow,
+    } = await import('@/lib/composio/workflow-builder');
+
+    registerWorkflow(createCrossRepoIssueSearch('cross-repo-issue-search'));
+    registerWorkflow(createReleasePipeline('release-pipeline'));
+    registerWorkflow(createSlackToGithubBridge('slack-to-github-bridge'));
+
+    logger.info('✓ Pre-built Composio workflows registered: cross-repo-issue-search, release-pipeline, slack-to-github-bridge');
+  } catch (error) {
+    logger.warn('⏳ Composio workflow registration failed — workflows will be unavailable', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   logger.info('Server initialization complete');
 }

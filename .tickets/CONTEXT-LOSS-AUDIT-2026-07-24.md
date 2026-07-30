@@ -120,7 +120,8 @@ userMessage: `[POST_SPEC_MAXIMAL]\nORIGINAL REQUEST:\n${request.task}\n\nENHANCE
 |---------|--------|----------|
 | #1 PAV context propagation | ✅ **FIXED** | orchSystemPrompt flows through callLLM system parts |
 | #2 Reviewer LLM pass | ✅ **FIXED** | runReview() exists with structured JSON output |
-| #3 ToolLoopAgent context loss | ⚠️ **OPEN** | v1AgentPrompt = task only; "(loading...)" snapshot |
+| #3 ToolLoopAgent context loss | ✅ **FIXED** | route.ts passes systemPrompt + conversationHistory; ensureWorkspaceSnapshot called before buildSystemPrompt in all paths |
+||| Verified 2026-07-26: route.ts createAgentLoop call passes both context fields; agent-loop.ts calls ensureWorkspaceSnapshot() in executeTask (L235), executeTaskStreaming (L251), and manual path (L569); buildSystemPrompt uses initialSystemPrompt as extraInstructions (L969). No code changes needed. |
 | #4 choose_role stateful | ✅ **FIXED** | activeRolePrompt stored + applied to subsequent calls |
 | #5 Spec anchoring | ✅ **FIXED** | modula.ts paths include ORIGINAL REQUEST + CURRENT CANDIDATE |
 

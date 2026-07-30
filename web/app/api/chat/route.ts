@@ -2498,6 +2498,14 @@ const config: UnifiedAgentConfig = {
                   }
                 );
 
+                // Direct SSE emitter for structured events (TOOL_RESULT, etc.)
+                // that bypasses the stream chunk handler's buffer accumulation.
+                currentConfig.onSSEEvent = (eventType, payload) => {
+                  try {
+                    emit(eventType as any, payload);
+                  } catch { /* best-effort */ }
+                };
+
                 // Call the LLM
 // @audit-Stage3-process-caller-typed-APPLIED:
 // processUnifiedAgentRequest(currentConfig) at L1501 is the Stage 3 retype target.

@@ -43,6 +43,13 @@ impl From<&TerminalSession> for SessionState {
     }
 }
 
+impl SessionState {
+    pub fn with_ws_url(mut self, ws_url: Option<String>) -> Self {
+        self.ws_url = ws_url;
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct RedisStore {
     conn: ConnectionManager,

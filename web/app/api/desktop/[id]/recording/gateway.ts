@@ -21,11 +21,12 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { verifyToken } from '@/lib/security/jwt-auth';
 import { activeDesktops } from '../../active-desktops';
+import { summarizeSession } from '@/lib/computer/e2b-desktop-recorder';
 import {
   registerRecorder,
   unregisterRecorder,
   getRecorder,
-  verifyRecorderOwnership,
+  getRecorderConstructor,
 } from '../../recording-store';
 
 /**
@@ -95,9 +96,10 @@ async function handleSubAction(
       }
 
       try {
-        const RecorderClass = await (await import('../../recording-store')).getRecorderConstructor();
+        const RecorderClass = await getRecorderConstructor();
+        const fps = body?.fps ?? 2;
         const recorder = new RecorderClass(desktop, {
-          fps: body?.fps ?? 2,
+          fps,
           captureOnAction: body?.captureOnAction ?? true,
           label: body?.label ?? undefined,
           resolution: body?.resolution ?? undefined,
@@ -112,7 +114,7 @@ async function handleSubAction(
             sessionId,
             desktopId,
             startedAt: Date.now(),
-            fps: recorder['config']?.fps ?? 2,
+            fps,
           },
         });
       } catch (error: any) {
@@ -138,10 +140,8 @@ async function handleSubAction(
         const session = await entry.recorder.stop();
         unregisterRecorder(desktopId);
 
-        // Optionally include a summary in the response
-        const summary = entry.recorder['summarizeSession']
-          ? (await import('@/lib/computer/e2b-desktop-recorder')).summarizeSession(session)
-          : undefined;
+        // Include a human-readable session summary
+        const summary = summarizeSession(session);
 
         return NextResponse.json({
           success: true,
@@ -270,7 +270,7 @@ async function handleSubAction(
           framesCaptured: state.framesCaptured,
           actionsRecorded: state.actionsRecorded,
           elapsedMs: state.elapsedMs,
-          sessionId: entry.recorder['sessionId'],
+          sessionId: entry.recorder.getSessionId(),
           desktopId,
         },
       });

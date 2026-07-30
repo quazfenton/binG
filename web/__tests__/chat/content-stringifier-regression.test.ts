@@ -68,24 +68,24 @@ const ROUTE_PATH = resolve(
 const DEFENSE_IN_DEPTH_SITES = [
   {
     id: 'layer-3-processUnifiedAgentRequest',
-    line: 2500,
-    coercionLine: 2525,
+    line: 2580,
+    coercionLine: 2605,
     expectedFragment: 'Bug-fix #2: surface the post-await response shape',
     description:
       'processUnifiedAgentRequest result.response → iterContent',
   },
   {
     id: 'layer-3-iterContent',
-    line: 2516,
-    coercionLine: 2525,
+    line: 2596,
+    coercionLine: 2605,
     expectedFragment: 'Accumulate this iteration',
     description:
       'streamState.buffer + result.response concatenation → iterContent',
   },
   {
     id: 'layer-3-sessionNaming',
-    line: 2784,
-    coercionLine: 2793,
+    line: 2862,
+    coercionLine: 2871,
     expectedFragment: 'SESSION NAMING',
     description:
       'finalEdits → session naming detection via detectSingleFolderFromResponse',

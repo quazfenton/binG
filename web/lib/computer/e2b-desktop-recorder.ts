@@ -348,6 +348,20 @@ export class DesktopRecorder {
   }
 
   /**
+   * Get the recording session ID.
+   */
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
+  /**
+   * Get the recorder configuration (fps, captureOnAction, etc.).
+   */
+  getConfig(): Required<RecorderConfig> {
+    return { ...this.config };
+  }
+
+  /**
    * Get current recorder state.
    */
   getState(): RecorderState {

@@ -182,8 +182,8 @@ cd /opt/bing/web && npx vitest run \\
 
 ## Partial closure (items ② + ⑤ resolved 2026-07-16)
 
-Items ② and ⑤ are fully resolved as of 2026-07-16. Items ①, ④ remain open
-(separate work streams; not actioned this turn).Item ③ is also resolved — see "What landed (item ③)" subsection at the end of this section. Item ⑥ was added as a post-postaudit follow-up and resolved 2026-07-16 — see "Item ⑥ closure (2026-07-16)" below.
+Items ② and ⑤ are fully resolved as of 2026-07-16. Item ④ remains open
+(separate work stream; not actioned this turn). Item ③ is also resolved — see "What landed (item ③)" subsection at the end of this section. Item ⑥ was added as a post-postaudit follow-up and resolved 2026-07-16 — see "Item ⑥ closure (2026-07-16)" below.
 
 ## Partial closure (item ④ — tsc exits 0 NOT achieved 2026-07-16)
 
@@ -404,10 +404,10 @@ Vitest reports 13 passed (13) in this posture; existing
 
 ### Why this is "partial closure" not "full closure"
 
-Only items ② + ⑤ are resolved. Items ① (docblock), ③ (TODO comments in
-`unified-agent.ts`), ④ (CI infrastructure: tsconfig + package.json script)
-remain open and require separate action streams. The ticket Status header
-above (`OPEN`) reflects this — the ticket is not yet fully closed.
+Only items ② + ⑤ are resolved. Item ④ (CI infrastructure: tsconfig +
+package.json script) remains open and requires a separate action stream.
+The ticket Status header above (`OPEN`) reflects this — the ticket is not
+yet fully closed.
 
 ### What landed (item ③ DONE 2026-07-16)
 
