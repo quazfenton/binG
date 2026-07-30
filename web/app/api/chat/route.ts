@@ -2065,7 +2065,9 @@ const config: UnifiedAgentConfig = {
     let mcpRaceError: { message?: string } | null = null;
     try {
       const mcpRace: Promise<any>[] = [
-        getMCPToolsForAI_SDK(authenticatedUserId, toolPlan, mcpAbortSignal),
+        getMCPToolsForAI_SDK(authenticatedUserId, toolPlan, mcpAbortSignal, {
+          scopePath: requestedScopePath,
+        }),
         // Tier 2: safety-net ceiling — padded so the Tier-1 abort signal
         // fires first, Phase 2 degrades, and getMCPToolsForAI_SDK returns
         // Phase 1 tools before this timer rejects the race.
@@ -2853,7 +2855,7 @@ const config: UnifiedAgentConfig = {
                   };
                   break;
                 }
-              } while (false);
+              } while (iteration < LLM_AGENT_TOOLS_MAX_ITERATIONS);
               // Post-loop: extract any final edits from the LAST iteration's buffer
               // and apply session naming detection. The loop already handled VFS
               // writes and step accumulation; this block runs once after the loop.
@@ -7039,6 +7041,24 @@ function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
       : JSON.stringify(lastUser?.content || '');
 
   return THIRD_PARTY_OAUTH_RE.test(content);
+}
+
+function buildAgenticContext(messages: LLMMessage[]): string {
+  const systemMessages = messages.filter(message => message.role === 'system');
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const recentMessages = messages
+    .filter((message, index) => message.role !== 'system' && index !== lastUserIndex)
+    .slice(-8);
+  return [
+    ...systemMessages.map(message => `SYSTEM: ${typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}`),
+    ...recentMessages.map(message => `${message.role.toUpperCase()}: ${typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}`),
+  ].join('\n\n');
 }
 
 /**

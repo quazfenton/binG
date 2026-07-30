@@ -614,6 +614,14 @@ export const STREAM_TIMEOUTS = {
   // content as text" retry, not a full second completion. Per-model
   // overrides live in MODEL_SERVER_TIMEOUT_OVERRIDES.phase2MaxDurationMs.
   phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '600000', 10),
+  // Issue 6 (Phase 1 Time-Budget Exceeded, P2): tools-first TTFT floor.
+  // When tools are registered, the model needs extra time to decide which
+  // tools to call before the first-token timeout fires. This constant is
+  // the minimum TTFT applied when `opts.tools` is non-empty. Configurable
+  // via LLM_STREAM_TOOLS_FIRST_TTFT_MS env var, default 45s.
+  // The widening is applied AFTER the per-model override, so a model with
+  // an explicit 60s override gets 60s, not 45s.
+  toolsFirstTtftMs: parseInt(process.env.LLM_STREAM_TOOLS_FIRST_TTFT_MS || '45000', 10),
   // Bug #13 (Phase 1 text-length gate): if Phase 1 already produced more
   // than this many chars of text in prose, the model is clearly answering
   // in prose (not trying to call tools). Re-streaming in Phase 2 would
@@ -683,7 +691,7 @@ const STREAM_TIMER_FINALIZE_ENABLED = process.env.ENABLE_STREAM_TIMER_FINALIZE !
 export interface ModelServerTimeoutOverride {
   substring: string;
   timeoutMs: number;
-  /** Per-model TTFT ceiling. Falls back to STREAM_TIMEOUTS.firstTokenTimeoutMs when undefined. */
+  /** Per-model TTFT floor (widening). Applied via Math.max at the call site. Falls back to STREAM_TIMEOUTS.firstTokenTimeoutMs when undefined. */
   firstTokenTimeoutMs?: number;
   /**
    * Bug #13 (Pass-5 audit follow-up) — per-model Phase 2 text-mode
@@ -736,8 +744,13 @@ export function getModelIdleTimeoutMs(modelId: string): number | null {
 /**
  * Bug #71 (Pass-5 audit) — look up the model-specific firstTokenTimeoutMs
  * override. Returns `null` when no override matches, so the caller falls
- * back to the global default. Mirrors `getModelIdleTimeoutMs` but for
- * the TTFT ceiling.
+ * back to the global default.
+ *
+ * NOTE: Unlike `getModelIdleTimeoutMs` (which returns a HARD CEILING), this
+ * function returns a FLOOR — the override WIDENS the TTFT window for slow
+ * cold-start models (e.g. deepseek-v4-flash needs 60s not 30s). The call
+ * site uses `Math.max` to apply the override as a floor (see Bug #71 /
+ * /opt/bing/.tickets/COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT.md Issue 6).
  */
 export function getModelFirstTokenTimeoutMs(modelId: string): number | null {
   if (!modelId) return null;
@@ -1727,13 +1740,16 @@ export async function* streamWithVercelAI(
     // override (e.g. 60s for deepseek-v4-flash cold-start). Falls back
     // to the caller-supplied `firstTokenTimeoutMs` when no override matches.
     //
-    // Contract (mirrors the IDLE-timeout Math.min below): the override is
-    // a HARD CEILING. `Math.min(caller, override)` returns the STRICTER of
-    // the two values. The inner `if (newTtft !== firstTokenTimeoutMs)` only
-    // fires when the override actually clamps the caller — a caller that
-    // explicitly widened the window is not silently cut back. The outer
-    // condition must be `_ttftOverrideMs !== null` ONLY (not a direction
-    // check) so the stricter case (override < caller) is also handled.
+    // NOTE: firstTokenTimeoutMs override is a FLOOR (Math.max), NOT a
+    // ceiling (Math.min). This is the OPPOSITE of the IDLE-timeout override
+    // below because cold-start models (deepseek-v4-flash, etc.) need a
+    // LONGER TTFT window (30s → 60s), not a shorter one. Using Math.min
+    // here would silently ignore the 60s override — Math.min(30000, 60000)
+    // returns 30000 and the `if (newTtft !== ...)` guard at line ~1746
+    // would skip logging entirely, making the override invisible. See
+    // Bug #71 / /opt/bing/.tickets/COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT.md
+    // (Issue 6 — Phase 1 Time-Budget Exceeded). The `direction` field in
+    // the INFO log below reflects `override > caller` as 'widened_to_override'.
     //
     // Implementation note: we use a local `let` (`_effectiveFirstTokenTimeoutMs`)
     // instead of reassigning the destructured `firstTokenTimeoutMs` because
@@ -1744,7 +1760,7 @@ export async function* streamWithVercelAI(
     {
       const _ttftOverrideMs = getModelFirstTokenTimeoutMs(modelName);
       if (_ttftOverrideMs !== null) {
-        const newTtft = Math.min(_effectiveFirstTokenTimeoutMs, _ttftOverrideMs);
+        const newTtft = Math.max(_effectiveFirstTokenTimeoutMs, _ttftOverrideMs);
         if (newTtft !== _effectiveFirstTokenTimeoutMs) {
           _effectiveFirstTokenTimeoutMs = newTtft;
           chatLogger.info('[TTFT-OVERRIDE] per-model firstTokenTimeoutMs applied', {
@@ -1753,10 +1769,29 @@ export async function* streamWithVercelAI(
             overrideMs: _ttftOverrideMs,
             callerMs: firstTokenTimeoutMs,
             effectiveMs: newTtft,
-            direction: _ttftOverrideMs < firstTokenTimeoutMs ? 'clamp_to_override' : 'kept_caller',
+            direction: _ttftOverrideMs > firstTokenTimeoutMs ? 'widened_to_override' : 'kept_caller',
           });
         }
       }
+    }
+
+    // Issue 6 (Phase 1 Time-Budget Exceeded, P2): when tools are registered,
+    // widen the TTFT floor so the model has extra time to decide which tools
+    // to call before the first-token timeout fires. This prevents premature
+    // fallback to text-only mode. The widening is conservative — it only
+    // applies when `tools` is non-empty, and takes the max of the current
+    // effective value and the tools-first floor.
+    const toolsAreRegistered = opts.tools && Object.keys(opts.tools).length > 0;
+    if (toolsAreRegistered && _effectiveFirstTokenTimeoutMs < STREAM_TIMEOUTS.toolsFirstTtftMs) {
+      chatLogger.info('[TOOLS-FIRST-TTFT] Widening firstTokenTimeoutMs for tools', {
+        provider,
+        model: modelName,
+        previousMs: _effectiveFirstTokenTimeoutMs,
+        widenedMs: STREAM_TIMEOUTS.toolsFirstTtftMs,
+        toolCount: Object.keys(opts.tools).length,
+        envVar: 'LLM_STREAM_TOOLS_FIRST_TTFT_MS',
+      });
+      _effectiveFirstTokenTimeoutMs = STREAM_TIMEOUTS.toolsFirstTtftMs;
     }
     ttftTimeoutId = setTimeout(() => {
       if (!firstTokenReceived) {

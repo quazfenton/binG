@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-07-30T03:27:12.825Z",
+  "url": "http://127.0.0.1:3000/api/filesystem/read",
+  "method": "POST",
+  "status": 400,
+  "headers": {
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "date": "Thu, 30 Jul 2026 03:27:12 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "R6RtO88YMXTQ8Ra9UUbr86c6jwcDlllVxQ4DE6O1Cq4",
+    "x-csp-nonce-style": "9e8fant1RxmPdfeq4hoz7xJ0Rz3bajhrj_UCH2ZVR4s",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785382032791_ux9tz8o6hqg",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "path": "project/sessions/e2e-google-app/app.js"
+  },
+  "responseText": "{\"success\":false,\"error\":\"Failed to read file\"}",
+  "responseJson": {
+    "success": false,
+    "error": "Failed to read file"
+  },
+  "cookies": {
+    "anon-session-id": "anon_1785382032766_03dc5d469f0c4e0b98"
+  }
+}

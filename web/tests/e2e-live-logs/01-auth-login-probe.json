@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-07-30T03:25:03.031Z",
+  "url": "http://127.0.0.1:3000/api/auth/login",
+  "method": "POST",
+  "status": 401,
+  "headers": {
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "date": "Thu, 30 Jul 2026 03:25:03 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "6iiC8_zIfz6Wb0POQdl9v-iQ2dn8TNMHrJeWc7Y5LAQ",
+    "x-csp-nonce-style": "iE9qD_iEins02X-wpFToIunmjPo-XFLl9tzEWdwR_6k",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785381902434_hvgyn9e6b87",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "email": "test@test.com",
+    "password": "Testing0"
+  },
+  "responseText": "{\"success\":false,\"error\":\"Invalid email or password\"}",
+  "responseJson": {
+    "success": false,
+    "error": "Invalid email or password"
+  },
+  "cookies": {}
+}

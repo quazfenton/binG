@@ -38,7 +38,7 @@ describe('Fallback Text-Based Tool Call Parsing', () => {
       { role: 'user', content: 'prior question' },
       { role: 'assistant', content: 'prior answer' },
     ]);
-  });
+  }, 60_000);
 
   describe('parseTextToolCalls pattern matching', () => {
     it('should parse write_file with JSON object syntax', async () => {

@@ -662,6 +662,7 @@ async function trySandboxRoute(
   command: string,
   workingDir: string,
   timeout?: number,
+  signal?: AbortSignal,
 ): Promise<{
   routed: boolean;
   sandboxId?: string;
@@ -674,17 +675,29 @@ async function trySandboxRoute(
     // No existing session — ask sandboxBridge to get or create one.
     // This bridges to the pre-warmed sandbox pool when available.
     if (!session) {
+      logger.info('[SandboxRoute] Allocation started', { agentId });
       try {
-        const newSession = await sandboxBridge.getOrCreateSession(agentId);
+        // Bound sandbox acquisition separately (15s) so a stuck provider
+        // does not block the caller indefinitely. The watchdog timeout is
+        // separate from the command execution timeout.
+        const createPromise = sandboxBridge.getOrCreateSession(agentId);
+        const acquisitionTimeout = 15_000;
+        const timedCreate = timeoutPromise(createPromise, acquisitionTimeout,
+          'Sandbox acquisition timed out');
+        const newSession = await (signal
+          ? abortablePromise(timedCreate, signal, 'Sandbox acquisition cancelled')
+          : timedCreate);
         if (newSession && newSession.sandboxId) {
           session = newSession;
-          logger.info('Bug #47: Sandbox session created/acquired for ' + agentId, {
+          logger.info('[SandboxRoute] Session acquired', {
             sandboxId: newSession.sandboxId,
+            agentId,
           });
         }
       } catch (createErr: any) {
-        logger.debug('Bug #47: sandboxBridge.getOrCreateSession failed, falling through to local spawn', {
+        logger.warn('[SandboxRoute] Allocation timed out or failed, falling back to local spawn', {
           error: createErr?.message,
+          agentId,
         });
       }
     }
@@ -692,8 +705,43 @@ async function trySandboxRoute(
     if (!session || !session.sandboxId) {
       return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
     }
+
+    // Bound sandbox execution using the requested command timeout.
+    // Default to 30s if no timeout was provided.
+    const execTimeout = timeout ?? 30_000;
+    logger.info('[SandboxRoute] Command execution started', {
+      sandboxId: session.sandboxId,
+      timeout: execTimeout,
+    });
     const startTime = Date.now();
-    const execResult = await sandboxBridge.executeCommand(session.sandboxId, command, workingDir);
+    let execResult: any;
+    try {
+      const execPromise = sandboxBridge.executeCommand(session.sandboxId, command, workingDir, execTimeout);
+      execResult = await (signal
+        ? abortablePromise(execPromise, signal, 'Sandbox command cancelled')
+        : execPromise);
+    } catch (execErr: any) {
+      const duration = Date.now() - startTime;
+      logger.warn('[SandboxRoute] Command timed out or failed', {
+        error: execErr?.message,
+        duration,
+        timeout: execTimeout,
+        sandboxId: session.sandboxId,
+      });
+      return {
+        routed: true,
+        sandboxId: session.sandboxId,
+        result: {
+          success: false,
+          stdout: '',
+          stderr: execErr?.message || 'Sandbox command execution failed',
+          exitCode: -1,
+          duration,
+          command,
+          workingDir,
+        },
+      };
+    }
     const duration = Date.now() - startTime;
     // Map sandbox-provider result to BashExecutionResult shape.
     // CRITICAL (review fix): do NOT short-circuit on truthy `success` — some
@@ -724,12 +772,40 @@ async function trySandboxRoute(
     }
     return { routed: true, sandboxId: session.sandboxId, result };
   } catch (err: any) {
-    logger.debug('Bug #47: sandboxBridge unavailable or executeCommand failed, falling back to local spawn', {
+    logger.debug('[SandboxRoute] sandboxBridge unavailable or executeCommand failed, falling back to local spawn', {
       error: err?.message,
       agentId,
     });
     return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
   }
+}
+
+/**
+ * Race a promise against a timeout. Rejects if the timeout fires first.
+ */
+function timeoutPromise<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+/**
+ * Race a promise against an AbortSignal. Rejects if the signal fires first.
+ */
+function abortablePromise<T>(promise: Promise<T>, signal: AbortSignal, message: string): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException(message, 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException(message, 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (val) => { signal.removeEventListener('abort', onAbort); resolve(val); },
+      (err) => { signal.removeEventListener('abort', onAbort); reject(err); },
+    );
+  });
 }
 
 /**

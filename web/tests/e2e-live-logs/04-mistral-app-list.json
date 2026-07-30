@@ -1,0 +1,30 @@
+{
+  "timestamp": "2026-07-30T03:25:22.772Z",
+  "url": "http://127.0.0.1:3000/api/filesystem/list?path=project%2Fsessions%2Fe2e-mistral-app",
+  "method": "GET",
+  "status": 400,
+  "headers": {
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "date": "Thu, 30 Jul 2026 03:25:22 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "vg6W64JLh6ma85GC8XYlWiX-O0f38qfPImER1mT5fu4",
+    "x-csp-nonce-style": "evbSrExLJfAv66c_H3LOgRqtp73IAKmp8mNd6xPxBM4",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785381922108_0kptf5mjy9zn",
+    "x-xss-protection": "1; mode=block"
+  },
+  "responseText": "{\"success\":false,\"error\":\"Path traversal beyond workspace root: project/sessions/e2e-mistral-app. Expected scope: workspace/sessions/... (use a relative path within the active session workspace, not an absolute or parent-relative one).\"}",
+  "responseJson": {
+    "success": false,
+    "error": "Path traversal beyond workspace root: project/sessions/e2e-mistral-app. Expected scope: workspace/sessions/... (use a relative path within the active session workspace, not an absolute or parent-relative one)."
+  },
+  "cookies": {}
+}

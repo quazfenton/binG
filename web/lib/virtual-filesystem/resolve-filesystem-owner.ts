@@ -58,7 +58,7 @@ export function withAnonSessionCookie<T extends NextResponse>(
  */
 export async function resolveFilesystemOwner(req: NextRequest): Promise<FilesystemOwnerResolution> {
   const auth = await resolveRequestAuth(req, { allowAnonymous: true });
-  if (auth.success && auth.userId) {
+  if (auth.success && auth.userId && auth.source !== 'anonymous') {
     return {
       ownerId: auth.userId,
       source: auth.source || 'jwt',

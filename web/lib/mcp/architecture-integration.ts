@@ -1279,7 +1279,7 @@ export async function getMCPToolsForAI_SDK(
   userId?: string,
   taskFilter?: SelectToolPlanResult,
   signal?: AbortSignal,
-  options?: { requireFullCatalog?: boolean },
+  options?: { requireFullCatalog?: boolean; scopePath?: string },
 ) {
   const view = computeTaskFilterView(taskFilter, options);
   const callStart = Date.now();
@@ -1544,7 +1544,7 @@ export async function getMCPToolsForAI_SDK(
     bashToolBundle.registerVFSSyncHook();
 
     const sessionId = userId ? normalizeSessionId(userId) : undefined;
-    const scopePath = getVfsScopeBasePath(sessionId);
+    const scopePath = options?.scopePath || getVfsScopeBasePath(sessionId);
 
     const bashToolMap = bashToolBundle.createBashTool({
       workingDir: scopePath,
@@ -2216,7 +2216,7 @@ export async function callMCPToolFromAI_SDK(
     const preGate = gatePreCall(contract!, {
       toolName,
       args,
-    errorCount: (recentFailures?.length ?? 0) + (result.success ? 0 : 1),
+      errorCount: recentFailures?.length ?? 0,
     });
     if (!preGate.allowed) {
       contract!.audit = contract!.audit.append({
@@ -2541,7 +2541,7 @@ export async function callMCPToolFromAI_SDK(
         );
       }
       const sessionId = normalizeSessionId(sessionIdSource);
-      const scopePath = `workspace/sessions/${sessionId}`;
+      const effectiveScopePath = scopePath || `workspace/sessions/${sessionId}`;
 
       // Get filesystem state for command routing
       let filesystemState: Record<string, { content?: string; isDirectory?: boolean }> = {};
@@ -2562,7 +2562,7 @@ export async function callMCPToolFromAI_SDK(
       }
 
       const bashToolMap = createBashTool({
-        workingDir: scopePath,
+        workingDir: effectiveScopePath,
         enableSelfHealing: true,
         persistToVFS: true,
         getFilesystemState: () => filesystemState,
@@ -2575,7 +2575,7 @@ export async function callMCPToolFromAI_SDK(
         logger.info('[Bash] Tool invoked (AI_SDK path)', {
           tool: toolName,
           command: args?.command?.slice(0, 100),
-          workingDir: scopePath,
+          workingDir: effectiveScopePath,
         });
 
         const result = await bashTool.execute(args || {}, {

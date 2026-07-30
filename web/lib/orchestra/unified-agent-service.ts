@@ -3763,6 +3763,28 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 
     const capabilityId = capabilityMap[name] || name;
 
+    // bash.execute needs the request-scoped executor assembled by the chat
+    // route. The generic capability router has no always-available bash
+    // provider, so routing it there first returns an opaque
+    // "All providers failed" without ever reaching the working executor.
+    if (capabilityId === 'bash.execute') {
+      if (config.executeTool) {
+        return config.executeTool(name, args);
+      }
+      const { callMCPToolFromAI_SDK } = await import('@/lib/mcp');
+      const result = await callMCPToolFromAI_SDK(
+        'bash_execute',
+        args,
+        config.filesystemOwnerId || config.userId || '',
+        config.scopePath,
+      );
+      return {
+        success: result.success,
+        output: result.output || result.error || '',
+        exitCode: result.success ? 0 : 1,
+      };
+    }
+
     if (await hasToolCapability(capabilityId)) {
       const toolStartTime = Date.now();
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
@@ -3771,7 +3793,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       const capResult = await executeToolCapability(capabilityId, args, {
         userId: config.userId || 'system',
         sessionId: config.conversationId,  // FIX: Session scoping for VFS
-        scopePath: config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
+        scopePath: config.scopePath || (config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined),
         workspaceId: config.projectContext?.id,
       });
 

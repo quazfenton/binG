@@ -832,39 +832,33 @@ export default {
       // Cloudflare's edge drops idle TCP connections after ~15-30s of
       // silence. When the 9router stalls mid-stream (fallback chains,
       // slow reasoning steps), wrap the body in a TransformStream that
-      // injects SSE heartbeat comments every 10s so the connection stays
+      // injects SSE heartbeat comments every 5s so the connection stays
       // alive until the next real chunk.
       //
-      // Note: the heartbeat only applies to the *downstream* path
-      // (Worker → client).  The *upstream* (Worker → backend) fetch has
-      // no keep-alive — it is subject to CF's 100s idle chunk timeout
-      // (hard limit, not configurable).  Once the backend sends its first
-      // byte downstream heartbeats keep the edge connection alive
-      // indefinitely.
-      //
-      // IMPORTANT: only wrap a genuine SSE stream — never wrap error
-      // responses (4xx/5xx) or non-event-stream bodies.  A 429 from a
-      // subprovider arrives as a short finite JSON document (NOT an
-      // SSE stream).  Wrapping it in a heartbeat-injecting stream:
+      // IMPORTANT: only wrap 2xx responses — never wrap error responses
+      // (4xx/5xx).  A 429 from a subprovider arrives as a short finite
+      // JSON document (NOT an SSE stream).  Wrapping it in a heartbeat-
+      // injecting stream:
       //   1. corrupts the JSON body with `:\n\n` heartbeats,
       //   2. closes the controller on upstream EOF, so the client sees
       //      the truncated JSON as partial SSE tokens then an early end
-      //      (this is the "a few words come in, then it drops" symptom).
-      // Worse, once an HTTP/2 RST_STREAM from the upstream propagates back
-      // through cloudflared, the poisoned keep-alive connection can
-      // persist on subsequent retries — so the bug reproduces for every
-      // request afterward until the tunnel recycles. Letting errors pass
-      // through untouched keeps the 429 status code intact so the client
-      // can apply its own backoff logic.
-      const isEventStream = (proxyResponse.headers.get('content-type') ?? '')
-        .toLowerCase()
-        .includes('event-stream');
-      if (isStreamingPath && responseBody && proxyResponse.ok && isEventStream) {
-        // 5s heartbeat (down from 10s) — cloudflared tunnel idle timeout
-        // is ~15s on many deployments. A 10s heartbeat meant the timer
-        // only had one 5s grace period before the tunnel dropped. With
-        // 5s heartbeats, we get three chances before the 15s mark.
-        responseBody = createKeepAliveStream(responseBody, 5_000);
+      //      ("a few words come in, then it drops").
+      // Worse, once cloudflared's half-HTTP/2-stream propagates the
+      // RST_STREAM from the upstream error, retries reuse the poisoned
+      // connection.  Letting errors pass untouched keeps the 429 status
+      // code intact so the client applies its own backoff logic.
+      if (isStreamingPath && responseBody && proxyResponse.ok) {
+        const raw = (proxyResponse.headers.get('content-type') ?? '').toLowerCase();
+        const ct = raw.split(';')[0].trim();
+        const isBinary = ct.startsWith('image/') || ct.startsWith('audio/') ||
+          ct.startsWith('video/') || ct.startsWith('font/') ||
+          ct.startsWith('multipart/') || ct.startsWith('application/x-') ||
+          ct === 'application/octet-stream' || ct === 'application/pdf' ||
+          ct === 'application/zip' || ct === 'application/gzip' ||
+          ct === 'application/x-tar';
+        if (!isBinary) {
+          responseBody = createKeepAliveStream(responseBody, 5_000);
+        }
       }
 
       // ─── Observability: trace response status ──────────────────

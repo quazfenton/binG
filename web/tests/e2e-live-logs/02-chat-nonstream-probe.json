@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-07-30T03:25:08.901Z",
+  "url": "http://127.0.0.1:3000/api/chat",
+  "method": "POST",
+  "status": 200,
+  "headers": {
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "date": "Thu, 30 Jul 2026 03:25:08 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "eBQJlmu3LPjKOQyA21QycNCp89FD0Fxt_bcC1lgDTlE",
+    "x-csp-nonce-style": "k-llVpPx2h3StpXe5nJtFy0Z3iAhV9Yp2ww1TmxKBnM",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785381903054_zejr5ww0z2s",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hi in one sentence."
+      }
+    ],
+    "provider": "mistral",
+    "model": "mistral-small-latest",
+    "stream": false,
+    "conversationId": "e2e-nonstream-probe"
+  },
+  "responseText": "{\"success\":true,\"content\":\"Hello, I am greeting you per your request; specify your next task.\",\"data\":{\"success\":true,\"response\":\"Hello, I am greeting you per your request; specify your next task.\",\"steps\":[],\"metadata\":{\"agentType\":\"unified-agent\",\"mode\":\"v1-api\",\"duration\":3952}}}",
+  "responseJson": {
+    "success": true,
+    "content": "Hello, I am greeting you per your request; specify your next task.",
+    "data": {
+      "success": true,
+      "response": "Hello, I am greeting you per your request; specify your next task.",
+      "steps": [],
+      "metadata": {
+        "agentType": "unified-agent",
+        "mode": "v1-api",
+        "duration": 3952
+      }
+    }
+  },
+  "cookies": {}
+}
