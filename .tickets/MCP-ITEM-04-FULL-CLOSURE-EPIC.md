@@ -5,7 +5,9 @@
 > **Parent audit:** `MCP tool-selection audit` (closed 2026-07-15 — 0 MUST-FIX)
 > **Sibling ticket — closed:** `/opt/bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md` (Path C discriminator + 524 mapping, closed 2026-07-16)
 > **Sibling ticket — joint work:** `/opt/bing/docs/CENTRALIZED_TODO_LIST.md` `### MCP-TOOL-SELECTION-POSTAUDIT` L710+
-> **Status:** 🟡 OPEN
+> **Status:** ✅ CLOSED (2026-07-23)
+
+> **Closure rationale:** Tasks 1 and 2 were already completed by the 4th round of ambient declarations (2026-07-16), which added both `@/lib/virtual-filesystem/index.server` and `@/lib/database/schema` to `ambient.d.ts`. The ticket's Option A/C plan for `database/schema` was walked back because the facade is invisible to `packages/shared`'s tsc view (per the 4th-round docblock in ambient.d.ts). The per-round progression table in CENTRALIZED_TODO_LIST.md `#per-round-closure-progression-2026-07-16` already accounts for both modules (4th round: -16 TS2307 cleared). No code changes were needed.
 > **Tracker convention:** This is the project's **local markdown ticket system** at `/opt/bing/.tickets/*.md` (consistent with `UAG-LOG-SHAPE-CONTRACT-INVESTIGATION.md`, `MCP-RATE-LIMITED-TTL-RECOVERY.md`, `STALL-ROUTEINTEGRATION-FOLLOWUP.md`). Not a GitHub or Linear issue — the local file IS the canonical ticket artifact.
 > **Architecture divergence:** User prompt asked for "Each gets Option A/C treatment" — the ticket's actual architecture is bifurcated: **1/3 modules Option A/C** (`database/schema`), **2/3 modules ambient** (`connection-shim` ✅ DONE + `virtual-filesystem/index.server` 🟡 PENDING). Per-module rationale documented in the Tasks section below.
 > **Opened:** 2026-07-16

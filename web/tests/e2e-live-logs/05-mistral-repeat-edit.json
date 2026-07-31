@@ -1,0 +1,105 @@
+{
+  "timestamp": "2026-07-30T03:25:27.287Z",
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Build a tiny counter web app in index.html, style.css, app.js."
+      },
+      {
+        "role": "assistant",
+        "content": "Counter app created."
+      },
+      {
+        "role": "user",
+        "content": "Update the existing app so the counter starts at 5 and add a reset button if it is missing. Modify existing files instead of recreating the project."
+      }
+    ],
+    "provider": "mistral",
+    "model": "mistral-small-latest",
+    "stream": true,
+    "conversationId": "e2e-mistral-app"
+  },
+  "status": 200,
+  "headers": {
+    "cache-control": "no-cache, no-store, must-revalidate",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "text/event-stream",
+    "date": "Thu, 30 Jul 2026 03:25:25 GMT",
+    "expires": "0",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "pragma": "no-cache",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-accel-buffering": "no",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "cn-ZUFHboGarIDcK7BofbOg-uJeT85AjQntvMD_ez-E",
+    "x-csp-nonce-style": "unMpj6jwCb3HDbspb-joKD5yLsw16E8q62DnavYUMs0",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785381922965_1m0toe7br12",
+    "x-xss-protection": "1; mode=block"
+  },
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1785381924926,\"stepIndex\":0}\n\nevent: tool_result\ndata: {\"tool\":\"list_files\",\"success\":true,\"exitCode\":0,\"durationMs\":4,\"args\":{\"path\":\"/\",\"recursive\":true}}\n\nevent: step\ndata: {\"step\":\"Iteration 1\",\"status\":\"completed\",\"timestamp\":1785381927268,\"stepIndex\":1}\n\nevent: auto-continue\ndata: {\"requestId\":\"chat_1785381922978_qtpYqeRar\",\"iteration\":1,\"reason\":\"read-then-stall\",\"continuationsSoFar\":1}\n\nevent: step\ndata: {\"type\":\"continuation\",\"iteration\":1,\"reason\":\"read-then-stall\",\"prompt\":\"[AUTO-CONTINUE] The previous tool call had no arguments (args was empty or missing). Please provide the required arguments for the tool and retry. If you no longer need to call that tool, proceed with\",\"timestamp\":1785381927284}\n\nevent: done\ndata: {\"success\":true,\"content\":\"I'll help you update the existing app to start the counter at 5 and add a reset button. Let me first search for the counter application files in the workspace.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-agent-loop\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1785381924926,\"stepIndex\":0},{\"step\":\"Iteration 1\",\"status\":\"completed\",\"timestamp\":1785381927268,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll help you update the existing app to start the counter at 5 and add a reset button. Let me first search for the counter application files in the workspace.\",\"steps\":[{\"toolName\":\"list_files\",\"args\":{},\"result\":{\"success\":true,\"output\":\"{\\\"success\\\":true,\\\"toolName\\\":\\\"list_files\\\",\\\"args\\\":{\\\"path\\\":\\\"/\\\",\\\"recursive\\\":true},\\\"output\\\":{\\\"success\\\":true,\\\"output\\\":\\\"{\\\\\\\"success\\\\\\\":true,\\\\\\\"output\\\\\\\":{\\\\\\\"path\\\\\\\":\\\\\\\"sessions/012\\\\\\\",\\\\\\\"nodes\\\\\\\":[]},\\\\\\\"provider\\\\\\\":\\\\\\\"vfs\\\\\\\"}\\\",\\\"exitCode\\\":0},\\\"summary\\\":\\\"Tool 'list_files' executed successfully\\\"}\",\"exitCode\":0}}],\"totalSteps\":1,\"mode\":\"v1-agent-loop\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":2324,\"orchestrator\":true,\"appliedEditCount\":0,\"extractedEditCount\":0,\"iterationCount\":2}}}\n\n",
+  "eventCount": 6,
+  "tokenText": "",
+  "toolEvents": [],
+  "fileEvents": [],
+  "done": {
+    "event": "done",
+    "rawData": "{\"success\":true,\"content\":\"I'll help you update the existing app to start the counter at 5 and add a reset button. Let me first search for the counter application files in the workspace.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-agent-loop\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1785381924926,\"stepIndex\":0},{\"step\":\"Iteration 1\",\"status\":\"completed\",\"timestamp\":1785381927268,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll help you update the existing app to start the counter at 5 and add a reset button. Let me first search for the counter application files in the workspace.\",\"steps\":[{\"toolName\":\"list_files\",\"args\":{},\"result\":{\"success\":true,\"output\":\"{\\\"success\\\":true,\\\"toolName\\\":\\\"list_files\\\",\\\"args\\\":{\\\"path\\\":\\\"/\\\",\\\"recursive\\\":true},\\\"output\\\":{\\\"success\\\":true,\\\"output\\\":\\\"{\\\\\\\"success\\\\\\\":true,\\\\\\\"output\\\\\\\":{\\\\\\\"path\\\\\\\":\\\\\\\"sessions/012\\\\\\\",\\\\\\\"nodes\\\\\\\":[]},\\\\\\\"provider\\\\\\\":\\\\\\\"vfs\\\\\\\"}\\\",\\\"exitCode\\\":0},\\\"summary\\\":\\\"Tool 'list_files' executed successfully\\\"}\",\"exitCode\":0}}],\"totalSteps\":1,\"mode\":\"v1-agent-loop\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":2324,\"orchestrator\":true,\"appliedEditCount\":0,\"extractedEditCount\":0,\"iterationCount\":2}}}",
+    "data": {
+      "success": true,
+      "content": "I'll help you update the existing app to start the counter at 5 and add a reset button. Let me first search for the counter application files in the workspace.",
+      "messageMetadata": {
+        "agent": "unified",
+        "mode": "v1-agent-loop",
+        "processingSteps": [
+          {
+            "step": "Start agentic pipeline",
+            "status": "started",
+            "timestamp": 1785381924926,
+            "stepIndex": 0
+          },
+          {
+            "step": "Iteration 1",
+            "status": "completed",
+            "timestamp": 1785381927268,
+            "stepIndex": 1
+          }
+        ]
+      },
+      "data": {
+        "success": true,
+        "response": "I'll help you update the existing app to start the counter at 5 and add a reset button. Let me first search for the counter application files in the workspace.",
+        "steps": [
+          {
+            "toolName": "list_files",
+            "args": {},
+            "result": {
+              "success": true,
+              "output": "{\"success\":true,\"toolName\":\"list_files\",\"args\":{\"path\":\"/\",\"recursive\":true},\"output\":{\"success\":true,\"output\":\"{\\\"success\\\":true,\\\"output\\\":{\\\"path\\\":\\\"sessions/012\\\",\\\"nodes\\\":[]},\\\"provider\\\":\\\"vfs\\\"}\",\"exitCode\":0},\"summary\":\"Tool 'list_files' executed successfully\"}",
+              "exitCode": 0
+            }
+          }
+        ],
+        "totalSteps": 1,
+        "mode": "v1-agent-loop",
+        "metadata": {
+          "provider": "mistral",
+          "model": "mistral-small-latest",
+          "duration": 2324,
+          "orchestrator": true,
+          "appliedEditCount": 0,
+          "extractedEditCount": 0,
+          "iterationCount": 2
+        }
+      }
+    }
+  },
+  "cookies": {
+    "anon-session-id": "anon_1785381922829_ae702eb0f7f97f2bab"
+  }
+}

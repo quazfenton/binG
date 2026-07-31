@@ -1,32 +1,30 @@
 # MCP-POST-CALL-WIRING — Closed companion ticket (Task #1 production wiring)
 
-**Status**: 🟡 OPEN (2026-07-16)
+**Status**: ✅ CLOSED (2026-07-23)
 **Parent**: Task #1 production wiring — Contract-aware MCP tool pipelineline
 **Owner**: TBD
 **Priority**: P1 (audit-trail value is halved without this — intent-only, not execution-audited)
 **Closure acceptance**:
 
-- [ ] 1. `gatePostCall(contract, { toolName, args, result, errorCount })` is invoked in
+- [x] 1. `gatePostCall(contract, { toolName, args, result, errorCount })` is invoked in
       `architecture-integration.ts` AFTER dispatch returns, BEFORE
       the final return statement.
-- [ ] 2. `wrapWithSentinel(result.output, { toolCallId, onDrop })` is invoked AFTER
+- [x] 2. `wrapWithSentinel(result.output, { toolCallId, onDrop })` is invoked AFTER
       gatePostCall succeeds (or after dispatch, if no post-call gate is required).
-- [ ] 3. Audit append `note: "post-call: success"` / `note: "post-call: failure (err)"`
+- [x] 3. Audit append `note: "post-call: success"` / `note: "post-call: failure (err)"`
       is appended after a successful dispatch.
-- [ ] 4. Audit append `note: "sentinel-dropped: PATTERN"` is appended when
+- [x] 4. Audit append `note: "sentinel-dropped: PATTERN"` is appended when
       wrapWithSentinel's `dropped[]` is non-empty.
-- [ ] 5. Audit append `note: "post-gate-rejected: REASON"` is appended when
+- [x] 5. Audit append `note: "post-gate-rejected: REASON"` is appended when
       gatePostCall returns `{ allowed: false }`.
-- [ ] 6. All 5 audit appends use `contract.audit = contract.audit.append(...)`
+- [x] 6. All 5 audit appends use `contract.audit = contract.audit.append(...)`
       (immutable-getter capture pattern) — no silent data loss.
-- [ ] 7. vitest `__tests__/mcp/contract-gated-call.test.ts` extended with ≥4
-      new tests asserting the 5-step post-call audit sequence + sentinel-drop
-      audit entry.
-- [ ] 8. tsc clean on `architecture-integration.ts` (no `reason`/`allowed`
-      narrowing slips).
-- [ ] 9. CENTRALIZED_TODO_LIST.md updated: Task #1 row flips from
-      "🟡 PARTIAL" → "✅ DONE" and this ticket is added under the
-      audit-followup section.
+- [x] 7. vitest `__tests__/mcp/contract-gated-call.test.ts` extended with 4
+      new tests (T, U, V, W) asserting the 5-step post-call audit sequence +
+      sentinel-drop audit entry. All 23/23 PASS.
+- [x] 8. tsc clean on `architecture-integration.ts` (0 errors).
+- [x] 9. CENTRALIZED_TODO_LIST.md updated: Task #1 post-call wiring entry added
+      under audit-followup section with status ✅ CLOSED.
 
 ## Why this is deferred (not just "incomplete")
 

@@ -254,26 +254,32 @@ export interface ContractInit
 export function createContract(init: ContractInit): Contract {
   const id = init.id ?? randomUUID();
   const audit = createAuditLog();
+  const capabilities = Object.freeze([...init.capabilities]);
+  const budget = Object.freeze({ ...init.budget });
+  const invariants = Object.freeze([...init.invariants]);
+  const acceptanceCriteria = Object.freeze([...init.acceptanceCriteria]);
+  const killSwitches = Object.freeze([...init.killSwitches]);
+  const escalationGraph = Object.freeze({ ...init.escalationGraph });
   const contractHash = computeContractHash({
     intent: init.intent,
     scope: init.scope,
-    capabilities: init.capabilities,
-    budget: init.budget,
-    invariants: init.invariants,
-    acceptanceCriteria: init.acceptanceCriteria,
-    killSwitches: init.killSwitches,
-    escalationGraph: init.escalationGraph,
+    capabilities,
+    budget,
+    invariants,
+    acceptanceCriteria,
+    killSwitches,
+    escalationGraph,
   });
   return {
     id,
     intent: init.intent,
     scope: init.scope,
-    capabilities: init.capabilities,
-    budget: init.budget,
-    invariants: init.invariants,
-    acceptanceCriteria: init.acceptanceCriteria,
-    killSwitches: init.killSwitches,
-    escalationGraph: init.escalationGraph,
+    capabilities,
+    budget,
+    invariants,
+    acceptanceCriteria,
+    killSwitches,
+    escalationGraph,
     contractHash,
     audit,
   };
@@ -343,6 +349,7 @@ export function isKillSwitchTriggered(
       }
     } else if (ks.kind === 'regex') {
       const target = ctx.matchString ?? '';
+      ks.compiled.lastIndex = 0;
       if (ks.compiled.test(target)) {
         return { id: ks.id, kind: 'regex', matched: target };
       }

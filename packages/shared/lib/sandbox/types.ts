@@ -320,7 +320,7 @@ export function determineExecutionPolicy(options: {
     /\b(write|create|generate)\b.*\b(\.ts|\.js|\.py|\.tsx|\.jsx|\.json)\b/i,
     /\b(show|display|give|provide)\b.*\b(code|example|snippet)\b/i,
     /\b(help|how)\b.*\b(write|create|make|build)\b/i,
-    /\b(explain|describe|what|how)\b/i,
+    /\b(explain|describe)\b/i,
   ];
 
   // Desktop/GUI tasks - require sandbox with desktop
@@ -333,13 +333,6 @@ export function determineExecutionPolicy(options: {
     return 'isolated-code-exec';
   }
 
-  // Check if this is clearly a code writing task (should NOT use sandbox)
-  const isCodeWriting = codeWritingPatterns.some(pattern => pattern.test(task));
-  if (isCodeWriting && !requiresBash) {
-    // Code writing without explicit bash execution = local-safe
-    return 'local-safe';
-  }
-
   // Long-running with persistence needs - requires sandbox
   if (isLongRunning || taskLower.includes('server') || taskLower.includes('service') || taskLower.includes('daemon')) {
     return 'persistent-sandbox';
@@ -348,6 +341,13 @@ export function determineExecutionPolicy(options: {
   // Heavy backend/database tasks - requires sandbox
   if (requiresBackend || requiresDatabase || fileCount > 50) {
     return 'sandbox-heavy';
+  }
+
+  // Check if this is clearly a code writing task (should NOT use sandbox)
+  const isCodeWriting = codeWritingPatterns.some(pattern => pattern.test(task));
+  if (isCodeWriting && !requiresBash) {
+    // Code writing without explicit bash execution = local-safe
+    return 'local-safe';
   }
 
   // Check for explicit execution patterns (bash commands, running code)
@@ -590,9 +590,16 @@ export function assessRisk(input: string, context?: {
   }
 
   // Context-based risk adjustments
+  const originalScore = totalScore;
   if (context?.source === 'user') {
     // User-entered commands get slight trust boost
     totalScore = Math.floor(totalScore * 0.9);
+  }
+
+  // Clamp score back to KVM minimum if original classification was KVM
+  const KVM_MIN_SCORE = 96;
+  if (originalScore >= KVM_MIN_SCORE) {
+    totalScore = Math.max(totalScore, KVM_MIN_SCORE);
   }
 
   // Check for command chaining (increases risk)

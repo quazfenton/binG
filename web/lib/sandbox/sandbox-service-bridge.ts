@@ -211,7 +211,7 @@ export class SandboxServiceBridge {
     }
   }
 
-  async executeCommand(sandboxId: string, command: string, cwd?: string) {
+  async executeCommand(sandboxId: string, command: string, cwd?: string, timeout?: number) {
     await this.ensureVirtualFilesystemMounted(sandboxId);
     await this.ensureInitialized();
 
@@ -224,7 +224,7 @@ export class SandboxServiceBridge {
       // Best-effort — proceed with original command if resolution fails
     }
 
-    return this.sandboxService.executeCommand(sandboxId, command, cwd);
+    return this.sandboxService.executeCommand(sandboxId, command, cwd, timeout);
   }
 
   async writeFile(sandboxId: string, filePath: string, content: string) {

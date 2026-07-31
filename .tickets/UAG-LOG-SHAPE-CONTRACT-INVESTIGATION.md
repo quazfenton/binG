@@ -2,7 +2,7 @@
 
 ## Status
 
-OPEN
+✅ CLOSED (2026-07-23 — all 7 tests pass, both fixes already verified in source)
 
 ## Date opened
 

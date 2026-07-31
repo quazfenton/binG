@@ -305,6 +305,16 @@ function startRequestTrackerCleanup() {
 // Start request tracker cleanup
 startRequestTrackerCleanup();
 
+// Bug #3 (audit): In-flight export dedup cache — prevents two concurrent requests
+// for the same (ownerId, pathFilter) from both calling exportWorkspace() on
+// the same workspace. Without this, overlapping snapshot requests (e.g., from
+// the catch-all route and the dedicated /api/filesystem/snapshot route) both
+// start full exports, doubling load on the DB and inflating latency for both.
+// The dedup is tracked via a module-level Map; the promise is removed from the
+// map once the export completes or fails.
+const inFlightExports = new Map<string, Promise<any>>();
+const IN_FLIGHT_EXPORT_TIMEOUT_MS = 60_000;
+
 // Clean up intervals on process exit
 process.on('beforeExit', () => {
   if (cleanupInterval) clearInterval(cleanupInterval);
@@ -549,28 +559,66 @@ export async function GET(req: NextRequest) {
       vfsSnapshotCacheMetrics.recordMiss();
     }
 
-    // Generate new snapshot
-    let snapshot;
-    const exportStart = Date.now();
-    try {
-      if (useDesktopSnapshot) {
-        const localSnapshot = await fsBridge.exportWorkspace(owner.ownerId);
-        snapshot = {
-          root: localSnapshot.root,
-          version: localSnapshot.version,
-          updatedAt: new Date().toISOString(),
-          exportedAt: new Date().toISOString(),
-          files: localSnapshot.files,
-        };
-      } else {
-        snapshot = await virtualFilesystem.exportWorkspace(owner.ownerId);
+    // Bug #3 (audit): Check if an export is already in-flight for this cacheKey.
+    // If so, join the existing promise instead of starting a duplicate export.
+    // This prevents double-loading on the workspace when the catch-all and
+    // dedicated snapshot routes race for the same (ownerId, pathFilter).
+    let snapshot: any;
+    const exportCacheKey = `export:${cacheKey}`;
+    let existingExport = inFlightExports.get(exportCacheKey);
+    if (existingExport) {
+      log(`[${requestId}] Joining in-flight export for cacheKey="${cacheKey}"`);
+      // Await the in-flight promise and assign to snapshot for downstream use.
+      // The in-flight promise resolves to the snapshot data, not the full
+      // response — we just need the data at this point in the flow.
+      snapshot = await existingExport;
+    } else {
+      // Generate new snapshot
+      const exportStart = Date.now();
+      const exportPromise = (async (): Promise<any> => {
+        if (useDesktopSnapshot) {
+          const localSnapshot = await fsBridge.exportWorkspace(owner.ownerId);
+          return {
+            root: localSnapshot.root,
+            version: localSnapshot.version,
+            updatedAt: new Date().toISOString(),
+            exportedAt: new Date().toISOString(),
+            files: localSnapshot.files,
+          };
+        } else {
+          return await virtualFilesystem.exportWorkspace(owner.ownerId);
+        }
+      })();
+
+      inFlightExports.set(exportCacheKey, exportPromise);
+
+      // Safety timeout: remove the in-flight entry after 60s so a never-
+      // resolving export (e.g., workspace stuck mid-init) doesn't permanently
+      // block all subsequent snapshot requests for this cacheKey.
+      const timeoutId = setTimeout(() => {
+        if (inFlightExports.get(exportCacheKey) === exportPromise) {
+          inFlightExports.delete(exportCacheKey);
+        }
+      }, IN_FLIGHT_EXPORT_TIMEOUT_MS);
+      timeoutId.unref();
+
+      try {
+        snapshot = await exportPromise;
+        // Bug #11 — record the export duration for the cache metrics.
+        vfsSnapshotCacheMetrics.recordExport(Date.now() - exportStart);
+      } catch (error: unknown) {
+        const duration = Date.now() - startTime;
+        logError(`[${requestId}] exportWorkspace failed:`, error instanceof Error ? error.message : error);
+        throw error;
+      } finally {
+        // Clean up the in-flight entry only if it's still ours (not replaced
+        // by a newer request that raced past the timeout).
+        if (inFlightExports.get(exportCacheKey) === exportPromise) {
+          inFlightExports.delete(exportCacheKey);
+        }
+        // Also clear the safety timeout if it hasn't fired yet.
+        clearTimeout(timeoutId);
       }
-      // Bug #11 — record the export duration for the cache metrics.
-      vfsSnapshotCacheMetrics.recordExport(Date.now() - exportStart);
-    } catch (error: unknown) {
-      const duration = Date.now() - startTime;
-      logError(`[${requestId}] exportWorkspace failed:`, error instanceof Error ? error.message : error);
-      throw error;
     }
 
     const files = useDesktopSnapshot
@@ -907,6 +955,17 @@ export async function GET(req: NextRequest) {
     const snapshotAge = Date.now() - new Date(snapshot.updatedAt).getTime();
     if (snapshotAge > 5 * 60 * 1000) {
       logWarn(`[${requestId}] STALE SNAPSHOT: last updated ${Math.round(snapshotAge / 1000)}s ago`);
+    }
+
+    // Bug #90 (Round 3): Force cache invalidation when snapshot is extremely stale
+    // (older than 1 hour). This handles the case where the VFS version didn't bump
+    // (e.g., Redis pub/sub failed, or write didn't trigger emitSnapshotChange).
+    // The next request will re-generate the snapshot from scratch.
+    const EXTREME_STALENESS_MS = 60 * 60 * 1000; // 1 hour
+    if (snapshotAge > EXTREME_STALENESS_MS) {
+      logWarn(`[${requestId}] EXTREME STALENESS: snapshot is ${Math.round(snapshotAge / 1000 / 60)}min old — forcing cache invalidation`);
+      snapshotCache.delete(cacheKey);
+      vfsSnapshotCacheMetrics.recordInvalidation();
     }
 
     // Cache with ETag

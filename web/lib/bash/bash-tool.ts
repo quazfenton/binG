@@ -281,6 +281,8 @@ export interface BashHookContext {
   workingDir: string;
   userId?: string;
   sessionId?: string;
+  scopePath?: string;
+  _isSandboxRoute?: boolean;
   [key: string]: any;
 }
 
@@ -662,6 +664,7 @@ async function trySandboxRoute(
   command: string,
   workingDir: string,
   timeout?: number,
+  signal?: AbortSignal,
 ): Promise<{
   routed: boolean;
   sandboxId?: string;
@@ -674,17 +677,29 @@ async function trySandboxRoute(
     // No existing session — ask sandboxBridge to get or create one.
     // This bridges to the pre-warmed sandbox pool when available.
     if (!session) {
+      logger.info('[SandboxRoute] Allocation started', { agentId });
       try {
-        const newSession = await sandboxBridge.getOrCreateSession(agentId);
+        // Bound sandbox acquisition separately (15s) so a stuck provider
+        // does not block the caller indefinitely. The watchdog timeout is
+        // separate from the command execution timeout.
+        const createPromise = sandboxBridge.getOrCreateSession(agentId);
+        const acquisitionTimeout = 15_000;
+        const timedCreate = timeoutPromise(createPromise, acquisitionTimeout,
+          'Sandbox acquisition timed out');
+        const newSession = await (signal
+          ? abortablePromise(timedCreate, signal, 'Sandbox acquisition cancelled')
+          : timedCreate);
         if (newSession && newSession.sandboxId) {
           session = newSession;
-          logger.info('Bug #47: Sandbox session created/acquired for ' + agentId, {
+          logger.info('[SandboxRoute] Session acquired', {
             sandboxId: newSession.sandboxId,
+            agentId,
           });
         }
       } catch (createErr: any) {
-        logger.debug('Bug #47: sandboxBridge.getOrCreateSession failed, falling through to local spawn', {
+        logger.warn('[SandboxRoute] Allocation timed out or failed, falling back to local spawn', {
           error: createErr?.message,
+          agentId,
         });
       }
     }
@@ -692,8 +707,43 @@ async function trySandboxRoute(
     if (!session || !session.sandboxId) {
       return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
     }
+
+    // Bound sandbox execution using the requested command timeout.
+    // Default to 30s if no timeout was provided.
+    const execTimeout = timeout ?? 30_000;
+    logger.info('[SandboxRoute] Command execution started', {
+      sandboxId: session.sandboxId,
+      timeout: execTimeout,
+    });
     const startTime = Date.now();
-    const execResult = await sandboxBridge.executeCommand(session.sandboxId, command, workingDir);
+    let execResult: any;
+    try {
+      const execPromise = sandboxBridge.executeCommand(session.sandboxId, command, workingDir, execTimeout);
+      execResult = await (signal
+        ? abortablePromise(execPromise, signal, 'Sandbox command cancelled')
+        : execPromise);
+    } catch (execErr: any) {
+      const duration = Date.now() - startTime;
+      logger.warn('[SandboxRoute] Command timed out or failed', {
+        error: execErr?.message,
+        duration,
+        timeout: execTimeout,
+        sandboxId: session.sandboxId,
+      });
+      return {
+        routed: true,
+        sandboxId: session.sandboxId,
+        result: {
+          success: false,
+          stdout: '',
+          stderr: execErr?.message || 'Sandbox command execution failed',
+          exitCode: -1,
+          duration,
+          command,
+          workingDir,
+        },
+      };
+    }
     const duration = Date.now() - startTime;
     // Map sandbox-provider result to BashExecutionResult shape.
     // CRITICAL (review fix): do NOT short-circuit on truthy `success` — some
@@ -724,12 +774,40 @@ async function trySandboxRoute(
     }
     return { routed: true, sandboxId: session.sandboxId, result };
   } catch (err: any) {
-    logger.debug('Bug #47: sandboxBridge unavailable or executeCommand failed, falling back to local spawn', {
+    logger.debug('[SandboxRoute] sandboxBridge unavailable or executeCommand failed, falling back to local spawn', {
       error: err?.message,
       agentId,
     });
     return { routed: false, result: { success: false, stdout: '', stderr: '', exitCode: -1, duration: 0, command, workingDir } };
   }
+}
+
+/**
+ * Race a promise against a timeout. Rejects if the timeout fires first.
+ */
+function timeoutPromise<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+/**
+ * Race a promise against an AbortSignal. Rejects if the signal fires first.
+ */
+function abortablePromise<T>(promise: Promise<T>, signal: AbortSignal, message: string): Promise<T> {
+  if (signal.aborted) return Promise.reject(new DOMException(message, 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new DOMException(message, 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (val) => { signal.removeEventListener('abort', onAbort); resolve(val); },
+      (err) => { signal.removeEventListener('abort', onAbort); reject(err); },
+    );
+  });
 }
 
 /**
@@ -896,7 +974,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         }
 
         // PATCH 2: Trigger preExecution hooks (allows VFS sync, scope injection, etc.)
-        const hookCtx: BashHookContext = { command, workingDir: wd, userId: agentId };
+        const hookCtx: BashHookContext = { command, workingDir: wd, userId: agentId, scopePath: 'workspace' };
         const preResult = await triggerHooks('preExecution', hookCtx);
         if (preResult?.skipExecution) {
           logger.info('Pre-execution hook skipped execution');
@@ -1034,7 +1112,45 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             rtkStats,
           };
         } catch (error: any) {
-          let errorMessage = error.message || 'Unknown error';
+          // Bug #77/#83: never surface an empty error on failure — the chat
+          // layer would log "Unknown error" and the LLM cannot self-correct.
+          // When error.message is empty, extract meaningful info from other
+          // error fields (stderr, exitCode, code, statusCode, reason) to give
+          // the LLM actionable feedback instead of the generic fallback.
+          let errorMessage: string;
+          if (error.message) {
+            errorMessage = error.message;
+          } else {
+            // Error object has no .message — build from available fields
+            const parts: string[] = [];
+            if (typeof error.stderr === 'string' && error.stderr.trim()) {
+              parts.push(error.stderr.trim());
+            }
+            if (typeof error.code === 'string' && error.code.trim()) {
+              parts.push(`[${error.code}]`);
+            }
+            if (typeof error.statusCode === 'number' || typeof error.status === 'number') {
+              const sc = error.statusCode ?? error.status;
+              parts.push(`HTTP ${sc}`);
+            }
+            if (typeof error.reason === 'string' && error.reason.trim()) {
+              parts.push(error.reason.trim());
+            }
+            if (typeof error.exitCode === 'number' && error.exitCode !== 0) {
+              parts.push(`exit code ${error.exitCode}`);
+            }
+            if (typeof error.signal === 'string') {
+              parts.push(`signal ${error.signal}`);
+            }
+            if (parts.length > 0) {
+              errorMessage = `Command failed: ${parts.join(' — ')}`;
+            } else {
+              // Truly nothing to extract — give the LLM the result keys and a nudge
+              const keys = error ? Object.keys(error) : [];
+              errorMessage = `Command failed without details` +
+                (keys.length > 0 ? ` (available fields: [${keys.join(', ')}])` : '');
+            }
+          }
 
           // Bug #39: If the command was blocked by the safety/router layer
           // (routeDecision.mode === 'blocked' or 'confirm'), surface a
@@ -1286,52 +1402,82 @@ export function extractOutputFiles(command: string): string[] {
 
 /**
  * Register the default VFS sync hook for bash execution.
- * This syncs files created by bash redirects (`> file.txt`) and `touch` commands
- * back into the VFS session workspace so they appear in the workspace panel.
+ * Post-execution: recursively scans the working directory and syncs all
+ * changed/new files back to VFS. Replaces the old regex-based
+ * extractOutputFiles approach which only captured shell redirects.
  *
- * Call this once during app initialization.
+ * Catches files created by npm, Python, build tools, generators, and
+ * arbitrary subprocesses — not just shell redirect syntax.
  */
 export function registerVFSSyncHook(): void {
   registerBashHook('postExecution', async (ctx: BashHookContext & { result?: BashExecutionResult }) => {
-    if (!ctx.result?.success) return;
+    if (!ctx.result) return;
+    const ownerId = ctx.userId || 'anonymous';
+    const workDir = ctx.workingDir;
 
-    // Extract files created by redirects (echo "x" > file.txt, cat > file.txt << EOF)
-    const outputFiles = extractOutputFiles(ctx.command);
+    try {
+      const vfs = await getVirtualFilesystem();
+      const { readdir, stat, readFile } = await import('fs/promises');
+      const { join, relative } = await import('path');
 
-    for (const filePath of outputFiles) {
-      try {
-        // Read the file from disk and sync to VFS
-        const { readFile } = await import('fs/promises');
-        const { resolve } = await import('path');
-        const absolutePath = resolve(ctx.workingDir, filePath);
-        const content = await readFile(absolutePath, 'utf8');
+      // Recursively walk the working directory and sync all files to VFS.
+      // Excludes node_modules, .git, and build output directories.
+      const excludeDirs = new Set([
+        'node_modules', '.git', '.next', 'dist', 'build', '.cache',
+        '__pycache__', '.venv', 'venv', '.tox', 'target',
+      ]);
+      const excludeFiles = new Set(['pnpm-lock.yaml', 'package-lock.json', '.gitignore']);
 
-        // Determine VFS scope path from session
-        const scopePath = ctx.scopePath || 'workspace';
-        const vfsPath = filePath.startsWith('/')
-          ? filePath.replace(/^\/+/, '')
-          : `${scopePath}/${filePath}`;
+      async function walkDir(dir: string): Promise<void> {
+        let entries: string[];
+        try {
+          entries = await readdir(dir);
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          const fullPath = join(dir, entry);
+          let entryStat: any;
+          try {
+            entryStat = await stat(fullPath);
+          } catch {
+            continue;
+          }
+          if (entryStat.isDirectory()) {
+            if (!excludeDirs.has(entry)) {
+              await walkDir(fullPath);
+            }
+            continue;
+          }
+          if (excludeFiles.has(entry)) continue;
+          const relativePath = relative(workDir, fullPath);
+          const scopePath = ctx.scopePath || 'workspace';
+          const vfsPath = `${scopePath}/${relativePath}`;
 
-        await (await getVirtualFilesystem()).writeFile(
-          ctx.userId || 'anonymous',
-          vfsPath,
-          content,
-          'text/plain',
-          { failIfExists: false, strictConcurrency: true }
-        );
-
-        logger.debug('VFS sync: bash-created file synced to VFS', {
-          command: ctx.command.slice(0, 80),
-          diskPath: absolutePath,
-          vfsPath,
-          contentLength: content.length,
-        });
-      } catch (e: any) {
-        logger.debug('VFS sync failed for bash output file', {
-          file: filePath,
-          error: e.message,
-        });
+          try {
+            const content = await readFile(fullPath, 'utf8');
+            await vfs.writeFile(ownerId, vfsPath, content, 'text/plain', {
+              failIfExists: false,
+              strictConcurrency: true,
+            });
+          } catch (fileErr: any) {
+            logger.debug('[VFS Sync] Failed to sync file', {
+              path: relativePath,
+              error: fileErr?.message,
+            });
+          }
+        }
       }
+
+      await walkDir(workDir);
+      logger.debug('[VFS Sync] Post-execution recursive sync complete', {
+        ownerId,
+        workDir,
+      });
+    } catch (err: any) {
+      logger.debug('[VFS Sync] Post-execution sync failed', {
+        error: err?.message,
+      });
     }
   });
 }

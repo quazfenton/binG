@@ -5,6 +5,7 @@
  */
 
 import { jwtVerify, importSPKI } from 'jose';
+import { sanitizePath } from '@/lib/security/safe-path';
 
 /**
  * Import a symmetric secret key for JWT verification
@@ -83,11 +84,30 @@ function getDefaultAuthConfig(): AuthConfig {
 }
 
 /**
- * Validate user ID to prevent path traversal and command injection
+ * Validate user ID to prevent path traversal and command injection.
+ *
+ * Two-layer defense:
+ *   1. Regex filter — rejects characters that are never valid in a userId
+ *      (alphanumeric, hyphens, underscores, and pipe for IdP formats like auth0|...).
+ *   2. `sanitizePath` — resolves the userId through the safe-path helper to
+ *      catch any path-traversal payload that survives the regex (e.g., if a
+ *      downstream site concatenates userId into a file path without additional
+ *      normalisation).
  */
 export function validateUserId(userId: string): boolean {
-  // Allow alphanumeric characters, hyphens, underscores, and pipe (for IdP formats like auth0|...)
-  return /^[a-zA-Z0-9_\-\|]+$/.test(userId);
+  // Layer 1: regex — first line of defense
+  if (!/^[a-zA-Z0-9_\-\|]+$/.test(userId)) {
+    return false;
+  }
+
+  // Layer 2: safe-path — catch any constructed traversal payloads that the
+  // regex allows (e.g., userId is concat'd into a file path downstream).
+  try {
+    sanitizePath(userId);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

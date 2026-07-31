@@ -4,10 +4,10 @@
  * hardcoded keyword arrays.
  */
 
-// Option 1 (postaudit item ④): migrated from `@/lib/utils/logger` to
-// direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
-// — a real file inside this package, NOT a cross-package reference into
-// web/lib/*.
+// Postaudit item ④: imports `createLogger` via relative path into web/lib
+// (NOT a local packages/shared/ import — `packages/shared/lib/utils/logger.ts`
+// does NOT exist; resolution goes through lib-shims/ambient.d.ts).
+// See comment #73 for why the previous doc was misleading.
 import { createLogger } from '../../../web/lib/utils/logger';
 import type { AgentPriority, AgentType } from './agent-kernel';
 import { getAgentKernel } from './agent-kernel';
@@ -751,6 +751,7 @@ class TaskRouter {
     const { OpencodeV2Provider } =    await import('../../../web/lib/sandbox/spawn/opencode-cli');
     const { agentSessionManager } =    await import('../../../web/lib/session/agent/agent-session-manager');
     const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } =    await import('../../../web/lib/mcp');
+    const { createContract } = await import('../../../web/lib/agents/contract');
 
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,
@@ -796,6 +797,16 @@ class TaskRouter {
           session.id,
           undefined,
           { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+          createContract({
+            intent: name,
+            scope: { paths: [], exclude: [] },
+            capabilities: [name],
+            budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+            invariants: [],
+            acceptanceCriteria: [],
+            killSwitches: [],
+            escalationGraph: {},
+          }),
         );
         return { success: toolResult.success, output: toolResult.output, exitCode: toolResult.success ? 0 : 1 };
       },

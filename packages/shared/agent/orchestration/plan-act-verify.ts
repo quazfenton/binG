@@ -480,7 +480,7 @@ function buildToolSuccessSummary(toolName: string, output: Record<string, any>):
 // ─── Typed Event Payloads (P2 #9) ────────────────────────────────────────────
 
 export type OrchestratorEvent =
-  | { type: 'phase_change'; phase: 'planning' | 'acting' | 'verifying' | 'responding' }
+  | { type: 'phase_change'; phase: 'planning' | 'acting' | 'verifying' | 'reviewing' | 'responding' }
   | { type: 'plan_created'; plan: Array<{ action: string; tool?: string }> }
   | { type: 'iteration_start'; iteration: number }
   | { type: 'tool_call'; tool: string; args: Record<string, any> }
@@ -489,6 +489,8 @@ export type OrchestratorEvent =
   | { type: 'token'; content: string }
   | { type: 'verification_failed'; errors: Array<{ file: string; message: string; suggestion?: string }> }
   | { type: 'verification_passed' }
+  | { type: 'review_failed'; issues: string[] }
+  | { type: 'review_passed' }
   | { type: 'warning'; message: string }
   | { type: 'done'; response: string; stats: { iterations: number; tokensUsed: number; durationMs: number }; budgetExhausted?: boolean };
 
@@ -504,6 +506,8 @@ export interface OrchestratorConfig {
   iterationConfig: IterationConfigInput;
   tools: OrchestratorToolDefinition[];
   executeTool: (name: string, args: any) => Promise<any>;
+  /** Caller-supplied workspace, retrieval, memory, and role context. */
+  systemPrompt?: string;
 }
 
 // ─── Iteration Controller ────────────────────────────────────────────────────
@@ -573,6 +577,8 @@ export class PlanActVerifyOrchestrator {
   private sdkTools: Record<string, Tool> = {};
   /** Track plan steps for fresh-context iteration */
   private planSteps: Array<{ action: string; tool?: string }> | null = null;
+  /** Persona selected by choose_role, applied to all subsequent LLM turns. */
+  private activeRolePrompt = '';
 
   constructor(private config: OrchestratorConfig) {
     // Validate and normalize configuration with Zod — P2 #9
@@ -692,6 +698,14 @@ export class PlanActVerifyOrchestrator {
 
         // Track modified files during tool execution
         const modifiedFiles: string[] = [];
+        // Track step-level evidence for deterministic completion evaluation
+        const stepEvidence: {
+          successfulResults: Array<{ toolName: string; result: any }>;
+          failedResults: Array<{ toolName: string; error: any }>;
+        } = {
+          successfulResults: [],
+          failedResults: [],
+        };
         // Collect tool execution results for conversation history threading
         // (paired with assistant tool_calls by matching toolCallId)
         const toolResultsHistory: Array<{ toolCallId: string; toolName: string; result: any }> = [];
@@ -705,6 +719,7 @@ export class PlanActVerifyOrchestrator {
               const validation = validateAndNormalizeArgs(call.name, call.arguments);
               if (validation.error) {
                 yield { type: 'tool_error', tool: call.name, error: validation.error };
+                stepEvidence.failedResults.push({ toolName: call.name, error: validation.error });
                 // Still record the attempt in history so the model sees the validation failure
                 toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, undefined, validation.error) }); // Bug #6 fix (symmetric): route validation-error through buildToolResult so all three push sites (L703, L717, L728) emit the same ToolResult envelope.
                 // Even validation failures represent activity — reset idle timer
@@ -713,23 +728,24 @@ export class PlanActVerifyOrchestrator {
               }
 
               const normalizedArgs = validation.args!;
-              const result = await this.executeToolWithHealing(call.name, normalizedArgs);
+              const result = call.name === 'choose_role'
+                ? this.adoptRole(normalizedArgs)
+                : await this.executeToolWithHealing(call.name, normalizedArgs);
               // Reset idle timer after each successful tool execution
               controller.recordActivity();
               const structuredResult = buildToolResult(call.name, normalizedArgs, result);
               yield { type: 'tool_result', tool: call.name, result: structuredResult };
+              stepEvidence.successfulResults.push({ toolName: call.name, result: structuredResult });
 
               // Record result for conversation history threading
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, result, undefined) }); // Bug #6 fix (symmetric): route success through buildToolResult too so both branches produce the same ToolResult shape; LLM sees a consistent schema regardless of success vs. error.
 
-              // Track files modified by writeFile/applyDiff for verification
-              if ((call.name === 'writeFile' || call.name === 'applyDiff') && normalizedArgs?.path) {
-                modifiedFiles.push(normalizedArgs.path);
-              }
+              modifiedFiles.push(...this.getModifiedPaths(call.name, normalizedArgs));
             } catch (error: any) {
               // Per-tool resilience: one failure doesn't abort the entire plan
               const structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
               yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
+              stepEvidence.failedResults.push({ toolName: call.name, error: structuredResult.error! });
               // Record the error result so the model can see what went wrong
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: structuredResult }); // Bug #6 fix: route error through buildToolResult for consistent ToolResult shape
               // Bug #14: When a search tool fails, inject a skip-search directive
@@ -805,11 +821,14 @@ export class PlanActVerifyOrchestrator {
           }
         }
 
-        // PHASE 3: VERIFICATION — After each step, verify modified files
-        if (modifiedFiles.length > 0) {
-          yield { type: 'phase_change', phase: 'verifying' };
-          const verificationResult = await this.runVerification(modifiedFiles);
+        // PHASE 3: VERIFICATION — After each step, verify results deterministically.
+        // Runs for ALL step types, not just file-edit steps. Collects evidence
+        // appropriate to the step type and checks it before advancing.
+        yield { type: 'phase_change', phase: 'verifying' };
 
+        // Run file-content verification for steps that produced modified files
+        if (modifiedFiles.length > 0) {
+          const verificationResult = await this.runVerification(modifiedFiles);
           if (!verificationResult.passed) {
             consecutiveVerificationFailures++;
             yield {
@@ -820,20 +839,74 @@ export class PlanActVerifyOrchestrator {
                 suggestion: e?.suggestion,
               })),
             };
-
             if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
               yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification failures.` };
               break;
             }
-
-            // Store feedback for next iteration — retry same step to fix
             pendingVerificationFeedback = `Verification failed for step "${currentStep.action}":\n${JSON.stringify(verificationResult.errors)}\nPlease fix these issues.`;
-            continue; // Skip stepIndex++ — retry same step with verification feedback
-          } else {
-            consecutiveVerificationFailures = 0;
-            yield { type: 'verification_passed' };
+            continue; // Retry same step
           }
         }
+
+        // Deterministic evaluation: if every tool failed and no tool succeeded,
+        // the step is incomplete. Unlike verification failures (which retry),
+        // all-tools-failed advances past the step with a failure record so the
+        // plan doesn't loop forever on a broken tool/environment.
+        const allToolsFailed = stepEvidence.failedResults.length > 0
+          && stepEvidence.successfulResults.length === 0;
+        if (allToolsFailed) {
+          consecutiveVerificationFailures++;
+          const failDetail = stepEvidence.failedResults
+            .map(f => `${f.toolName}: ${typeof f.error === 'string' ? f.error : f.error?.message || 'unknown error'}`)
+            .join('; ');
+          yield {
+            type: 'verification_failed',
+            errors: [{
+              file: currentStep.action,
+              message: `All tools failed for step "${currentStep.action}": ${failDetail}`,
+              suggestion: 'Check tool availability and connectivity before retrying.',
+            }],
+          };
+          // Advance past the broken step — don't retry, don't review (the
+          // evidence is just tool errors). The failure is recorded for the
+          // final completion summary.
+          pendingVerificationFeedback = (pendingVerificationFeedback || '') +
+            `\nStep "${currentStep.action}" tools all failed: ${failDetail}. ` +
+            `Mark this step as failed and proceed to the next step.`;
+          stepIndex++;
+          continue;
+        }
+
+        yield { type: 'verification_passed' };
+
+        // Phase 4: REVIEW — run for every step with step-appropriate evidence.
+        yield { type: 'phase_change', phase: 'reviewing' };
+        const reviewEvidence = modifiedFiles.length > 0
+          ? modifiedFiles
+          // For non-file steps, use tool execution results as review evidence
+          : [
+              ...stepEvidence.successfulResults.map(r => `${r.toolName}: success`),
+              ...stepEvidence.failedResults.map(r => `${r.toolName}: failed - ${typeof r.error === 'string' ? r.error : (r.error?.message || '')}`),
+            ];
+        const reviewResult = await this.runReview(task, currentStep.action, reviewEvidence, stepHistory);
+        controller.recordTokens(reviewResult.tokensUsed);
+        if (!reviewResult.passed) {
+          consecutiveVerificationFailures++;
+          yield { type: 'review_failed', issues: reviewResult.issues };
+
+          if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
+            yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification or review failures.` };
+            break;
+          }
+
+          pendingVerificationFeedback =
+            `Reviewer found blocking issues in step "${currentStep.action}":\n` +
+            `${reviewResult.issues.map(issue => `- ${issue}`).join('\n')}\n` +
+            'Fix these issues and preserve the original task requirements.';
+          continue;
+        }
+        consecutiveVerificationFailures = 0;
+        yield { type: 'review_passed' };
 
         stepIndex++; // Move to next plan step
       }
@@ -958,7 +1031,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
    * unknown roles to 'user'. System messages must always go via
    * generateText's `system` param, not the messages array.
    */
-  private async callLLM(prompt: string, history: ModelMessage[]) {
+  private async callLLM(prompt: string, history: ModelMessage[], toolsEnabled: boolean = true) {
     const { provider, model } = this.validatedConfig;
 
     let vercelModel: any;
@@ -989,18 +1062,23 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
           { role: 'user' as const, content: prompt },
         ];
 
-        const result = await generateText({
-          model: vercelModel,
-          messages,
-          tools: (Object.keys(this.sdkTools).length > 0 && (this.validatedConfig.provider !== 'ninerouter' || !(this.validatedConfig.model || '').startsWith('gh/'))) ? this.sdkTools : ({} as any),
-          system:
-            'You are an autonomous AI coding agent. You have tools available to interact with the system.' +
-            '\n\n' + CHOOSE_ROLE_DIRECTIVE +
-            '\n\n### Workspace State Tools\n' +
+        const systemParts = [
+          'You are an autonomous AI coding agent. You have tools available to interact with the system.',
+          CHOOSE_ROLE_DIRECTIVE,
+          this.config.systemPrompt,
+          this.activeRolePrompt ? `### Active Expert Role\n${this.activeRolePrompt}` : '',
+          '### Workspace State Tools\n' +
             '- workspace_graph: Get a structured view of all workspace state (processes, services, ports, previews) with health diagnostics. Use to understand what\x27s currently running before planning or making changes.\n' +
             '- workspace_graph_diagnostic: Trace a specific service\x27s issues to root causes (port conflicts, crashed processes, stale snapshots).\n' +
             '- workspace_graph_find_process: Search for processes by command pattern across the workspace.\n' +
             'Use these tools to inspect and verify workspace health before and after making changes.',
+        ].filter(Boolean).join('\n\n');
+
+        const result = await generateText({
+          model: vercelModel,
+          messages,
+          tools: toolsEnabled && Object.keys(this.sdkTools).length > 0 && (this.validatedConfig.provider !== 'ninerouter' || !(this.validatedConfig.model || '').startsWith('gh/')) ? this.sdkTools : ({} as any),
+          system: systemParts,
           maxOutputTokens: 4000,
           temperature: 0.2,
           // NOTE: stopWhen intentionally omitted. The orchestrator's own loop
@@ -1068,9 +1146,12 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const fallbackResult = await generateText({
           model: vercelModel,
           messages: [{ role: 'user' as const, content: prompt }],
-          system:
-            'You are an autonomous AI coding agent.' +
-            '\n\n' + CHOOSE_ROLE_DIRECTIVE,
+          system: [
+            'You are an autonomous AI coding agent.',
+            CHOOSE_ROLE_DIRECTIVE,
+            this.config.systemPrompt,
+            this.activeRolePrompt ? `### Active Expert Role\n${this.activeRolePrompt}` : '',
+          ].filter(Boolean).join('\n\n'),
           // `maxSteps` is not a valid AI SDK v6 option (see note above).
           maxOutputTokens: 4000,
           temperature: 0.2,
@@ -1151,7 +1232,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             model: this.validatedConfig.model,
             provider: this.validatedConfig.provider,
             toolName: name,
-            redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+            redactedArgs: JSON.stringify(redactArgsForLogging(args, { deep: true })),
             originStack: createOriginStack(),
             toolCallId,
           });
@@ -1180,7 +1261,7 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               model: this.validatedConfig.model,
               provider: this.validatedConfig.provider,
               toolName: name,
-              redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+              redactedArgs: JSON.stringify(redactArgsForLogging(args, { deep: true })),
               originStack: createOriginStack(),
               toolCallId,
             });
@@ -1197,28 +1278,102 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
   }
 
   private async runVerification(files: string[]) {
-    // Mocking file content read for verification
-    const modifiedFilesRecord: Record<string, string> = {};
-    for (const file of files) {
-      try {
-        const result = await this.config.executeTool('readFile', { path: file });
-        if (result && result.content) {
-          modifiedFilesRecord[file] = result.content;
-        }
-      } catch (e) {
-        // Skip if we can't read it
-      }
-    }
-
-    if (Object.keys(modifiedFilesRecord).length === 0) {
-      return { passed: true, errors: [] };
-    }
+    const { contents: modifiedFilesRecord, errors: readErrors } = await this.readModifiedFiles(files);
+    if (readErrors.length > 0) return { passed: false, errors: readErrors };
 
     const result = await verifyChanges(modifiedFilesRecord, { strict: false });
     return {
       passed: result.passed,
       errors: result.errors
     };
+  }
+
+  private adoptRole(args: Record<string, any>) {
+    const result = normalizeAndValidateRole(args.role || '', args.reason || '', {
+      recentFailures: args.recentFailures,
+    });
+    if (result.valid) this.activeRolePrompt = result.rolePrompt || '';
+    return {
+      success: result.valid,
+      roleAdopted: result.roleAdopted,
+      rolePrompt: result.valid ? result.rolePrompt || '' : '',
+      roleSource: result.valid ? result.roleSource || null : null,
+      message: result.message,
+    };
+  }
+
+  private getModifiedPaths(toolName: string, args: Record<string, any>): string[] {
+    const writeTools = new Set([
+      'writeFile', 'write_file', 'file.write', 'applyDiff', 'apply_diff',
+      'str_replace', 'replace_in_file', 'batch_write',
+    ]);
+    if (!writeTools.has(toolName)) return [];
+    const paths = [args?.path, args?.file]
+      .concat(Array.isArray(args?.files) ? args.files.map((file: any) => file?.path || file?.file) : [])
+      .filter((path): path is string => typeof path === 'string' && path.length > 0);
+    return [...new Set(paths)];
+  }
+
+  private async readModifiedFiles(files: string[]) {
+    const contents: Record<string, string> = {};
+    const errors: Array<{ path: string; error: string }> = [];
+    const configuredTools = new Set(this.config.tools.map(tool => tool.name));
+    const readTool = ['readFile', 'read_file', 'file.read'].find(name => configuredTools.has(name)) || 'readFile';
+
+    for (const file of [...new Set(files)]) {
+      try {
+        const result = await this.config.executeTool(readTool, { path: file });
+        const content = result?.content ?? result?.output?.content ?? result?.data?.content;
+        if (typeof content !== 'string') {
+          errors.push({ path: file, error: `Verification could not read current content using ${readTool}.` });
+        } else {
+          contents[file] = content;
+        }
+      } catch (error: any) {
+        errors.push({ path: file, error: `Verification read failed: ${error?.message || String(error)}` });
+      }
+    }
+    return { contents, errors };
+  }
+
+  private async runReview(
+    task: string,
+    step: string,
+    files: string[],
+    history: ModelMessage[],
+  ): Promise<{ passed: boolean; issues: string[]; tokensUsed: number }> {
+    const { contents, errors } = await this.readModifiedFiles(files);
+    if (errors.length > 0) {
+      return { passed: false, issues: errors.map(error => `${error.path}: ${error.error}`), tokensUsed: 0 };
+    }
+
+    const fileContext = Object.entries(contents)
+      .map(([path, content]) => `### ${path}\n${content.slice(0, 12000)}`)
+      .join('\n\n');
+    const response = await this.callLLM(
+      `Act as an independent senior code reviewer. Check whether the completed step satisfies the original request, is behaviorally correct, and avoids regressions. Ignore cosmetic preferences.\n\n` +
+      `ORIGINAL REQUEST:\n${task}\n\nCOMPLETED STEP:\n${step}\n\nCURRENT MODIFIED FILES:\n${fileContext}\n\n` +
+      'Return ONLY JSON in this shape: {"passed":true,"issues":[]} or {"passed":false,"issues":["blocking issue"]}.',
+      history,
+      false,
+    );
+
+    try {
+      const match = response.text.match(/\{[\s\S]*\}/);
+      const parsed = JSON.parse(match?.[0] || '{}');
+      const issues = Array.isArray(parsed.issues) ? parsed.issues.filter((issue: any) => typeof issue === 'string') : [];
+      return {
+        passed: parsed.passed === true && issues.length === 0,
+        issues: parsed.passed === true && issues.length === 0 ? [] : issues.length ? issues : ['Reviewer did not return a valid passing assessment.'],
+        tokensUsed: response.usage?.totalTokens || 0,
+      };
+    } catch {
+      return {
+        passed: false,
+        issues: ['Reviewer returned invalid structured output; re-run the step and review.'],
+        tokensUsed: response.usage?.totalTokens || 0,
+      };
+    }
   }
 }
 

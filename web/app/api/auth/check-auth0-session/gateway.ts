@@ -171,6 +171,28 @@ export async function POST(request: NextRequest) {
         path: '/',
       });
 
+      // Set JWT token as auth-token cookie for admin auth and server components
+      // (matches standard login gateway behavior)
+      if (token) {
+        response.cookies.set('auth-token', token, {
+          httpOnly: true,
+          secure: isSecureConnection,
+          sameSite: 'lax',
+          maxAge: 60 * 60, // 1 hour — matches JWT TTL
+          path: '/',
+        });
+      }
+
+      // Clear anonymous session cookie — authenticated users should NOT
+      // fall back to their old anonymous workspace identity
+      response.cookies.set('anon-session-id', '', {
+        httpOnly: true,
+        secure: isSecureConnection,
+        sameSite: 'lax',
+        maxAge: 0,
+        path: '/',
+      });
+
       return response;
     } catch (sessionError: any) {
       logger.error('[Auth0 Session Check] Session creation error:', sessionError.message);

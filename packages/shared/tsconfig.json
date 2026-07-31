@@ -39,6 +39,9 @@
       // exhaustively in spot-resolution so the ORDER does not affect
       // matching, but the catch-all is intentionally last so future
       // operators splicing in entries don't accidentally clobber it.
+      "@/agent/*": ["./agent/*"],
+      "@/FS/*": ["./FS/*"],
+      "@/lib-shims/*": ["./lib-shims/*"],
       "@/*": ["./lib-shims/*"]
     }
   },

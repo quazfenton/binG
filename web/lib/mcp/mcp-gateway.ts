@@ -205,8 +205,9 @@ class MCPGatewayImpl implements MCPGateway {
     const timeout = connection.config.timeout || this.config.defaultTimeout
 
     try {
-      // Fetch tools from MCP server
-      const tools = await this.fetchServerTools(connection.config, timeout)
+      // Fetch tools from MCP server using standard JSON-RPC HTTP transport
+      // (http-transport.ts) instead of raw GET /tools which is non-standard.
+      const tools = await this.fetchServerToolsViaJSONRPC(connection.config, timeout)
       connection.tools = tools
       connection.connected = true
       connection.lastHealthCheck = Date.now()
@@ -226,7 +227,22 @@ class MCPGatewayImpl implements MCPGateway {
     }
   }
 
-  private async fetchServerTools(config: MCPServerConfig, timeout: number): Promise<MCPTool[]> {
+  /**
+   * Fetch tools from an MCP server using standard JSON-RPC over HTTP POST.
+   *
+   * Uses the same protocol as http-transport.ts (the proper MCP HTTP client):
+   *   POST {url}  Content-Type: application/json
+   *   {"jsonrpc":"2.0","id":...,"method":"tools/list","params":{}}
+   *
+   * This replaces the prior raw-GET-{"url}/tools` path which is non-standard
+   * and incompatible with real MCP HTTP servers (causing the SSE connection
+   * failures observed in 2026-07).
+   *
+   * @param config - Server connection config (url can include path suffix
+   *   like "/mcp" for tunnel-based MCP access)
+   * @param timeout - Per-request timeout in ms
+   */
+  private async fetchServerToolsViaJSONRPC(config: MCPServerConfig, timeout: number): Promise<MCPTool[]> {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), timeout)
 
@@ -235,20 +251,24 @@ class MCPGatewayImpl implements MCPGateway {
         'Content-Type': 'application/json',
       }
 
-      // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
-      // alias for back-compat with existing server configs (deprecated).
       const authToken = config.bearerToken ?? config.authToken
       if (authToken) {
         headers['Authorization'] = `Bearer ${authToken}`
       }
-
       if (config.headers) {
         Object.assign(headers, config.headers)
       }
 
-      const response = await fetch(`${config.url}/tools`, {
-        method: 'GET',
+      // Standard JSON-RPC request for tools/list
+      const response = await fetch(config.url, {
+        method: 'POST',
         headers,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: Date.now(),
+          method: 'tools/list',
+          params: {},
+        }),
         signal: controller.signal,
       })
 
@@ -257,7 +277,13 @@ class MCPGatewayImpl implements MCPGateway {
       }
 
       const data = await response.json()
-      const tools = data.tools || []
+
+      // Standard JSON-RPC response format: { jsonrpc, id, result: { tools: [...] } }
+      if (data.error) {
+        throw new Error(data.error.message || 'MCP JSON-RPC error')
+      }
+
+      const tools = data.result?.tools || []
 
       return tools.map((tool: any) => ({
         name: tool.name,
@@ -340,19 +366,23 @@ class MCPGatewayImpl implements MCPGateway {
           'Content-Type': 'application/json',
         }
 
-        // Prefer canonical `bearerToken`; fall back to the legacy `authToken`
-        // alias for back-compat with existing server configs (deprecated).
         const authToken = targetServer.config.bearerToken ?? targetServer.config.authToken
         if (authToken) {
           headers['Authorization'] = `Bearer ${authToken}`
         }
 
-        const response = await fetch(`${targetServer.config.url}/tools/call`, {
+        // Standard JSON-RPC request for tools/call
+        const response = await fetch(targetServer.config.url, {
           method: 'POST',
           headers,
           body: JSON.stringify({
-            name: toolName,
-            arguments: args,
+            jsonrpc: '2.0',
+            id: Date.now(),
+            method: 'tools/call',
+            params: {
+              name: toolName,
+              arguments: args,
+            },
           }),
           signal: controller.signal,
         })
@@ -361,11 +391,20 @@ class MCPGatewayImpl implements MCPGateway {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`)
         }
 
-        const result = await response.json()
+        const data = await response.json()
+
+        if (data.error) {
+          throw new Error(data.error.message || 'MCP JSON-RPC error')
+        }
+
+        // Defensive fallback: use data.result (standard MCP JSON-RPC), but
+        // fall back to the full data object for servers that return results
+        // at the top level (e.g. older non-standard implementations).
+        const callResult = data.result ?? data;
 
         return {
           success: true,
-          result: result.result || result,
+          result: callResult,
           serverName: targetServer.config.name,
           duration: Date.now() - startTime,
         }
@@ -523,7 +562,7 @@ export function createGatewayFromEnv(): MCPGateway {
     }
   }
 
-  // Add default local MCP gateway if configured
+  // Add default local MCP gateway if configured via env var
   if (process.env.MCP_GATEWAY_ENABLED === 'true' && process.env.MCP_GATEWAY_URL) {
     servers.push({
       name: 'gateway',
@@ -535,6 +574,38 @@ export function createGatewayFromEnv(): MCPGateway {
       timeout: parseInt(process.env.MCP_GATEWAY_TIMEOUT_MS || '15000', 10),
       enabled: true,
     })
+  }
+
+  // Fallback: if no servers were configured via env vars AND no gateway
+  // was explicitly configured, try defaults that work in common setups:
+  //   1. Local MCP server on port 8261 (default blaxel-mcp port)
+  //   2. CF tunnel /mcp path (if the MCP server is accessible via the
+  //      same Cloudflare tunnel as BACKEND_URL, add a /mcp path to the
+  //      Caddyfile — see bing/Caddyfile for reference)
+  //
+  // These defaults only activate when NO servers were explicitly
+  // configured, so explicit env config always takes precedence.
+  if (servers.length === 0) {
+    const localUrl = process.env.MCP_LOCAL_URL || 'http://localhost:8261/mcp';
+    const tunnelUrl = process.env.MCP_TUNNEL_URL || (process.env.BACKEND_URL ? `${process.env.BACKEND_URL}/mcp` : '');
+
+    // Try local first (fastest, no network overhead)
+    servers.push({
+      name: 'local',
+      url: localUrl,
+      enabled: true,
+      timeout: 5000,
+    });
+
+    // Also add tunnel URL if available (fallback if local is unreachable)
+    if (tunnelUrl) {
+      servers.push({
+        name: 'tunnel',
+        url: tunnelUrl,
+        enabled: true,
+        timeout: 15000,
+      });
+    }
   }
 
   return createMCPGateway({

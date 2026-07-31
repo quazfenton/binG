@@ -157,7 +157,9 @@ export class EnhancedBufferManager extends BrowserEventEmitter {
     try {
       const session = this.sessions.get(sessionId);
       if (!session) {
-        console.warn(`Session ${sessionId} not found for chunk processing`);
+        // Session was already completed or destroyed — this is normal when
+        // the done event is received before pending render frames flush.
+        // Downgraded from warn to debug to reduce console noise.
         return;
       }
 

@@ -131,7 +131,17 @@ export async function getRemoteMCPTools(
   );
   const allTools = transportResults.flat();
 
-  // Update cache
+  // Update cache — BUT only if the discovery wasn't aborted mid-flight.
+  // Review comment #23: an aborted discovery (caller's timeout/turn watchdog
+  // firing while some transports were still resolving) would poison the
+  // shared TTL cache with partial results, causing later NON-aborted turns to
+  // lose remote tools until the cache expired. Skip cache write + reset the
+  // freshness timestamp on abort so the next call re-discovers cleanly.
+  if (options?.signal?.aborted) {
+    cachedRemoteTools = null;
+    lastToolFetch = 0;
+    return allTools;
+  }
   cachedRemoteTools = allTools;
   lastToolFetch = now;
 
@@ -152,6 +162,7 @@ export function clearRemoteToolsCache(): void {
  */
 export function clearAllHTTPTransports(): void {
   connectedTransports.clear();
+  clearRemoteToolsCache();
 }
 
 /**
@@ -376,7 +387,26 @@ export class HTTPTransport {
   }
 
   /**
-   * Handle SSE stream response
+   * Handle SSE stream response — accumulates events until a complete JSON-RPC
+   * response is received.
+   *
+   * Fixes three bugs in the prior implementation:
+   *   1. Returned on the FIRST `data:` line, missing progress/intermediate events
+   *      and returning premature partial results.
+   *   2. Split on `\n` (single newline) instead of `\n\n` (double newline, the
+   *      SSE event boundary), which broke multi-line data fields.
+   *   3. Ignored the `event:` type field — progress events were treated the same
+   *      as result/message events.
+   *
+   * This implementation:
+   *   - Splits on `\n\n` to correctly identify SSE event boundaries.
+   *   - Parses `event:` and `data:` fields per event.
+   *   - Accumulates multi-line `data:` values (each `data:` line is appended
+   *     with a newline separator per the SSE spec).
+   *   - Only returns a complete JSON-RPC response from an `event: message`
+   *     (or bare data: with no event type). Progress and other intermediate
+   *     events are parsed but discarded.
+   *   - If the stream ends without finding a matching response, returns null.
    */
   private async handleSSEStream(body: any): Promise<any> {
     const reader = body?.getReader();
@@ -385,28 +415,86 @@ export class HTTPTransport {
     }
 
     const decoder = new TextDecoder();
+    // Buffer holds partial data that hasn't formed a complete SSE event yet.
     let buffer = '';
 
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        // Stream ended without finding a complete response.
+        // Try to parse whatever is left in the buffer as a last resort.
+        if (buffer.trim().length > 0) {
+          const lastResort = buffer.trim();
+          if (lastResort.startsWith('{')) {
+            try { return JSON.parse(lastResort); } catch { /* ignore */ }
+          }
+        }
+        return null;
+      }
 
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            return JSON.parse(line.slice(6));
-          } catch {
-            // Continue parsing
+      // SSE events are delimited by double newline (\n\n).
+      // Split on this boundary to extract complete events.
+      let eventEndIndex: number;
+      while ((eventEndIndex = buffer.indexOf('\n\n')) >= 0) {
+        const eventBlock = buffer.slice(0, eventEndIndex);
+        buffer = buffer.slice(eventEndIndex + 2);
+
+        if (!eventBlock.trim()) continue;
+
+        // Parse the event block into (eventType, dataString).
+        const lines = eventBlock.split('\n');
+        let eventType = '';
+        let dataString = '';
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            eventType = line.slice(7).trim();
+          } else if (line.startsWith('data: ')) {
+            // Per the SSE spec, multiple data: lines in the same event
+            // should be joined with a newline separator.
+            const dataContent = line.slice(6);
+            if (dataString.length > 0) {
+              dataString += '\n';
+            }
+            dataString += dataContent;
           }
+        }
+
+        if (!dataString) continue;
+
+        // Only process 'message' events or bare data: (no event type).
+        // Progress, ping, and other intermediate events are discarded.
+        // Per the MCP SSE transport spec, the final JSON-RPC response
+        // is delivered as an `event: message` with a `data:` containing
+        // the complete JSON-RPC response object.
+        const isMessageEvent = eventType === '' || eventType === 'message';
+        if (!isMessageEvent) {
+          logger.debug('[SSE] Skipping intermediate event', { eventType, dataLength: dataString.length });
+          continue;
+        }
+
+        try {
+          const parsed = JSON.parse(dataString);
+          // If the parsed object has an `id` field matching the request
+          // and either a `result` or `error` field, it's a complete
+          // JSON-RPC response — return it immediately.
+          // Bare `data: {}` without id/result/error is treated as a
+          // notification and skipped.
+          if ('result' in parsed || 'error' in parsed) {
+            return parsed;
+          }
+          // Notifications (id-less messages) are silently skipped so
+          // the loop continues to the next event.
+        } catch {
+          logger.warn('[SSE] Failed to parse data as JSON, skipping event', {
+            eventType,
+            dataPreview: dataString.slice(0, 200),
+          });
         }
       }
     }
-
-    return null;
   }
 
   /**

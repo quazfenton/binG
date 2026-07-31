@@ -1,0 +1,37 @@
+{
+  "timestamp": "2026-07-30T03:25:22.846Z",
+  "url": "http://127.0.0.1:3000/api/filesystem/read",
+  "method": "POST",
+  "status": 400,
+  "headers": {
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "date": "Thu, 30 Jul 2026 03:25:22 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "set-cookie": "anon-session-id=anon_1785381922829_ae702eb0f7f97f2bab; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-anonymous-session-id": "anon_1785381922829_ae702eb0f7f97f2bab",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "bOvynfAbT7D5Y8MTNNNULPIPYauPvJWapTbiaZNM4RY",
+    "x-csp-nonce-style": "Amf8e3pO_odJ1v1J4dU6Opc6_HnGT7EjR0mgBdWpZOc",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785381922803_80sf10goz1",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "path": "project/sessions/e2e-mistral-app/index.html"
+  },
+  "responseText": "{\"success\":false,\"error\":\"Failed to read file\"}",
+  "responseJson": {
+    "success": false,
+    "error": "Failed to read file"
+  },
+  "cookies": {
+    "anon-session-id": "anon_1785381922829_ae702eb0f7f97f2bab"
+  }
+}

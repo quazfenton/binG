@@ -28,6 +28,11 @@ export interface StreamChunkState {
   parser: ReturnType<typeof createIncrementalParser>;
   markerSeen: boolean;
   charsEmittedSafely: number;
+  /** Bug #16 (audit): Accumulated reasoning/thinking tokens from the stream.
+   *  Emitted in the final DONE event so client consumers can access the full
+   *  reasoning trace after the stream closes. Non-reasoning models will leave
+   *  this undefined. */
+  reasoningContent?: string;
 }
 
 /** Default markers used by the chat route to suppress routing JSON. */

@@ -155,3 +155,19 @@ async function startServer(initialPort: number): Promise<void> {
 }
 
 await startServer(desiredPort);
+
+// Start the local MCP transport only when explicitly configured. It is
+// intentionally non-fatal: chat and the public /api/mcp JSON-RPC route remain
+// available if MCP initialization fails or the configured port is occupied.
+if (process.env.MCP_CLI_PORT) {
+  const mcpPort = Number.parseInt(process.env.MCP_CLI_PORT, 10);
+  if (Number.isInteger(mcpPort) && mcpPort > 0 && mcpPort <= 65535) {
+    import("@/lib/mcp/architecture-integration")
+      .then(({ initializeMCPForArchitecture2 }) => initializeMCPForArchitecture2(mcpPort))
+      .catch((error) => {
+        console.error("[backend] MCP CLI transport failed to start (non-fatal):", error);
+      });
+  } else {
+    console.error(`[backend] Ignoring invalid MCP_CLI_PORT=${process.env.MCP_CLI_PORT}`);
+  }
+}

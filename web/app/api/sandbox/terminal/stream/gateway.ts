@@ -85,7 +85,6 @@ export async function GET(req: NextRequest) {
     const connectionToken = req.nextUrl.searchParams.get('token');
     const sessionId = req.nextUrl.searchParams.get('sessionId');
     const sandboxId = req.nextUrl.searchParams.get('sandboxId');
-    const anonymousSessionId = req.nextUrl.searchParams.get('anonymousSessionId');
 
     if (!sessionId || !sandboxId) {
       return new Response(JSON.stringify({ error: 'sessionId and sandboxId are required' }), {
@@ -119,7 +118,6 @@ export async function GET(req: NextRequest) {
       // Fallback to anonymous auth (for backward compatibility)
       const authResult = await resolveRequestAuth(req, {
         allowAnonymous: true,
-        anonymousSessionId,
       });
 
       if (!authResult.success || !authResult.userId) {

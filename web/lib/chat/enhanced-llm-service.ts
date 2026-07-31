@@ -24,6 +24,8 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
+import { selectToolPlan } from '../tools/select-tool-plan';
+import { createContract } from '@/lib/agents/contract';
 import { normalizeSchemaForAI } from '@bing/shared/agent/tool-schema';
 import { chatLogger } from './chat-logger'
 import { recordToolCallTelemetry, prepareTelemetryPayload } from '../errors/logging-utils';
@@ -955,13 +957,20 @@ export class EnhancedLLMService {
           // matching error signatures (4xx, 5xx-mismatch, 530-mismatch)
           // leave both counters untouched; only the corresponding
           // success-path helpers decrement them on a successful
-          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
-              record530ErrorIfApplicable(fallbackProvider, fallbackError);
-              // F3 fix: also track 429 rate-limit responses so the
-              // next fallback iteration skips the rate-limited provider
-              // instead of re-trying it. Tracker is independent;
-              // 429/5xx/530 counters do not interfere.
-              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
+          // round-trip (gated by ENABLE_*_RESET_ON_SUCCESS).
+          //
+          // Restoration (review comment #13): the 5xx/530 calls below were
+          // accidentally merged into the comment above (the code text ran off
+          // the comment line) so they never executed — fallback 5xx failures
+          // stopped being recorded for blacklist tracking. Restored as real
+          // statements so the per-provider blacklists stay accurate.
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
+          // F3 fix: also track 429 rate-limit responses so the
+          // next fallback iteration skips the rate-limited provider
+          // instead of re-trying it. Tracker is independent;
+          // 429/5xx/530 counters do not interfere.
+          recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           chatLogger.warn('Fallback provider failed (non-streaming)', {
                 requestId,
                 fallbackProvider,
@@ -1208,6 +1217,28 @@ export class EnhancedLLMService {
               ? lastUserMsgForPowers.content
               : '';
 
+            // P0 fix: compute a selectToolPlan for plan-based capability filtering.
+            // The plan is threaded through ToolExecutionContext so createToolSet
+            // uses it to filter capabilities instead of loading all of them.
+            const toolPlanResult = selectToolPlan({
+              userMessage: lastUserMessageForPowers,
+              conversationHistory: (llmRequest.messages || [])
+                .filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+                .map((m: any) => ({
+                  role: m.role as 'user' | 'assistant' | 'system',
+                  content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+                })),
+              authenticated: !!request.userId,
+              configuredSources: {
+                arcade: !!process.env.ARCADE_API_KEY,
+                composio: !!process.env.COMPOSIO_API_KEY,
+                nullclaw: process.env.NULLCLAW_ENABLED === 'true',
+                remoteMcp: true,
+                mem0: !!process.env.MEM0_API_KEY,
+                mcpHttp: true,
+              },
+            });
+
             vercelTools = await getAllTools({
               userId: effectiveUserId,
               conversationId: request.conversationId,
@@ -1215,6 +1246,11 @@ export class EnhancedLLMService {
               requestId,
               scopePath: computedScopePath,  // Session-aware path for VFS tools
               lastUserMessage: lastUserMessageForPowers,  // For power trigger-matching
+              toolPlan: toolPlanResult,  // P0 fix: plan-based capability filtering
+              conversationHistory: llmRequest.messages?.map((m: any) => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+              })),
             });
 
             chatLogger.info('[TOOLS] ✅ Tools built successfully', {
@@ -1595,18 +1631,19 @@ export class EnhancedLLMService {
             latencyMs: fallbackLatency,
             error: errorMsg,
           });
-          // Record error for blacklist tracking (mirrors non-streaming fallback)          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          // Record error for blacklist tracking (mirrors non-streaming fallback).
+          // Restoration (review comment #14): the 5xx call below was merged into
+          // the comment line so it never executed, and `recordRateLimitedIfApplicable`
+          // fired TWICE (lines 1639 + 1645) double-counting 429s. Restored the 5xx
+          // call, kept the 530 call, and collapsed the duplicate 429 record to one
+          // so blacklist state and rate-limit counters stay accurate.
+          record5xxErrorIfApplicable(fallbackProvider, fallbackError);
+          record530ErrorIfApplicable(fallbackProvider, fallbackError);
           // F3 fix: also track 429 rate-limit responses so the
           // next fallback iteration skips the rate-limited provider
-          // instead of re-trying it. Tracker is independent;
-          // 429/5xx/530 counters do not interfere.
+          // instead of re-trying it. Tracker is independent (its own Map);
+          // 429/5xx/530 counters don't interfere.
           recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
-              record530ErrorIfApplicable(fallbackProvider, fallbackError);
-              // F3 fix: also track 429 rate-limit responses so the next
-              // fallback iteration skips the rate-limited provider instead
-              // of re-trying it. Tracker is independent (its own Map), so
-              // 429/5xx/530 counters don't interfere.
-              recordRateLimitedIfApplicable(fallbackProvider, fallbackError);
           fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
           lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
           // Continue to next fallback in chain
@@ -1958,6 +1995,28 @@ export class EnhancedLLMService {
          if (request.enableTools !== false) {
            try {
              const { getAllTools } = await import('./vercel-ai-tools');
+
+             // P0 fix: compute a selectToolPlan for plan-based capability filtering
+             // (mirrors the first call site in the Vercel provider path above).
+             const cliToolPlanResult = selectToolPlan({
+               userMessage,
+               conversationHistory: messages
+                 .filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+                 .map((m: any) => ({
+                   role: m.role as 'user' | 'assistant' | 'system',
+                   content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+                 })),
+               authenticated: !!request.userId,
+               configuredSources: {
+                 arcade: !!process.env.ARCADE_API_KEY,
+                 composio: !!process.env.COMPOSIO_API_KEY,
+                 nullclaw: process.env.NULLCLAW_ENABLED === 'true',
+                 remoteMcp: true,
+                 mem0: !!process.env.MEM0_API_KEY,
+                 mcpHttp: true,
+               },
+             });
+
              const vercelTools = await getAllTools({
                userId,
                conversationId,
@@ -1965,6 +2024,11 @@ export class EnhancedLLMService {
                requestId,
                scopePath: request.scopePath || `workspace/sessions/${sessionId}`,
                lastUserMessage: userMessage,
+               toolPlan: cliToolPlanResult,  // P0 fix: plan-based capability filtering
+               conversationHistory: messages.map((m: any) => ({
+                 role: m.role,
+                 content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+               })),
              });
              // Convert to LLMToolDefinition format for opencode-cli
              // We use Object.entries to preserve the tool names which are the keys
@@ -2429,7 +2493,24 @@ export class EnhancedLLMService {
               metadata: { source: 'llm_tool_use' }
             }
           )
-        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId, scopePath);
+        : await callMCPToolFromAI_SDK(
+            selectedTool,
+            { ...call.arguments, conversationId },
+            userId,
+            scopePath,
+            undefined,
+            undefined,
+            createContract({
+              intent: selectedTool,
+              scope: { paths: [], exclude: [] },
+              capabilities: [selectedTool],
+              budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+              invariants: [],
+              acceptanceCriteria: [],
+              killSwitches: [],
+              escalationGraph: {},
+            }),
+          );
 
       toolResults.push({
         name: selectedTool,
@@ -2945,6 +3026,10 @@ export async function* streamWithConcurrentFallback(
     fallbackChain,
     ...rest
   } = options;
+  // Track whether the CALLER explicitly set concurrentFallbackMs so we can
+  // decide whether to override the coordinator's silenceMs default. Default
+  // destructuring above can't distinguish "user set 20000" from "default".
+  const concurrentFallbackMsExplicit = 'concurrentFallbackMs' in options;
   const { streamWithVercelAI } = await import('./vercel-ai-streaming');
 
   // Disabled: delegate so the internal speculative fallback runs as before.
@@ -2999,11 +3084,19 @@ export async function* streamWithConcurrentFallback(
   // safe to treat as `StreamingResponse` at this boundary. The cast is
   // localized to the call site rather than baked into the factory's public
   // contract (which would be a type lie — the envelope yields Vercel chunks).
+  //
+  // Review comment #18: only pass `silenceMs` when the caller EXPLICITLY set
+  // `concurrentFallbackMs`. The previous unconditional `silenceMs:
+  // concurrentFallbackMs` (default 20000) always overrode the coordinator's
+  // own ninerouter-class default (5s) — so ninerouter-class production
+  // streams still waited the full 20s before walking the fallback chain,
+  // defeating the provider-specific tuning in coordinateConcurrentFallback.
+  // When unspecified, the coordinator applies its internal default itself.
   yield* coordinateConcurrentFallback<StreamingResponse>({
     primaryProvider: options.provider,
     model: options.model,
     fallbackChain,
-    silenceMs: concurrentFallbackMs,
+    ...(concurrentFallbackMsExplicit ? { silenceMs: concurrentFallbackMs } : {}),
     signal: options.signal,
     requestId: `ellm-${Date.now()}`,
     createPrimaryStream: () => wrapAsHandle() as unknown as Promise<StreamHandle<StreamingResponse>>,

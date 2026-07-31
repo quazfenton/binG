@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Ticket type** | Bug fix + test alignment |
-| **Status** | 🟡 OPEN (recommendation ready; awaits implementation) |
+| **Status** | ✅ CLOSED (2026-07-23 — fix already applied, 15/15 tests pass) |
 | **Opened** | 2026-07-16 |
 | **Severity** | Medium — silent behavior divergence from documented contract |
 | **Unblocks** | STABLE-STRINGIFY-CANONICAL-MIGRATION (the 2 local-copy migrations in contract.ts + tool-sentinel.ts) |

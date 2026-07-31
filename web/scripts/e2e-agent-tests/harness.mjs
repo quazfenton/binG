@@ -91,9 +91,15 @@ async function login() {
  */
 async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL, agentMode = 'auto', extra = {} }) {
   const started = Date.now();
+  // Capture the requested stream mode up-front (extra.stream overrides the
+  // body default below) so the reader can branch on it: streaming responses
+  // are consumed as SSE; non-streaming responses are consumed as a single
+  // JSON body. Pre-fix every response went through the SSE parser, so the
+  // T0_nonstream_json scenario silently got zero events (review #29).
+  const requestedStream = extra.stream !== undefined ? !!extra.stream : true;
   const body = {
     messages: [{ role: 'user', content: prompt }],
-    provider, model, stream: true, agentMode,
+    provider, model, stream: requestedStream, agentMode,
     conversationId,
     ...extra,
   };
@@ -110,7 +116,8 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
     });
   } catch (e) {
     clearTimeout(chatTimer);
-    return { httpStatus: 0, headers: {}, events: [], tokens: '', rawBytes: 0, toolCalls: [], errors: ['FETCH_ABORTED_OR_FAILED: ' + e.message], done: null, durationMs: Date.now() - started, ttfbMs: 0 };
+    return { httpStatus: 0, headers: {}, events: [], tokens: '', rawBytes: 0, toolCalls: [], errors: ['FETCH_ABORTED_OR_FAILED: ' + e.message], done: null, durationMs: Date.now() - started, ttfbMs: 0, stream: requestedStream };
+
   }
 
   const result = {
@@ -124,7 +131,39 @@ async function chat({ prompt, conversationId, provider = PROVIDER, model = MODEL
     done: null,
     durationMs: 0,
     ttfbMs: 0,
+    stream: requestedStream,
   };
+
+  // Non-streaming JSON path: consume the body as a single JSON document and
+  // surface it as one synthetic 'json' event so summarize() / validate() can
+  // inspect the actual response shape instead of mis-parsing it through the
+  // SSE framer (which previously reported 0 events for T0_nonstream_json).
+  if (!requestedStream) {
+    const text = await res.text();
+    clearTimeout(chatTimer);
+    result.bytes = text.length;
+    result.rawBytes = text.length;
+    result.durationMs = Date.now() - started;
+    result.ttfbMs = result.durationMs;
+    if (text) {
+      let parsed;
+      try {
+        parsed = JSON.parse(text);
+        result.events.push({ event: 'json', data: parsed });
+        if (parsed && typeof parsed === 'object') {
+          if (typeof parsed.content === 'string') result.tokens = parsed.content;
+          if (parsed.error) result.errors.push(String(parsed.error));
+          if (parsed.toolCalls) result.toolCalls.push(...(Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [parsed.toolCalls]));
+        }
+      } catch {
+        // Not JSON despite stream:false — surface the raw text so the failure
+        // is visible in the summary instead of being silently dropped.
+        result.events.push({ event: 'raw', data: text });
+        result.errors.push('NON_JSON_RESPONSE: ' + text.slice(0, 200));
+      }
+    }
+    return result;
+  }
 
   if (!res.body) { clearTimeout(chatTimer); result.durationMs = Date.now() - started; return result; }
 
@@ -180,6 +219,59 @@ async function vfsRead(filePath, ownerId = USER_ID) {
   const url = `${BASE}/api/test/vfs-read-file?path=${encodeURIComponent(filePath)}&ownerId=${encodeURIComponent(ownerId)}`;
   const res = await fetch(url, { headers: { Cookie: COOKIES } });
   try { return await res.json(); } catch { return { error: 'bad json', status: res.status }; }
+}
+
+// Validate a scenario result against the route's HTTP contract so a logged
+// (but failed) run actually fails the harness (review comment #4). Streaming
+// and non-streaming responses have different success shapes:
+//   - stream:  HTTP 200, at least one event, and no error events (a server
+//              error is reported either via status !== 200 or an 'error'
+//              event; a 524/500 with zero events is a fail).
+//   - non-stream: HTTP 200 and a parseable JSON body with content (chat result).
+function validateResult(name, r) {
+  const reasons = [];
+  if (!r || typeof r !== 'object') return { pass: false, reasons: ['no result'] };
+
+  if (r.aborted) reasons.push('request aborted (CHAT_TIMEOUT_MS fired)');
+
+  // Best-effort stream mode detection. When summarize() is called on a
+  // helper result (vfsRead/probe), skip HTTP contract validation.
+  const isChatResult =
+    'httpStatus' in r && 'events' in r && 'tokens' in r && 'toolCalls' in r;
+  if (!isChatResult) return { pass: true, reasons: ['non-chat result — skipped'] };
+
+  if (!r.httpStatus || r.httpStatus === 0) {
+    return { pass: false, reasons: [...reasons, `http=${r.httpStatus} (fetch failed)`] };
+  }
+
+  const isStream = r.stream !== false;
+
+  if (r.httpStatus !== 200) {
+    // 524 (stall) and 5xx are acceptable per the route's documented contract
+    // (logged + tracked) but still indicate the scenario did not succeed —
+    // surface them as a failure reason so the operator sees the route
+    // classified the turn as degraded.
+    reasons.push(`http=${r.httpStatus}`);
+  }
+
+  const meaningfulEvents = (r.events || []).filter(
+    (e) => e && e.event && e.event !== 'DONE_SENTINEL',
+  );
+  if (isStream) {
+    if ((r.events || []).length === 0) reasons.push('stream: zero events (response not consumed)');
+    if ((r.tokens || '').length === 0 && meaningfulEvents.length === 0 && r.httpStatus === 200) {
+      reasons.push('stream: no tokens and no meaningful events on HTTP 200');
+    }
+  } else {
+    if ((r.events || []).length === 0) reasons.push('non-stream: no JSON body captured');
+    if ((r.tokens || '').length === 0 && (r.errors || []).length === 0) {
+      reasons.push('non-stream: empty content and no error in JSON body');
+    }
+  }
+
+  if ((r.errors || []).length) reasons.push(`errors=[${(r.errors || []).slice(0, 3).join(', ')}]`);
+
+  return { pass: reasons.length === 0, reasons };
 }
 
 function summarize(name, r) {
@@ -268,13 +360,28 @@ async function main() {
   const only = process.argv[2];
   await login();
   const list = only ? [only] : Object.keys(scenarios);
+  // Review comment #4: previously scenario failures were only logged and
+  // discarded, so the harness reported success even when every chat request
+  // failed or expected VFS side effects were missing. Validate each result
+  // and exit with a nonzero status so this can serve as a real E2E gate.
+  let failed = 0;
   for (const name of list) {
     if (!scenarios[name]) { log(`no scenario ${name}`); continue; }
-    try { await scenarios[name](); }
-    catch (e) { log(`✗ ${name} threw: ${e.stack || e.message}`); }
+    let r;
+    try {
+      r = await scenarios[name]();
+    } catch (e) {
+      log(`✗ ${name} threw: ${e.stack || e.message}`);
+      failed++;
+      continue;
+    }
+    const v = validateResult(name, r || {});
+    if (v.reasons.length) log(`  validate[${name}]: ${v.pass ? 'PASS' : 'FAIL'} — ${v.reasons.join('; ')}`);
+    if (!v.pass) failed++;
   }
   hr();
-  log('DONE');
+  log(failed === 0 ? 'DONE — all scenarios passed' : `DONE — ${failed} scenario(s) FAILED`);
+  if (failed > 0) process.exit(1);
 }
 
 main().catch(e => { console.error(e); process.exit(1); });

@@ -118,9 +118,9 @@ describe('Workflow Templates', () => {
 
       const result = await workflowTemplateService.executeTemplate(config);
 
-      // Will fail without Mastra workflows set up, but tests the flow
-      expect(result).toBeDefined();
+      expect(result.success).toBe(true);
       expect(result.templateId).toBe('memory-wipe');
+      expect(result.steps?.every(step => step.status === 'completed')).toBe(true);
     });
 
     it('should execute with variables override', async () => {
@@ -134,7 +134,7 @@ describe('Workflow Templates', () => {
 
       const result = await workflowTemplateService.executeTemplate(config);
 
-      expect(result).toBeDefined();
+      expect(result.success).toBe(true);
       expect(result.templateId).toBe('code-review');
     });
 
@@ -147,8 +147,8 @@ describe('Workflow Templates', () => {
 
       const result = await workflowTemplateService.executeTemplate(config);
 
-      expect(result).toBeDefined();
-      // memoryWiped would be true if execution succeeded
+      expect(result.success).toBe(true);
+      expect(result.memoryWiped).toBe(true);
     });
   });
 

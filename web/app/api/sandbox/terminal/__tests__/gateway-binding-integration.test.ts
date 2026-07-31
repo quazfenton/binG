@@ -112,7 +112,7 @@ describe('gateway.ts + RedisSandboxBindingService wiring', () => {
       expect(arg.sandboxId).toBe('sbx-existing');
       expect(arg.provider).toBe('daytona');
       expect(arg.status).toBe('active');
-      expect(arg.wsUrl).toBe('/api/sandbox/terminal/stream?sessionId=sess-existing');
+      expect(arg.wsUrl).toBe('/api/sandbox/terminal/stream?sessionId=sess-existing&sandboxId=sbx-existing');
       expect(arg.expiresAt).toBeGreaterThan(arg.createdAt);
     });
 

@@ -192,8 +192,10 @@ export async function POST(req: NextRequest) {
     }
 
     // Hash new password
-    const bcrypt = await import('bcryptjs');
-    const passwordHash = await bcrypt.hash(newPassword, 10);
+    // Uses bcrypt-provider adapter which selects bcryptjs vs native bcrypt
+    // based on BCRYPT_NATIVE_ENABLED env flag (see bcrypt-provider.ts).
+    const { hash: bcryptHash } = await import('@/lib/auth/bcrypt-provider');
+    const passwordHash = await bcryptHash(newPassword, 10);
 
     // Update password and invalidate all sessions
     db.prepare(`

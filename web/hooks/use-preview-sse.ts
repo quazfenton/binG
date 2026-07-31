@@ -270,7 +270,15 @@ export function usePreviewSSE(
         }
       };
     } catch (e: any) {
-      logger.error('Failed to create EventSource:', e.message);
+      // Logger stores the Error in the entry's `error` field (only printed when
+      // includeStack=true, default false); passing `e.message` (a string) as the
+      // 2nd arg would wrap it in new Error and lose the details from console.
+      // Fold the message into the message string so console always surfaces it,
+      // and keep the original error as the 2nd arg for the structured/Sentry path.
+      logger.error(
+        'Failed to create EventSource: ' + (e?.message || 'unknown'),
+        e instanceof Error ? e : undefined,
+      );
       callbacksRef.current.onError?.(e.message || 'Failed to connect to preview SSE');
     }
   }, [handleSSEEvent]);

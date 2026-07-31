@@ -272,7 +272,14 @@ const log = createLogger('UnifiedAgentService');
 // In-process orchestrator concurrency limiter to prevent "All workers are busy" failures.
 // Simple FIFO queue with a configurable max concurrency. This is an additive safety
 // layer that queues requests when the orchestrator is saturated instead of failing.
-const ORCH_MAX_CONCURRENCY = Number.parseInt(process.env.ORCH_MAX_CONCURRENCY || '3', 10);
+const ORCH_MAX_CONCURRENCY = (() => {
+  const parsed = Number.parseInt(process.env.ORCH_MAX_CONCURRENCY || '3', 10);
+  // Guard against a malformed/non-positive env value. NaN (e.g. "abc") or
+  // a value <= 0 (e.g. "0", "-1") would make the `_orchCurrent < cap` gate
+  // always false, queueing EVERY orchestrated request forever. Fall back to
+  // the documented default of 3 so the limiter is always safe to acquire.
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+})();
 let _orchCurrent = 0;
 const _orchQueue: Array<() => void> = [];
 async function acquireOrchSlot(): Promise<void> {
@@ -653,6 +660,52 @@ function classifyProviderError(error: any): 'permanent' | 'rate_limit' | 'transi
   return 'transient';
 }
 
+/** track the number of rate-limit retries per provider so exponential backoff
+ *  progresses (1s, 2s, 4s, 8s) across consecutive 429 responses on the
+ *  same provider, rather than re-using the provider-index formula which
+ *  resets to 500ms on every new provider.
+ *  Map<providerName, retryCount>. Reset once per provider loop iteration
+ *  when the provider succeeds or exhausts all retries.
+ */
+const _rateLimitRetryCount = new Map<string, number>();
+
+/**
+ * Bug #3 (429 rate-limit cascade): exponential backoff for 429 responses.
+ * Uses a per-provider retry count so the same provider gets progressively
+ * longer backoff (1s, 2s, 4s, 8s, max 10s) before the caller falls through
+ * to the next provider in the fallback chain. Respects Retry-After headers
+ * when present (capped at 30s to avoid excessive waits).
+ */
+async function waitForRateLimitBackoff(
+  error: any,
+  retryCount: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (signal?.aborted) return;
+
+  const retryAfterValue = error?.response?.headers?.get?.('retry-after')
+    ?? error?.headers?.get?.('retry-after')
+    ?? error?.response?.headers?.['retry-after']
+    ?? error?.headers?.['retry-after'];
+  const retryAfterSeconds = Number(retryAfterValue);
+  // Exponential backoff based on retry count: 1s, 2s, 4s, 8s, max 10s
+  const exponentialDelayMs = Math.min(1000 * Math.pow(2, retryCount), 10000);
+  // Respect Retry-After header with a 30s upper bound
+  const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+    ? Math.min(retryAfterSeconds * 1000, 30000)
+    : exponentialDelayMs;
+
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    }
+  });
+}
+
 /**
  * Track providers that have permanently failed in this request.
  * Once a provider returns a permanent error, we skip it in subsequent
@@ -796,7 +849,7 @@ export interface UnifiedAgentConfig {
   systemPrompt?: string;
   /** If set, use the prompt-composer to build the system prompt from a role template */
   role?: 'coder' | 'reviewer' | 'planner' | 'architect' | 'researcher' | 'debugger';
-  conversationHistory?: Array<{ role: string; content: string }>;
+  conversationHistory?: Array<{ role: string; content: string | any[] }>;
   userId?: string;  // Authenticated user ID — passed to BootstrappedAgency for VFS scoping
   conversationId?: string;  // Session/conversation ID for VFS session scoping (e.g., "001")
 
@@ -814,6 +867,13 @@ export interface UnifiedAgentConfig {
 
   // Streaming
   onStreamChunk?: (chunk: string) => void;
+  /**
+   * Direct SSE event emitter — bypasses the stream chunk handler's buffer
+   * accumulation and TOKEN re-emission. Used for structured SSE events
+   * (TOOL_RESULT, etc.) that should be forwarded to the client as-is
+   * rather than treated as raw token content.
+   */
+  onSSEEvent?: (eventType: string, payload: Record<string, unknown>) => void;
   /**
    * Progress heartbeat — called when the service is about to start a new
    * streaming phase (e.g. auto-continuation re-invocation). The route uses
@@ -1181,7 +1241,7 @@ type ContextualSignals = {
  * hasReprompt — those phrasings occur naturally in normal conversation.
  */
 function deriveContextualSignals(
-  conversationHistory?: Array<{ role: string; content: string }>,
+  conversationHistory?: Array<{ role: string; content: string | any[] }>,
   userMessage?: string,
 ): ContextualSignals {
   // Look at assistant + tool + user messages (skip system) AND the current
@@ -1541,6 +1601,16 @@ function auditResponseShape(
     responseLen: serializableTextLength(result.response),
     outcome: meta.outcome,
   });
+}
+
+/**
+ * Strip [STEER] orchestrator prompts from response content before returning to client.
+ * [STEER] blocks are injected server-side to guide the LLM on the next turn but
+ * should never be visible to the user.  Preserves any content after the [STEER] block.
+ */
+function stripSteerFromResponse(content: string): string {
+  if (!content || !content.includes('[STEER]')) return content;
+  return content.replace(/\[STEER\][\s\S]*?(?=\n\n|$)/g, '').replace(/^\n+/, '').trim();
 }
 
 /**
@@ -1967,22 +2037,16 @@ log.info('[UnifiedAgent] ┌─ MODE SELECTED ───────────�
               orchNonSystem.push(msg);
             }
           }
-          // NOTE: System messages are intentionally discarded here — not
-          // passed to runV1Orchestrated. The PlanActVerifyOrchestrator
-          // does not accept a separate system-prompt parameter; it receives
-          // all context through the messages array. System-role messages
-          // cannot be included there because they trigger Vercel AI SDK
-          // ModelMessage[] schema validation errors inside callLLM.
-          //
-          // On the fallback path (Phase 2 → runV1Api), system messages
-          // are re-extracted from config.conversationHistory and merged
-          // into the `system` parameter of generateText/streamText, where
-          // the AI SDK accepts them.
+          // System-role messages cannot be included in the AI SDK messages
+          // array. Preserve them through the orchestrator's dedicated system
+          // context channel instead of discarding workspace retrieval, memory,
+          // and role instructions before planning.
           const orchMessages = [
             ...orchNonSystem,
             { role: 'user', content: config.userMessage },
           ];
-          return await runV1Orchestrated(config, orchMessages, startTime);
+          const orchSystemPrompt = [...new Set([config.systemPrompt, ...orchSystemParts].filter(Boolean))].join('\n\n');
+          return await runV1Orchestrated(config, orchMessages, startTime, orchSystemPrompt);
         }
 
         case 'v2-native':
@@ -2884,7 +2948,7 @@ async function runOpencodeSDKMode(
       await sdkProvider.initialize();
 
       // Build messages for the SDK provider
-      const messages: Array<{ role: string; content: string }> = [
+      const messages: Array<{ role: string; content: string | any[] }> = [
         ...(config.conversationHistory || []),
         { role: 'user', content: config.userMessage },
       ];
@@ -2957,11 +3021,15 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
   const startTime = Date.now();
 
   // Build messages from conversation history + current message.
-  // Filter out tool-role messages: route.ts:1130 converts non-string content
-  // via JSON.stringify, producing string-content tool messages that violate
-  // the AI SDK ModelMessage[] schema (requires array content with
-  // { type: 'tool-result', ... }). Tool messages from prior turns are also
-  // stale — their tool_call_id references no longer match any live calls.
+  // Filter out OLD-FORMAT tool-role messages (string content) — these were
+  // produced by legacy code that JSON.stringified the result, producing
+  // string-content tool messages that violate the AI SDK ModelMessage[]
+  // schema. AI SDK v6 tool messages MUST use array content with
+  // [{ type: 'tool-result', toolCallId, toolName, output }].
+  //
+  // NEW-FORMAT tool messages (array content with tool-result parts) are
+  // passed through so the LLM can see previous tool results and does not
+  // re-attempt the same tool calls.
   //
   // Additionally, strip system-role messages and extract them into
   // config.systemPrompt so the downstream path (streamWithVercelAI or
@@ -2977,7 +3045,13 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
         ? msg.content
         : JSON.stringify(msg.content || '');
       systemParts.push(text);
-    } else if (msg.role !== 'tool') {
+    } else if (msg.role === 'tool') {
+      // Keep AI SDK v6 format tool messages (array content with tool-result
+      // parts). Strip legacy string-content tool messages.
+      if (Array.isArray(msg.content)) {
+        nonSystemMessages.push(msg);
+      }
+    } else {
       nonSystemMessages.push(msg);
     }
   }
@@ -3548,6 +3622,7 @@ function logToolCall(
   result: { success: boolean; output?: string; error?: any; exitCode?: number },
   durationMs: number,
   onStreamChunk?: (chunk: string) => void,
+  onSSEEvent?: (eventType: string, payload: Record<string, unknown>) => void,
 ): void {
   const redactedArgs = redactToolArgs(toolName, rawArgs || {});
   
@@ -3594,16 +3669,21 @@ function logToolCall(
   );
 
   // SSE event for client-side display (if streaming is available)
-  if (onStreamChunk) {
+  if (onSSEEvent || onStreamChunk) {
+    const payload = {
+      tool: toolName,
+      success: result.success,
+      exitCode: result.exitCode ?? (result.success ? 0 : 1),
+      durationMs,
+      args: redactedArgs,
+      ...(errorDetail ? { error: errorDetail, errorCode } : {}),
+    };
     try {
-      onStreamChunk(sseEncode(SSE_EVENT_TYPES.TOOL_RESULT, {
-        tool: toolName,
-        success: result.success,
-        exitCode: result.exitCode ?? (result.success ? 0 : 1),
-        durationMs,
-        args: redactedArgs,
-        ...(errorDetail ? { error: errorDetail, errorCode } : {}),
-      }));
+      if (onSSEEvent) {
+        onSSEEvent(SSE_EVENT_TYPES.TOOL_RESULT, payload);
+      } else {
+        onStreamChunk!(sseEncode(SSE_EVENT_TYPES.TOOL_RESULT, payload));
+      }
     } catch { /* best effort */ }
   }
 }
@@ -3688,9 +3768,32 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       'workspace_graph_find_process': 'workspace.graph_find_process',
       // Legacy mappings (from extended-sandbox-tools EXTENDED_TOOL_TO_CAPABILITY)
       'exec_shell': 'bash.execute',
+      'bash_execute': 'bash.execute',
     };
 
     const capabilityId = capabilityMap[name] || name;
+
+    // bash.execute needs the request-scoped executor assembled by the chat
+    // route. The generic capability router has no always-available bash
+    // provider, so routing it there first returns an opaque
+    // "All providers failed" without ever reaching the working executor.
+    if (capabilityId === 'bash.execute') {
+      if (config.executeTool) {
+        return config.executeTool(name, args);
+      }
+      const { callMCPToolFromAI_SDK } = await import('@/lib/mcp');
+      const result = await callMCPToolFromAI_SDK(
+        'bash_execute',
+        args,
+        config.filesystemOwnerId || config.userId || '',
+        config.scopePath,
+      );
+      return {
+        success: result.success,
+        output: result.output || result.error || '',
+        exitCode: result.success ? 0 : 1,
+      };
+    }
 
     if (await hasToolCapability(capabilityId)) {
       const toolStartTime = Date.now();
@@ -3700,7 +3803,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       const capResult = await executeToolCapability(capabilityId, args, {
         userId: config.userId || 'system',
         sessionId: config.conversationId,  // FIX: Session scoping for VFS
-        scopePath: config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
+        scopePath: config.scopePath || (config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined),
         workspaceId: config.projectContext?.id,
       });
 
@@ -3721,7 +3824,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 
       const toolDuration = Date.now() - toolStartTime;
       const toolResult: ToolResult = { success: capResult.success, output: (typeof capOutputRaw === 'string' ? capOutputRaw : JSON.stringify(capOutputRaw)) + scopeNote, exitCode: capResult.exitCode };
-      logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk);
+      logToolCall(name, rawArgs, toolResult, toolDuration, config.onStreamChunk, config.onSSEEvent);
       return toolResult;
     }
 
@@ -3795,7 +3898,7 @@ function isFailedToolInvocation(inv: { result?: any; toolName?: string }): boole
  */
 async function runV1ApiWithTools(
   config: UnifiedAgentConfig,
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<{ role: string; content: string | any[] }>,
   startTime: number
 ): Promise<UnifiedAgentResult> {
 
@@ -4288,9 +4391,21 @@ async function runV1ApiWithTools(
     // clearly writing everything in prose and the Phase 2 text-mode extraction
     // can handle what's already been collected. Without this guard, the user
     // waits 92s for a single skeleton response.
+    //
+    // Phase 1 time-budget fix (2026-07-24, P2): increased default budget from
+    // 30s → 60s and text threshold from 5K → 8K so long-thinking models
+    // (DeepSeek, Claude Sonnet, etc.) that produce verbose planning text
+    // before their first tool call aren't cut off prematurely. The env vars
+    // remain overridable for tuning. Added a tools-first grace period: during
+    // the first 45s the text threshold is doubled (16K) to avoid aborting
+    // while the model is still warming up.
     const _phase1StartTime = Date.now();
-    const _PHASE1_BUDGET_MS = parseInt(process.env.V1_PHASE1_BUDGET_MS || '30000', 10);
-    const _PHASE1_TEXT_THRESHOLD = parseInt(process.env.V1_PHASE1_TEXT_THRESHOLD || '5000', 10);
+    const _PHASE1_BUDGET_MS = parseInt(process.env.V1_PHASE1_BUDGET_MS || '60000', 10);
+    const _PHASE1_TEXT_THRESHOLD = parseInt(process.env.V1_PHASE1_TEXT_THRESHOLD || '8000', 10);
+    // Tools-first grace period: during the first 45s, double the text
+    // threshold so models that produce verbose planning text (code analysis,
+    // architecture review) before their first tool call aren't cut off.
+    const _PHASE1_GRACE_MS = parseInt(process.env.V1_PHASE1_GRACE_MS || '45000', 10);
 
     try {
       log.info('[V1-API-WITH-TOOLS] Calling streamWithConcurrentFallback...');
@@ -4317,10 +4432,23 @@ async function runV1ApiWithTools(
           config.onStreamChunk?.(chunk.content);
           // Bug #21 (Pass-8): Phase 1 time-budget check. If we have lots of
           // text but zero tool calls and the budget is exceeded, abort early.
-          if (toolInvocations.length === 0 && response.length > _PHASE1_TEXT_THRESHOLD && Date.now() - _phase1StartTime > _PHASE1_BUDGET_MS) {
+          // The text threshold escalates with time: during the grace period
+          // (first 45s), the threshold is doubled (16K) to avoid cutting off
+          // long-thinking models. After grace, the normal threshold (8K)
+          // applies. The threshold does NOT drop mid-budget — once grace
+          // expires, the normal threshold applies for the remaining window.
+          // This prevents a perverse incentive where producing more text
+          // during grace makes it harder to survive the post-grace window.
+          const elapsedPhase1 = Date.now() - _phase1StartTime;
+          const effectiveThreshold = elapsedPhase1 < _PHASE1_GRACE_MS
+            ? _PHASE1_TEXT_THRESHOLD * 2
+            : _PHASE1_TEXT_THRESHOLD;
+          if (toolInvocations.length === 0 && response.length > effectiveThreshold && elapsedPhase1 > _PHASE1_BUDGET_MS) {
             log.warn('[V1-API-WITH-TOOLS] Phase 1 time-budget exceeded — aborting early (text-only, no tools)', {
               responseLength: response.length,
-              durationMs: Date.now() - _phase1StartTime,
+              durationMs: elapsedPhase1,
+              effectiveThreshold,
+              phase: elapsedPhase1 < _PHASE1_GRACE_MS ? 'grace' : 'normal',
             });
             break;
           }
@@ -4922,7 +5050,14 @@ async function runV1ApiWithTools(
 
         try {
           // FIX: Carry forward last successful provider/model so SelfHeal retries skip dead primary
-          const retryConfig = _selfHealProvider ? { ...config, provider: _selfHealProvider, model: _selfHealModel || config.model } : config;
+          // FIX: Create FRESH AbortController for each retry attempt to avoid
+          // "Concurrent fallback: caller aborted before start" error. The original
+          // config.abortSignal may be in an aborted state from prior attempts,
+          // causing the fallback coordinator to throw immediately.
+          const retryAbortController = new AbortController();
+          const retryConfig = _selfHealProvider 
+            ? { ...config, provider: _selfHealProvider, model: _selfHealModel || config.model, abortSignal: retryAbortController.signal } 
+            : { ...config, abortSignal: retryAbortController.signal };
           const retryResult = await runV1ApiWithTools(retryConfig, retryMessages, startTime);
           // If the retry produced something, use it. Otherwise fall through to
           // the friendly fallback below so the user still sees a message.
@@ -5031,7 +5166,7 @@ async function runV1ApiWithTools(
       let accumulatedToolInvocations = [...toolInvocations];
 
       while (autoContinueIteration < MAX_V1_CONTINUATIONS) {
-        const autoDecision = decideAutoContinue({
+        let autoDecision = decideAutoContinue({
           requestId,
           // Bug #Q7 (audit): pass advancedDetectorFn to the v1-api-with-tools continuation
               // loop so it gets the richer-signal coverage route.ts's
@@ -5076,6 +5211,44 @@ async function runV1ApiWithTools(
               .filter((e: any) => typeof e.path === 'string' && e.path.length > 0),
           },
         });
+
+        // Issue 8 — write→verify enforcement: when the LLM has made N+ writes without
+        // a matching read operation, inject a verification directive into the continuation
+        // prompt so the model calls read_file on the affected files before making further
+        // changes. This breaks the cascade: write → write → write → DIFF_MISMATCH → fail.
+        const WRITE_VERIFY_THRESHOLD = parseInt(process.env.WRITE_VERIFY_THRESHOLD || '3', 10);
+        if (
+          autoDecision.continue &&
+          WRITE_VERIFY_THRESHOLD > 0
+        ) {
+          const writeCount = accumulatedSteps.filter(
+            (s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName)
+          ).length;
+          const readCount = accumulatedSteps.filter(
+            (s: any) => s?.toolName && (s.toolName === 'read_file' || s.toolName === 'list_files')
+          ).length;
+          if (writeCount >= WRITE_VERIFY_THRESHOLD && readCount < Math.ceil(writeCount / 2)) {
+            const writtenPaths = [...new Set<string>(
+              accumulatedSteps
+                .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName) && typeof s?.args?.path === 'string')
+                .map((s: any) => s.args.path)
+            )];
+            const verifyPrompt = writtenPaths.length > 0
+              ? `[WRITE_VERIFY] You have made ${writeCount} file writes without verifying the current file state. Before making further changes, call read_file on the following path(s):
+${writtenPaths.slice(0, 5).map((p: string) => `- ${p}`).join('\n')}
+
+After verifying, continue with your original task.
+
+`
+              : `[WRITE_VERIFY] You have made ${writeCount} file writes without verifying the current file state. Before making further changes, call read_file to verify the current state of the files you just modified.
+
+`;
+            autoDecision = {
+              ...autoDecision,
+              continuationPrompt: verifyPrompt + (autoDecision.continuationPrompt ?? ''),
+            };
+          }
+        }
 
         if (!autoDecision.continue || !autoDecision.continuationPrompt) {
           break;
@@ -5133,6 +5306,19 @@ async function runV1ApiWithTools(
           { role: 'assistant', content: accumulatedResponse },
           { role: 'user', content: autoDecision.continuationPrompt },
         ];
+
+        // Bug #88 (Round 3): Check if parent request was aborted before starting
+        // a new LLM call. Without this check, auto-continue fires LLM requests
+        // that waste tokens and provider quota when the parent is already dead.
+        // The stall watchdog or user-initiated abort may have already fired
+        // between the previous iteration finishing and this iteration starting.
+        if (config.abortSignal?.aborted) {
+          log.info('[V1-API-WITH-TOOLS] Auto-continuation skipped — parent request already aborted', {
+            iteration: autoContinueIteration,
+            reason: autoDecision.reason,
+          });
+          break;
+        }
 
         try {
           const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
@@ -5214,9 +5400,86 @@ async function runV1ApiWithTools(
           // wasting tokens and compute on doomed requests. Now we break immediately
           // when we detect rate limiting or provider exhaustion.
           if (isRateLimitError) {
-            log.info('[V1-API-WITH-TOOLS] Rate limit detected, attempting continuation on next fallback provider(s)', {
+            // Issue 4: back off and retry the SAME provider before falling through
+            // to fallback providers (which produce zero tool calls). Uses the
+            // per-provider retry count tracked in _rateLimitRetryCount for
+            // exponential backoff progression (1s, 2s, 4s, 8s) across consecutive
+            // 429 responses on the same provider.
+            const currentRetryCount = _rateLimitRetryCount.get(providerName) ?? 0;
+            _rateLimitRetryCount.set(providerName, currentRetryCount + 1);
+
+            log.info('[V1-API-WITH-TOOLS] Rate limit detected, backing off and retrying same provider', {
+              iteration: autoContinueIteration,
+              provider: providerName,
+              retryCount: currentRetryCount,
+              error: errorMsg,
+            });
+
+            await waitForRateLimitBackoff(contErr, currentRetryCount, config.abortSignal);
+
+            if (config.abortSignal?.aborted) {
+              log.info('[V1-API-WITH-TOOLS] Auto-continuation aborted during rate-limit backoff', {
+                iteration: autoContinueIteration,
+              });
+              break;
+            }
+
+            // Retry the same provider after backoff
+            // Use streamWithConcurrentFallback (same as the fallback path below)
+            // with an empty fallbackChain to retry only the current provider.
+            // Matches the exact call pattern from the main try block above.
+            try {
+              const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+              let retryContContent = '';
+              let retryContToolInvocations: any[] = [];
+              for await (const chunk of streamWithConcurrentFallback({
+                provider: providerName,
+                model: modelForProvider,
+                messages: contMessages as any,
+                temperature: config.temperature || 0.7,
+                maxTokens: config.maxTokens || 65536,
+                maxSteps: config.maxSteps || 15,
+                tools: aiSdkTools,
+                toolCallStreaming: true,
+                signal: config.abortSignal,
+                fallbackChain: [],  // empty — only retry the same provider
+              })) {
+                if (chunk.content) retryContContent += chunk.content;
+                if (chunk.toolInvocations) {
+                  for (const inv of chunk.toolInvocations) {
+                    if (inv.state === 'result') retryContToolInvocations.push(inv);
+                  }
+                }
+              }
+
+              if (retryContContent || retryContToolInvocations.length > 0) {
+                accumulatedResponse = (accumulatedResponse + '\n\n' + retryContContent).trim();
+                accumulatedSteps.push(...retryContToolInvocations.map(inv => ({
+                  toolName: inv.toolName,
+                  args: inv.args,
+                  result: inv.result,
+                })));
+                log.info('[V1-API-WITH-TOOLS] Auto-continuation succeeded after rate-limit backoff', {
+                  iteration: autoContinueIteration,
+                  provider: providerName,
+                  retryCount: currentRetryCount,
+                });
+                _rateLimitRetryCount.delete(providerName);
+                continue;
+              }
+            } catch (retryErr: any) {
+              log.warn('[V1-API-WITH-TOOLS] Rate-limit retry also failed, trying fallback providers', {
+                iteration: autoContinueIteration,
+                provider: providerName,
+                retryError: retryErr?.message || String(retryErr),
+              });
+            }
+
+            // If retry didn't produce useful output, try fallback providers
+            log.info('[V1-API-WITH-TOOLS] Rate limit retry exhausted, trying next provider(s)', {
               iteration: autoContinueIteration,
               error: errorMsg,
+              attemptedRetries: currentRetryCount + 1,
             });
 
             // Try continuation on the next provider(s) in the configured chain
@@ -5302,7 +5565,7 @@ async function runV1ApiWithTools(
       if (autoContinueIteration > 0) {
         return {
           success: true,
-          response: accumulatedResponse,
+          response: stripSteerFromResponse(accumulatedResponse),
           steps: accumulatedSteps,
           totalSteps: accumulatedSteps.length,
           mode: 'v1-api',
@@ -5324,9 +5587,13 @@ async function runV1ApiWithTools(
       // Gated by ENABLE_530_RESET_ON_SUCCESS=1 (default OFF) inside the helper.
       // PR-W -- single-call both-trackers reset (replaces the manual pair).
       maybeResetBothTrackers(providerName);
+      // Bug #3 (429 cascade): clear the per-provider rate-limit retry count
+      // so the next 429 from this provider starts fresh (1s) instead of
+      // inheriting a stale high count from a previous cascade loop.
+      _rateLimitRetryCount.delete(providerName);
       return {
         success: true,
-        response: finalResponse,
+        response: stripSteerFromResponse(finalResponse),
         steps,
         totalSteps: steps.length,
         mode: 'v1-api',
@@ -5364,6 +5631,24 @@ async function runV1ApiWithTools(
       };
     } catch (error: any) {
       lastError = error;
+      const errorClass = classifyProviderError(error);
+      if (errorClass === 'rate_limit') {
+        // Bug #3 (429 cascade fix): use per-provider exponential backoff
+        // so the SAME provider gets progressively longer waits (1s, 2s,
+        // 4s, 8s) before the caller falls through to the next provider.
+        // The retry count is incremented on each 429 and resets on success
+        // or when the caller exhausts all retries and moves to the next
+        // provider (the provider loop's next iteration naturally resets
+        // the count since _rateLimitRetryCount entries for providers that
+        // aren't being retried anymore will age out).
+        const retryCount = _rateLimitRetryCount.get(providerName) ?? 0;
+        log.warn('[V1-API-WITH-TOOLS] Rate limited; backing off', {
+          provider: providerName,
+          retryCount,
+        });
+        await waitForRateLimitBackoff(error, Math.min(retryCount, 5), config.abortSignal);
+        _rateLimitRetryCount.set(providerName, retryCount + 1);
+      }
       // PR-E + PR-H: both trackers fire here in parallel — pure
       // record-or-noop, NEVER cross-wipe each other's Map. Parallels
       // lib/chat/enhanced-llm-service.ts:746. Non-matching error
@@ -5391,7 +5676,6 @@ async function runV1ApiWithTools(
           // If this is a permanent error (missing API key, invalid auth, model not found),
           // skip model-ranker recording entirely — the provider is misconfigured, not
           // performing poorly. Mark it so subsequent iterations skip it immediately.
-          const errorClass = classifyProviderError(error);
           if (errorClass === "permanent") {
             markProviderPermanentlyFailed(providerName);
             log.error("[V1-API-WITH-TOOLS] ┌─ PERMANENT ERROR ────────────");
@@ -5588,7 +5872,8 @@ async function runV1ApiWithTools(
 async function runV1Orchestrated(
   config: UnifiedAgentConfig,
   messages: any[],
-  startTime: number
+  startTime: number,
+  systemPrompt: string = '',
 ): Promise<UnifiedAgentResult> {
   // === SESSION TRACKING FOR SUCCESSIVE CALLS ===
   const sessionId = config.sessionId || `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -5634,6 +5919,7 @@ async function runV1Orchestrated(
     },
     tools: config.tools || [],
     executeTool: capabilityExecuteTool,
+    systemPrompt,
   };
 
   const orchestrator = new PlanActVerifyOrchestrator(orchestratorConfig);
@@ -5883,10 +6169,34 @@ async function runV1Orchestrated(
         // was fired due to orchestrator timeout (not user abort).
         // The orchestrator may have timed out, but that doesn't mean the
         // fallback v1-api should be rejected without attempting it.
+        //
+        // HOWEVER the previous implementation discarded `config.abortSignal`
+        // entirely, so a genuine user cancellation no longer stopped the
+        // fallback. Compose the fresh fallback controller WITH the caller's
+        // signal so: (a) an orchestrator-timeout (fired only on the fresh
+        // controller's sibling state) does NOT prematurely abort the
+        // fallback, and (b) the user's own abort still propagates. The
+        // fresh controller is kept as a no-op here for API symmetry with
+        // the original comment; the load-bearing cancellation path is the
+        // composed signal below. (AbortSignal.any is supported on the same
+        // runtime the route already relies on it — Node 20+/Edge.)
         const fallbackAbortController = new AbortController();
+        const composedFallbackSignal =
+          config.abortSignal
+            ? AbortSignal.any([config.abortSignal, fallbackAbortController.signal])
+            : fallbackAbortController.signal;
+        // When falling back due to orchestration failure (often a 400
+        // "model not supported" error), strip the invalid model so v1-api
+        // uses the provider's default instead of retrying the same bad model.
+        // The DEFAULT_MODEL env var is the canonical fallback; if unset, the
+        // provider's own default kicks in downstream.
+        const fallbackModel = (fallbackReason === 'orchestration_failed' && config.model)
+          ? (process.env.DEFAULT_MODEL || undefined)
+          : config.model;
         const fallbackConfig = {
           ...config,
-          abortSignal: fallbackAbortController.signal,
+          model: fallbackModel,
+          abortSignal: composedFallbackSignal,
         };
         
         const fallbackResult = await runV1Api(fallbackConfig);
@@ -5932,8 +6242,6 @@ async function runV1Orchestrated(
             : (config.conversationId || config.userId || 'default'),
           budgetExhausted,
         });
-        // Release orchestrator slot before returning
-        try { releaseOrchSlot(); } catch { /* best-effort */ }
         return _tagged;
       } catch (fbError: any) {
         log.error('[runV1Orchestrated] v1-api fallback also failed', { error: fbError?.message || String(fbError) });
@@ -5995,7 +6303,6 @@ async function runV1Orchestrated(
             }} : {}),
           },
         };
-        try { releaseOrchSlot(); } catch { /* best-effort */ }
         return _resFallbackFailed;
       }
     }
@@ -6024,7 +6331,6 @@ async function runV1Orchestrated(
         } : undefined,
       },
     };
-    try { releaseOrchSlot(); } catch { /* best-effort */ }
     return _resSuccess;
   } catch (err: any) {
     invalidateDynamicDefaultsCache();
@@ -6044,8 +6350,16 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
-    try { releaseOrchSlot(); } catch { /* best-effort */ }
     throw err;
+  } finally {
+    // Single slot-release site covering EVERY exit (success-returns inside
+    // the try, the early v1-api-fallback return, the re-thrown error path,
+    // and any uncaught throw). Previously the per-acquire slot was released
+    // ad-hoc in four separate branches, and the v1-api-fallback-chain
+    // success return missed a release — permanently exhausting the limiter.
+    // `releaseOrchSlot` is idempotent-safe (it clamps via Math.max(0, ...)),
+    // so a finally-only release guarantees exactly one decrement per acquire.
+    try { releaseOrchSlot(); } catch { /* best-effort */ }
   }
 }
 
@@ -6648,7 +6962,14 @@ log.info('[Fallback] └──────────────────�
   if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
     fallbackOrder.push('v2-local');
   }
-  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && caps.v1Api) {
+  // v1-api is always a candidate in auto mode — the orchestrator's internal
+  // fallback already uses runV1Api regardless of v1ApiCap. When caps.v1Api
+  // is false (no provider API key detected at startup), we still include it
+  // as a last-resort entry so the chain isn't empty after v2 modes are
+  // excluded by forceV1Auto. The worst case is a duplicate attempt that
+  // fails fast; the best case is the runtime-resolved provider works
+  // despite the startup probe being wrong.
+  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api') {
     fallbackOrder.push('v1-api');
   }
 
@@ -6786,6 +7107,7 @@ function modeToCapFlag(mode: string): keyof StartupCapabilities | null {
     case 'v2-native': return 'v2Native';
     case 'v2-containerized': return 'v2Containerized';
     case 'v2-local': return 'v2Local';
+    case 'v1-api': return 'v1Api';
     case 'v1-agent-loop': return 'statefulAgent';
     case 'mastra-workflow': return 'mastraWorkflows';
     default: return null;

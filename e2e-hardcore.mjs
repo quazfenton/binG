@@ -16,7 +16,7 @@ const WORKSPACE = '/tmp/workspaces';
 
 import fs from 'fs';
 import path from 'path';
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -126,6 +126,15 @@ function exec(cmd, opts = {}) {
   }
 }
 
+function execFile(cmd, args, opts = {}) {
+  try {
+    const out = execFileSync(cmd, args, { timeout: opts.timeout || 15000, encoding: 'utf-8', ...opts });
+    return { ok: true, stdout: out.trim(), stderr: '' };
+  } catch (err) {
+    return { ok: false, stdout: err.stdout?.toString().trim() || '', stderr: err.stderr?.toString().trim() || err.message };
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // TESTS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -176,7 +185,7 @@ async function T1_createAndVerify() {
   }
 
   return {
-    pass: anyCreated || (textMentions && r.text.length > 50),
+    pass: anyCreated && (textMentions || contentMatch),
     reason: `diskCreated=${anyCreated} (${found.length} files) mention=${textMentions} contentMatch=${contentMatch} textLen=${r.text.length}`,
     detail: { diskFiles: found, text: r.text.slice(0, 300) }
   };
@@ -204,20 +213,17 @@ async function T2_createAndRunPython() {
   let runResult = null;
   for (const f of diskFiles) {
     if (f.endsWith('.py')) {
-      runResult = exec(`python3 "${f}"`);
+      runResult = execFile('python3', [f]);
       break;
     }
   }
 
-  // Also try to find any fib file in workspace
+  // Also try to find any fib file in newly created files only (not stale workspace artifacts — Comment #64)
   if (!runResult?.ok) {
-    const allPy = exec(`find ${WORKSPACE} -name '*fib*.py' -type f 2>/dev/null`, { timeout: 5000 });
-    if (allPy.ok && allPy.stdout) {
-      const fibFiles = allPy.stdout.split('\n').filter(Boolean);
-      for (const ff of fibFiles.slice(0, 2)) {
-        runResult = exec(`python3 "${ff}"`);
-        if (runResult.ok) break;
-      }
+    const newFibFiles = diskFiles.filter(f => f.includes('fib') && f.endsWith('.py'));
+    for (const ff of newFibFiles.slice(0, 2)) {
+      runResult = execFile('python3', [ff]);
+      if (runResult.ok) break;
     }
   }
 
@@ -226,7 +232,8 @@ async function T2_createAndRunPython() {
   const outputClean = runResult?.stdout?.trim();
 
   return {
-    pass: mentionsFib && (mentions610 || (ranSuccess && output610)),
+    pass: ranSuccess && output610 && hasPy,
+    reason: `disk=${hasPy} text610=${mentions610} ran=${ranSuccess} out610=${output610} out=${outputClean || '(no output)'}`,
     reason: `disk=${hasPy} text610=${mentions610} ran=${ranSuccess} out610=${output610} out=${outputClean || '(no output)'}`,
     detail: { diskFiles, runResult, text: text.slice(0, 300) }
   };
@@ -255,11 +262,12 @@ async function T3_expressProject() {
 
   // Check file content quality
   let serverContent = '';
+  let hasExpressInPkg = false;
   for (const f of diskFiles) {
     if (f.includes('server.js')) serverContent = getFileContent(f) || '';
     if (f.includes('package.json')) {
       const pkg = getFileContent(f) || '';
-      if (pkg.includes('express')) hasPackageJSON; // confirmed
+      hasExpressInPkg = pkg.includes('express');
     }
   }
 
@@ -268,8 +276,8 @@ async function T3_expressProject() {
   const hasHelloEndpoint = serverContent.includes('hello');
 
   return {
-    pass: created >= 2 && hasExpressImport,
-    reason: `created=${created}/3 srv=${hasServerJS} rts=${hasRoutesJS} pkg=${hasPackageJSON} express=${hasExpressImport} port=${hasPort3456} hello=${hasHelloEndpoint}`,
+    pass: created >= 3 && hasExpressImport && hasHelloEndpoint && hasExpressInPkg,
+    reason: `created=${created}/3 srv=${hasServerJS} rts=${hasRoutesJS} pkg=${hasPackageJSON} express=${hasExpressImport} port=${hasPort3456} hello=${hasHelloEndpoint} pkgExpress=${hasExpressInPkg}`,
     detail: { diskFiles, text: text.slice(0, 300), serverContent: serverContent.slice(0, 500) }
   };
 }
@@ -309,7 +317,7 @@ async function T4_readModifyChain() {
   const diskHasMode = diskContent.includes('"mode"') || diskContent.includes("'mode'");
 
   return {
-    pass: textMentionsConfig && (textMentionsV2 || textMentionsMode || diskHasV2 || diskHasMode),
+    pass: diskHasV2 && diskHasMode,
     reason: `textCfg=${textMentionsConfig} v2=${textMentionsV2} mode=${textMentionsMode} diskV2=${diskHasV2} diskMode=${diskHasMode}`,
     detail: { text: r2.text.slice(0, 300), diskContent: diskContent.slice(0, 300), files1 }
   };

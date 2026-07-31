@@ -47,9 +47,14 @@ pub fn increment_sessions(user_id: &str) {
 
 /// Decrement sessions for a user
 pub fn decrement_sessions(user_id: &str) {
-    global::USER_SESSIONS.write()
-        .entry(user_id.to_string())
-        .and_modify(|c| *c = c.saturating_sub(1));
+    let mut map = global::USER_SESSIONS.write();
+    let key = user_id.to_string();
+    if let Some(count) = map.get_mut(&key) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            map.remove(&key);
+        }
+    }
 }
 
 /// Increment auth success
@@ -82,15 +87,14 @@ pub fn get_metrics() -> String {
     let errors = global::ERRORS.load(Ordering::Relaxed);
     
     let user_sessions = global::USER_SESSIONS.read();
-    let user_labels: Vec<String> = user_sessions
-        .iter()
-        .map(|(k, v)| format!("user_id=\"{}\"", k))
-        .collect();
-    let user_label_str = if user_labels.is_empty() {
-        String::new()
-    } else {
-        format!("{{{}}}", user_labels.join(","))
-    };
+    
+    let mut user_lines = String::new();
+    for (user_id, count) in user_sessions.iter() {
+        user_lines.push_str(&format!(
+            "terminal_proxy_user_sessions{{user_id=\"{}\"}} {}\n",
+            user_id, count
+        ));
+    }
     
     format!(
         r#"# HELP terminal_proxy_active_connections Number of active WebSocket connections
@@ -119,21 +123,19 @@ terminal_proxy_errors_total {errors}
 
 # HELP terminal_proxy_user_sessions Current sessions per user
 # TYPE terminal_proxy_user_sessions gauge
-terminal_proxy_user_sessions{user_label_str} {user_count}
-"#,
+{user_lines}"#,
         active = active,
         total = total,
         auth_ok = auth_ok,
         auth_fail = auth_fail,
         messages = messages,
         errors = errors,
-        user_label_str = user_label_str,
-        user_count = user_sessions.values().sum::<u64>()
+        user_lines = user_lines,
     )
 }
 
 /// Start the metrics HTTP server
-pub async fn start_metrics_server(port: u16) {
+pub fn start_metrics_server(port: u16) {
     let addr = format!("0.0.0.0:{}", port);
     
     tokio::spawn(async move {
@@ -154,6 +156,7 @@ pub async fn start_metrics_server(port: u16) {
                     // Read and ignore the request (metrics only)
                     let _ = stream.read(&mut buf).await;
                     
+                    let metrics_body = get_metrics();
                     let response = format!(
                         "HTTP/1.1 200 OK\r\n\
                         Content-Type: text/plain\r\n\
@@ -161,8 +164,8 @@ pub async fn start_metrics_server(port: u16) {
                         Connection: close\r\n\
                         \r\n\
                         {}",
-                        get_metrics().len(),
-                        get_metrics()
+                        metrics_body.len(),
+                        metrics_body
                     );
                     
                     let _ = stream.write_all(response.as_bytes()).await;

@@ -60,7 +60,6 @@ describe('isKnownGoodFC()', () => {
 
   it('should return false for non-matching models', () => {
     expect(isKnownGoodFC('llama-3.1-8b-instruct')).toBe(false);
-    expect(isKnownGoodFC('mistral-small-latest')).toBe(false);
     expect(isKnownGoodFC('google/gemma-3-27b-it')).toBe(false);
     expect(isKnownGoodFC('')).toBe(false);
   });
@@ -103,12 +102,12 @@ describe('shouldStripTools()', () => {
 
   // ── Mistral Small ────────────────────────────────────────────────
   describe('Mistral Small (via mistral provider)', () => {
-    it('should strip tools for mistral-small-latest', () => {
-      expect(shouldStripTools('mistral', 'mistral-small-latest')).toBe(true);
+    it('should NOT strip tools for mistral-small-latest', () => {
+      expect(shouldStripTools('mistral', 'mistral-small-latest')).toBe(false);
     });
 
-    it('should strip tools for mistral-small-2402', () => {
-      expect(shouldStripTools('mistral', 'mistral-small-2402')).toBe(true);
+    it('should NOT strip tools for mistral-small-2402', () => {
+      expect(shouldStripTools('mistral', 'mistral-small-2402')).toBe(false);
     });
 
     it('should NOT strip tools for mistral-large-latest (known-good)', () => {

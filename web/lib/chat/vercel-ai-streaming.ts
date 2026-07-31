@@ -28,6 +28,18 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from '../providers/llm-providers';
 import { chatLogger } from './chat-logger';
+// Bug #10 (zombie-stream-reaper wiring): register stream lifecycle so the
+// reaper's sweep interval can catch per-stream timer escapes and orphaned
+// streams. The reaper module is a process-scoped backstop that force-aborts
+// any stream whose lastActivityTime exceeds the reap threshold (5 min default).
+// Import at module-scope so the globalThis-backed Map survives hot-reload.
+import { registerStream, unregisterStream, updateStreamActivity } from './zombie-stream-reaper';
+// Bug 2 wire (2026-07-22) — source-anchor for the static-analysis integration test.
+// Ticket: /opt/bing/.tickets/BUG2-ZOMBIE-STREAM-REAPER.md
+// ResponseEnvelope threading 2026-07-22 (cross-bug closure): emit a structured
+// envelope alongside the existing `[TIMEOUT]` operator log so downstream
+// operators can pattern-match on `envelope.kind === 'stall_watchdog'`.
+import { stallWatchdogEnvelope } from '@/lib/api/response-router';
 import { recordCall } from './llm-provider-health';
 // PR-C — opt-in 530-blacklist reset on success (flag default OFF). See provider-530-tracker.ts for details.
 
@@ -76,6 +88,15 @@ import {
   recordToolOnlyCompletion,
 } from './chat-metrics';
 import { createLogger } from '@/lib/utils/logger';
+// DIFF_MISMATCH recovery utilities (self-heal/recovery flow):
+// Provides buildRecoverySteer, extractMeta, tagToolResult helpers so the
+// streaming layer injects forceful, path-tagged recovery steer into the
+// LLM's very next turn instead of delegating read_file to the model.
+import {
+  buildDiffMismatchRecoverySteer,
+  extractDiffMismatchMeta,
+  tagToolResultWithDiffMismatchRecovery,
+} from './diff-mismatch-recovery';
 
 const logger = createLogger('Chat:Streaming');
 import { getModelsForPurpose } from './model-capability-registry';
@@ -149,6 +170,28 @@ const _fcGatePositiveCache = new Map<string, { confirmedAt: number; provider: st
 declare global { var __fcGatePositiveCache__: Map<string, { confirmedAt: number; provider: string }> | undefined; }
 const fcGatePositiveCache = globalThis.__fcGatePositiveCache__ ?? (globalThis.__fcGatePositiveCache__ = _fcGatePositiveCache);
 
+// Bug #88 (Round 3): Known FC-capable models — checked when the in-memory cache
+// is empty (e.g. cross-process requests via ninerouter). This avoids the cold-start
+// cost of "assuming supported → Phase 2 fallback" on every request.
+const KNOWN_FC_CAPABLE_MODELS = new Set([
+  'openrouter/arcee-ai/trinity-large-thinking:free',
+  'stepfun-ai/step-3.7-flash',
+  'mistral-large-latest',
+  'qwen/qwen3.5-122b-a10b',
+  'deepseek-ai/deepseek-v4-flash',
+  'gpt-4o',
+  'gpt-4o-mini',
+  'gpt-4-turbo',
+  'gpt-3.5-turbo',
+  'claude-3-5-sonnet-20241022',
+  'claude-3-haiku-20240307',
+]);
+
+// Known FC-incapable models — skip Phase 1 entirely, go straight to text-mode
+const KNOWN_FC_INCAPABLE_MODELS = new Set([
+  'meta/llama-4-maverick-17b-128e-instruct',
+]);
+
 export function recordFCGatePositive(provider: string, modelName: string): void {
   const key = `${provider}/${modelName}`;
   fcGatePositiveCache.set(key, { confirmedAt: Date.now(), provider });
@@ -171,6 +214,23 @@ export interface ToolExecutionContext {
   /** The last user message — used for trigger-matching powers so only relevant
    *  action-tools are registered (avoids bloating the LLM tool list). */
   lastUserMessage?: string;
+  /**
+   * Optional plan from `selectToolPlan()`. When present, `createToolSet`
+   * uses the plan's intents to filter capabilities instead of the legacy
+    * Plan-based capability filtering. The plan carries matched semantic
+   * intents (e.g. 'code.edit', 'web.fetch'), source permissions, and
+   * requested toolkits — the same signal the active /api/chat route
+   * already uses.
+   */
+  toolPlan?: import('@/lib/tools/select-tool-plan').SelectToolPlanResult;
+  /** Prior conversation turns for context-aware tool selection. */
+  conversationHistory?: ReadonlyArray<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  /** Attached file paths (e.g. @-mentions). */
+  attachedFiles?: ReadonlyArray<string>;
+  /** Whether filesystem edits are allowed for this request. */
+  filesystemEditEligible?: boolean;
+  /** Whether the request is authenticated. */
+  authenticated?: boolean;
   [key: string]: any;
 }
 
@@ -318,8 +378,11 @@ export function classifyToolResult(toolResult: any): ToolResultClassification {
   if (toolResult?.success === false) {
     const errorObj = toolResult?.error;
     const resultKeys = toolResult ? Object.keys(toolResult) : [];
+    const recoveryHint = typeof toolResult?._recoveryHint === 'string'
+      ? toolResult._recoveryHint.trim()
+      : '';
     let errorMsg: string;
-    if (typeof errorObj === 'string') {
+    if (typeof errorObj === 'string' && errorObj.trim()) {
       errorMsg = errorObj;
     } else if (errorObj?.message) {
       errorMsg = errorObj.message;
@@ -335,23 +398,18 @@ export function classifyToolResult(toolResult: any): ToolResultClassification {
           errorMsg = String(errorObj);
         }
       }
-      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
-        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
-      }
     } else {
-      errorMsg = toolResult
-        ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}], no error field`
-        : `Unknown error — tool result is ${typeof toolResult}`;
-      // BUG 4 fix — append _recoveryHint in the synthesize branch so the
-      // 100+ `Unknown error — tool result has keys: [..., _recoveryHint], no
-      // error field` log lines in production (visible in
-      // /opt/bing/web/logs/run.log around bash_execute / read_file / apply_diff
-      // failures) carry the actionable guidance the LLM injector attached.
-      // Mirrors the errorObj=object branch above (L338-L340) so every
-      // failure-classification path surfaces _recoveryHint consistently.
-      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
-        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
-      }
+      const output = typeof toolResult?.output === 'string' ? toolResult.output.trim() : '';
+      const exitCode = toolResult?.exitCode;
+      errorMsg = output
+        || (exitCode !== undefined ? `Tool exited with code ${String(exitCode)}` : '')
+        || recoveryHint
+        || (toolResult
+          ? `Tool reported failure without details (result keys: [${resultKeys.join(', ')}])`
+          : `Tool reported failure with a ${typeof toolResult} result`);
+    }
+    if (recoveryHint && !errorMsg.includes(recoveryHint)) {
+      errorMsg += ` [recovery: ${recoveryHint}]`;
     }
     return { isFailure: true, reason: 'success_false', errorMsg };
   }
@@ -556,6 +614,14 @@ export const STREAM_TIMEOUTS = {
   // content as text" retry, not a full second completion. Per-model
   // overrides live in MODEL_SERVER_TIMEOUT_OVERRIDES.phase2MaxDurationMs.
   phase2MaxDurationMs: parseInt(process.env.LLM_STREAM_PHASE2_MAX_DURATION_MS || '600000', 10),
+  // Issue 6 (Phase 1 Time-Budget Exceeded, P2): tools-first TTFT floor.
+  // When tools are registered, the model needs extra time to decide which
+  // tools to call before the first-token timeout fires. This constant is
+  // the minimum TTFT applied when `opts.tools` is non-empty. Configurable
+  // via LLM_STREAM_TOOLS_FIRST_TTFT_MS env var, default 45s.
+  // The widening is applied AFTER the per-model override, so a model with
+  // an explicit 60s override gets 60s, not 45s.
+  toolsFirstTtftMs: parseInt(process.env.LLM_STREAM_TOOLS_FIRST_TTFT_MS || '45000', 10),
   // Bug #13 (Phase 1 text-length gate): if Phase 1 already produced more
   // than this many chars of text in prose, the model is clearly answering
   // in prose (not trying to call tools). Re-streaming in Phase 2 would
@@ -625,7 +691,7 @@ const STREAM_TIMER_FINALIZE_ENABLED = process.env.ENABLE_STREAM_TIMER_FINALIZE !
 export interface ModelServerTimeoutOverride {
   substring: string;
   timeoutMs: number;
-  /** Per-model TTFT ceiling. Falls back to STREAM_TIMEOUTS.firstTokenTimeoutMs when undefined. */
+  /** Per-model TTFT floor (widening). Applied via Math.max at the call site. Falls back to STREAM_TIMEOUTS.firstTokenTimeoutMs when undefined. */
   firstTokenTimeoutMs?: number;
   /**
    * Bug #13 (Pass-5 audit follow-up) — per-model Phase 2 text-mode
@@ -678,8 +744,13 @@ export function getModelIdleTimeoutMs(modelId: string): number | null {
 /**
  * Bug #71 (Pass-5 audit) — look up the model-specific firstTokenTimeoutMs
  * override. Returns `null` when no override matches, so the caller falls
- * back to the global default. Mirrors `getModelIdleTimeoutMs` but for
- * the TTFT ceiling.
+ * back to the global default.
+ *
+ * NOTE: Unlike `getModelIdleTimeoutMs` (which returns a HARD CEILING), this
+ * function returns a FLOOR — the override WIDENS the TTFT window for slow
+ * cold-start models (e.g. deepseek-v4-flash needs 60s not 30s). The call
+ * site uses `Math.max` to apply the override as a floor (see Bug #71 /
+ * /opt/bing/.tickets/COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT.md Issue 6).
  */
 export function getModelFirstTokenTimeoutMs(modelId: string): number | null {
   if (!modelId) return null;
@@ -1140,9 +1211,10 @@ function convertMessages(messages: LLMMessage[]): {
     }
 
     // Handle multi-modal content — convert images to text placeholders for now
-    // Also extract tool-call parts from array content for AI SDK compatibility
+    // Also extract tool-call/tool-result parts from array content for AI SDK compatibility
     const textParts: string[] = [];
     let toolCallsFromContent: any[] = [];
+    let toolResultParts: any[] = [];
     for (const c of msg.content) {
       if (c.type === 'text') {
         textParts.push(c.text || '');
@@ -1156,8 +1228,20 @@ function convertMessages(messages: LLMMessage[]): {
           name: toolCall.toolName,
           arguments: toolCall.args || toolCall.arguments || {},
         });
+      } else if (c.type === 'tool-result') {
+        toolResultParts.push(c);
       }
     }
+
+    // Tool-role messages with tool-result parts — preserve as array content
+    if (msg.role === 'tool' && toolResultParts.length > 0) {
+      chatMessages.push({
+        role: 'tool',
+        content: toolResultParts,
+      });
+      continue;
+    }
+
     const textContent = textParts.join(' ');
 
     const hasSeparateToolCalls = Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0;
@@ -1589,6 +1673,10 @@ export async function* streamWithVercelAI(
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
+  // Bug #10: streamId for zombie-stream-reaper registration.
+  // Declared as `let` (not `const`) to allow future reassignment if
+  // a fallback provider path assigns a new streamId mid-request.
+  let streamId = requestId;
 
   // Start pre-fetch health check speculatively — runs in parallel with
   // synchronous setup (getVercelModel, convertMessages, build streamOptions).
@@ -1618,6 +1706,14 @@ export async function* streamWithVercelAI(
   // net for the case where BOTH primary and fallback are silent for too long.
   let hardDeadlineTimeoutId: NodeJS.Timeout | null = null;
   let timeoutController: AbortController | null = null;
+  // Dedicated AbortController for the zombie-stream reaper.
+  // ALWAYS created (unlike timeoutController which is conditional on
+  // firstTokenTimeoutMs > 0). The reaper's forceReap aborts THIS
+  // controller, which is wired into effectiveSignal below so the
+  // stream consumer sees the abort even when timeoutController was
+  // already aborted by a per-stream timeout.
+  // See COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT P1 Issue 1 (zombie streams).
+  const reaperAbortController = new AbortController();
   let firstTokenReceived = false;
   
   // ── Activity tracker for differentiated timeout diagnostics ──────────
@@ -1657,13 +1753,16 @@ export async function* streamWithVercelAI(
     // override (e.g. 60s for deepseek-v4-flash cold-start). Falls back
     // to the caller-supplied `firstTokenTimeoutMs` when no override matches.
     //
-    // Contract (mirrors the IDLE-timeout Math.min below): the override is
-    // a HARD CEILING. `Math.min(caller, override)` returns the STRICTER of
-    // the two values. The inner `if (newTtft !== firstTokenTimeoutMs)` only
-    // fires when the override actually clamps the caller — a caller that
-    // explicitly widened the window is not silently cut back. The outer
-    // condition must be `_ttftOverrideMs !== null` ONLY (not a direction
-    // check) so the stricter case (override < caller) is also handled.
+    // NOTE: firstTokenTimeoutMs override is a FLOOR (Math.max), NOT a
+    // ceiling (Math.min). This is the OPPOSITE of the IDLE-timeout override
+    // below because cold-start models (deepseek-v4-flash, etc.) need a
+    // LONGER TTFT window (30s → 60s), not a shorter one. Using Math.min
+    // here would silently ignore the 60s override — Math.min(30000, 60000)
+    // returns 30000 and the `if (newTtft !== ...)` guard at line ~1746
+    // would skip logging entirely, making the override invisible. See
+    // Bug #71 / /opt/bing/.tickets/COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT.md
+    // (Issue 6 — Phase 1 Time-Budget Exceeded). The `direction` field in
+    // the INFO log below reflects `override > caller` as 'widened_to_override'.
     //
     // Implementation note: we use a local `let` (`_effectiveFirstTokenTimeoutMs`)
     // instead of reassigning the destructured `firstTokenTimeoutMs` because
@@ -1674,7 +1773,7 @@ export async function* streamWithVercelAI(
     {
       const _ttftOverrideMs = getModelFirstTokenTimeoutMs(modelName);
       if (_ttftOverrideMs !== null) {
-        const newTtft = Math.min(_effectiveFirstTokenTimeoutMs, _ttftOverrideMs);
+        const newTtft = Math.max(_effectiveFirstTokenTimeoutMs, _ttftOverrideMs);
         if (newTtft !== _effectiveFirstTokenTimeoutMs) {
           _effectiveFirstTokenTimeoutMs = newTtft;
           chatLogger.info('[TTFT-OVERRIDE] per-model firstTokenTimeoutMs applied', {
@@ -1683,10 +1782,29 @@ export async function* streamWithVercelAI(
             overrideMs: _ttftOverrideMs,
             callerMs: firstTokenTimeoutMs,
             effectiveMs: newTtft,
-            direction: _ttftOverrideMs < firstTokenTimeoutMs ? 'clamp_to_override' : 'kept_caller',
+            direction: _ttftOverrideMs > firstTokenTimeoutMs ? 'widened_to_override' : 'kept_caller',
           });
         }
       }
+    }
+
+    // Issue 6 (Phase 1 Time-Budget Exceeded, P2): when tools are registered,
+    // widen the TTFT floor so the model has extra time to decide which tools
+    // to call before the first-token timeout fires. This prevents premature
+    // fallback to text-only mode. The widening is conservative — it only
+    // applies when `tools` is non-empty, and takes the max of the current
+    // effective value and the tools-first floor.
+    const toolsAreRegistered = opts.tools && Object.keys(opts.tools).length > 0;
+    if (toolsAreRegistered && _effectiveFirstTokenTimeoutMs < STREAM_TIMEOUTS.toolsFirstTtftMs) {
+      chatLogger.info('[TOOLS-FIRST-TTFT] Widening firstTokenTimeoutMs for tools', {
+        provider,
+        model: modelName,
+        previousMs: _effectiveFirstTokenTimeoutMs,
+        widenedMs: STREAM_TIMEOUTS.toolsFirstTtftMs,
+        toolCount: Object.keys(opts.tools).length,
+        envVar: 'LLM_STREAM_TOOLS_FIRST_TTFT_MS',
+      });
+      _effectiveFirstTokenTimeoutMs = STREAM_TIMEOUTS.toolsFirstTtftMs;
     }
     ttftTimeoutId = setTimeout(() => {
       if (!firstTokenReceived) {
@@ -1761,7 +1879,7 @@ export async function* streamWithVercelAI(
   // signal is optional (typed `signal?: AbortSignal`), so we can't pass
   // it to AbortSignal.any unconditionally — that throws TypeError on
   // `undefined`. Filter to defined sources only.
-  const primaryAbortSources: AbortSignal[] = [signal, timeoutController?.signal].filter(
+  const primaryAbortSources: AbortSignal[] = [signal, timeoutController?.signal, reaperAbortController.signal].filter(
     (s): s is AbortSignal => !!s,
   );
   const effectiveSignal =
@@ -1836,8 +1954,26 @@ export async function* streamWithVercelAI(
   // Bug #17: previously, a 60+ second thinking pause looked identical to a hung
   // stream to the client (no chunks, no progress). The think-ping fixes that
   // without changing abort semantics.
-  const thinkPingQueue: Array<{ type: 'thinking_ping' | 'stall_steer'; elapsedMs: number; lastActivityType: string }> = [];
-  let thinkPingIntervalId: NodeJS.Timeout | null = null;
+    const thinkPingQueue: Array<{ type: 'thinking_ping' | 'stall_steer'; elapsedMs: number; lastActivityType: string }> = [];
+    let thinkPingIntervalId: NodeJS.Timeout | null = null;
+
+    // Bug #10: register this stream with the zombie-stream-reaper so the
+    // module-level sweep interval can force-abort it if the per-stream
+    // timer escapes (e.g. setTimeout-TIMEOUT not reaching the consumer).
+    // `sessionId` is best-effort — derived from opts or requestId.
+    // The controller passed here is the AbortController that the reaper
+    // will abort on reap; all for-await consumers downstream observe
+    // this same signal.
+    // Bug 2 wire (2026-07-22) — registerStream call site.
+    registerStream({
+      streamId,
+      sessionId: (opts as any)?.sessionId ?? undefined,
+      abortController: reaperAbortController,
+      lastActivityTime: Date.now(),
+      lastActivityType: 'init',
+      provider,
+      modelName,
+    });
   const THINK_PING_MS = thinkPingMs;
   const STALL_STEER_MS = STREAM_TIMEOUTS.stallSteerMs;
   // Bug #17 (active-text override): higher threshold for streams that are
@@ -1862,7 +1998,7 @@ export async function* streamWithVercelAI(
           elapsedMs: silenceMs,
           lastActivityType: lastActivityType,
         });
-        chatLogger.debug('[THINK-PING] Model has been silent; emitting ping', {
+        chatLogger.info('[THINK-PING] Model has been silent; emitting ping', {
           silenceMs,
           lastActivityType,
           lastActivityDetail: lastActivityDetail.slice(0, 40),
@@ -1964,6 +2100,15 @@ export async function* streamWithVercelAI(
       clearTimeout(idleTimeoutId);
     }
     if (!timeoutController) return;
+
+    // Bug #10: bump the reaper's lastActivityTime on every idle timeout
+    // reset — this is the activity pump that keeps the stream alive.
+    // Without this call, the reaper would reap the stream after its 5 min
+    // default threshold even while the stream is actively yielding chunks.
+    // `updateStreamActivity` is a no-op when the streamId is not registered
+    // (e.g. the reaper was never imported, or the stream was already reaped).
+    // Bug 2 wire (2026-07-22) — updateStreamActivity call site.
+    updateStreamActivity(streamId, lastActivityType);
     const effectiveMultiplier = extensionMultiplier ?? activeExtensionMultiplier;
     // Bug #69 (Pass-5 audit) — fold tool-call-count scaling into the base
     // resetIdleTimeout so we never have two timers racing per tool-call event.
@@ -2003,7 +2148,18 @@ export async function* streamWithVercelAI(
           `firstTokenTimeoutMs=${firstTokenTimeoutMs}`,
           `idleTimeoutMs=${IDLE_TIMEOUT_MS}`,
         ].join(' | ');
+        // ResponseEnvelope threading 2026-07-22 (cross-bug closure): emit the
+        // envelope as a sibling of the existing diagnostic log so downstream
+        // operators + future client-bindings can pattern-match on
+        // `envelope.kind === 'stall_watchdog'` instead of grepping logs.
+        // Legacy `[TIMEOUT]` line kept for backward-compat.
+        const stallEnvelope = stallWatchdogEnvelope({
+          msSinceLastChunk: Date.now() - lastActivityTime,
+          reason: lastActivityType,
+          message: `No activity for ${effectiveTimeout}ms (idle timeout) — lastActivityType=${lastActivityType}`,
+        });
         chatLogger.warn('[TIMEOUT] ' + diagnosticMsg, {
+          envelope: stallEnvelope,
           provider,
           model: modelName,
           timeoutCategory: firstTokenReceived
@@ -2410,6 +2566,10 @@ export async function* streamWithVercelAI(
         const fcCacheEntry = fcGatePositiveCache.get(fcCacheKey);
         const fcCacheTtlMs = parseInt(process.env.FC_GATE_POSITIVE_TTL_MS || '1800000', 10);
         const fcCacheHit = !!(fcCacheEntry && (Date.now() - fcCacheEntry.confirmedAt) < fcCacheTtlMs);
+
+        // Bug #88 (Round 3): Check hardcoded known-model lists when cache misses.
+        // This avoids the cold-start cost for cross-process requests (ninerouter)
+        // and prevents wasting API calls on models known to lack FC support.
         if (fcCacheHit) {
           chatLogger.info('[FC-GATE] Function calling CONFIRMED via positive cache — skipping two-phase strategy', {
             provider,
@@ -2417,19 +2577,40 @@ export async function* streamWithVercelAI(
             toolCount,
             cacheAgeMs: Date.now() - fcCacheEntry.confirmedAt,
           });
-        } else {
-          // Model doesn't report this capability — could be unknown provider.
-          // POLICY: always let the model TRY tools first. Don't pre-emptively
-          // strip them based on telemetry. The Phase 2 fallback below already
-          // kicks in after the fact if Phase 1 produces zero usable output.
-          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — using two-phase strategy', {
+        } else if (KNOWN_FC_INCAPABLE_MODELS.has(modelName)) {
+          // Known FC-incapable: skip Phase 1 entirely, go straight to text-mode
+          chatLogger.info('[FC-GATE] Model known to lack FC support — using text-mode strategy', {
             provider,
             model: modelName,
             toolCount,
-            strategy: 'Phase 1: tools only (always); Phase 2: text-mode fallback only if file-edit tools failed',
+            strategy: 'text-mode only (known FC-incapable)',
+          });
+          if (streamOptions.system) {
+            streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
+          } else {
+            streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS + '\n\n' + getTextModeInstructions();
+          }
+        } else if (KNOWN_FC_CAPABLE_MODELS.has(modelName)) {
+          // Known FC-capable: skip cache lookup, treat as confirmed
+          chatLogger.info('[FC-GATE] Function calling CONFIRMED via known-model list — skipping two-phase strategy', {
+            provider,
+            model: modelName,
+            toolCount,
+            source: 'KNOWN_FC_CAPABLE_MODELS',
+          });
+        } else {
+          // Bug #88: Assume FC is supported by default (optimistic). Most modern
+          // models support function calling. If Phase 1 fails (no tool calls),
+          // Phase 2 text-mode fallback kicks in automatically. This avoids the
+          // expensive two-phase strategy on every request while still providing
+          // a safety net. Cache will be populated after first successful tool call.
+          chatLogger.info('[FC-GATE] Function calling ability UNKNOWN — assuming supported (optimistic)', {
+            provider,
+            model: modelName,
+            toolCount,
+            strategy: 'Phase 1: tools only (optimistic); Phase 2: text-mode fallback if no tools called',
             fcCacheHit: false,
           });
-          // Do NOT inject text-mode instructions yet — let the model try native tool calls first.
         }
       }
       // === COMMENTED OUT: Auto text-mode based on telemetry ===
@@ -2713,11 +2894,13 @@ export async function* streamWithVercelAI(
     // 'thinking' pings first. Pings accumulate when the stream has been silent
     // for thinkPingMs — yielding them here keeps the client UI responsive
 // without changing abort semantics.
-try {
-while (thinkPingQueue.length > 0) {
+try {    while (thinkPingQueue.length > 0) {
       if (signal?.aborted) return;
       const ping = thinkPingQueue.shift()!;
       if (ping.type === 'stall_steer') {
+        chatLogger.info('[THINK-PING] Emitting stall_steer to client', {
+          elapsedMs: ping.elapsedMs,
+        });
         yield {
           content: '[STEER] stall_detected: The model has been silent for 30s. If this was a thinking pause, continue with your response. If you were about to call a tool, invoke it now. If the response was already complete, re-state the conclusion.',
           isComplete: false,
@@ -2725,6 +2908,10 @@ while (thinkPingQueue.length > 0) {
           metadata: { type: 'stall_steer', elapsedMs: ping.elapsedMs },
         };
       } else {
+        chatLogger.info('[THINK-PING] Emitting thinking_ping to client', {
+          elapsedMs: ping.elapsedMs,
+          lastActivityType: ping.lastActivityType,
+        });
         yield {
           content: '',
           isComplete: false,
@@ -2955,8 +3142,16 @@ while (thinkPingQueue.length > 0) {
                   }
                 }
               }
-            } catch {
-              // Validation is best-effort
+            } catch (validationErr) {
+              // Bug #14: log validation crashes so operators can detect
+              // when validateToolArgs throws (e.g. requiredFields is
+              // undefined for an unknown tool name). Previously the empty
+              // catch silently dropped all validation errors, meaning a
+              // model that calls a non-existent tool got no steer feedback.
+              chatLogger.warn('[TOOL-VALIDATION] validateToolArgs threw', {
+                toolName,
+                error: validationErr instanceof Error ? validationErr.message : String(validationErr),
+              });
             }
 
             const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
@@ -3123,11 +3318,46 @@ while (thinkPingQueue.length > 0) {
                       });
                       return helperPrompt || `Re-read the tool description and provide all required fields.`;
                     })()
-                  : (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined);
+                  : (errObj?.code === 'INVALID_ARGS' ? `Re-read the tool description and provide all required fields.` : undefined);            // Bug #3 (DIFF_MISMATCH cascade from COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT):
+            // inject a forceful recovery steer when applyDiff fails with a
+            // mismatch. The LLM should regenerate the SEARCH block using the
+            // currentFileContent provided in the error, NOT try bash_execute.
+            // Enhanced 2026-07-28: uses the diff-mismatch-recovery module to
+            // build a three-tier steer (error content → proactive read → forceful
+            // LLM instruction) and tags the result with _diffMismatchPath so the
+            // auto-continue / self-heal flow can detect it without re-parsing.
+            if (errObj?.code === 'DIFF_MISMATCH') {
+              const meta = extractDiffMismatchMeta(errObj as Record<string, unknown>);
+              if (meta) {
+                // Build the strongest possible recovery steer using the new module.
+                // This is a synchronous call (uses existing error content only — no
+                // readFileFn callback here because the streaming layer doesn't have
+                // direct VFS access; the LLM instruction fallback is appropriate).
+                const { steer } = await buildDiffMismatchRecoverySteer(meta);
+                tagToolResultWithDiffMismatchRecovery(toolResult, errObj as Record<string, unknown>, steer);
+                logger.info('[DIFF-MISMATCH-RECOVERY] Injected recovery steer via streaming layer', {
+                  filePath: meta.filePath,
+                  hasContent: !!meta.currentFileContent,
+                  steerLength: steer.length,
+                });
+              } else {
+                // Fallback: meta extraction failed (no path found) — emit a generic hint.
+                const path = errObj?.attemptedPath || errObj?.path || '(unknown path)';
+                toolResult._recoveryHint =
+                  `DIFF_MISMATCH on "${path}". ` +
+                  `The file was already modified since the SEARCH block was generated. ` +
+                  `Call read_file("${path}") to get the current content first. ` +
+                  `Regenerate the SEARCH/REPLACE block to match the current content exactly. ` +
+                  `Do NOT try bash_execute — it will NOT fix a diff mismatch.`;
+              }
+            } else {
               toolResult._recoveryHint = errObj?.suggestedNextAction
-                || (errObj?.code === 'PATH_NOT_FOUND' ? `Check the path and call list_files on the parent directory.` : undefined)
+                || (errObj?.code === 'PATH_NOT_FOUND'
+                  ? `Check the path and call list_files on the parent directory.`
+                  : undefined)
                 || invalidArgsHint
                 || `Read the error carefully. Do NOT retry the exact same call — try a different approach.`;
+            }
             }
             // Wrap plain-string errors into structured format for consistency
             if (typeof errObj === 'string') {
@@ -3316,6 +3546,12 @@ while (thinkPingQueue.length > 0) {
           break;
         case 'start':
         case 'finish':
+          // Bug 2 closure (2026-07-22) — SHOULD-CONSIDER #1: magic-hook defensive guard.
+          // Bump reaper activity on case-bypass chunks so the reaper's lastActivityTime
+          // cannot desync from resetIdleTimeout().
+          if (typeof streamId === 'string' && streamId) {
+            updateStreamActivity(streamId, 'text');
+          }
           // Skip these event types — handled elsewhere
   break;
 }
@@ -4037,6 +4273,15 @@ ${healingInstructions}` : healingInstructions)
     throw error;
   }
   finally {
+    // Bug 2 wire (2026-07-22) — unregisterStream call site.
+    // Bug #10: unregister the stream from the zombie-stream-reaper on
+    // every exit path — normal completion, thrown error, AbortError, or
+    // explicit return. `unregisterStream` is idempotent: calling it twice
+    // on the same streamId is a no-op, and calling it on an already-reaped
+    // stream is also a no-op. This guarantees the reaper doesn't force-abort
+    // a stream that already completed normally.
+    unregisterStream(streamId);
+
     // Always clear timer handles to prevent leaks — these are independent
     // of the think-ping gate below. Only the think-ping interval is gated
     // by `STREAM_TIMER_FINALIZE_ENABLED` so operators who disable it

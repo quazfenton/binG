@@ -42,11 +42,10 @@ pub struct RateLimitEntry {
 impl Router {
     pub fn new(redis: RedisStore, config: Config) -> Self {
         Self {
-            config,
+            config: config.clone(),
             redis,
             sessions: Arc::new(SessionStore::new(
-                // Default 15 minutes idle timeout
-                900000
+                config.idle_timeout_ms
             )),
             connection_state: DashMap::new(),
             rate_limit: Arc::new(RwLock::new(HashMap::new())),
@@ -102,5 +101,16 @@ impl Router {
     /// Check if max connections reached
     pub fn can_accept_connection(&self) -> bool {
         self.sessions.len() < self.config.max_connections
+    }
+
+    /// Enforce both connection limit and rate limit
+    pub fn enforce_connection_limit(&self, ip: &str) -> Result<()> {
+        if !self.can_accept_connection() {
+            return Err(anyhow::anyhow!("Maximum connections reached"));
+        }
+        if !self.check_rate_limit(ip) {
+            return Err(anyhow::anyhow!("Rate limit exceeded for IP: {}", ip));
+        }
+        Ok(())
     }
 }

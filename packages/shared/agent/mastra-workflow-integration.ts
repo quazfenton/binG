@@ -354,9 +354,9 @@ export class MastraWorkflowIntegration extends EventEmitter {
       workflow = createWorkflow({
         id: workflowId,
         name: workflowId,
-      });
-
-      workflow.addStep(executeStep);
+        inputSchema: null as any,
+        outputSchema: null as any,
+      }).then(executeStep).commit();
 
       this.workflows.set(workflowId, workflow);
     }
@@ -367,8 +367,9 @@ export class MastraWorkflowIntegration extends EventEmitter {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
+      const run = await workflow.createRun();
       const workflowResult = await Promise.race([
-        workflow.execute({ inputData }),
+        run.start({ inputData }),
         new Promise((_, reject) => {
           controller.signal.addEventListener('abort', () => {
             reject(new Error('Workflow execution timeout'));

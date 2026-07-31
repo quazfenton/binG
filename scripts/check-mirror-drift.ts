@@ -65,6 +65,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // CLI parser
@@ -93,7 +94,7 @@ const topN = parseInt(getOpt('top', String(50)) ?? '50', 10);
 // Paths + ANSI helpers
 // ---------------------------------------------------------------------------
 
-const SCRIPT_DIR = path.dirname(new URL(import.meta.url).pathname);
+const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(SCRIPT_DIR, '..');
 
 const c = {
@@ -173,17 +174,34 @@ VALID_PAIRS.add('all');
  */
 function walkFiles(rootAbs: string, exts: Set<string>): Map<string, string> {
   const out = new Map<string, string>();
-  if (!fs.existsSync(rootAbs)) return out;
+  // Review comment #17: a nonexistent configured canonical/mirror root
+  // previously returned an empty map, which made the pair report "0
+  // files walked, 0 drift" and PASS CI — silently disabling the check
+  // for that pair. Treat a missing configured root as a runtime/config
+  // error so the operator fixes the config (or the deleted dir) rather
+  // than shipping undetected drift.
+  if (!fs.existsSync(rootAbs)) {
+    throw new Error(
+      `check-mirror-drift: configured root does not exist: ${rootAbs} ` +
+        `(treat as a config/runtime error — not an empty tree)`,
+    );
+  }
 
   const visit = (dirAbs: string): void => {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dirAbs, { withFileTypes: true });
-    } catch {
-      // Permission denied / EIO / etc. — skip silently. A future enhancement
-      // could log to stderr; today, we surface the pair as "0 walked" in
-      // the output so the operator can investigate.
-      return;
+    } catch (e) {
+      // Review comment #16: unreadable directories (EACCES/EIO/ENOTDIR)
+      // previously skipped silently, which could mask a drifted file beneath
+      // the unreadable subtree — the pair would report "0 walked" and pass.
+      // Surface the error so CI fails loudly instead of producing a partial,
+      // falsely-clean scan.
+      const code = (e as NodeJS.ErrnoException)?.code ?? 'UNKNOWN';
+      throw new Error(
+        `check-mirror-drift: cannot read directory ${dirAbs} (${code}) — ` +
+          `aborting walk to avoid a falsely-clean partial scan`,
+      );
     }
     for (const entry of entries) {
       const full = path.join(dirAbs, entry.name);

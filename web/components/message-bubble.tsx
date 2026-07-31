@@ -723,15 +723,11 @@ export default function MessageBubble({
           whiteSpace: contentAnalysis.hasCodeBlocks && layout.isMobile ? 'pre' : 'pre-wrap',
           // Mobile scrolling: allow touch scrolling on message bubbles
           touchAction: layout.isMobile ? 'pan-y' : 'auto',
-          // On mobile, use 'visible' so touches inside short bubbles pass through
-          // to the page scroll.  'clip' captured touch input and prevented the
-          // containing page from being scrolled.  For long content we switch to
-          // 'auto' so the bubble itself becomes scrollable.
-          overflowY: contentAnalysis.hasLongContent && layout.isMobile
-            ? 'auto'
-            : layout.isMobile
-            ? 'visible'
-            : 'clip',
+          // On mobile, use 'auto' for overflowY to create a scroll boundary that works
+          // with touch-action: pan-y. This allows native vertical scroll gestures to
+          // propagate correctly - short bubbles scroll (no-op) and bubble to parent,
+          // long bubbles self-scroll.
+          overflowY: layout.isMobile ? 'auto' : 'clip',
           // Prevent text from breaking out of bubble
           overflowX: layout.isMobile ? 'hidden' : 'clip',
           // Allow native text selection in the bubble (do NOT use 'none').

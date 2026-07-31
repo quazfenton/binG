@@ -43,6 +43,13 @@ impl From<&TerminalSession> for SessionState {
     }
 }
 
+impl SessionState {
+    pub fn with_ws_url(mut self, ws_url: Option<String>) -> Self {
+        self.ws_url = ws_url;
+        self
+    }
+}
+
 #[derive(Clone)]
 pub struct RedisStore {
     conn: ConnectionManager,
@@ -140,6 +147,7 @@ impl RedisStore {
             let user_key = format!("{}{}", USER_SESSIONS_PREFIX, state.user_id);
             let score = state.last_activity as f64;
             let _: () = conn.zadd(&user_key, &state.session_id, score).await?;
+            conn.expire(&user_key, SESSION_TTL_SECS).await?;
         }
         
         Ok(())
@@ -148,7 +156,7 @@ impl RedisStore {
     /// Get reconnectable sessions for a user
     pub async fn get_reconnectable_sessions(&self, user_id: &str) -> Result<Vec<SessionState>> {
         let sessions = self.get_user_sessions(user_id).await?;
-        Ok(sessions.into_iter().filter(|s| s.ws_url.is_some()).collect())
+        Ok(        sessions.into_iter().collect())
     }
     
     /// Health check

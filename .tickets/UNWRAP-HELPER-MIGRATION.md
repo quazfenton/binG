@@ -1,7 +1,14 @@
 # UNWRAP-HELPER-MIGRATION — TODO Tracking Ticket
 
 **Ticket type:** Forward-looking refactor (code-reviewer SHOULD-CONSIDER a, 2026-07-16)
-**Status:** 🟡 OPEN
+**Status:** ✅ CLOSED (2026-07-23)
+
+**Closure evidence:**
+- [x] **a.1** Added `// TODO: migrate to unwrapStructuredToolError when V2-path surfaces tool errors to LLM` comment near `route.ts` V2-path `onToolExecution` handler (reference: `@/lib/mcp/orchestrator-error-unwrap`, ticket ref in comment)
+- [x] **a.2** `chat-helpers.ts` already had the module-level JSDoc referencing this ticket from a prior session — no change needed
+- [x] **a.3** No code changes — comments only; future V2-path/chat-helpers.ts extensions should replace inline format blocks with `unwrapStructuredToolError(result.error)`
+- [x] `tsc --noEmit` — 0 errors on `route.ts`
+- [x] Code review signed off
 **Opened:** 2026-07-16
 **Helper:** `/opt/bing/web/lib/mcp/orchestrator-error-unwrap.ts` → `unwrapStructuredToolError`
 

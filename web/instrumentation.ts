@@ -100,5 +100,57 @@ export async function register() {
         );
       }
     }
+
+    // Pre-warm the bcrypt native binding so the cost-12 verify (~250ms native
+    // vs ~4200ms bcryptjs) is paid during server boot rather than on the first
+    // /api/auth/login request. Mirrors the better-sqlite3 pre-warm pattern above.
+    //
+    // Behavior:
+    //   - AWAIT, not fire-and-forget. We want the hash call to finish BEFORE
+    //     the HTTP port is bound so the first inbound login request sees a warm
+    //     binding if BCRYPT_NATIVE_ENABLED=true.
+    //   - Uses the bcrypt-provider adapter which automatically picks native vs
+    //     js based on the env flag. If native is not enabled, this warmup is a
+    //     no-op log statement (the bcryptjs module is already in the require
+    //     cache after the first import, so the warmup hash is cheap either way).
+    //   - HMR dedup via globalThis.__bcryptNativeWarmed__. Same pattern as the
+    //     better-sqlite3 dedup above.
+    //   - On throw (native not compiled / missing compiler toolchain), log a
+    //     warn and CONTINUE. The warmup is a perf optimization, not a correctness
+    //     invariant — login must still work (via bcryptjs fallback).
+    const __bcryptState__ = (globalThis as unknown as {
+      __bcryptNativeWarmed__?: boolean;
+    });
+    if (!__bcryptState__.__bcryptNativeWarmed__) {
+      __bcryptState__.__bcryptNativeWarmed__ = true;
+      const __t1__ = process.hrtime.bigint();
+      try {
+        const { hash: warmBcryptHash } = await import(
+          '@/lib/auth/bcrypt-provider'
+        );
+        // Side-effecting call: triggers the native bcrypt addon to load and
+        // JIT its internal functions (the C++ loop for the Blowfish cipher).
+        // Cost-4 is intentionally low — this is a warmup, not a real hash.
+        // The actual login path uses cost-12.
+        await warmBcryptHash('warmup-payload', 4);
+        const __elapsedMs__ = Number(process.hrtime.bigint() - __t1__) / 1e6;
+        if (process.env.BCRYPT_NATIVE_ENABLED === 'true') {
+          console.info(
+            `[Instrumentation] Native bcrypt binding pre-loaded (${__elapsedMs__.toFixed(1)}ms) — /api/auth/login bcrypt verify will use native addon (≈250ms at cost-12)`,
+          );
+        } else {
+          console.info(
+            `[Instrumentation] bcrypt warmup (${__elapsedMs__.toFixed(1)}ms) — BCRYPT_NATIVE_ENABLED not set, will use bcryptjs pure-JS (≈4200ms at cost-12)`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[Instrumentation] bcrypt warmup threw after ${(
+            Number(process.hrtime.bigint() - __t1__) / 1e6
+          ).toFixed(1)}ms — boot continues; login will use bcryptjs fallback. Error:`,
+          err,
+        );
+      }
+    }
   }
 }

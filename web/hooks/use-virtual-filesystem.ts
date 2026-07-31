@@ -99,6 +99,16 @@ declare global {
   var __useVfsInFlightRequests__: Map<string, Promise<any>> | undefined;
   var __useVfsLastApiCallTime__: Map<string, number> | undefined;
   var __useVfsLastGlobalVfsCall__: number | undefined;
+  // Bug #7 (audit): Module-level singleton debouncer state for the
+  // filesystem-updated event listener. Multiple hook instances (CodePreviewPanel,
+  // TerminalPanel, WorkspacePanel) each mount their own useEffect with the
+  // listener — without a shared debounceTimer and pendingPathsToRefresh,
+  // each instance fires N independent fetches per filesystem event, producing
+  // the "Debounced refresh for 1 paths" × 5-6 per write pattern observed in
+  // the console capture. Hoisting these to globalThis ensures all instances
+  // share ONE debounce cycle and ONE pending set.
+  var __useVfsDebounceTimer__: ReturnType<typeof setTimeout> | undefined | null;
+  var __useVfsPendingPathsToRefresh__: Set<string> | undefined;
 }
 
 const snapshotCache: Map<string, SnapshotCacheEntry> =
@@ -605,12 +615,18 @@ export function useVirtualFilesystem(
   // Note: We define a local fetch function here since 'request' is defined after this useEffect
   useEffect(() => {
     // Debounce rapid filesystem events to prevent excessive re-fetching
-    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    // Bug #7 (audit): Use module-level singleton debouncer instead of local
+    // variables. Multiple hook instances each mount their own useEffect — local
+    // debounceTimer and pendingPathsToRefresh produce N independent timers and
+    // sets per component mount, causing "Debounced refresh for 1 paths" × 5-6
+    // per write. The singleton ensures ALL instances share ONE debounce cycle.
+    const debounceTimer: { current: ReturnType<typeof setTimeout> | null } = {
+      current: globalThis.__useVfsDebounceTimer__ ?? null,
+    };
+    const pendingPathsToRefresh: Set<string> =
+      globalThis.__useVfsPendingPathsToRefresh__ ??
+      (globalThis.__useVfsPendingPathsToRefresh__ = new Set<string>());
     const DEBOUNCE_MS = 150; // Wait 150ms after last event before fetching
-    
-    // CRITICAL: Keep one shared set across all events to accumulate paths
-    // This prevents losing paths when rapid events clear the timer
-    const pendingPathsToRefresh = new Set<string>();
     
     // Helper function to actually fetch and update directory listing
     const fetchAndUpdateDirectory = (path: string, ownerId: string) => {
@@ -774,11 +790,11 @@ export function useVirtualFilesystem(
       // This fixes the polling issue where 4+ events fire in 66ms
       // IMPORTANT: We clear the timer but NOT the pendingPathsToRefresh set
       // This ensures all accumulated paths are processed when the timer fires
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
       }
 
-      debounceTimer = setTimeout(() => {
+      debounceTimer.current = globalThis.__useVfsDebounceTimer__ = setTimeout(() => {
         log(`[filesystem-updated] Debounced refresh for ${pendingPathsToRefresh.size} paths`);
 
         // Fetch fresh data for all affected paths
@@ -809,17 +825,23 @@ export function useVirtualFilesystem(
 
         // Clear the pending set AFTER all fetches are scheduled
         pendingPathsToRefresh.clear();
-        debounceTimer = null;
+        debounceTimer.current = globalThis.__useVfsDebounceTimer__ = null;
       }, DEBOUNCE_MS);
     });
 
     return () => {
       unsubscribe();
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-      }
-      // Clear pending paths on cleanup
-      pendingPathsToRefresh.clear();
+      // Bug #7: On cleanup, do NOT clear the shared debounce timer — another
+      // hook instance may still be mounted and relying on it. The timer is
+      // shared across all instances via globalThis, so clearing it on unmount
+      // would orphan pending paths accumulated by other still-mounted
+      // components. The timer will fire on its own, process the pending set,
+      // and clean itself up. If pendingPathsToRefresh is empty, the timer
+      // handler is a fast no-op (the for-loop iterates zero times).
+      // Only clear the pending set if we were the last subscriber; but since
+      // we can't easily track subscriber count, we leave the shared set
+      // intact — it'll be picked up by the next timer fire or garbage-collected
+      // if all subscribers are gone.
     };
   }, [log, logWarn, getOwnerId, invalidateSnapshotCache, setCachedList, buildApiHeaders]);
 

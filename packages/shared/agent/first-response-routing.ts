@@ -102,6 +102,43 @@ const ROUTING_MARKER = '[ROLE_SELECT]';
 /** Initial response marker */
 const INITIAL_RESPONSE_MARKER = '### Initial Response';
 
+// ─── Plan-Step Threshold Constants ─────────────────────────────────────
+// RT-005: named constants replace inline `>= 2` / `> 0` literals so a
+// future reader sees documented intent rather than assumed drift. The
+// two constants carry different semantics — see each JSDoc.
+
+/**
+ * Minimum planSteps.length that qualifies as a "multi-step plan" for
+ * env-default-on continuation. Producer (validateAndNormalize) and
+ * hasMultiplePlanSteps BOTH gate on this value.
+ *
+ * Raising above 2 silently drops the env-default on 1-or-2-step plans
+ * under env-default-off. Lowering below 2 interferes with the 3-factor
+ * detector chain (Factor 1 deep-research-loop needs >= 3 reads; Factor
+ * 2 read-then-stall fires on last-read-only regardless of count).
+ */
+export const MULTI_STEP_PLAN_THRESHOLD = 2;
+
+/**
+ * Minimum planSteps.length that qualifies an explicit `continue: true`
+ * as "any planning happened". Intentionally finer-grained than
+ * MULTI_STEP_PLAN_THRESHOLD because "explicit opt-in" has a lower bar
+ * than "multi-step plan" — a 1-step plan can carry an explicit
+ * continue flag from upstream.
+ *
+ * Only computeShouldContinue gates on this value indirectly (via
+ * routing.explicitContinue). The producer (284) and hasMultiplePlanSteps
+ * (394) gate on MULTI_STEP_PLAN_THRESHOLD, NOT this one.
+ *
+ * NOTE: this constant is exported for documentation purposes and was part
+ * of the RT-005 ticket contract. As of 2026-07-24 the `explicitContinue`
+ * field is computed via `parsed.continue === true` (a boolean comparison,
+ * not a `> 0` length check), so this constant is not referenced directly.
+ * Keep it in place so a future refactor that introduces a `planSteps.length`
+ * guard for explicitContinue has a named constant to use.
+ */
+export const EXPLICIT_CONTINUE_THRESHOLD = 0;
+
 /**
  * Strip routing metadata and initial response markers from response text.
  * Used to clean LLM responses before sending to client.
@@ -281,9 +318,13 @@ function validateAndNormalize(parsed: Record<string, any>, rawJson?: string): Pa
       // resolveDefaultContinue() contract — see docblock.
       // Multi-step plans force continuation even when the parsed payload
       // explicitly says continue: false (conflicting signal from the LLM).
-      continue: Array.isArray(parsed.planSteps) && parsed.planSteps.length >= 2
+      // RT-001 Option C hardening: when normalizeBoolean returns undefined
+      // (e.g. unrecognized string like "yes"), fall back to the env-aware
+      // default instead of hardcoding false — a benign LLM typo should not
+      // kill continuation when the operator's env-default is "on".
+      continue: Array.isArray(parsed.planSteps) && parsed.planSteps.length >= MULTI_STEP_PLAN_THRESHOLD
         ? true
-        : (parsed.continue !== undefined ? (normalizeBoolean(parsed.continue) ?? false) : resolveDefaultContinue()),
+        : (parsed.continue !== undefined ? (normalizeBoolean(parsed.continue) ?? resolveDefaultContinue()) : resolveDefaultContinue()),
     };
 
     return {
@@ -389,9 +430,13 @@ export function truncateAtFirstRouting(responseText: string): string {
 // (Single declaration; earlier duplicates were removed during Q3 cleanup.)
 // ============================================================================
 
-/** Q1: a "multi-step plan" is one with >= 2 steps (matches the LLM contract). */
+/**
+ * Q1: a "multi-step plan" is one with >= MULTI_STEP_PLAN_THRESHOLD steps
+ * (matches the LLM contract). The threshold constant centralises the
+ * literal so hasMultiplePlanSteps and the producer (validateAndNormalize)
+ * stay in agreement without manual cross-referencing. */
 function hasMultiplePlanSteps(routing: RoutingMetadata): boolean {
-  return Array.isArray(routing.planSteps) && routing.planSteps.length >= 2;
+  return Array.isArray(routing.planSteps) && routing.planSteps.length >= MULTI_STEP_PLAN_THRESHOLD;
 }
 
 /**
@@ -404,7 +449,8 @@ function hasMultiplePlanSteps(routing: RoutingMetadata): boolean {
  *
  * Returns true when EITHER:
  *   - the LLM explicitly said `continue: true` (stamped as `explicitContinue`), or
- *   - the plan has >= 2 steps (multi-step intent overrides a "false" explicit).
+ *   - the plan has >= MULTI_STEP_PLAN_THRESHOLD steps (multi-step intent
+ *     overrides a "false" explicit).
  */
 export function computeShouldContinue(routing: RoutingMetadata): boolean {
   return routing.explicitContinue || hasMultiplePlanSteps(routing) || routing.continue === true;

@@ -715,9 +715,8 @@ export async function getComposioMCPTools(
 /**
  * Discriminated view of the taskFilter signal. Built once at the top of
  * `getMCPToolsForAI_SDK` and consumed by each per-source filter below —
- * keeps each branch a single `if (view.kind === 'plan')` /
- * `else if (view.kind === 'string')` test rather than re-doing the
- * type guard at every site.
+ * keeps each branch a single `if (view.kind === 'plan')` test rather
+ * than re-doing the type guard at every site.
  *
  *   - 'plan'   : the active chat route passed a `SelectToolPlanResult`
  *                (see web/lib/tools/select-tool-plan.ts). Per-source
@@ -728,12 +727,9 @@ export async function getComposioMCPTools(
  *                defects identified in the active-route review (P1
  *                finding #6 — Arcade broad match, finding #7 —
  *                Composio fail-open for unknown names).
- *   - 'string' : legacy callers (unified-agent.ts, opencode-direct.ts,
- *                task-router.ts, vercel-ai-tools.ts) still pass a raw
- *                user-message string. Falls back to the original
- *                substring gates for backward compat.
- *   - 'none'   : no signal at all. Per-source filters return the
- *                unfiltered source catalog (behavior pre-planner).
+ *   - 'none'   : no signal at all (undefined taskFilter, or
+ *                requireFullCatalog sentinel). Per-source filters
+ *                return the unfiltered source catalog.
  */
 export type TaskFilterView =
   | {
@@ -743,7 +739,6 @@ export type TaskFilterView =
       requestedToolkits: ReadonlyArray<string>;
       fallbackUsed: boolean;
     }
-  | { kind: 'string'; taskLower: string }
   | { kind: 'none' };
 
 function isSelectToolPlan(value: unknown): value is SelectToolPlanResult {
@@ -797,13 +792,12 @@ export function isStructuredMcpError(
 // /opt/bing/web/__tests__/mcp/legacy-substring-contract.test.ts:
 // `requireFullCatalog` sentinel contract tests + view.branch coverage).
 export function computeTaskFilterView(
-  taskFilter: string | SelectToolPlanResult | undefined,
+  taskFilter: SelectToolPlanResult | undefined,
   options?: { requireFullCatalog?: boolean },
 ): TaskFilterView {
   // Compile-enforced typed sentinel: short-circuit to `kind: 'none'`
-  // BEFORE consulting `taskFilter` so a `SelectToolPlanResult` or
-  // non-empty string can never reach `kind === 'plan'` or
-  // `kind === 'string'`. The per-source filter helpers
+  // BEFORE consulting `taskFilter` so a `SelectToolPlanResult` can
+  // never reach `kind === 'plan'`. The per-source filter helpers
   // (`filterBlaxelToolsByView` etc.) all have a `view.kind === 'none'`
   // branch that returns `[...all]` — i.e. the unfiltered source catalog —
   // which is exactly what tools-only consumers need.
@@ -830,9 +824,6 @@ export function computeTaskFilterView(
       fallbackUsed: !!taskFilter.fallbackUsed,
     };
   }
-  if (typeof taskFilter === 'string' && taskFilter.length > 0) {
-    return { kind: 'string', taskLower: taskFilter.toLowerCase() };
-  }
   return { kind: 'none' };
 }
 
@@ -841,8 +832,8 @@ export function computeTaskFilterView(
 // PURE functions: each takes the unfiltered upstream tool list (as
 // returned by the per-source SDK call) plus the discriminating
 // `TaskFilterView`, and returns the filtered tool list. NO module-
-// level state, NO SDK calls — fully deterministic. Identical substring
-// / plan-intent logic that was previously inlined in
+// level state, NO SDK calls — fully deterministic. Intent-based
+// logic that was previously inlined in
 // `getMCPToolsForAI_SDK`. Exported so the legacy-substring-contract
 // test suite (`bing/web/__tests__/mcp/legacy-substring-contract.test.ts`)
 // can invoke them directly, bypassing the vitest SDK-mock module-cache
@@ -863,17 +854,6 @@ export function filterBlaxelToolsByView(
       const name = (tool.function?.name || '').toLowerCase();
       if (name.includes('search') || name.includes('grep')) return hasCodeRead || hasCodeSearch;
       if (name.includes('apply') || name.includes('reapply')) return hasCodeEdit;
-      return false;
-    });
-  }
-  if (view.kind === 'string') {
-    const taskLower = view.taskLower;
-    const needsCodeSearch = taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('codebase');
-    const needsCodegen = taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('implement');
-    return allBlaxelTools.filter(tool => {
-      const name = (tool.function?.name || '').toLowerCase();
-      if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
-      if (name.includes('apply') || name.includes('reapply')) return needsCodegen;
       return false;
     });
   }
@@ -905,21 +885,6 @@ export function filterNullclawToolsByView(
       return hasShellOrComputer;
     });
   }
-  if (view.kind === 'string') {
-    const taskLower = view.taskLower;
-    const needsMessaging =
-      taskLower.includes('send') ||
-      taskLower.includes('message') ||
-      taskLower.includes('discord') ||
-      taskLower.includes('telegram');
-    const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
-    return stripped.filter(tool => {
-      const name = (tool.function?.name || '').toLowerCase();
-      if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
-      if (name.includes('browse') || name.includes('automate')) return needsBrowse;
-      return false;
-    });
-  }
   return [...stripped];
 }
 
@@ -942,15 +907,6 @@ export function filterArcadeToolsByView(
       return false;
     });
   }
-  if (view.kind === 'string') {
-    const taskLower = view.taskLower;
-    const needsWebAutomation =
-      taskLower.includes('browse') || taskLower.includes('web') || taskLower.includes('automation');
-    return allArcadeTools.filter(tool => {
-      const name = (tool.function?.name || '').toLowerCase();
-      return needsWebAutomation || name.includes('browse') || name.includes('web');
-    });
-  }
   return [...allArcadeTools];
 }
 
@@ -963,8 +919,7 @@ export function filterComposioToolsByView(
   // `composioToolkitRequest` parameter passed to the SDK call (so the
   // SDK only returns tools in the requested prefix scope). The per-tool
   // filter below operates on tools the SDK already returned, applying
-  // the secondary per-tool prefix match for plan-mode + the LEGACY
-  // substring fall-through for 'string'-mode.
+  // the secondary per-tool prefix match for plan mode.
   if (view.kind === 'plan') {
     const composioGranted = view.sourcePermissions.composio;
     const requested = view.requestedToolkits;
@@ -978,25 +933,6 @@ export function filterComposioToolsByView(
         if (name.startsWith(`${prefix}_`) || name.startsWith(`${prefix}-`)) return true;
       }
       return false;
-    });
-  }
-  if (view.kind === 'string') {
-    const taskLower = view.taskLower;
-    const needsGmail = taskLower.includes('gmail') || taskLower.includes('email') || taskLower.includes('send mail');
-    const needsSlack = taskLower.includes('slack') || taskLower.includes('message') || taskLower.includes('channel');
-    const needsGoogleDrive = taskLower.includes('drive') || taskLower.includes('google drive') || taskLower.includes('upload file');
-    const needsGithub = taskLower.includes('github') || taskLower.includes('git') || taskLower.includes('pull request') || taskLower.includes('issue');
-    const needsNotion = taskLower.includes('notion') || taskLower.includes('page') || taskLower.includes('workspace');
-    return allComposioTools.filter(tool => {
-      const name = (tool.function?.name || '').toLowerCase();
-      if (name.includes('gmail') || name.includes('email')) return needsGmail;
-      if (name.includes('slack') || name.includes('message')) return needsSlack;
-      if (name.includes('drive') || name.includes('google')) return needsGoogleDrive;
-      if (name.includes('github') || name.includes('git')) return needsGithub;
-      if (name.includes('notion')) return needsNotion;
-      // LEGACY substring `return true` fall-through preserved verbatim
-      // (the prior substring-mode contract — no fail-closed).
-      return true;
     });
   }
   return [...allComposioTools];
@@ -1023,27 +959,6 @@ export function filterProviderToolsByView(
       if (name.startsWith('codesandbox_')) return hasSandboxIntent;
       if (name.startsWith('sprites_')) return false;
       return false;
-    });
-  }
-  if (view.kind === 'string') {
-    const taskLower = view.taskLower;
-    const needsComputerUse =
-      taskLower.includes('screenshot') ||
-      taskLower.includes('computer_use') ||
-      taskLower.includes('desktop_automation');
-    const needsAgentOffload =
-      taskLower.includes('agent') || taskLower.includes('complex_task') || taskLower.includes('e2b');
-    const needsSandbox = taskLower.includes('sandbox') || taskLower.includes('isolated');
-    const needsCheckpoint = taskLower.includes('checkpoint') || taskLower.includes('sprite');
-    return allProviderTools.filter(tool => {
-      const name = (tool.function?.name || '').toLowerCase();
-      if (name.startsWith('daytona_')) return needsComputerUse;
-      if (name.startsWith('e2b_')) return needsAgentOffload;
-      if (name.startsWith('codesandbox_')) return needsSandbox;
-      if (name.startsWith('sprites_')) return needsCheckpoint;
-      // LEGACY substring-mode `return true` fall-through preserved
-      // (unrecognized name prefix passes through the substring gate).
-      return true;
     });
   }
   return [...allProviderTools];
@@ -1362,9 +1277,9 @@ function normalizeAndCapTools(
  */
 export async function getMCPToolsForAI_SDK(
   userId?: string,
-  taskFilter?: string | SelectToolPlanResult,
+  taskFilter?: SelectToolPlanResult,
   signal?: AbortSignal,
-  options?: { requireFullCatalog?: boolean },
+  options?: { requireFullCatalog?: boolean; scopePath?: string },
 ) {
   const view = computeTaskFilterView(taskFilter, options);
   const callStart = Date.now();
@@ -1629,7 +1544,7 @@ export async function getMCPToolsForAI_SDK(
     bashToolBundle.registerVFSSyncHook();
 
     const sessionId = userId ? normalizeSessionId(userId) : undefined;
-    const scopePath = getVfsScopeBasePath(sessionId);
+    const scopePath = options?.scopePath || getVfsScopeBasePath(sessionId);
 
     const bashToolMap = bashToolBundle.createBashTool({
       workingDir: scopePath,
@@ -1722,8 +1637,16 @@ export async function getMCPToolsForAI_SDK(
   // and cap remains in effect), so this branch ONLY widens the cap for
   // the 2 helper callers in `enhanced-llm-service.ts` that genuinely
   // need the full MCP catalog.
+  //
+  // When a plan is provided, use its maxBudget as the authoritative cap.
+  // The plan's budget (from select-tool-plan.ts, default 20) is the
+  // single source of truth; the env-var MCP_TOOLS_MAX_TOTAL (default 25)
+  // is the fallback for undefined taskFilter callers (requireFullCatalog).
+  const planBudget = taskFilter?.maxBudget;
   const normalization = normalizeAndCapTools(bundles, {
-    maxBudget: options?.requireFullCatalog === true ? Number.POSITIVE_INFINITY : getToolsMaxTotal(),
+    maxBudget: options?.requireFullCatalog === true
+      ? Number.POSITIVE_INFINITY
+      : planBudget ?? getToolsMaxTotal(),
     exempt: WORKFLOW_COMPANIONS,
   });
   const tools = normalization.kept;
@@ -2081,6 +2004,7 @@ function applyPostCallPipeline(
   toolName: string,
   toolCallId: string,
   args?: Readonly<Record<string, unknown>>,
+  recentFailures?: string[],
 ): { success: boolean; output: string; error?: string } {
   // 1. gatePostCall — post-invocation invariant + kill-switch check.
   //    Mirrors runPipeline's gatePostCall usage (the test helper invokes
@@ -2094,7 +2018,7 @@ function applyPostCallPipeline(
     toolName,
     args: args ?? {},
     result,
-    errorCount: 0,
+    errorCount: recentFailures?.length ?? 0,
   });
   if (!postGate.allowed) {
     contract.audit = contract.audit.append({
@@ -2203,8 +2127,9 @@ function wrapDispatch(
   toolCallId: string,
   args: Readonly<Record<string, unknown>> | undefined,
   result: { success: boolean; output: string; error?: string },
+  recentFailures?: string[],
 ): { success: boolean; output: string; error?: string } {
-  return contract ? applyPostCallPipeline(result, contract, toolName, toolCallId, args) : result;
+  return contract ? applyPostCallPipeline(result, contract, toolName, toolCallId, args, recentFailures) : result;
 }
 
 /**
@@ -2383,7 +2308,7 @@ export async function callMCPToolFromAI_SDK(
             } else {
               logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
               const __dispatchResult: { success: boolean; output: string; error?: string } = { success: true, output: cachedData };
-              return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+              return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
             }
           } else {
             // Fully cacheable: list_files, search_files
@@ -2392,7 +2317,7 @@ export async function callMCPToolFromAI_SDK(
               success: true,
               output: typeof cached === 'string' ? cached : JSON.stringify(cached),
             };
-            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
           }
         }
       }
@@ -2402,14 +2327,14 @@ export async function callMCPToolFromAI_SDK(
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
       const result = await executeBlaxelCodegenTool(toolName, args)
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return wrapDispatch(contract, toolName, toolCallId, args, result);
+      return wrapDispatch(contract, toolName, toolCallId, args, result, recentFailures);
     }
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
       const result = await executeArcadeTool(toolName, args, userId);
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return wrapDispatch(contract, toolName, toolCallId, args, result);
+      return wrapDispatch(contract, toolName, toolCallId, args, result, recentFailures);
     }
 
     // NEW: Check if it's a provider-specific advanced tool
@@ -2420,13 +2345,13 @@ export async function callMCPToolFromAI_SDK(
       toolName.startsWith('sprites_')
     ) {
       const __dispatchResult = await executeProviderAdvancedTool(toolName, args);
-      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
     }
 
     // NEW: Check if it's a Nullclaw tool
     if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
       const __dispatchResult = await nullclawMCPBridge.executeTool(toolName, args, userId);
-      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
     }
 
     // NEW: Check if it's a remote MCP tool (from HTTP transport servers)
@@ -2436,7 +2361,7 @@ export async function callMCPToolFromAI_SDK(
       for (const serverName of remoteServerNames) {
         if (toolName.startsWith(`${serverName}_`)) {
           const __dispatchResult = await callRemoteMCPTool(toolName, args, { signal: options?.signal });
-          return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+          return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
         }
       }
     }
@@ -2465,11 +2390,11 @@ export async function callMCPToolFromAI_SDK(
           errors: validationErrors.join('; '),
           inputKeys: Object.keys(args || {}),
         });
-        return {
+        return wrapDispatch(contract, toolName, toolCallId, args, {
           success: false,
           output: '',
           error: validationErrors.join('; '),
-        };
+        }, recentFailures);
       }
 
       // Redacted payload dump for tracing origin of malformed tool calls
@@ -2534,7 +2459,7 @@ export async function callMCPToolFromAI_SDK(
         output: resultOutput,
         error: (result as any)?.error,
       };
-      return wrapDispatch(contract, toolName, toolCallId, undefined, dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, dispatchResult, recentFailures);
     }
 
     // Check if it's the web_search tool
@@ -2568,7 +2493,7 @@ export async function callMCPToolFromAI_SDK(
               success: true,
               output: JSON.stringify({ results, query: args.query, source: 'searxng' }),
             };
-            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
           }
         }
 
@@ -2584,7 +2509,7 @@ export async function callMCPToolFromAI_SDK(
           success: true,
           output: JSON.stringify({ ...result, source: 'duckduckgo' }),
         };
-        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
       } catch (error: any) {
         logger.error('[WebSearch] Failed', { error: error.message });
         const __dispatchResult: { success: boolean; output: string; error?: string } = {
@@ -2592,7 +2517,7 @@ export async function callMCPToolFromAI_SDK(
           output: '',
           error: error.message || 'Web search failed',
         };
-        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
       }
     }
 
@@ -2616,7 +2541,7 @@ export async function callMCPToolFromAI_SDK(
         );
       }
       const sessionId = normalizeSessionId(sessionIdSource);
-      const scopePath = `workspace/sessions/${sessionId}`;
+      const effectiveScopePath = scopePath || `workspace/sessions/${sessionId}`;
 
       // Get filesystem state for command routing
       let filesystemState: Record<string, { content?: string; isDirectory?: boolean }> = {};
@@ -2637,7 +2562,7 @@ export async function callMCPToolFromAI_SDK(
       }
 
       const bashToolMap = createBashTool({
-        workingDir: scopePath,
+        workingDir: effectiveScopePath,
         enableSelfHealing: true,
         persistToVFS: true,
         getFilesystemState: () => filesystemState,
@@ -2650,7 +2575,7 @@ export async function callMCPToolFromAI_SDK(
         logger.info('[Bash] Tool invoked (AI_SDK path)', {
           tool: toolName,
           command: args?.command?.slice(0, 100),
-          workingDir: scopePath,
+          workingDir: effectiveScopePath,
         });
 
         const result = await bashTool.execute(args || {}, {
@@ -2664,7 +2589,7 @@ export async function callMCPToolFromAI_SDK(
           output: (result as any)?.output || JSON.stringify(result),
           error: (result as any)?.error,
         };
-        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
       }
     }
 
@@ -2696,7 +2621,7 @@ export async function callMCPToolFromAI_SDK(
         output: nativeResult.content,
         error: nativeResult.isError ? nativeResult.content : undefined,
       }
-      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
     }
 
     const mcporterResult = await callMCPorterTool(toolName, args);
@@ -2706,7 +2631,7 @@ export async function callMCPToolFromAI_SDK(
       invalidateToolResultCache(args?.path);
     }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
-    return wrapDispatch(contract, toolName, toolCallId, args, mcporterResult);
+    return wrapDispatch(contract, toolName, toolCallId, args, mcporterResult, recentFailures);
   } catch (error: any) {
     logger.error(`MCP tool call failed: ${toolName}`, error)
     const __dispatchResult: { success: boolean; output: string; error?: string } = {
@@ -2714,7 +2639,7 @@ export async function callMCPToolFromAI_SDK(
       output: '',
       error: error.message || 'Tool call failed',
     }
-    return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
+    return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult, recentFailures);
   }
 }
 

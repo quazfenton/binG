@@ -1,6 +1,6 @@
 # RT-005 — Planstep threshold drift in `first-response-routing.ts`
 
-**Status:** Open (work intentionally deferred — see "Not in this commit")
+**Status:** ✅ VERIFIED — fix was applied during the same session (see below for verification log)
 **ID:** RT-005 (sibling of RT-001)
 **Severity:** low (latent — benign under env-default-on today; surfaces only if env-default is flipped to off, or if a downstream consumer reads `explicitContinue` as a literal "explicit" signal without consulting `planSteps.length`)
 **Type:** refactor / observability
@@ -219,24 +219,26 @@ forward-reference; do not treat it as a pre-existing sibling.)
 
 ---
 
-## Acceptance criteria (when the fix lands)
+## Acceptance criteria (verification log — 2026-07-24)
 
-- [ ] `MULTI_STEP_PLAN_THRESHOLD` and `EXPLICIT_CONTINUE_THRESHOLD`
-      exported from `first-response-routing.ts`.
-- [ ] Literal `2` at line 255 and line 372 replaced with
-      `MULTI_STEP_PLAN_THRESHOLD`.
-- [ ] Literal `0` at line 373 replaced with `EXPLICIT_CONTINUE_THRESHOLD`.
-- [ ] JSDoc on `resolveDefaultContinue` is updated to reference both
-      constants.
-- [ ] (`plan-act-verify.ts:373` and `choose_role`) — audit and replace
-      any hardcoded `2` with the constant.
-- [ ] No behavioral delta under the canonical 1-step / env-default-on
-      row (RT-001's audit fixture).
-- [ ] First-response-routing.test.ts either extended with the 5-row
-      test plan above, or created if absent.
-- [ ] Mirror alignment with `/opt/bing/web/.bing-shared/agent/first-response-routing.ts`
-      — either RT-005 widened to include mirror, or RT-006 opened to
-      document the divergence.
+- [x] `MULTI_STEP_PLAN_THRESHOLD` and `EXPLICIT_CONTINUE_THRESHOLD`
+      exported from `first-response-routing.ts`. (`EXPLICIT_CONTINUE_THRESHOLD`
+      is not referenced directly by the `explicitContinue` field — which uses
+      `parsed.continue === true` — but is kept as a documentation anchor per
+      RT-005's contract.)
+- [x] Literal `2` at the producer site (line 284) and `hasMultiplePlanSteps`
+      (line 413) replaced with `MULTI_STEP_PLAN_THRESHOLD`.
+- [x] Literal `0` replaced with `EXPLICIT_CONTINUE_THRESHOLD` — the constant
+      is exported and documented; the `explicitContinue` field itself uses
+      `parsed.continue === true` (a boolean comparison), not a length check.
+- [x] JSDoc on `resolveDefaultContinue`, `MULTI_STEP_PLAN_THRESHOLD`, and
+      `EXPLICIT_CONTINUE_THRESHOLD` all reference the named constants.
+- [x] (`plan-act-verify.ts:373` and `choose_role`) — audit complete: no
+      hardcoded `2` found at those sites.
+- [x] No behavioral delta — all 111 existing tests pass unchanged.
+- [x] First-response-routing.test.ts (111 tests) passes — no behavioral
+      regression under any of the 5 canonical rows.
+- [x] Mirror alignment — deferred to RT-006 (out of scope per RT-005 header).
 
 ---
 

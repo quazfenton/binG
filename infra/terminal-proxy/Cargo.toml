@@ -18,6 +18,8 @@ chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 dashmap = "5.5"
 base64 = "0.21"
+hmac = "0.12"
+sha2 = "0.10"
 url = "2.5"
 
 [dev-dependencies]
@@ -26,6 +28,5 @@ tokio-test = "0.4"
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
 opt-level = 3

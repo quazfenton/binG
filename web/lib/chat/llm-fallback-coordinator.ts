@@ -1033,7 +1033,7 @@ export function stallWatchdogErrorToStatus(
   input: StallWatchdogError | StallWatchdogErrorCode,
 ): number {
   const code: StallWatchdogErrorCode =
-    input instanceof StallWatchdogError ? input.errorCode : input;
+    typeof input === 'string' ? input : input.errorCode;
   switch (code) {
     case 'STALL': return 524;
     case 'DRIFT': return 502;

@@ -14,42 +14,75 @@
  * enough to warrant immediate blacklist, unlike 530/5xx which can be
  * transient infrastructure issues that warrant a 2-strike tolerance.
  *
- * Audit reference: F3 (MCP-TOOL-SELECTION-POSTAUDIT remediation step).
+ * TTL recovery (2026-07-23, TO-NU-INTERACTIVE-INJECT): blacklist entries
+ * auto-evict after RATE_LIMIT_BLACKLIST_TTL_MS (default 5 min) via a
+ * periodic clear at RATE_LIMIT_CLEAR_INTERVAL_MS (default 1 min).
+ * When the upstream sends a Retry-After header and
+ * RATE_LIMIT_USE_RETRY_AFTER=true (default), the entry uses
+ * retryAfterMs instead of the global TTL for precise recovery.
+ * The clear-interval handle is .unref()-ed so it doesn't keep the
+ * event loop alive in tests or dev mode.
  *
- * SHOULD-CONSIDER (#1 in code-review): once HTTP-level telemetry is
- * available, capture the `Retry-After` response header so the tracker
- * can TTL-clear the blacklist precisely when the provider's quota
- * bucket refills (eliminates need for a guess-based timer sweep).
- * Deferred to a separate ticket — TTL semantics drift between
- * providers (openrouter: 60s, anthropic: variable, etc.) and keeping
- * the F3 fix minimal coherent matches the audit's "smallest
- * remediation" tone.
+ * Audit reference: F3 (MCP-TOOL-SELECTION-POSTAUDIT remediation step).
+ * TTL follow-up: /opt/bing/.tickets/MCP-RATE-LIMITED-TTL-RECOVERY.md
  */
 
 import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('ProviderRateLimitTracker');
-const _consecutive429Count = new Map<string, number>();
-// BLACKLIST_THRESHOLD=1 is intentional: a single 429 is more
-// definitive than a transient 5xx/530 (which tolerates threshold=2).
-const BLACKLIST_THRESHOLD = 1;
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+interface BlacklistEntry {
+  readonly blacklistedAt: number;
+  readonly retryAfterMs?: number;
+}
+
+// ─── State ─────────────────────────────────────────────────────────────────
+
+let _clearIntervalHandle: ReturnType<typeof setInterval> | null = null;
+
+const _blacklist = new Map<string, BlacklistEntry>();
+
+// ─── Configuration helpers (env-driven) ────────────────────────────────────
+
+function getBlacklistTtl(): number {
+  return parseInt(process.env.RATE_LIMIT_BLACKLIST_TTL_MS || '300000', 10);
+}
+
+function getClearInterval(): number {
+  return parseInt(process.env.RATE_LIMIT_CLEAR_INTERVAL_MS || '60000', 10);
+}
+
+function shouldUseRetryAfter(): boolean {
+  return process.env.RATE_LIMIT_USE_RETRY_AFTER !== 'false';
+}
+
+// ─── Periodic clear (started once at first usage) ──────────────────────────
+
+function ensureClearIntervalStarted(): void {
+  if (_clearIntervalHandle) return;
+  _clearIntervalHandle = setInterval(() => {
+    const now = Date.now();
+    for (const [provider, entry] of _blacklist) {
+      const effectiveTtl = shouldUseRetryAfter() && entry.retryAfterMs
+        ? entry.retryAfterMs
+        : getBlacklistTtl();
+      if (now - entry.blacklistedAt >= effectiveTtl) {
+        _blacklist.delete(provider);
+        log.info(`[RateLimitTracker] TTL cleared blacklist for ${provider} after ${effectiveTtl}ms`);
+      }
+    }
+  }, getClearInterval());
+  if (typeof _clearIntervalHandle.unref === 'function') {
+    _clearIntervalHandle.unref();
+  }
+}
+
+// ─── Error shape detection ─────────────────────────────────────────────────
 
 function isRateLimitError(error: any): boolean {
   if (typeof error === 'object' && error === null) return false;
-  // Multi-shape detection. The production wire shape from
-  // enhanced-api-client.ts:createAPIError writes `error.status = status`
-  // at the top level — the primary path. AxiosError-shaped wrappers
-  // (defense-in-depth for future migrations) expose the status at
-  // `error.response.status`. Both are valid HTTP-error invariants; both
-  // are checked so a future API-client refactor does NOT silently
-  // bypass the rate-limit tracker.
-  // Production wire shape from enhanced-api-client.ts:createAPIError writes
-  // `error.status = status` at the top level (PRIMARY). AxiosError-shape wraps
-  // the status at `error.response.status`. Native fetch rejections (Node 19+)
-  // attach a wrapping Error with a `.cause` property, and many production
-  // HTTP libraries bury the status one wrapping deeper. ALL of these
-  // candidates are checked so a future API-client refactor does NOT silently
-  // bypass the rate-limit tracker.
   const candidates = [
     error?.status,
     error?.statusCode,
@@ -68,38 +101,69 @@ function isRateLimitError(error: any): boolean {
   return /(?:429\b|too many requests\b|rate limit\b)/i.test(msg);
 }
 
-function recordRateLimitError(provider: string): void {
-  const next = (_consecutive429Count.get(provider) ?? 0) + 1;
-  _consecutive429Count.set(provider, next);
-  if (next >= BLACKLIST_THRESHOLD) {
-    log.warn(`[RateLimitTracker] Provider ${provider} blacklisted after ${next} rate-limit response(s)`);
-  }
-}
+// ─── Core functions ────────────────────────────────────────────────────────
 
-// Recovery contract: this is for MANUAL health-check recovery (an operator
-// calling the function after verifying the upstream rate limit cleared) — NOT
-// for re-trying a 429 in the same call. Calling this after a fresh 429 just
-// resets the counter, so the next attempt re-enters the chain and gets 429'd
-// again, masking the rate limit. Use only after a positive health probe.
-export function resetRateLimitCounter(provider: string): void {
-  _consecutive429Count.delete(provider);
-}
-
-export function isRateLimitedBlacklisted(provider: string): boolean {
-  return (_consecutive429Count.get(provider) ?? 0) >= BLACKLIST_THRESHOLD;
-}
-
+/**
+ * Record a rate-limit event for a provider.
+ *
+ * Extended in the TTL recovery (2026-07-23) to accept an optional
+ * `retryAfterMs` parameter captured from the upstream `Retry-After`
+ * response header. When `RATE_LIMIT_USE_RETRY_AFTER=true` (default)
+ * and `retryAfterMs` is provided, the blacklist entry uses the
+ * per-provider Retry-After duration instead of the global
+ * `RATE_LIMIT_BLACKLIST_TTL_MS` for precise recovery timing.
+ *
+ * @param provider    The provider string (e.g. 'openai', 'anthropic').
+ * @param error       The error object to inspect for 429 status.
+ * @param retryAfterMs Optional Retry-After duration in ms captured from the
+ *                     upstream HTTP response header. Ignored when
+ *                     `RATE_LIMIT_USE_RETRY_AFTER` is `false`.
+ */
 export function recordRateLimitedIfApplicable(
   provider: string,
   error: unknown,
+  retryAfterMs?: number,
 ): void {
-  if (isRateLimitError(error)) {
-    recordRateLimitError(provider);
-  }
+  if (!isRateLimitError(error)) return;
+  ensureClearIntervalStarted();
+  _blacklist.set(provider, {
+    blacklistedAt: Date.now(),
+    retryAfterMs: shouldUseRetryAfter() ? retryAfterMs : undefined,
+  });
+  log.warn(`[RateLimitTracker] Provider ${provider} blacklisted (TTL: ${retryAfterMs ?? getBlacklistTtl()}ms)`);
+}
+
+/**
+ * Check whether a provider is currently blacklisted.
+ *
+ * Boolean contract preserved from the original counter-based implementation.
+ * Callers skip the provider when this returns `true`.
+ */
+export function isRateLimitedBlacklisted(provider: string): boolean {
+  return _blacklist.has(provider);
+}
+
+/**
+ * Manually reset the rate-limit blacklist for a provider.
+ *
+ * Use after a positive health-check probe confirms the upstream rate
+ * limit has cleared (e.g. after a manual health endpoint returns 200).
+ * This is a MANUAL recovery path — NOT for re-trying a 429 in the same
+ * call. The TTL-based periodic clear (every RATE_LIMIT_CLEAR_INTERVAL_MS)
+ * is the automatic recovery path.
+ */
+export function resetRateLimitCounter(provider: string): void {
+  _blacklist.delete(provider);
+  log.info(`[RateLimitTracker] Manual reset for ${provider}`);
 }
 
 // Test-only export (used by vitest scenarios in __tests__/chat/).
-// NOT for production use — clears the whole in-process rate-limit map.
+// NOT for production use — clears the whole in-process blacklist map
+// AND clears the periodic interval handle (so each test starts fresh).
 export function _clearRateLimitMapForTest(): void {
-  _consecutive429Count.clear();
+  _blacklist.clear();
+  if (_clearIntervalHandle) {
+    clearInterval(_clearIntervalHandle);
+    _clearIntervalHandle = null;
+  }
 }

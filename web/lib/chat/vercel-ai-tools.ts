@@ -11,7 +11,8 @@ import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
 import type { ToolExecutionContext as RouterToolContext } from '@/lib/tools/tool-integration/types';
 import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
-import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
+import { selectToolPlan, type SelectToolPlanResult, BASELINE_CORE_TOOL_IDS } from '@/lib/tools/select-tool-plan';
+import { createContract } from '@/lib/agents/contract';
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { getCapabilityRouter } from '@/lib/tools/router';
@@ -137,17 +138,46 @@ function createCapabilityTool(
 
 function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
-  
+
+  // Review comment #5: VFS mutation tools (write_file, apply_diff, batch_write)
+  // were previously added UNCONDITIONALLY — the planner's
+  // `filesystemEditEligible: false` gate only filtered capability IDs, and
+  // `file.*` capabilities are skipped anyway (VFS dedup at L372), so the gate
+  // never reached the tools the model actually sees. Honor the plan's flag
+  // here as the load-bearing mutation gate. `delete_file` is intentionally
+  // kept (matches the planner's STRIPPED set which keeps file.delete for
+  // destructive-but-useful cleanup).
+  const editEligible = context.toolPlan?.filesystemEditEligible !== false;
+  const VFS_MUTATION_TOOLS = new Set(['write_file', 'apply_diff', 'batch_write']);
+
   for (const [name, mcpTool] of Object.entries(mcpVFSTools)) {
+    if (!editEligible && VFS_MUTATION_TOOLS.has(name)) continue;
     tools[name] = tool({
       description: (mcpTool as any).description,
       inputSchema: (mcpTool as any).inputSchema || (mcpTool as any).parameters || z.object({}),
       execute: async (args: any) => {
-        return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
+        return await callMCPToolFromAI_SDK(
+          name,
+          { ...args, conversationId: context.conversationId },
+          context.userId,
+          context.scopePath,
+          undefined,
+          undefined,
+          createContract({
+            intent: name,
+            scope: { paths: [], exclude: [] },
+            capabilities: [name],
+            budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+            invariants: [],
+            acceptanceCriteria: [],
+            killSwitches: [],
+            escalationGraph: {},
+          }),
+        );
       },
     } as any);
   }
-  
+
   return tools;
 }
 
@@ -184,7 +214,24 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
         description: mcpTool.function.description,
         inputSchema: mcpTool.function.parameters || z.object({}),
         execute: async (args: any) => {
-          return await callMCPToolFromAI_SDK(name, args, context.userId, context.scopePath);
+          return await callMCPToolFromAI_SDK(
+            name,
+            { ...args, conversationId: context.conversationId },
+            context.userId,
+            context.scopePath,
+            undefined,
+            undefined,
+            createContract({
+              intent: name,
+              scope: { paths: [], exclude: [] },
+              capabilities: [name],
+              budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+              invariants: [],
+              acceptanceCriteria: [],
+              killSwitches: [],
+              escalationGraph: {},
+            }),
+          );
         },
       } as any);
     }
@@ -249,171 +296,38 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
  * Falls back to all capabilities when nothing matches, so the LLM is
  * never stranded.
  */
-type TaskGroup = { keywords: string[]; add: string[] };
-
-const TASK_GROUPS: TaskGroup[] = [
-  {
-    keywords: ['search', 'grep', 'find', 'codebase', 'lookup', 'locate', 'ripgrep'],
-    add: ['repo.search'],
-  },
-  {
-    keywords: ['run', 'execute', 'eval', 'interpreter', 'python', 'javascript', 'script', 'snippet'],
-    add: ['sandbox.execute'],
-  },
-  {
-    keywords: ['shell', 'bash', 'command', 'exec', 'cli', 'cmd'],
-    add: ['bash.execute'],
-  },
-  {
-    keywords: ['sandbox', 'session', 'container', 'workspace'],
-    add: ['sandbox.session'],
-  },
-  {
-    keywords: ['commit', 'push', 'pull', 'clone', 'git', 'branch', 'merge', 'rebase', 'stash', 'version control'],
-    add: ['repo.git'],
-  },
-  {
-    keywords: ['browse', 'scrape', 'url', 'http', 'fetch', 'webpage', 'web page', 'crawl'],
-    add: ['web.browse', 'web.fetch', 'web.search'],
-  },
-  {
-    keywords: ['discord', 'telegram', 'dm', 'direct message', 'send message', 'message'],
-    add: ['automation.discord', 'automation.telegram'],
-  },
-  {
-    keywords: ['task', 'todo', 'plan', 'steps', 'schedule', 'track', 'checklist'],
-    add: ['task.*', 'workflow.discovery', 'workflow.plan'],
-  },
-  {
-    keywords: ['desktop', 'click', 'screenshot', 'snapshot', 'window', 'screen', 'type text', 'keyboard', 'clipboard', 'app'],
-    add: ['desktop.*', 'computer_use.*'],
-  },
-  {
-    keywords: ['terminal', 'pty', 'interactive', 'tui'],
-    add: ['terminal.*'],
-  },
-  {
-    keywords: ['process', 'daemon', 'background', 'kill', 'ps', 'bg job'],
-    add: ['process.stop', 'process.list', 'terminal.start_process', 'terminal.stop_process', 'terminal.list_processes'],
-  },
-  {
-    keywords: ['port', 'preview', 'forward', 'listen', 'expose'],
-    add: ['preview.*', 'terminal.get_port_status'],
-  },
-  {
-    keywords: ['memory', 'remember', 'store', 'recall', 'cache', 'remember this'],
-    add: ['memory.*'],
-  },
-  {
-    keywords: ['workspace', 'sync', 'migrate', 'r2', 'storage', 'affinity', 'image', 'cas'],
-    add: ['workspace.*', 'workspacefs.*', 'workspace.graph', 'workspace.graph_diagnostic', 'workspace.graph_find_process'],
-  },
-  {
-    keywords: ['analyze', 'detect', 'framework', 'dependency', 'structure', 'stats'],
-    add: ['repo.analyze', 'workspace.analyze', 'workspace.structure', 'workspace.stats', 'workspace.list_scripts'],
-  },
-  {
-    keywords: ['bundle', 'context', 'repomix', 'export', 'project context'],
-    add: ['workspace.bundle'],
-  },
-  {
-    keywords: ['diff', 'syntax', 'ast', 'refactor', 'check', 'lint', 'validate', 'format'],
-    add: ['code.ast_diff', 'code.syntax_check', 'workspace.getChanges'],
-  },
-  {
-    keywords: ['provider', 'cost', 'runtime', 'broker', 'estimate'],
-    add: ['runtime.*'],
-  },
-  {
-    keywords: ['graph', 'diagnostic', 'diagnose', 'troubleshoot', 'state', 'runtime state'],
-    add: ['workspace.graph', 'workspace.graph_diagnostic', 'workspace.graph_find_process', 'workspace.runtime_state'],
-  },
-  {
-    keywords: ['mcp', 'tool list', 'list tools'],
-    add: ['mcp.*'],
-  },
-  {
-    keywords: ['workflow', 'automation', 'pipeline', 'cron', 'trigger'],
-    add: ['automation.workflow', 'workflow.*', 'task.schedule', 'task.status', 'task.cancel'],
-  },
-  {
-    keywords: ['batch', 'atomic', 'multiple files', 'write multiple'],
-    add: ['file.batch_write'],
-  },
-  {
-    keywords: ['changes', 'sync client', 'file sync', 'get changes'],
-    add: ['file.sync', 'workspace.getChanges'],
-  },
-  {
-    keywords: ['approval', 'human', 'confirm', 'hitl', 'human in the loop'],
-    add: ['workflow.request_approval'],
-  },
-  {
-    keywords: ['history', 'rollback', 'undo', 'restore', 'revert', 'snapshot'],
-    add: ['workflow.history', 'workflow.rollback', 'workflow.commit'],
-  },
-  {
-    keywords: ['read', 'write', 'edit', 'file', 'create file', 'delete file', 'append', 'cat', 'save'],
-    add: [
-      'file.read', 'file.write', 'file.append', 'file.delete',
-      'file.batch_write', 'code.ast_diff',
-    ],
-  },
-  {
-    keywords: ['list', 'ls', 'dir', 'show files', 'tree', 'browse files'],
-    add: ['file.list', 'workspace.structure'],
-  },
-  {
-    keywords: ['sync', 'transfer', 'copy files', 'move files'],
-    add: ['file.sync', 'workspace.getChanges', 'workspacefs.sync_status'],
-  },
-];
-
 /**
- * Filter capabilities by task relevance using additive task groups.
- * Starts from empty and only adds capabilities whose task-group keywords
- * match the user's message. This avoids the broad-match problem where
- * common words like "search" or "run" load 15+ loosely-related tools.
+ * Filter capabilities using a `SelectToolPlanResult` from the pure planner.
  *
- * Falls back to all capabilities when no message or no groups match.
+ * The plan's `coreToolIds` carry the planner's recommended capability IDs
+ * (e.g. 'file.read', 'repo.search', 'bash.execute'). Wildcard patterns
+ * like 'terminal.*' are expanded against the capability list.
+ *
+ * Baseline IDs (from `BASELINE_CORE_TOOL_IDS` in the planner) are always
+ * included so the LLM is never stranded.
  */
-function filterCapabilitiesByTask(
+function filterCapabilitiesByPlan(
   capabilities: readonly CapabilityDefinition[],
-  userMessage: string | undefined
+  plan: import('@/lib/tools/select-tool-plan').SelectToolPlanResult,
 ): CapabilityDefinition[] {
-  if (!userMessage) return [...capabilities];
+  // Collect all capability IDs from the plan's core tool list
+  const planIds = new Set<string>(plan.coreTools);
 
-  const lower = userMessage.toLowerCase();
-
-  // Collect capability patterns that match the user's message
-  const matchedPatterns = new Set<string>();
-
-  for (const group of TASK_GROUPS) {
-    if (group.keywords.some(kw => lower.includes(kw.toLowerCase()))) {
-      for (const pattern of group.add) {
-        matchedPatterns.add(pattern);
-      }
-    }
+  // Also include baseline IDs (the planner always includes these)
+  for (const id of BASELINE_CORE_TOOL_IDS) {
+    planIds.add(id);
   }
 
-  // If nothing matched (e.g. "hi", "thanks", "yes"), load everything
-  if (matchedPatterns.size === 0) {
-    chatLogger.debug('[TaskFilter] No task groups matched — loading all capabilities', {
-      messagePreview: lower.slice(0, 80),
-    });
-    return [...capabilities];
-  }
-
-  // Expand wildcard patterns and collect matching capability IDs
+  // Expand wildcard patterns (e.g. 'terminal.*' → all terminal.* capabilities)
   const expandedIds = new Set<string>();
-  for (const pattern of matchedPatterns) {
-    if (pattern.endsWith('.*')) {
-      const prefix = pattern.slice(0, -2);
+  for (const id of planIds) {
+    if (id.endsWith('.*')) {
+      const prefix = id.slice(0, -2);
       for (const cap of capabilities) {
         if (cap.id.startsWith(prefix)) expandedIds.add(cap.id);
       }
     } else {
-      expandedIds.add(pattern);
+      expandedIds.add(id);
     }
   }
 
@@ -421,12 +335,9 @@ function filterCapabilitiesByTask(
 
   const skipped = capabilities.length - result.length;
   if (skipped > 0) {
-    chatLogger.debug('[TaskFilter] Additive match', {
-      total: capabilities.length,
-      included: result.length,
-      skipped,
-      patterns: matchedPatterns.size,
-      ids: expandedIds.size,
+    chatLogger.info('[ToolSet] Plan-based capability filter: loaded ' + result.length + '/' + capabilities.length + ' (' + skipped + ' filtered by plan)', {
+      intents: plan.intents.slice(0, 6),
+      fallbackUsed: plan.fallbackUsed,
     });
   }
 
@@ -457,11 +368,12 @@ export function createToolSet(
   }
 
   if (priority.includes('capability')) {
-    // Task-aware filtering: only load capabilities whose keywords match the
-    // user's message (same pattern as powersRegistry.matchByTriggers()).
-    // Falls back to all capabilities when no message or no match, so the
-    // LLM always has at least some tools available.
-    const capsToLoad = filterCapabilitiesByTask(ALL_CAPABILITIES, context.lastUserMessage);
+    // All callers now compute a toolPlan via selectToolPlan() before calling
+    // getAllTools/createToolSet. The plan carries the planner's recommended
+    // capability IDs — expand wildcards and filter against them.
+    const capsToLoad = context.toolPlan
+      ? filterCapabilitiesByPlan(ALL_CAPABILITIES, context.toolPlan)
+      : [...ALL_CAPABILITIES];
 
     for (const cap of capsToLoad) {
       if (allowedCapabilities.length > 0 && !allowedCapabilities.includes(cap.id)) continue;
@@ -476,14 +388,14 @@ export function createToolSet(
   }
 
   // Log capability filter summary at info level so we can verify
-  // token savings at runtime (debug-level detail is in filterCapabilitiesByTask).
+  // token savings at runtime (debug-level detail is in filterCapabilitiesByPlan).
   // Subtract file.* caps from the baseline since they're always skipped by VFS dedup
-  // — this way the log only reflects task-filtering savings, not VFS dedup.
+  // — this way the log only reflects plan-filtering savings, not VFS dedup.
   const capCount = Object.keys(sourceTools.capability).length;
   const fileCapsTotal = ALL_CAPABILITIES.filter(c => c.id.startsWith('file.')).length;
   const baseline = priority.includes('vfs') ? ALL_CAPABILITIES.length - fileCapsTotal : ALL_CAPABILITIES.length;
   if (capCount < baseline) {
-    chatLogger.info('[ToolSet] Capability task filter: loaded ' + capCount + '/' + baseline + ' (' + (baseline - capCount) + ' filtered by task)');
+    chatLogger.info('[ToolSet] Capability plan filter: loaded ' + capCount + '/' + baseline + ' (' + (baseline - capCount) + ' filtered by plan)');
   }
 
   if (includeCapabilityChain) {

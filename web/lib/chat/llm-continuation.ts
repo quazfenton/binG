@@ -358,7 +358,16 @@ export type ContinuationReason =
   // enableBatchMode TypeError was the originating bug). Strictly additive:
   // existing switch statements with `default` cases are unaffected;
   // exhaustive switch statements without default need a new arm.
+  // 'failure_plan_loop' is a dedicated reason emitted by the chat-loop
+  // circuit-breaker (see _detectFailurePlanLoop below).
   | 'failure_plan_loop'
+  // 'llm_continue_token_detected' fires when the LLM explicitly ends its
+  // response with the [CONTINUE_REQUESTED] token (see system-prompts.ts:3684
+  // for the LLM-facing instruction). Unlike the heuristic triggers below,
+  // this is an EXPLICIT signal from the model — it means the LLM knows it
+  // has more work to do and is asking for another turn. Placed highest in
+  // priority after hard cap so it fires before heuristic detectors.
+  | 'llm_continue_token_detected'
   | 'no_continuation_needed'
   | 'max_continuations_reached'
   | 'max_iterations'
@@ -480,6 +489,24 @@ export function shouldAutoContinue(input: {
       continue: true,
       reason: 'role_selection_continue_true',
       continuationPrompt: basePrompt,
+      continuationsSoFar: continuationsSoFar + 1,
+      clearedCount: continuationsSoFar + 1,
+      finalIteration: maxContinuations,
+    };
+  }
+
+  // 1b. LLM continue token detected → the model explicitly ended its
+  //     response with [CONTINUE_REQUESTED] (see system-prompts.ts:3684).
+  //     This is an EXPLICIT signal from the LLM — it knows it needs more
+  //     turns. Place before heuristic triggers so the model's own request
+  //     is honored over pattern-matching heuristics.
+  if (input.responseText && /\[CONTINUE_REQUESTED\]\s*$/.test(input.responseText.trimEnd())) {
+    return {
+      continue: true,
+      reason: 'llm_continue_token_detected',
+      continuationPrompt:
+        '[AUTO-CONTINUE] You requested continuation in your previous response. ' +
+        'Continue from where you left off and complete the remaining work.',
       continuationsSoFar: continuationsSoFar + 1,
       clearedCount: continuationsSoFar + 1,
       finalIteration: maxContinuations,

@@ -131,7 +131,7 @@ export interface LLMProvider {
 
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
+  content: string | Array<{ type: 'text' | 'image_url' | 'tool-result' | 'tool-call'; text?: string; image_url?: { url: string }; toolCallId?: string; toolName?: string; output?: any }>
 }
 
 export interface LLMRequest {
@@ -949,12 +949,16 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     name: 'NVIDIA NIM',
     models: [
       'z-ai/glm-5.1',
+      'z-ai/glm-5.2',
       'minimaxai/minimax-m2.7',
+      'minimaxai/minimax-m3',
       'moonshotai/kimi-k2.6',
       'deepseek-ai/deepseek-v4-flash',
+      'deepseek-ai/deepseek-v4-pro',
       'qwen/qwen3.5-122b-a10b',
       'stepfun-ai/step-3.7-flash',
       'meta/llama-4-maverick-17b-128e-instruct',
+      'poolside/laguna-xs-2.1',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
@@ -1377,12 +1381,16 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'mistral/mistral-medium-latest',
       // NVIDIA NIM models
       'nvidia/z-ai/glm-5.1',
+      'nvidia/z-ai/glm-5.2',
       'nvidia/minimaxai/minimax-m2.7',
+      'nvidia/minimaxai/minimax-m3',
       'nvidia/moonshotai/kimi-k2.6',
       'nvidia/deepseek-ai/deepseek-v4-flash',
+      'nvidia/deepseek-ai/deepseek-v4-pro',
       'nvidia/qwen/qwen3.5-122b-a10b',
       'nvidia/stepfun-ai/step-3.7-flash',
       'nvidia/meta/llama-4-maverick-17b-128e-instruct',
+      'nvidia/poolside/laguna-xs-2.1',
       // Ollama Cloud models
       'ollama/glm-4.7-flash',
       // Opencode Free models

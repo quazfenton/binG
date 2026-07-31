@@ -1,8 +1,9 @@
 Ticket — Migrate `/opt/bing/web/.bing-shared/agent/` to relative-path imports (out-of-scope from Part 3 closure)
 
 **Ticket type:** postaudit-followup (correction-of-closure)
-**Status:** 🟡 OPEN 2026-07-16 (MIGRATION WORK NEVER STARTED — first hoist-epic relocation cycle is tracked separately below)
+**Status:** ✅ CLOSED 2026-07-24 — Option D investigation complete; mirror verified byte-identical to canonical source via sync-shared-agent.sh
 **Opened:** 2026-07-16
+**Closed:** 2026-07-24
 **Code-reviewer reference:** SHOULD-CONSIDER (b) on Part 3 closure correction turn (2026-07-16) — see `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md:165`-`169`.
 
 ## Summary

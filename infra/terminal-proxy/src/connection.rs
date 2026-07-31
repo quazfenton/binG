@@ -40,6 +40,9 @@ impl Connection {
         // Accept WebSocket connection
         let ws_stream = accept_async(stream).await?;
         let (mut write, mut read) = ws_stream.split();
+
+        // Enforce connection and rate limits before auth
+        router.enforce_connection_limit(&addr.ip().to_string())?;
         
         // Read the first message to get headers and authenticate
         let first_msg = match tokio::time::timeout(
@@ -82,7 +85,11 @@ impl Connection {
         let session_arc = router.sessions.create(conn_session);
         
         // Store in Redis for distributed access
-        let state = crate::redis_store::SessionState::from(&*session_arc.read());
+        let ws_scheme = router.config.backend_url.replacen("http://", "ws://", 1)
+            .replacen("https://", "wss://", 1);
+        let ws_url = Some(format!("{}/sandboxes/{}/pty", ws_scheme, sandbox_id));
+        let state = crate::redis_store::SessionState::from(&*session_arc.read())
+            .with_ws_url(ws_url);
         if let Err(e) = router.redis.save_session(&state).await {
             warn!("Failed to persist session to Redis: {}", e);
         }
@@ -109,26 +116,30 @@ impl Connection {
         let (client_tx, client_rx) = mpsc::channel::<Message>(100);
         let (backend_tx, backend_rx) = mpsc::channel::<Message>(100);
         
+        let max_msg_size = router.config.max_message_size;
+
         // Relay client -> backend
         let client_to_backend = async {
             let mut local_read = read;
             let mut remote_write = backend_write;
-            
-            // Handle the first message we already read
-            let first = Message::Text(first_msg);
-            if remote_write.send(first).await.is_err() {
-                return;
-            }
-            
-            // Continue with remaining messages
+
+            // Skip auth message, start relay from next message
             while let Some(msg) = local_read.next().await {
                 match msg {
                     Ok(Message::Text(t)) => {
+                        if t.len() > max_msg_size {
+                            warn!("Client message exceeds max size ({} > {}), closing", t.len(), max_msg_size);
+                            break;
+                        }
                         if remote_write.send(Message::Text(t)).await.is_err() {
                             break;
                         }
                     }
                     Ok(Message::Binary(b)) => {
+                        if b.len() > max_msg_size {
+                            warn!("Client message exceeds max size ({} > {}), closing", b.len(), max_msg_size);
+                            break;
+                        }
                         if remote_write.send(Message::Binary(b)).await.is_err() {
                             break;
                         }
@@ -187,9 +198,9 @@ impl Connection {
         }
         
         // Cleanup
-        router.sessions.touch(&session_id);
-        if let Err(e) = router.redis.touch_session(&session_id).await {
-            debug!("Failed to touch session in Redis: {}", e);
+        router.sessions.remove(&session_id);
+        if let Err(e) = router.redis.delete_session(&session_id, claims.user_id()).await {
+            debug!("Failed to delete session in Redis: {}", e);
         }
         
         metrics::decrement_connections();
@@ -228,7 +239,7 @@ impl Connection {
             .ok_or_else(|| anyhow!("No authentication token provided"))?;
         
         // Verify JWT
-        let claims = verify_token(&token, &config.jwt_secret)
+        let claims = verify_token(&token, &config.jwt_secret, config.jwt_issuer.as_deref())
             .map_err(|e| anyhow!("Authentication failed: {}", e))?;
         
         // Verify user can access this sandbox

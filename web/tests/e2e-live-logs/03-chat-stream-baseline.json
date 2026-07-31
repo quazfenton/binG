@@ -1,0 +1,96 @@
+{
+  "timestamp": "2026-07-30T03:25:11.272Z",
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hi in one sentence."
+      }
+    ],
+    "provider": "mistral",
+    "model": "mistral-small-latest",
+    "stream": true,
+    "conversationId": "e2e-stream-baseline"
+  },
+  "status": 200,
+  "headers": {
+    "cache-control": "no-cache, no-store, must-revalidate",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "text/event-stream",
+    "date": "Thu, 30 Jul 2026 03:25:10 GMT",
+    "expires": "0",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "pragma": "no-cache",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-accel-buffering": "no",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "ThzUULxZ5A6UhRZNTLccW2dOJyVOlFa3Qon_43NdDHQ",
+    "x-csp-nonce-style": "4iFGGTj0BNTwyUVECQHj8OIHfM1JI0N1rUfV3AOxw1w",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1785381908916_yzw7bryg1nl",
+    "x-xss-protection": "1; mode=block"
+  },
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1785381910326,\"stepIndex\":0}\n\nevent: token\ndata: {\"content\":\"H\",\"timestamp\":1785381911181}\n\nevent: token\ndata: {\"content\":\"i! H\",\"timestamp\":1785381911197}\n\nevent: token\ndata: {\"content\":\"ow can\",\"timestamp\":1785381911213}\n\nevent: token\ndata: {\"content\":\" I help you today?event: tool_summary\\ndata: {\\\"totalCalls\\\":0,\\\"succeeded\\\":0,\\\"failed\\\":0,\\\"durationMs\\\":825,\\\"timestamp\",\"timestamp\":1785381911251}\n\nevent: step\ndata: {\"step\":\"Iteration 1\",\"status\":\"completed\",\"timestamp\":1785381911265,\"stepIndex\":1}\n\nevent: token\ndata: {\"content\":\"\\\":1785381911251}\\n\\n\",\"timestamp\":1785381911265}\n\nevent: done\ndata: {\"success\":true,\"content\":\"Hi! How can I help you today?\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1785381910326,\"stepIndex\":0},{\"step\":\"Iteration 1\",\"status\":\"completed\",\"timestamp\":1785381911265,\"stepIndex\":1}],\"continuationDecision\":{\"continue\":false,\"reason\":\"no_continuation_needed\",\"continuationsSoFar\":0}},\"data\":{\"success\":true,\"response\":\"Hi! How can I help you today?\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":825,\"toolInvocations\":[],\"fallbackChain\":[],\"continuationDecision\":{\"continue\":false,\"reason\":\"no_continuation_needed\",\"continuationsSoFar\":0},\"appliedEditCount\":0,\"extractedEditCount\":0,\"iterationCount\":1}}}\n\n",
+  "eventCount": 8,
+  "tokenText": "Hi! How can I help you today?event: tool_summary\ndata: {\"totalCalls\":0,\"succeeded\":0,\"failed\":0,\"durationMs\":825,\"timestamp\":1785381911251}\n\n",
+  "toolEvents": [],
+  "fileEvents": [],
+  "done": {
+    "event": "done",
+    "rawData": "{\"success\":true,\"content\":\"Hi! How can I help you today?\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1785381910326,\"stepIndex\":0},{\"step\":\"Iteration 1\",\"status\":\"completed\",\"timestamp\":1785381911265,\"stepIndex\":1}],\"continuationDecision\":{\"continue\":false,\"reason\":\"no_continuation_needed\",\"continuationsSoFar\":0}},\"data\":{\"success\":true,\"response\":\"Hi! How can I help you today?\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":825,\"toolInvocations\":[],\"fallbackChain\":[],\"continuationDecision\":{\"continue\":false,\"reason\":\"no_continuation_needed\",\"continuationsSoFar\":0},\"appliedEditCount\":0,\"extractedEditCount\":0,\"iterationCount\":1}}}",
+    "data": {
+      "success": true,
+      "content": "Hi! How can I help you today?",
+      "messageMetadata": {
+        "agent": "unified",
+        "mode": "v1-api",
+        "processingSteps": [
+          {
+            "step": "Start agentic pipeline",
+            "status": "started",
+            "timestamp": 1785381910326,
+            "stepIndex": 0
+          },
+          {
+            "step": "Iteration 1",
+            "status": "completed",
+            "timestamp": 1785381911265,
+            "stepIndex": 1
+          }
+        ],
+        "continuationDecision": {
+          "continue": false,
+          "reason": "no_continuation_needed",
+          "continuationsSoFar": 0
+        }
+      },
+      "data": {
+        "success": true,
+        "response": "Hi! How can I help you today?",
+        "steps": [],
+        "totalSteps": 0,
+        "mode": "v1-api",
+        "metadata": {
+          "provider": "mistral",
+          "model": "mistral-small-latest",
+          "duration": 825,
+          "toolInvocations": [],
+          "fallbackChain": [],
+          "continuationDecision": {
+            "continue": false,
+            "reason": "no_continuation_needed",
+            "continuationsSoFar": 0
+          },
+          "appliedEditCount": 0,
+          "extractedEditCount": 0,
+          "iterationCount": 1
+        }
+      }
+    }
+  },
+  "cookies": {}
+}

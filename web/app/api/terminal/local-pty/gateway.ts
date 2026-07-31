@@ -6,7 +6,7 @@
  *
  * Isolation modes (ENABLE_LOCAL_PTY env var):
  *   "off"       — Disabled (production default)
- *   "localhost" — Only from localhost requests
+ *   "localhost" — Try unshare namespace isolation, fall back to direct spawn
  *   "unshare"   — Linux user namespace isolation (unshare --user --map-root-user)
  *   "docker"    — Per-session Docker container isolation
  *   "on"        — Direct spawn (fallback when unshare unavailable, e.g. macOS)
@@ -67,9 +67,28 @@ import {
 import { virtualPidRegistry } from '@/lib/terminal/virtual-pid-registry';
 import { sandboxOrchestrator } from '@/lib/sandbox/sandbox-orchestrator';
 import { getWorkspaceRuntime } from '@/lib/terminal/workspace-runtime-service';
+import {
+  buildFishSafeShellWrapper,
+  buildNuSafeShellWrapper,
+  isFishShell,
+  getShellBasename,
+  getEnvExportSyntax,
+  getSourceSyntax,
+  translateRuntimeEnvScript,
+  getSafeShellWrapperPath,
+} from '@/lib/terminal/shell-init-emitter';
 
 const logger = createLogger('LocalPTY');
 
+// Bug #4 (audit): Workspace-switch grace window — when the OPFS adapter is
+// mid-switch (ownerId changed), the PTY gateway's resolveFilesystemOwner may
+// return the NEW ownerId while the session was created with the OLD ownerId.
+// This produces a 400 Bad Request because the workspace validation fails.
+// The grace window allows both old and new ownerIds for 30 seconds after the
+// switch is detected, so in-flight PTY requests during a workspace transition
+// succeed without requiring a client retry.
+const WORKSPACE_SWITCH_GRACE_WINDOW_MS = 30_000;
+const workspaceSwitchTimestamps = new Map<string, { newOwnerId: string; switchedAt: number }>();
 
 
 // ============================================================
@@ -83,15 +102,39 @@ const logger = createLogger('LocalPTY');
  * On Windows: creates a PowerShell profile that overrides Set-Location.
  * On Unix: creates a bash init file that overrides the cd builtin.
  */
-async function createSafeShellWrapper(workspaceDir: string, shellPath: string): Promise<{ cmd: string; args: string[]; env?: Record<string, string> } | null> {
+async function createSafeShellWrapper(
+  workspaceDir: string,
+  shellPath: string,
+): Promise<{ cmd: string; args: string[]; env?: Record<string, string>; shellBasename: string; preInitLines?: string[] } | null> {
   const isWindows = process.platform === 'win32';
+  // Hoisted from the Unix branch so EVERY return path can thread `shellBasename`
+  // back to the caller — single source of truth for the target shell across
+  // the whole PTY lifecycle. The downstream env-emit region in
+  // createDirectPtySession now reads from `safeShell.shellBasename` instead of
+  // recomputing via `getShellBasename(ptyShell)` (SHOULDCONSIDER b DRY).
+  const shellBasename = getShellBasename(shellPath);
   const wrapperDir = path.join(workspaceDir, '.binG-temp');
-  const wrapperPath = isWindows
-    ? path.join(wrapperDir, '_safe_profile.ps1')
-    : path.join(wrapperDir, '_safe_shell_init.sh');
+  // Per-shellBasename filename — closes the cross-shell-contamination bug
+  // where a fish session inherited a bash wrapper written by a prior bash
+  // session via the shared `_safe_shell_init.sh` filename. Centralized in
+  // `getSafeShellWrapperPath` so the env-emit region (createDirectPtySession
+  // around L1737) reads the SAME per-shellBasename file rather than a
+  // hardcoded fallback filename.
+  const wrapperPath = getSafeShellWrapperPath(workspaceDir, shellBasename, isWindows);
 
   try {
     await fs.promises.mkdir(wrapperDir, { recursive: true });
+
+    // Proactive legacy-cleanup: remove the OLD shared `_safe_shell_init.sh`
+    // filename artifact if it lingers in this workspace. Without this defense
+    // in depth, any third-party tool (or older gateway code) that reads the
+    // shared filename would still source the bash template, recreating the
+    // fish-`builtin pushd` crash on cross-shell workspaces. Best-effort;
+    // .catch(() => {}) matches the codebase's silent-cleanup idiom (e.g. the
+    // appendFile block below).
+    if (!isWindows) {
+      await fs.promises.unlink(path.join(wrapperDir, '_safe_shell_init.sh')).catch(() => {});
+    }
 
     if (isWindows) {
       // PowerShell: Create a profile script that overrides Set-Location
@@ -149,15 +192,26 @@ async function createSafeShellWrapper(workspaceDir: string, shellPath: string): 
       ].join('\n');
       await fs.promises.writeFile(wrapperPath, psProfile, 'utf-8');
 
+
       return {
         cmd: shellPath,
         args: ['-NoExit', '-NoLogo', '-NoProfile', '-Command', `& { . '${wrapperPath.replace(/'/g, "''")}' }`],
+        shellBasename,
       };
     } else {
-      // Unix: Create POSIX-compatible cd override init script
-      // Uses ENV variable (sh/dash/ash), --init-file (bash), or -c sourcing (zsh/fish)
+      // Unix: Create shell-aware cd override init script.
+      //   Fish requires fish-native syntax (`set -gx`, `function ... end`); the
+      //   `'='`-assignment form is rejected at parse time with:
+      //     `~/.binG-temp/_safe_shell_init.sh (line 2): Unsupported use of '='`.
+      //   Bash / zsh / sh stay on the original bash template below for
+      //   byte-identical backward compat with existing sessions.
       const escapedWorkspaceDir = workspaceDir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const shellScript = `# Safe shell init - prevent cd from escaping workspace
+      // `shellBasename` is hoisted at the top of createSafeShellWrapper so the
+      // return shape can carry it through to the env-emit caller — do not
+      // re-derive here.
+      const shellScript = isFishShell(shellBasename)
+        ? buildFishSafeShellWrapper(workspaceDir)
+        : `# Safe shell init - prevent cd from escaping workspace
 WORKSPACE_ROOT="${escapedWorkspaceDir}"
 
 # Override cd builtin — blocks path traversal including ~/ (home dir)
@@ -200,46 +254,83 @@ cd() {
     builtin cd "$resolved"
 }
 
-# Override pushd — also block ~/
-pushd() {
-    local target="$1"
-    # Expand tilde to home directory BEFORE validation
-    case "$target" in
-        ~) target="$HOME" ;;
-        ~/*) target="$HOME/$(printf '%s' "$target" | cut -c3-)" ;;
-    esac
-    local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
-    if [[ -z "$resolved" || ( "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ) ]]; then
-        echo "pushd: Path traversal blocked - must stay within workspace" >&2
+# Override pushd — bash/zsh have built-in pushd; sh/dash/ash do NOT.
+# Source-time runtime detection: emit the real override only on shells that
+# have a native pushd, otherwise emit a warning stub. Without this guard,
+# \`builtin pushd\` would crash at runtime on sh/dash with \`pushd: not found\`    # (analogous to the fish parse-time crash fixed in shell-init-emitter.ts - see
+    # the comment block there for the design rationale).
+# NOTE: BASH_VERSION / ZSH_VERSION env vars are escaped as TS template
+# expressions (with the backslash-dollar prefix below) so the source-time
+# runtime detect block sees the literal env-var reference at runtime.
+# (For TS template-literal safety without the backslash-dollar escape,
+# tsc fails with TS1005 because unescaped $VAR inside backticks is
+# treated as a JS expression.)
+if [ -n "\${BASH_VERSION:-}" ] || [ -n "\${ZSH_VERSION:-}" ]; then
+    pushd() {
+        local target="$1"
+        # Expand tilde to home directory BEFORE validation
+        case "$target" in
+            ~) target="$HOME" ;;
+            ~/*) target="$HOME/$(printf '%s' "$target" | cut -c3-)" ;;
+        esac
+        local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
+        if [[ -z "$resolved" || ( "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ) ]]; then
+            echo "pushd: Path traversal blocked - must stay within workspace" >&2
+            return 1
+        fi
+        builtin pushd "$target"
+    }
+else
+    # sh/dash/ash: no native pushd - warning stub mirrors the fish decision
+    # (fish wrapper drops the pushd function entirely; sh/dash gets an
+    # explicit warning so the user understands why their pushd did nothing).
+    pushd() {
+        echo "[chatshell] pushd not supported in this shell (only bash/zsh have it built-in)" >&2
         return 1
-    fi
-    builtin pushd "$target"
-}
+    }
+fi
 
 # Set initial directory
 cd "$WORKSPACE_ROOT" 2>/dev/null || true
 `;
       await fs.promises.writeFile(wrapperPath, shellScript, { mode: 0o755 });
 
-      // Detect shell type and use the correct init mechanism
-      const shellBasename = path.basename(shellPath).toLowerCase();
+      // Detect shell type and use the correct init mechanism.
+      // shellBasename bound above via the getShellBasename helper; do not re-bind.
       if (shellBasename === 'bash' || shellBasename.endsWith('-bash')) {
         // bash: use --init-file
         return {
           cmd: shellPath,
           args: ['--init-file', wrapperPath, '-i'],
+          shellBasename,
         };
       } else if (shellBasename === 'zsh') {
         // zsh: source the init script then exec interactive zsh
         return {
           cmd: shellPath,
           args: ['-c', `source '${wrapperPath}' && exec ${shellPath} -i`],
+          shellBasename,
         };
       } else if (shellBasename === 'fish') {
         // fish: use fish's init file mechanism
         return {
           cmd: shellPath,
           args: ['--init-command', `source '${wrapperPath}'`],
+          shellBasename,
+        };
+      } else if (shellBasename === 'nu' || shellBasename === 'nushell') {
+        // Nushell: no --init-file / --init-command equivalent. We use
+        // post-spawn stdin injection instead: return the init script as
+        // preInitLines so createDirectPtySession writes them to pty.write()
+        // within 50ms of pty.spawn(). Nu is a REPL — it processes stdin
+        // lines as commands sequentially, so the init script runs before
+        // the user can type anything.
+        const nuInit = buildNuSafeShellWrapper(workspaceDir);
+        return {
+          cmd: shellPath,
+          args: ['-i'],
+          shellBasename,
+          preInitLines: nuInit.split('\n'),
         };
       } else {
         // sh/dash/ash/unknown: use ENV environment variable
@@ -247,6 +338,7 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
           cmd: shellPath,
           args: ['-i'],
           env: { ENV: wrapperPath },
+          shellBasename,
         };
       }
     }
@@ -1112,7 +1204,7 @@ export async function POST(req: NextRequest) {
     // Determine shell — SECURITY: validate against allowlist to prevent arbitrary binary execution
     const ALLOWED_SHELLS: string[] = process.platform === 'win32'
       ? ['powershell.exe', 'cmd.exe', 'pwsh.exe', 'pwsh']
-      : ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/zsh', '/usr/bin/fish'];
+      : ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/zsh', '/usr/bin/fish', '/usr/bin/nu', '/bin/nu', 'nushell'];
     const defaultShell = process.platform === 'win32'
       ? 'powershell.exe'
       : (process.env.SHELL && process.env.SHELL.length > 0) ? process.env.SHELL : '/bin/bash';
@@ -1135,7 +1227,67 @@ export async function POST(req: NextRequest) {
     // Safe to call for anonymous users (returns `anon:<sessionId>` ownerId).
     // When this throws (e.g. DB unavailable), the orchestrator's session
     // lookup will fall back to `authResult.userId` as before.
-    const ownerResolution = await resolveFilesystemOwner(req);
+    // Bug #4 (audit): Attempt to resolve the filesystem owner. If it fails
+    // (e.g., OPFS mid-switch), check the workspace-switch grace window: if a
+    // switch for this session happened within the last 30s, use the new ownerId
+    // from the grace window so the PTY creation doesn't get a 400 mismatch.
+    let ownerResolution: FilesystemOwnerResolution;
+    try {
+      ownerResolution = await resolveFilesystemOwner(req);
+      // Record the switch if ownerId changed from the last known value.
+      // Use the session cookie / auth header as the key so we track per-session.
+      const sessionKey = authResult.userId;
+      if (sessionKey) {
+        const prevSwitch = workspaceSwitchTimestamps.get(sessionKey);
+        if (prevSwitch && prevSwitch.newOwnerId !== ownerResolution.ownerId) {
+          // OwnerId changed — update the grace window.
+          workspaceSwitchTimestamps.set(sessionKey, {
+            newOwnerId: ownerResolution.ownerId,
+            switchedAt: Date.now(),
+          });
+          logger.info('[Local PTY] Workspace switch detected for session', {
+            sessionKey,
+            previousOwnerId: prevSwitch.newOwnerId,
+            newOwnerId: ownerResolution.ownerId,
+          });
+        } else if (!prevSwitch) {
+          // First resolution for this session — seed the cache.
+          workspaceSwitchTimestamps.set(sessionKey, {
+            newOwnerId: ownerResolution.ownerId,
+            switchedAt: Date.now(),
+          });
+        }
+      }
+    } catch (ownerResolutionError: any) {
+      // resolveFilesystemOwner failed — check the grace window for a recent
+      // workspace switch. If found, use the ownerId from the grace window
+      // so the PTY creation doesn't fault with 400.
+      const sessionKey = authResult.userId;
+      const graceEntry = sessionKey ? workspaceSwitchTimestamps.get(sessionKey) : undefined;
+      if (graceEntry && (Date.now() - graceEntry.switchedAt) < WORKSPACE_SWITCH_GRACE_WINDOW_MS) {
+        logger.warn('[Local PTY] resolveFilesystemOwner failed, using grace-window ownerId', {
+          sessionKey,
+          graceOwnerId: graceEntry.newOwnerId,
+          error: ownerResolutionError?.message,
+        });
+        ownerResolution = {
+          ownerId: graceEntry.newOwnerId,
+          source: 'anonymous',
+          isAuthenticated: false,
+          anonSessionId: undefined,
+        } as unknown as FilesystemOwnerResolution;
+      } else {
+        throw ownerResolutionError;
+      }
+    }
+
+    // Purge stale entries from the grace-window Map (entries older than 2× the grace window)
+    const now = Date.now();
+    for (const [key, entry] of workspaceSwitchTimestamps) {
+      if (now - entry.switchedAt > WORKSPACE_SWITCH_GRACE_WINDOW_MS * 2) {
+        workspaceSwitchTimestamps.delete(key);
+      }
+    }
 
     // === Isolation mode: unshare (Linux user namespaces) ===
     if (ENABLE_LOCAL_PTY === 'unshare') {
@@ -1187,6 +1339,38 @@ export async function POST(req: NextRequest) {
         ptyShell,
         ownerResolution
       ));
+    }
+
+    // === Hardened localhost mode: try unshare first, fall back to direct spawn ===
+    // Bug #88: The old "localhost" mode spawned PTY directly on the host with zero
+    // filesystem isolation — `cd ../` traversed the entire VM. Now we attempt
+    // Linux user/mount/PID namespace isolation first (same as `unshare` mode).
+    // If unshare is unavailable (macOS, missing binary, kernel restriction),
+    // we fall back to direct spawn with a security warning.
+    if (ENABLE_LOCAL_PTY === 'localhost') {
+      if (process.platform === 'linux') {
+        // Try unshare — returns NextResponse (200 on success, 503 on failure)
+        const unshareResult = await createUnsharePtySession(
+          nodePty,
+          sessionId,
+          authResult.userId,
+          cols,
+          rows,
+          cwd,
+          ptyShell,
+          ownerResolution,
+        );
+        // If unshare succeeded (200), return it
+        if (unshareResult.status === 200) {
+          return addAnonSessionCookie(unshareResult);
+        }
+        // Unshare failed — log and fall through to direct spawn
+        logger.warn('[Local PTY] Unshare unavailable in localhost mode, falling back to direct spawn', {
+          unshareStatus: unshareResult.status,
+          hint: 'Enable unprivileged user namespaces: sysctl kernel.unprivileged_userns_clone=1',
+        });
+      }
+      // Fall through to direct spawn (non-Linux or unshare failed)
     }
 
     // === Direct spawn mode (dev only) ===
@@ -1636,6 +1820,11 @@ async function createDirectPtySession(
   // === Workspace Env Injection ===
   // Load workspace-scoped environment variables from the runtime service
   // and inject them into the shell init script so exports survive reconnects.
+  // CRITICAL: `runtime.buildShellInitScript()` returns a FIXED BASH-syntax
+  // string (`export VAR="value"`). We must re-translate for the target shell
+  // via `translateRuntimeEnvScript` so fish/nu don't choke at parse time when
+  // sourcing `.workspace_env`. See /opt/bing/.tickets/OUTERCATCH-PROD-REACHABILITY.md
+  // for the closure rationale.
   let workspaceEnvScript = '';
   try {
     const runtime = getWorkspaceRuntime(sessionId, userId);
@@ -1647,25 +1836,66 @@ async function createDirectPtySession(
     });
   }
 
+  // Read `targetShellBasename` from `safeShell.shellBasename` (single source
+  // of truth — createSafeShellWrapper hoisted getShellBasename into its
+  // return shape, SHOULDCONSIDER b). If the wrapper failed (safeShell is
+  // null), fall back to a direct derivation so the env-emit downstream
+  // still has a value to dispatch against.
+  const targetShellBasename = safeShell?.shellBasename ?? getShellBasename(ptyShell);
+
   // If we have workspace env vars, inject them by writing a .workspace_env file
-  // and appending a source command to the safe shell init script.
+  // and appending a shell-correct source command to the safe shell init script.
   if (workspaceEnvScript) {
     try {
       const envFilePath = path.join(workspaceDir, '.workspace_env');
-      await fs.writeFile(envFilePath, workspaceEnvScript + '\n', { mode: 0o600 });
+      // Re-translate the bash-syntax runtime script for the target shell via
+      // translateRuntimeEnvScript (uses getEnvExportSyntax under the hood).
+      // Malformed `export` lines (non-canonical forms from a runtime change)
+      // are FAIL-LOUD: dropped from output + recorded in `malformed[]` + logged
+      // as a warning so the source of corruption is traceable. This prevents
+      // a latent regression vector for OUTERCATCH-PROD-REACHABILITY.
+      const {
+        content: translatedEnv,
+        count: envCount,
+        malformed,
+      } = translateRuntimeEnvScript(workspaceEnvScript, targetShellBasename, logger);
+      await fs.writeFile(envFilePath, translatedEnv + '\n', { mode: 0o600 });
 
-      // Append sourcing to the safe shell init script if it exists
-      const initScriptPath = path.join(workspaceDir, '.binG-temp', '_safe_shell_init.sh');
+      // Append sourcing to the safe shell init script if it exists.
+      // Use getSourceSyntax so fish gets `source "..."`, sh/dash/ash gets
+      // `. "..."`, bash/zsh/nu get `source "..."` — all syntactically correct
+      // for the target. (Previously this was hardcoded to POSIX-sh `.`,
+      // which fish tolerates for the source command itself but the file
+      // CONTENT was still bash-typed export lines that triggered the parse fail.)
+      //
+      // Per-shellBasename filename — closes the cross-shell-contamination bug
+      // where a fish env-emit appended env-exports to a bash wrapper inherited
+      // from a prior shell session. `targetShellBasename` flows from `safeShell`
+      // (read via the return shape of `createSafeShellWrapper`); we fall back
+      // to `getShellBasename(ptyShell)` so the env-emit region remains keyed
+      // by the target shell's basename even when `safeShell` is null.
+      const initScriptPath = getSafeShellWrapperPath(
+        workspaceDir,
+        targetShellBasename,
+        false,
+      );
       try {
         await fs.access(initScriptPath);
-        await fs.appendFile(initScriptPath, `\n# Source workspace environment variables\n. '${envFilePath}'\n`);
+        await fs.appendFile(
+          initScriptPath,
+          `\n# Source workspace environment variables\n${getSourceSyntax(targetShellBasename, envFilePath)}\n`,
+        );
       } catch {
         // Init script doesn't exist (Windows PowerShell) — env will be in PTY env vars instead
       }
 
       logger.debug('[Local PTY] Injected workspace env vars into shell init', {
         sessionId,
-        count: (workspaceEnvScript.match(/^export /gm) || []).length,
+        count: envCount,
+        malformed: malformed.length,
+        // Surface the actual lines in debug mode so regression triage can
+        // see which runtime-emitted lines were dropped at translation.
+        ...(malformed.length > 0 ? { malformedSample: malformed.slice(0, 3) } : {}),
       });
     } catch (err: any) {
       logger.warn('[Local PTY] Failed to write workspace env file', {
@@ -1701,6 +1931,21 @@ async function createDirectPtySession(
       cwd: workspaceDir,
       env: mergedEnv,
     });
+
+    // nushell: write preInitLines to PTY immediately after spawn so the init
+    // script (env-set + cd-override + initial cd) runs before the user can
+    // type anything. Nu is a REPL — it processes stdin lines as commands
+    // sequentially. `preInitLines` is only present for shells that need
+    // post-spawn stdin injection (currently only nu/nushell).
+    if (safeShell?.preInitLines && safeShell.preInitLines.length > 0) {
+      // Write each line synchronously — no inter-line delay needed because
+      // node-pty's internal buffer and nu's REPL handle line-at-a-time input
+      // without dropping data. The loop runs in the same microtask as the
+      // spawn, so all init lines are queued before the user can type.
+      for (const line of safeShell.preInitLines) {
+        pty.write(line + '\r\n');
+      }
+    }
   } catch (spawnError: any) {
     // Spawn failed — stop the file watcher to avoid leaks
     vfsWatcher.stop();
@@ -1737,10 +1982,13 @@ async function createDirectPtySession(
     sessionId,
     mode: 'direct',
     workspaceDir,
-    // SECURITY WARNING: Direct spawn has no isolation
+    // SECURITY WARNING: Direct spawn has no isolation. The cd override is
+    // a user-space bash function that provides zero kernel-level enforcement.
+    // Commands like `cat /etc/passwd`, `find / -name "*.key"`, or spawning
+    // a new interpreter can traverse the entire host filesystem.
     warning: process.env.NODE_ENV !== 'production'
       ? undefined
-      : 'Direct spawn mode provides no process or filesystem isolation. Use Docker or unshare mode for production.',
+      : 'WARNING: Direct spawn mode has NO filesystem isolation. Enable unshare mode (sysctl kernel.unprivileged_userns_clone=1) or Docker mode for production.',
   });
 }
 

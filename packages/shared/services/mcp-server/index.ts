@@ -16,7 +16,8 @@ import { createServer } from 'http';
 // Dynamic import of MCP tools — avoids @/ path alias issues in shared package
 // The web layer re-exports these, so we import from the web module at runtime
 let getMCPToolsForAI_SDK: ((userId: string) => Promise<any[]>) | undefined;
-let callMCPToolFromAI_SDK: ((name: string, args: Record<string, any>, userId: string, scopePath?: string) => Promise<any>) | undefined;
+let callMCPToolFromAI_SDK: ((name: string, args: Record<string, any>, userId: string, scopePath?: string, recentFailures?: string[], options?: { signal?: AbortSignal }, contract?: any) => Promise<any>) | undefined;
+let createContract: ((init: any) => any) | undefined;
 
 async function ensureMCPFunctions() {
   if (!getMCPToolsForAI_SDK || !callMCPToolFromAI_SDK) {
@@ -24,6 +25,8 @@ async function ensureMCPFunctions() {
       const mcp = await import('../../../../web/lib/mcp/architecture-integration');
       getMCPToolsForAI_SDK = mcp.getMCPToolsForAI_SDK;
       callMCPToolFromAI_SDK = mcp.callMCPToolFromAI_SDK;
+      const contractModule = await import('../../../../web/lib/agents/contract');
+      createContract = contractModule.createContract;
     } catch (err) {
       // Fallback: try absolute path from web build
       console.warn('[MCPServer] Could not import MCP functions via relative path, trying dynamic import');
@@ -84,7 +87,17 @@ class MCPServerService {
    */
   async executeTool(name: string, args: Record<string, any>, userId: string): Promise<any> {
     try {
-      const result = await callMCPToolFromAI_SDK(name, args, userId);
+      const contract = createContract?.({
+        intent: name,
+        scope: { paths: [], exclude: [] },
+        capabilities: [name],
+        budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+        invariants: [],
+        acceptanceCriteria: [],
+        killSwitches: [],
+        escalationGraph: {},
+      });
+      const result = await callMCPToolFromAI_SDK(name, args, userId, undefined, undefined, undefined, contract);
       return {
         success: result.success,
         output: result.output,

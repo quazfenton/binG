@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/providers/llm-providers";
 import { errorHandler } from '@/lib/errors/error-handler';
-import { responseRouter } from "@/lib/api/response-router";
+import { responseRouter, scopeRejectedEnvelope } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
 import { resolveFilesystemOwner, withAnonSessionCookie } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
@@ -14,7 +14,7 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
-import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId, normalizeSessionPath } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import { streamStateManager } from '@/lib/streaming/stream-state-manager';
 import { notifyStreamComplete, notifyNeedMoreTurns } from '@/lib/streaming/stream-control-handler';
@@ -33,10 +33,12 @@ import {
   getOrchestrationModeFromRequest,
   executeWithOrchestrationMode
 } from '@bing/shared/agent';
+import { generateRoleInjectionSection, generateWeightedRoleSelection } from '@bing/shared/agent/role-redirector';
+import { workflowTemplateService } from '@bing/shared/agent/workflow-templates';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 // F2 minimal-fix Change C — bumpProgress observability helper. The existing
 // `lastProgressAt` module-local variable is preserved (it's the watchdog's
 // primary read at route.ts L2056/L2065/L2071); bumpProgress is additive —
@@ -51,8 +53,9 @@ import { bumpProgress, getLastProgressAt } from '@/lib/chat/enhanced-llm-service
 import { isStructuredMcpError } from '@/lib/mcp/architecture-integration';
 import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
 import { selectToolPlan } from '@/lib/tools/select-tool-plan';
+import { createContract, type Contract } from '@/lib/agents/contract';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
-import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { createSSEEmitter, buildSSEResponseHeaders, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
 import {
@@ -75,6 +78,22 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
 // llm-fallback-coordinator.ts.
 import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus, isStallWatchdogErrorCode, isStallWatchdogInstanceByConstructorName } from '@/lib/chat/llm-fallback-coordinator';
+
+/**
+ * STALL-524 shared helper: detect whether an error is a StallWatchdogError
+ * using the 3-line defense-in-depth check (instanceof + constructor name +
+ * error code). Extracted to a module-level helper so all catch blocks in
+ * this file (streaming, orchestration, outer) use the same detection logic
+ * without copy-pasting the 3-line pattern.
+ */
+function isStallError(err: unknown): boolean {
+  return (
+    err instanceof StallWatchdogError ||
+    isStallWatchdogInstanceByConstructorName(err) ||
+    isStallWatchdogErrorCode((err as any)?.code)
+  );
+}
+
 // Phase 2 success-signal architecture — phase1Status (L472) needs the
 // Phase1Status type for its `let` declaration + the assignment site
 // `?? 'unknown'` widening per code-reviewer NEEDS-CHANGE (a). Phase1Status
@@ -313,7 +332,9 @@ async function classifyRequest(
   try {
     const classifier = getTaskClassifier({ provider: process.env.DEFAULT_PROVIDER || 'mistral' });
     if (!classifier) {
-      throw new Error('Task classifier disabled');
+      // Bug #88: skip silently when classifier is disabled — don't throw and
+      // generate a noisy warn log on every multi-turn request.
+      return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
     }
     const result = await classifier.classify(content, {
       projectSize: process.env.PROJECT_SIZE as any,
@@ -1048,23 +1069,79 @@ export async function POST(request: NextRequest) {
         chatLogger.debug('Session file tracking failed (non-critical)', { requestId: trackingReqId, error: error.message });
       });
 
-    const defaultScopePath = `workspace/sessions/${sanitizePathSegment(resolvedConversationId)}`;
-    // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
-    // e.g., "workspace/sessions/anon:1774710784761_6TB03h8Ow:002" -> "workspace/sessions/002"
+    // ResponseEnvelope threading 2026-07-22 (Bug 1 closure):
+    // wrap normalizeSessionPath in a try/catch so any upstream throw (scope-utils.ts
+    // "outside the allowed scope") surfaces an envelope in the operator log + preserves
+    // existing re-throw semantics for callers.
+    let defaultScopePath: string;
+    try {
+      defaultScopePath = normalizeSessionPath(sanitizePathSegment(resolvedConversationId));
+    } catch (scopeErr: any) {
+      chatLogger.warn('[SCOPE-REJECTED] normalizeSessionPath failure', {
+        attemptedPath: resolvedConversationId,
+        expectedScopePrefix: 'workspace/sessions/{id}',
+        envelope: scopeRejectedEnvelope({
+          attemptedPath: resolvedConversationId,
+          expectedScopePrefix: 'workspace/sessions/{id}',
+        }),
+        error: scopeErr?.message,
+      });
+      throw scopeErr; // preserve existing throw semantics
+    }
+    // The resolved conversation ID is the source of truth for workspace
+    // isolation. When the client provides a valid filesystemContext.scopePath
+    // (a well-formed session path like "workspace/sessions/002"), we honor it
+    // so VFS operations read/write the session the client is actually asking
+    // about. Previously we always overwrote with defaultScopePath regardless,
+    // which caused "PATH MISMATCH" bugs where the client asked for session 002
+    // but the server directed all VFS operations to a DIFFERENT session (000).
     const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
       ? filesystemContext.scopePath.trim()
       : defaultScopePath;
+    const sanitizedClientScopePath = sanitizeScopePath(rawScopePath);
+    
+    // Determine which scope path to use. If the client sent a well-formed
+    // session path AND it's actually a different session, trust the client
+    // (they know which workspace they're working with). Only reject if the
+    // client path is malformed or potentially malicious.
+    const clientSentScopePath = rawScopePath !== defaultScopePath;
+    const isWellFormedSessionPath = sanitizedClientScopePath.startsWith('workspace/sessions/');
+    
+    if (clientSentScopePath && isWellFormedSessionPath && sanitizedClientScopePath !== defaultScopePath) {
+      // Client provided a valid session path that differs from the server's
+      // default — honor the client's scope so VFS reads/writes hit the
+      // correct session. Log the override at INFO level for observability.
+      chatLogger.info('Using client-provided scope path (differs from resolved conversation)', {
+        requestId,
+        clientScopePath: sanitizedClientScopePath,
+        defaultScopePath,
+        resolvedConversationId,
+      });
+    } else if (clientSentScopePath) {
+      // Client sent a scope that either isn't a well-formed session path or
+      // matches the default — log for observability.
+      chatLogger.debug('Client scope path handling', {
+        requestId,
+        clientScopePath: sanitizedClientScopePath,
+        resolvedScopePath: defaultScopePath,
+        resolvedConversationId,
+        matchesDefault: sanitizedClientScopePath === defaultScopePath,
+      });
+    }
     
     // Log scopePath for debugging session folder naming issues
     chatLogger.debug('Scope path handling:', {
       rawScopePath,
       defaultScopePath,
+      resolvedScopePath: sanitizedClientScopePath,
       fromClient: !!filesystemContext?.scopePath,
       resolvedConversationId,
     });
 
-    // Make it 'let' so it can be updated when session is renamed
-    let requestedScopePath = sanitizeScopePath(rawScopePath);
+    // Make it 'let' so it can be updated when session is renamed.
+    // Use the client's sanitized scope when provided (even if it differs
+    // from the default) to avoid VFS PATH MISMATCH bugs.
+    let requestedScopePath = clientSentScopePath ? sanitizedClientScopePath : defaultScopePath;
 
     // Log sanitized result
     chatLogger.debug('Sanitized scope path:', {
@@ -1417,14 +1494,7 @@ export async function POST(request: NextRequest) {
             });
 
             return new Response(streamBody, {
-              headers: {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                Pragma: 'no-cache',
-                Expires: '0',
-                Connection: 'keep-alive',
-                'X-Accel-Buffering': 'no',
-              },
+              headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
             });
           }
 
@@ -1517,6 +1587,13 @@ export async function POST(request: NextRequest) {
 // — adding it would waste tokens and degrade response quality.
 if (isCodeRequest || enableFilesystemEdits) {
   baseSystemPrompt += generateDynamicInjection();
+  const roleSelection = generateWeightedRoleSelection({ taskDescription: task });
+  const workflowOptions = workflowTemplateService
+    .listTemplates()
+    .map((template) => `${template.id}: ${template.description}`)
+    .join('\n- ');
+  baseSystemPrompt += generateRoleInjectionSection(roleSelection);
+  baseSystemPrompt += `\n## Available Workflow Templates\nRecommend or select a template when it clearly fits the task; never execute approval, deployment, or memory-wipe steps without explicit user confirmation.\n- ${workflowOptions}\n`;
 }
 
     // CRITICAL: Unified tool usage instructions with ENFORCED output formats.
@@ -1622,8 +1699,8 @@ FORMAT RULES:
     // response is freed even if the underlying SDK/provider ignores the abort.
     const agentTurnAbort = new AbortController();
     const agentTurnSignal: AbortSignal = request.signal
-      ? AbortSignal.any([request.signal, agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)])
-      : AbortSignal.any([agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)]);
+      ? AbortSignal.any([request.signal, agentTurnAbort.signal])
+      : agentTurnAbort.signal;
 
     // Chat-hang-fix #3 — HOISTED route-level stall watchdog.
     //
@@ -1639,7 +1716,7 @@ FORMAT RULES:
     //
     // Closure-captured state is intentionally module-private to POST() so
     // a request's watchdog cannot leak across concurrent requests.
-    const stallStartTime = Date.now();
+    let stallStartTime = Date.now();
     let lastProgressAt = stallStartTime;
     const PROGRESS_EVENT_TYPES = new Set<unknown>([
       SSE_EVENT_TYPES.TOKEN,
@@ -1716,19 +1793,38 @@ FORMAT RULES:
       process.env.CHAT_ROUTE_MAX_TURN_MS || '120000',
       10,
     );
+    // Per-step accounting (Bug #1 closure): each agent step (tool call, LLM
+    // response) is budgeted a per-step window so a legitimate 12-step model
+    // doesn't hit the max-total-ms false-positive at 120s wall time.
+    // Default 60s/step × 12 steps = 720s (12 min). Operators can tune via
+    // CHAT_ROUTE_PER_STEP_BUDGET_MS and CHAT_ROUTE_MAX_STEPS env vars for
+    // exceptionally long-running agents.
+    const CHAT_ROUTE_PER_STEP_BUDGET_MS = parseInt(
+      process.env.CHAT_ROUTE_PER_STEP_BUDGET_MS || '60000',
+      10,
+    );
+    const CHAT_ROUTE_MAX_STEPS = parseInt(
+      process.env.CHAT_ROUTE_MAX_STEPS || '12',
+      10,
+    );
+    const perStepTurnCap = CHAT_ROUTE_PER_STEP_BUDGET_MS * CHAT_ROUTE_MAX_STEPS;
     const ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS = 7;
     const isNinerouterClassProvider = ['ninerouter', 'ollama', 'kiro'].includes(provider);
     const effectiveSilenceMs = isNinerouterClassProvider ? 5000 : 20000;
     const ROUTE_MAX_TURN_MS = Math.max(
       ROUTE_MAX_TURN_MS_ENV,
       Math.ceil(ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS * effectiveSilenceMs * 1.5) + 30000,
+      perStepTurnCap,
     );
-    chatLogger.debug('[CHAT-ROUTE] computed max-turn from chain.length + silenceMs', {
+    chatLogger.debug('[CHAT-ROUTE] computed max-total-ms from per-step accounting + chain.length + silenceMs', {
       requestId,
       provider,
       isNinerouterClassProvider,
       effectiveSilenceMs,
       ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS,
+      perStepTurnCap,
+      CHAT_ROUTE_PER_STEP_BUDGET_MS,
+      CHAT_ROUTE_MAX_STEPS,
       ROUTE_MAX_TURN_MS,
       ROUTE_MAX_TURN_MS_ENV,
     });
@@ -1793,7 +1889,7 @@ FORMAT RULES:
       const noProgressMs = Date.now() - lastProgressAt;
       const turnMs = Date.now() - stallStartTime;
       if (turnMs >= ROUTE_MAX_TURN_MS) {
-        fireStall('max-turn', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
+        fireStall('max-total-ms', { turnMs, thresholdMs: ROUTE_MAX_TURN_MS });
       } else if (noProgressMs >= ROUTE_STALL_TIMEOUT_MS) {
         fireStall('no-progress', { idleMs: noProgressMs, thresholdMs: ROUTE_STALL_TIMEOUT_MS });
       }
@@ -1825,7 +1921,11 @@ const config: UnifiedAgentConfig = {
       // Reset the stall watchdog when the auto-continuation loop starts a
       // new streaming call, preventing false timeouts during the gap between
       // the primary stream ending and the continuation's first token.
-      onProgress: () => { lastProgressAt = Date.now(); },
+      onProgress: () => {
+        const now = Date.now();
+        lastProgressAt = now;
+        stallStartTime = now;
+      },
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,
@@ -1924,6 +2024,25 @@ const config: UnifiedAgentConfig = {
       requestedToolkits: toolPlan.requestedToolkits,
       authenticatedUser: !!authenticatedUserId,
     });
+
+    // ── Contract construction from toolPlan ──────────────────────────────
+    // Build a minimal Contract from the route-level pure-planner signal so
+    // the MCP tool pipeline (callMCPToolFromAI_SDK → gatePreCall /
+    // gatePostCall / wrapWithSentinel / contract.audit) activates for the
+    // primary production path. Round-1 wiring: killSwitches + invariants are
+    // empty (no op-restrictive gating yet); round-2 will populate them from
+    // escalationGraph / kill-switch config.
+    const contract: Contract = createContract({
+      intent: toolPlan.intents[0] ?? 'tool-execution',
+      scope: { paths: [], exclude: [] },
+      capabilities: toolPlan.intents,
+      budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+      invariants: [],
+      acceptanceCriteria: [],
+      killSwitches: [],
+      escalationGraph: {},
+    });
+
     // Tier 1: abort signal for Phase 2 internal degradation.
     const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
     // Boundary #4 timestamp — measured AT try-entry so duration includes
@@ -1939,7 +2058,9 @@ const config: UnifiedAgentConfig = {
     let mcpRaceError: { message?: string } | null = null;
     try {
       const mcpRace: Promise<any>[] = [
-        getMCPToolsForAI_SDK(authenticatedUserId, toolPlan, mcpAbortSignal),
+        getMCPToolsForAI_SDK(authenticatedUserId, toolPlan, mcpAbortSignal, {
+          scopePath: requestedScopePath,
+        }),
         // Tier 2: safety-net ceiling — padded so the Tier-1 abort signal
         // fires first, Phase 2 degrades, and getMCPToolsForAI_SDK returns
         // Phase 1 tools before this timer rejects the race.
@@ -2068,11 +2189,12 @@ const config: UnifiedAgentConfig = {
       try {
         const result = await callMCPToolFromAI_SDK(
           name,
-          args,
-          authenticatedUserId ?? '',
+          { ...args, conversationId: resolvedConversationId },
+          authenticatedUserId || filesystemOwnerId || '',
           requestedScopePath ?? '',
           undefined,                     // recentFailures (unchanged)
           { signal: toolCallSignal },    // F4: per-call signal (was agentTurnSignal)
+          contract,
         );
 
       // F1 fix: structured-error unwrap. VFS tools (vfs-mcp-tools.ts:640+) return
@@ -2271,6 +2393,14 @@ const config: UnifiedAgentConfig = {
                   // requestId into a closure-local BEFORE the void chain keeps
                   // correlation even when chatLogger's ALS scope is gone.
                   const toolTelemetryReqId = requestId;
+                  // TODO: migrate to unwrapStructuredToolError when V2-path
+                  // surfaces tool errors to LLM. Currently recordToolCall logs
+                  // result.error for telemetry but does NOT surface the
+                  // structured error to the LLM-facing message. When it does,
+                  // use unwrapStructuredToolError(result.error) from
+                  // @/lib/mcp/orchestrator-error-unwrap rather than building
+                  // the [ORCHESTRATOR-UNWRAP]: block inline.
+                  // Tracked in /opt/bing/.tickets/UNWRAP-HELPER-MIGRATION.md
                   void import('@/lib/tools/tool-call-tracker')
                     .then(({ toolCallTracker }) => {
                       toolCallTracker.recordToolCall({
@@ -2338,6 +2468,9 @@ const config: UnifiedAgentConfig = {
               // do/while(false) runs ONCE unless `break;` (sole, at L1706) exits mid-body.
               // `iteration++` (L1698) advances each turn; bound is LLM_AGENT_TOOLS_MAX_ITERATIONS (env, default 10).
               // Migration note: when swapping to a real while-loop, preserve the cap + the autoDecision.continue gate so chain-bound semantics do not regress.
+              // Fix 9: track loop exit reason for cap-exhaustion detection.
+              let loopExitReason: string | undefined;
+
               do {
                 // Reset per-iteration state in place. The factory's returned
                 // handler reads/writes `streamState` by reference, so the same
@@ -2362,6 +2495,14 @@ const config: UnifiedAgentConfig = {
                     );
                   }
                 );
+
+                // Direct SSE emitter for structured events (TOOL_RESULT, etc.)
+                // that bypasses the stream chunk handler's buffer accumulation.
+                currentConfig.onSSEEvent = (eventType, payload) => {
+                  try {
+                    emit(eventType as any, payload);
+                  } catch { /* best-effort */ }
+                };
 
                 // Call the LLM
 // @audit-Stage3-process-caller-typed-APPLIED:
@@ -2664,6 +2805,7 @@ const config: UnifiedAgentConfig = {
                     prompt: (autoDecision.continuationPrompt ?? '').slice(0, 200),
                     timestamp: Date.now(),
                   });
+                  const toolCallNow = Date.now();
                   currentConfig = {
                     ...currentConfig,
                     conversationHistory: [
@@ -2678,11 +2820,32 @@ const config: UnifiedAgentConfig = {
            *   );
            * Until then, the do/while(false) shape preserves the single-shot
            * by-break bound here.
-           */
-                      ...(currentConfig.conversationHistory || []),
-                      { role: 'assistant', content: previousAssistantContent },
-                      { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
-                    ],
+           */                       ...(currentConfig.conversationHistory || []),
+                       { role: 'assistant', content: previousAssistantContent },
+                        // Bug #6 (audit): Carry forward tool results so the LLM knows
+                        // which tools were already executed. Without these tool role
+                        // messages, the re-invoked LLM doesn't see the tool outputs and
+                        // re-attempts the same tool calls, creating an endless loop or
+                        // terminating at maxSteps=12 without emitting [BUILD_COMPLETE].
+                        // AI SDK v6 requires tool-result content as typed content parts:
+                        //   [{ type: 'tool-result', toolCallId, toolName, output }]
+                        // Legacy { role: 'tool', tool_call_id, content: string } format
+                        // triggers schema validation errors downstream.
+                        // Date.now() is hoisted before the spread so all toolCallId
+                        // suffixes within one update share the same timestamp.
+                        ...(accumulatedSteps.length > 0
+                          ? accumulatedSteps.map((step: any, idx: number) => ({
+                              role: 'tool' as const,
+                              content: [{
+                                type: 'tool-result' as const,
+                                toolCallId: `${step.toolName ?? 'tool'}-${idx}-${toolCallNow}`,
+                                toolName: step.toolName ?? 'tool',
+                                output: { type: 'json' as const, value: step.result ?? null },
+                              }],
+                            }))
+                          : []),
+                       { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
+                     ],
                   };
                   iteration++;
                 } else {
@@ -2692,9 +2855,33 @@ const config: UnifiedAgentConfig = {
                     reason: autoDecision.reason,
                     continuationsSoFar: autoDecision.continuationsSoFar,
                   };
+                  loopExitReason = autoDecision.reason;
                   break;
                 }
-              } while (false);
+              } while (iteration < LLM_AGENT_TOOLS_MAX_ITERATIONS);
+
+              // Fix 9: detect cap exhaustion — either decideAutoContinue refused
+              // (max_continuations_reached) or the while guard tripped.
+              if (!loopExitReason || loopExitReason === 'max_continuations_reached' || loopExitReason === 'max_iterations') {
+                result.metadata = result.metadata || {};
+                result.metadata.continuationExhausted = true;
+                result.metadata.continuationExhaustedReason = loopExitReason ?? 'max_iterations';
+                result.metadata.continuationExhaustedIterations = iteration + 1;
+                // Signal incompleteness to downstream consumers.
+                if (!result.incompleteSignals) result.incompleteSignals = [];
+                if (!result.incompleteSignals.includes('cap_exhausted')) {
+                  result.incompleteSignals.push('cap_exhausted');
+                }
+                emit(SSE_EVENT_TYPES.CONTINUATION_EXHAUSTED, {
+                  requestId,
+                  iteration: iteration + 1,
+                  maxIterations: LLM_AGENT_TOOLS_MAX_ITERATIONS,
+                  reason: loopExitReason ?? 'max_iterations',
+                  incompleteSignals: result.incompleteSignals,
+                  description: 'The assistant reached the maximum number of continuation turns. Some tasks may be incomplete.',
+                  timestamp: Date.now(),
+                });
+              }
               // Post-loop: extract any final edits from the LAST iteration's buffer
               // and apply session naming detection. The loop already handled VFS
               // writes and step accumulation; this block runs once after the loop.
@@ -2860,6 +3047,20 @@ const config: UnifiedAgentConfig = {
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
                 content: finalContent,
+                // Bug #16 (audit): Surface accumulated reasoning content in the
+                // final DONE event so downstream consumers (UI diff viewers, log
+                // pipelines) can access the full reasoning trace after the stream
+                // closes. Uses the main requestId (in scope across all streaming
+                // paths) as the globalThis accumulator key. After reading, the
+                // accumulator entry is deleted to prevent globalThis memory leaks
+                // across long-lived server processes.
+                ...(requestId && (globalThis as any)[`__reasoning_${requestId}`]
+                  ? (() => {
+                      const content = (globalThis as any)[`__reasoning_${requestId}`];
+                      delete (globalThis as any)[`__reasoning_${requestId}`];
+                      return { reasoningContent: content };
+                    })()
+                  : {}),
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
@@ -2880,6 +3081,16 @@ const config: UnifiedAgentConfig = {
             } catch (error: any) {
               // Clean up the continuation counter on error so it doesn't leak.
               clearContinuationCount(requestId);
+              // STALL-524: detect StallWatchdogError via the shared helper
+              // and tag the SSE error so the client can differentiate a stall
+              // from a generic stream error.
+              const isStall = isStallError(error);
+              if (isStall) {
+                chatLogger.warn('[STALL-524] StallWatchdogError caught in streaming inner catch', {
+                  errorCode: error?.code,
+                  stallDidFire,
+                });
+              }
               // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
               if (streamState.buffer.trim().length > 0) {
                 try {
@@ -2914,7 +3125,10 @@ const config: UnifiedAgentConfig = {
                 }
               }
 
-              emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
+              emit(SSE_EVENT_TYPES.ERROR, {
+                message: error.message || 'Agentic execution failed',
+                ...(isStall ? { isStall: true, stallCode: error?.code || 'STALL' } : {}),
+              });
 
               // Cleanup on error too
               streamState.buffer = '';
@@ -2922,6 +3136,7 @@ const config: UnifiedAgentConfig = {
               streamState.parser.unclosedPositions.clear();
             } finally {
               clearInterval(stallWatchdog);
+              clearContinuationCount(requestId);
               controller.close();
             }
           },
@@ -2947,15 +3162,10 @@ const config: UnifiedAgentConfig = {
         // are the only channel available to expose "this stream was
         // aborted by a server-side watchdog" to upstream proxies +
         // observability pipelines + clients that parse response trailers.
-        const responseHeaders: Record<string, string> = {
-          ...SSE_RESPONSE_HEADERS,
-          ...(stallDidFire
-            ? {
-                'x-stall-fired': 'true',
-                'x-stall-reason': stallDidFireReason ?? 'unknown',
-              }
-            : {}),
-        };
+        const responseHeaders = buildSSEResponseHeaders({
+          anonSessionIdToSet,
+          stallMeta: stallDidFire ? { fired: true, reason: stallDidFireReason ?? undefined } : undefined,
+        });
         return new Response(streamBody, { headers: responseHeaders });
       }
 
@@ -3120,7 +3330,21 @@ enqueue('done', {
                 const catchPhase1Status = orchestrationResult?.metadata?.phase1Status
                   ?? (orchestrationResult as any)?.phase1Status
                   ?? 'unknown';
-                enqueue('error', { message: error.message, mode: orchestrationMode, phase1Status: catchPhase1Status });
+                // STALL-524: detect StallWatchdogError via the shared helper
+                // and tag the SSE error so the client can differentiate a stall
+                // from a generic orchestration error.
+                const orchIsStall = isStallError(error);
+                if (orchIsStall) {
+                  chatLogger.warn('[STALL-524] StallWatchdogError caught in orchestration catch', {
+                    errorCode: error?.code,
+                  });
+                }
+                enqueue('error', {
+                  message: error.message,
+                  mode: orchestrationMode,
+                  phase1Status: catchPhase1Status,
+                  ...(orchIsStall ? { isStall: true, stallCode: error?.code || 'STALL' } : {}),
+                });
                 // SHOULD-CONSIDER (b) postaudit fix: structured chatLogger.error
                 // for log-side grep-discoverability. Operators searching server
                 // logs: `grep 'orchestration error' log.txt` recovers operator-friendly signal.
@@ -3146,15 +3370,10 @@ enqueue('done', {
           // L2494 site (different branch — Mastra ToolLoopAgent
           // streaming). Duplicated deliberately (each branch
           // self-contained) to avoid LET/HOIST churn at the route level.
-          const responseHeaders: Record<string, string> = {
-            ...SSE_RESPONSE_HEADERS,
-            ...(stallDidFire
-              ? {
-                  'x-stall-fired': 'true',
-                  'x-stall-reason': stallDidFireReason ?? 'unknown',
-                }
-              : {}),
-          };
+          const responseHeaders = buildSSEResponseHeaders({
+            anonSessionIdToSet,
+            stallMeta: stallDidFire ? { fired: true, reason: stallDidFireReason ?? undefined } : undefined,
+          });
           return new Response(streamBody, { headers: responseHeaders });
         }
 
@@ -3782,12 +4001,23 @@ enqueue('done', {
       const v1AgentTask = typeof lastUserMessage === 'string'
         ? lastUserMessage
         : JSON.stringify(lastUserMessage || '');
-      const v1AgentContext = buildAgenticContext(contextualMessages);
       // FIX: Do NOT prepend filesystem context to the task — the LLM already sees it
-      // via contextualMessages in conversationHistory. Prepending it caused the
+      // through the agent loop's dedicated initial context. Prepending it caused the
       // StatefulAgent/BootstrappedAgency to receive the system prompt as the task,
       // leading it to write "SYSTEM: Virtual filesystem tools..." to a file.
       const v1AgentPrompt = v1AgentTask;
+      const v1AgentSystemPrompt = contextualMessages
+        .filter(message => message.role === 'system')
+        .map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content))
+        .join('\n\n');
+      const v1AgentConversation = contextualMessages
+        .filter(message => message.role === 'user' || message.role === 'assistant')
+        .map(message => ({
+          role: message.role as 'user' | 'assistant',
+          content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
+        }));
+      const currentTaskIndex = v1AgentConversation.map(message => message.role).lastIndexOf('user');
+      if (currentTaskIndex >= 0) v1AgentConversation.splice(currentTaskIndex, 1);
 
       // V1 agentic tools: reuse existing Mastra tool loop for coding/tool requests.
       let agentToolResults = null;
@@ -3847,6 +4077,10 @@ enqueue('done', {
               workspacePath: sandboxSession?.workspacePath || requestedScopePath,
             },
             actualModel, // user-selected model
+            {
+              systemPrompt: v1AgentSystemPrompt,
+              conversationHistory: v1AgentConversation,
+            },
           );
 
           // Check if agent supports streaming (ToolLoopAgent integration)
@@ -4978,21 +5212,7 @@ enqueue('done', {
           });
 
           return new Response(readableStream, {
-            headers: {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              Pragma: 'no-cache',
-              Expires: '0',
-              Connection: 'keep-alive',
-              'X-Accel-Buffering': 'no',
-              'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || '',
-              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-              'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-anonymous-session-id',
-              'Vary': 'Origin',
-              ...(anonSessionIdToSet ? {
-                'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-              } : {}),
-            },
+            headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
           });
         }
 
@@ -5129,15 +5349,28 @@ enqueue('done', {
                         } catch {
                           // Non-critical
                         }
-                      }
-                    } else if (chunk.type === 'reasoning') {
-                      const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
-                        requestId: streamRequestId,
-                        reasoning: chunk.reasoning,
-                        timestamp: Date.now(),
-                      })}\n\n`;
-                      safeEnqueue(encoderRef, controller, reasoningEvent);
-                      chunkCount++;
+                      }    } else if (chunk.type === 'reasoning') {
+      // Bug #16 (audit): Accumulate reasoning content during streaming using
+      // a module-level accumulator. The accumulated content is emitted in the
+      // final DONE event so downstream consumers (UI diff viewers, log
+      // pipelines) can access the full reasoning trace after the stream
+      // closes. Non-reasoning models produce no accumulation.
+      if (chunk.reasoning) {
+        // Use a simple globalThis-based accumulator keyed by the main
+        // requestId (in scope across all streaming paths). The DONE event
+        // reads from this same key and then deletes it to prevent memory
+        // leaks across long-lived server processes.
+        const reasoningKey = `__reasoning_${requestId}`;
+        const existing = (globalThis as any)[reasoningKey] || '';
+        (globalThis as any)[reasoningKey] = existing + chunk.reasoning;
+      }
+      const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
+        requestId: streamRequestId,
+        reasoning: chunk.reasoning,
+        timestamp: Date.now(),
+      })}\n\n`;
+      safeEnqueue(encoderRef, controller, reasoningEvent);
+      chunkCount++
                     } else if (chunk.type === 'text-delta') {
                       // Accumulate text deltas and emit in batches
                       tokenBuffer += chunk.textDelta;
@@ -5428,21 +5661,7 @@ enqueue('done', {
           });
 
           return new Response(readableStream, {
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache, no-store, must-revalidate",
-              Pragma: "no-cache",
-              Expires: "0",
-              Connection: "keep-alive",
-              "X-Accel-Buffering": "no",
-              "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
-              "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-              "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
-              "Vary": "Origin",
-              ...(anonSessionIdToSet ? {
-                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-              } : {}),
-            },
+            headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
           });
         }
 
@@ -5852,21 +6071,7 @@ enqueue('done', {
         });
 
         return new Response(readableStream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            Pragma: "no-cache",
-            Expires: "0",
-            Connection: "keep-alive",
-            "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
-            "Vary": "Origin",
-            ...(anonSessionIdToSet ? {
-              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-            } : {}),
-          },
+          headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
         });
       }
 
@@ -6814,13 +7019,21 @@ function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
 }
 
 function buildAgenticContext(messages: LLMMessage[]): string {
-  const systemMessages = messages.filter(m => m.role === 'system');
-  const recent = messages.slice(-8);
-  const parts = [
-    ...systemMessages.map(m => `SYSTEM: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
-    ...recent.map(m => `${m.role.toUpperCase()}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
-  ];
-  return parts.join('\n\n');
+  const systemMessages = messages.filter(message => message.role === 'system');
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === 'user') {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  const recentMessages = messages
+    .filter((message, index) => message.role !== 'system' && index !== lastUserIndex)
+    .slice(-8);
+  return [
+    ...systemMessages.map(message => `SYSTEM: ${typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}`),
+    ...recentMessages.map(message => `${message.role.toUpperCase()}: ${typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}`),
+  ].join('\n\n');
 }
 
 /**
@@ -7908,7 +8121,11 @@ export async function GET(request: NextRequest) {
       // surface as HTTP 524 with the x-stall-fired signal — not the
       // generic 500 fallback below. Closes STALL-524-OUTERCATCH-GAP for the
       // warmup route; the active /api/chat route was already covered.
-      if (error instanceof StallWatchdogError) {
+      // Bug #12: add cross-realm-safe isStallWatchdogInstanceByConstructorName
+      // fallback so StallWatchdogErrors thrown across Worker boundaries or
+      // deserialized via structuredClone/postMessage still map to 524 instead
+      // of falling through to the generic 500 handler.
+      if (error instanceof StallWatchdogError || isStallWatchdogInstanceByConstructorName(error)) {
         return NextResponse.json(
           {
             success: false,
@@ -7987,6 +8204,3 @@ export async function OPTIONS(request: NextRequest) {
     },
   });
 }
-
-
-

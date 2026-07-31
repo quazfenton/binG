@@ -173,6 +173,15 @@ export function validateArguments(
   args: Readonly<Record<string, unknown>>,
   options?: { roleName?: string },
 ): GateResult {
+  // Normalize known arg aliases so policies cannot be bypassed via alternate
+  // parameter names. Comment #56: bash_execute accepts `code` as an alias for
+  // `command`; without this normalization, `{ code: 'rm -rf /' }` evades every
+  // rule keyed on `argName: 'command'`.
+  let effectiveArgs = args;
+  if (toolName === 'bash_execute' && args.code !== undefined && args.command === undefined) {
+    effectiveArgs = { ...args, command: args.code };
+  }
+
   const policies = DEFAULT_POLICIES.get(toolName);
   if (!policies || policies.length === 0) return { ok: true };
 
@@ -181,19 +190,22 @@ export function validateArguments(
   const disabledByIndex = new Set<number>();
   for (const o of overrides) {
     if (o.toolName !== toolName || !o.disabled) continue;
-    // Match by stable id when supplied, else fall back to index-based
-    // resolve: the caller's override MUST use index-based resolution
-    // unless they explicitly copy the policy id.
+    // Match by stable id when supplied; auto-derive when absent by
+    // checking each policy's stablePolicyId (Comment #74: doc says
+    // "Auto-derived if omitted" but implementation used -1, meaning
+    // overrides without policyId could never actually disable anything).
     const idx = o.policyId
       ? policies.findIndex((p) => stablePolicyId(toolName, p) === o.policyId)
-      : -1;
+      : policies.length === 1
+        ? 0  // unambiguous: only one policy in this tool → auto-select it
+        : -1;
     if (idx >= 0) disabledByIndex.add(idx);
   }
 
   for (let i = 0; i < policies.length; i++) {
     if (disabledByIndex.has(i)) continue;
     const policy = policies[i];
-    const argValue = args[policy.argName];
+    const argValue = effectiveArgs[policy.argName];
     const verdict = checkOne(policy, argValue);
     if (!verdict.ok) {
       const failureMsg = (verdict as Extract<ReturnType<typeof checkOne>, { ok: false }>).message;

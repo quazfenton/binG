@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { e2bDesktopProvider } from '@/lib/computer/e2b-desktop-provider-enhanced';
 import { verifyToken } from '@/lib/security/jwt-auth';
 import { activeDesktops } from '../active-desktops';
+import { unregisterRecorder, getRecorder } from '../recording-store';
 
 /**
  * Extract userId from request authorization header
@@ -140,6 +141,18 @@ export async function DELETE(
     }
 
     if (activeDesktop) {
+      // Stop any active recording first
+      const activeRecorder = getRecorder(id);
+      if (activeRecorder) {
+        try {
+          await activeRecorder.recorder.stop();
+        } catch {
+          // Best-effort — recorder may already be in a bad state
+        }
+        unregisterRecorder(id);
+        console.log('[Desktop API] Recording stopped for desktop:', id);
+      }
+
       // Stop desktop
       await activeDesktop.desktop.stop();
       activeDesktops.delete(id);

@@ -38,6 +38,11 @@ services:
       NINEROUTER_API_KEY: ${NINEROUTER_API_KEY}
       KIRO_BASE_URL: http://ninerouter:3000/v1
       BACKEND_ROUTE_EXCLUDES: "/desktop/"
+      # Starts the authenticated local MCP CLI transport inside the backend.
+      # Public HTTP MCP requests are routed by Caddy's /mcp handler to
+      # backend:3001/api/mcp; do not point MCP_GATEWAY_URL back at this
+      # process, which would create a self-registration loop.
+      MCP_CLI_PORT: "8888"
       # S3/MinIO storage for VFS snapshots and file uploads
       STORAGE_TYPE: ${STORAGE_TYPE:-s3}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}

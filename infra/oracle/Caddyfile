@@ -4,6 +4,7 @@
 #
 # Routes based on URL path prefixes:
 #   /api/*, /health*  → bing backend (Hono orchestrator)
+#   /mcp*             → bing MCP HTTP endpoint
 #   /nocturne/*       → nocturne FastAPI backend
 #   /copa/*           → CopaMundial (Next.js + Socket.IO)
 #   /novnc/*        → noVNC web-based VNC client (on Docker host, basic_auth required)
@@ -25,11 +26,26 @@
         }
     }
 
+    # Public MCP HTTP transport. Keep this ahead of both the 9Router API
+    # matcher and the dashboard catch-all; otherwise /api/mcp was captured by
+    # 9Router and never reached binG's MCP endpoint.
+    @bing_mcp path /mcp /mcp/*
+    handle @bing_mcp {
+        uri replace /mcp /api/mcp
+        reverse_proxy backend:3001 {
+            flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
+        }
+    }
+
     # 9Router dashboard API routes (must come before /api/* catch-all)
     # NOTE: The Host header is passed through as the original tunnel host so
     #       9Router returns dashboard configuration for the correct hostname.
     #       The -l flag is just --log (server logs), NOT "require localhost".
-    @ninerouter_api path /api/auth/* /api/combos* /api/init /api/keys* /api/locale /api/mcp/* /api/media-providers/* /api/models* /api/oauth/* /api/pricing /api/provider-nodes/* /api/providers* /api/proxy-pools/* /api/cli-tools/* /api/settings* /api/shutdown /api/tags /api/translator/* /api/tunnel/* /api/usage/* /api/version*
+    @ninerouter_api path /api/auth/* /api/combos* /api/init /api/keys* /api/locale /api/media-providers/* /api/models* /api/oauth/* /api/pricing /api/provider-nodes/* /api/providers* /api/proxy-pools/* /api/cli-tools/* /api/settings* /api/shutdown /api/tags /api/translator/* /api/tunnel/* /api/usage/* /api/version*
     handle @ninerouter_api {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
@@ -114,12 +130,32 @@
         }
     }
 
+    # ── Catch-all → 9Router (dashboard + /v1/* SSE streams) ───────────────
+    # This handler serves the 9Router dashboard and all /v1/* completions
+    # streams.  The transport block adds explicit timeouts that are
+    # MISSING from the original config — without them Go's http.Transport
+    # uses unlimited connection lifetime, which means once a connection
+    # enters a half-open state after an upstream 429/RST_STREAM, subsequent
+    # requests reuse the dead connection and the SSE stream dies after a
+    # few bytes.  Explicit read/write timeouts force Caddy to recycle
+    # connections, preventing the poisoned-connection persistence.
+    #
+    # The `handle @ninerouter_errors` block adds `Connection: close` on
+    # error responses (4xx/5xx).  This forces cloudflared to drop the
+    # HTTP/2 stream immediately, so the next request from the client gets
+    # a fresh tunnel stream instead of being routed through the same
+    # half-closed connection.
+    #
+    # 9Router -l flag is just --log (server logs). Keep Host: localhost
+    # here for /v1/chat/completions compatibility — the dashboard's HTML
+    # is also served here but uses relative URLs so Host doesn't matter.
     handle {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
-            # 9Router -l flag is just --log (server logs). Keep Host: localhost
-            # here for /v1/chat/completions compatibility — the dashboard's HTML
-            # is also served here but uses relative URLs so Host doesn't matter.
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
             header_up Host "localhost"
             header_up X-Forwarded-Proto "https"
             header_up X-Forwarded-Host {host}
@@ -137,5 +173,16 @@
             header_down Set-Cookie "; Domain=[^;]*" ";"
             header_down Set-Cookie "Domain=[^;]*; " ""
         }
+    }
+    # Force Connection: close on error responses from 9Router so
+    # cloudflared drops the half-open HTTP/2 stream immediately.
+    # Without this a 429 from a subprovider (which 9Router passes through)
+    # leaves the tunnel stream in a half-closed state; the client's next
+    # request reuses that dead connection and the SSE stream drops after a
+    # few bytes — the "works first few times, then every request fails"
+    # pattern.
+    @ninerouter_errors status 4xx 5xx
+    handle @ninerouter_errors {
+        header Connection close
     }
 }

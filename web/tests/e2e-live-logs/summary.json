@@ -1,0 +1,85 @@
+{
+  "timestamp": "2026-07-30T03:27:47.128Z",
+  "baseUrl": "http://127.0.0.1:3000",
+  "scenarios": [
+    {
+      "name": "auth_login_probe",
+      "passed": false,
+      "status": 401,
+      "failurePoint": "auth/login returned non-2xx",
+      "responseSnippet": "{\"success\":false,\"error\":\"Invalid email or password\"}"
+    },
+    {
+      "name": "chat_nonstream_probe",
+      "passed": true,
+      "status": 200,
+      "failurePoint": null,
+      "responseSnippet": "{\"success\":true,\"content\":\"Hello, I am greeting you per your request; specify your next task.\",\"data\":{\"success\":true,\"response\":\"Hello, I am greeting you per your request; specify your next task.\",\"steps\":[],\"metadata\":{\"agentType\":\"unified-agent\",\"mode\":\"v1-api\",\"duration\":3952}}}"
+    },
+    {
+      "name": "chat_stream_baseline",
+      "passed": true,
+      "status": 200,
+      "tokenLength": 141,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0
+    },
+    {
+      "name": "mistral_app_generation",
+      "passed": false,
+      "status": 200,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "filesInSession": [],
+      "indexHasButton": false,
+      "appHasCounterLogic": false,
+      "failurePoint": "stream finished without persisting expected files"
+    },
+    {
+      "name": "mistral_repeat_edit_existing",
+      "passed": false,
+      "status": 200,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "versionBefore": null,
+      "versionAfter": null,
+      "appContainsStartAt5": false,
+      "appContainsReset": false,
+      "failurePoint": "repeat edit did not change target file version"
+    },
+    {
+      "name": "mistral_terminal_run",
+      "passed": false,
+      "status": 200,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "terminalToolSeen": false,
+      "terminalOutputSeen": true,
+      "failurePoint": "natural-language run request did not produce a terminal/shell tool invocation event"
+    },
+    {
+      "name": "google_app_generation",
+      "passed": false,
+      "status": 200,
+      "doneEvent": true,
+      "toolEventCount": 12,
+      "fileEventCount": 56,
+      "indexReadStatus": 400,
+      "appReadStatus": 400,
+      "failurePoint": "google stream completed without expected workspace files"
+    },
+    {
+      "name": "ambiguous_file_selection",
+      "passed": false,
+      "status": 200,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "frontendContent": "{\"success\":false,\"error\":\"Failed to read file\"}",
+      "serverContent": "{\"success\":false,\"error\":\"Failed to read file\"}",
+      "failurePoint": "wrong file selected or both files changed during ambiguous-target update"
+    }
+  ]
+}

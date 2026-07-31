@@ -1415,7 +1415,7 @@ export async function executeWithOrchestrationMode(
         while (iterations < maxIterations && specAmplified && (Date.now() - startTime) < maxLoopDurationMs) {
         // Run spec amplification step
         const amplifyResult = await processUnifiedAgentRequest({
-          userMessage: `[SPEC_AMPLIFY] Review and enhance: ${currentResponse}`,
+          userMessage: `[SPEC_AMPLIFY]\nORIGINAL REQUEST:\n${request.task}\n\nCURRENT CANDIDATE:\n${currentResponse}\n\nReview and enhance the candidate while preserving the original request.`,
           userId: request.ownerId,
           conversationId: request.sessionId,
           sandboxId: request.sessionId,
@@ -1458,7 +1458,7 @@ export async function executeWithOrchestrationMode(
 
         // Run spec amplification in the middle
         const specResult = await processUnifiedAgentRequest({
-          userMessage: `[SPEC_MAXIMAL] Enhance: ${preSpecResult.response}`,
+          userMessage: `[SPEC_MAXIMAL]\nORIGINAL REQUEST:\n${request.task}\n\nCURRENT CANDIDATE:\n${preSpecResult.response}\n\nEnhance the candidate while preserving the original request.`,
           userId: request.ownerId,
           conversationId: request.sessionId,
           sandboxId: request.sessionId,
@@ -1467,7 +1467,7 @@ export async function executeWithOrchestrationMode(
 
         // Run final agent loop (post-spec phase)
         const postSpecResult = await processUnifiedAgentRequest({
-          userMessage: `[POST_SPEC_MAXIMAL] Proceed with: ${specResult.response}`,
+          userMessage: `[POST_SPEC_MAXIMAL]\nORIGINAL REQUEST:\n${request.task}\n\nENHANCED SPECIFICATION:\n${specResult.response}\n\nProceed with the enhanced specification and verify it fulfills the original request.`,
           userId: request.ownerId,
           conversationId: request.sessionId,
           sandboxId: request.sessionId,

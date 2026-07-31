@@ -408,7 +408,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
   const loadToolsForRequest = async (
     composio: any,
     userId: string,
-    requestedToolkits?: string[]
+    requestedToolkits?: string[],
+    attempt: number = 1,
   ): Promise<any[]> => {
     const requested = (requestedToolkits || []).map((t) => t.toLowerCase());
 
@@ -417,8 +418,15 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
       return tools.filter((tool) => requested.includes(String(tool.toolkit || '').toLowerCase()));
     };
 
+    // Issue 7 (Composio 0-tools): log which SDK path was tried and the response
+    // shape when tools come back empty, so operators can diagnose why Composio
+    // silently degraded to 0 tools.
+    let lastError: string | null = null;
+    let methodsTried: string[] = [];
+
     // Preferred path for newer SDK docs: composio.tools.get(userId, filters)
     if (typeof composio?.tools?.get === 'function') {
+      methodsTried.push('tools.get');
       try {
         const result = await composio.tools.get(userId, {
           ...(requested.length > 0 ? { toolkits: requested } : {}),
@@ -426,11 +434,20 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         });
         const tools = extractToolArray(result).map(normalizeTool);
         if (tools.length > 0) return filterByToolkit(tools);
-      } catch {}
+        logger.warn('[ComposioZeroTools] tools.get returned 0 tools', {
+          attempt,
+          requestedToolkits,
+          resultShape: typeof result === 'object' ? `keys=[${Object.keys(result || {}).join(',')}]` : typeof result,
+        });
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+        logger.warn('[ComposioZeroTools] tools.get threw', { attempt, error: lastError });
+      }
     }
 
     // Common list path in several SDK versions
     if (typeof composio?.tools?.list === 'function') {
+      methodsTried.push('tools.list');
       const tryParams = [
         requested.length > 0 ? { toolkit_slug: requested[0], limit: 300 } : { limit: 300 },
         requested.length > 0 ? { apps: requested.join(','), limit: 300 } : { limit: 300 },
@@ -442,24 +459,43 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
           const result = params ? await composio.tools.list(params) : await composio.tools.list();
           const tools = extractToolArray(result).map(normalizeTool);
           if (tools.length > 0) return filterByToolkit(tools);
-        } catch {}
+          logger.warn('[ComposioZeroTools] tools.list returned 0 tools', {
+            attempt,
+            params: params ? JSON.stringify(params) : 'undefined',
+            resultShape: typeof result === 'object' ? `keys=[${Object.keys(result || {}).join(',')}]` : typeof result,
+          });
+        } catch (err: any) {
+          lastError = err?.message || String(err);
+          logger.warn('[ComposioZeroTools] tools.list threw', { attempt, params: params ? JSON.stringify(params) : 'undefined', error: lastError });
+        }
       }
     }
 
     // Session-based native tools path
     if (typeof composio?.create === 'function') {
+      methodsTried.push('session.tools');
       try {
         const session = await composio.create(userId);
         if (typeof session?.tools === 'function') {
           const result = await session.tools();
           const tools = extractToolArray(result).map(normalizeTool);
           if (tools.length > 0) return filterByToolkit(tools);
+          logger.warn('[ComposioZeroTools] session.tools returned 0 tools', {
+            attempt,
+            resultShape: typeof result === 'object' ? `keys=[${Object.keys(result || {}).join(',')}]` : typeof result,
+          });
+        } else {
+          logger.warn('[ComposioZeroTools] session created but session.tools is not a function', { attempt });
         }
-      } catch {}
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+        logger.warn('[ComposioZeroTools] session.tools threw', { attempt, error: lastError });
+      }
     }
 
     // Raw tools fallback
     if (typeof composio?.tools?.getRawComposioTools === 'function') {
+      methodsTried.push('tools.getRawComposioTools');
       try {
         const result = await composio.tools.getRawComposioTools({
           ...(requested.length > 0 ? { toolkits: requested } : {}),
@@ -467,9 +503,35 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
         });
         const tools = extractToolArray(result).map(normalizeTool);
         if (tools.length > 0) return filterByToolkit(tools);
-      } catch {}
+        logger.warn('[ComposioZeroTools] tools.getRawComposioTools returned 0 tools', {
+          attempt,
+          resultShape: typeof result === 'object' ? `keys=[${Object.keys(result || {}).join(',')}]` : typeof result,
+        });
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+        logger.warn('[ComposioZeroTools] tools.getRawComposioTools threw', { attempt, error: lastError });
+      }
     }
 
+    // Issue 7: single retry when ALL methods return 0 tools
+    if (attempt < 2) {
+      logger.warn('[ComposioZeroTools] All Composio SDK methods returned 0 tools — retrying once', {
+        attempt,
+        methodsTried,
+        lastError,
+        requestedToolkits,
+      });
+      // Short delay before retry to allow transient conditions to clear
+      const COMPOSIO_RETRY_DELAY_MS = 500;
+      await new Promise((resolve) => setTimeout(resolve, COMPOSIO_RETRY_DELAY_MS));
+      return loadToolsForRequest(composio, userId, requestedToolkits, attempt + 1);
+    }
+
+    logger.error('[ComposioZeroTools] All Composio SDK methods returned 0 tools after retry', {
+      methodsTried,
+      lastError,
+      requestedToolkits,
+    });
     return [];
   };
 

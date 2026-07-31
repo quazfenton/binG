@@ -11,6 +11,7 @@ import { runAgentLoop } from '@/lib/orchestra/agent-loop';
 import { generateSecureId } from '@/lib/utils/utils';
 import type { SandboxProviderType } from '@/lib/sandbox/providers/index';
 import { getAllTools } from '@/lib/chat/vercel-ai-tools';
+import { selectToolPlan } from '@/lib/tools/select-tool-plan';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Agent:Stateful');
@@ -138,11 +139,27 @@ export async function POST(request: NextRequest) {
         modelId
       );
 
+      // Compute a tool plan for plan-based capability filtering.
+      const toolPlan = selectToolPlan({
+        userMessage,
+        conversationHistory: messages
+          .filter((m: any) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+          .map((m: any) => ({
+            role: m.role as 'user' | 'assistant' | 'system',
+            content: typeof m.content === 'string'
+              ? m.content
+              : JSON.stringify(m.content ?? ''),
+          })),
+        authenticated: true,
+      });
+
       // Get tools from vercel-ai-tools including capability-based tools
       const tools = await getAllTools({
         userId,
         conversationId: sessionId,
         sessionId: sessionId || requestId,
+        toolPlan,
+        lastUserMessage: userMessage,
       });
 
       // Extract system messages for the `system` parameter and keep only

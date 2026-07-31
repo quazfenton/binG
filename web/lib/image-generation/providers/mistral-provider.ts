@@ -18,7 +18,7 @@ import type {
 import { ASPECT_RATIO_DIMENSIONS, ImageGenerationErrorType as ErrorType } from '../types';
 import { createLogger } from '@/lib/utils/logger';
 
-const logger = createLogger('MistralProvider');
+const logger = createLogger('MistralProvider', { secure: true });
 
 export class MistralImageProvider implements ImageGenerationProvider {
   readonly id = 'mistral';
@@ -75,10 +75,20 @@ export class MistralImageProvider implements ImageGenerationProvider {
   initialize(config: ProviderConfig): void {
     if (config.apiKey) {
       this.apiKey = config.apiKey;
-      this.client = new Mistral({ apiKey: this.apiKey });
     }
     if (config.baseURL) {
       this.baseURL = config.baseURL;
+    }
+    // Recreate the client whenever an API key is available so that a
+    // `baseURL`/proxy configured via `initializeAll` (set AFTER the
+    // constructor ran) actually takes effect. Previously the client was
+    // built before `baseURL` was applied and never received `serverURL`,
+    // so configured custom endpoints were silently ignored.
+    if (this.apiKey) {
+      this.client = new Mistral({
+        apiKey: this.apiKey,
+        ...(this.baseURL ? { serverURL: this.baseURL } : {}),
+      });
     }
   }
 
@@ -505,7 +515,7 @@ export class MistralImageProvider implements ImageGenerationProvider {
               logger.info('Successfully extracted image from file:', chunk.fileId);
               logger.info('Image URL length: ' + imageUrl.length + ' characters');
             } catch (error) {
-              logger.error('Failed to process file:', chunk.fileId, error);
+              logger.error('Failed to process file:', error, { fileId: chunk.fileId });
               // Continue to next chunk instead of failing entirely
             }
           }

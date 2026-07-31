@@ -101,31 +101,56 @@ impl SessionStore {
     }
     
     pub fn remove(&self, session_id: &str) -> Option<Arc<RwLock<TerminalSession>>> {
-        self.idle_timers.write().remove(session_id);
-        
-        let session = self.sessions.write().remove(session_id)?;
-        
-        if let Ok(s) = session.try_read() {
-            let user_id = s.user_id.clone();
+        // Acquire sessions lock, remove the session, get user_id, then drop
+        let session = {
+            let mut sessions = self.sessions.write();
+            sessions.remove(session_id)?
+        };
+
+        let user_id = {
+            if let Ok(s) = session.try_read() {
+                Some(s.user_id.clone())
+            } else {
+                None
+            }
+        };
+
+        // Remove from user_sessions
+        if let Some(user_id) = user_id {
             if let Some(ids) = self.user_sessions.write().get_mut(&user_id) {
                 ids.retain(|id| id != session_id);
             }
         }
-        
+
+        // Remove idle timer
+        self.idle_timers.write().remove(session_id);
+
         Some(session)
     }
     
     pub fn remove_by_user(&self, user_id: &str) {
-        let session_ids = self.user_sessions.write()
-            .remove(user_id)
-            .unwrap_or_default();
-        
-        let mut sessions = self.sessions.write();
-        let mut idle_timers = self.idle_timers.write();
-        
-        for id in session_ids {
-            sessions.remove(&id);
-            idle_timers.remove(&id);
+        // Acquire locks in the same order as create/remove: sessions first,
+        // then user_sessions, to prevent deadlocks.
+        let session_ids: Vec<String>;
+        {
+            let mut user_sessions = self.user_sessions.write();
+            session_ids = user_sessions.remove(user_id).unwrap_or_default();
+        }
+
+        // Remove from sessions
+        {
+            let mut sessions = self.sessions.write();
+            for id in &session_ids {
+                sessions.remove(id);
+            }
+        }
+
+        // Remove idle timers
+        {
+            let mut idle_timers = self.idle_timers.write();
+            for id in &session_ids {
+                idle_timers.remove(id);
+            }
         }
     }
     

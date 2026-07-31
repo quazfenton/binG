@@ -216,6 +216,201 @@ export interface UnifiedResponse {
   }
 }
 
+/**
+ * ResponseEnvelope — cross-bug unification (2026-07-22).
+ *
+ * Discriminated union using `kind` discriminator. Single source of truth
+ * for the cross-layer error contract that closes:
+ *  - Bug 3 (DIFF_MISMATCH cascade) — `kind: 'error_recoverable'` with
+ *    `currentFileContent` + `currentFileVersion` via conditional spread
+ *  - Bug 2 (zombie streams 19+ min silence) — `kind: 'idle_approach'`
+ *    + `kind: 'stall_watchdog'` with silenceMs + lastChunkAt
+ *  - Bug 1 (VFS session path normalization) — `kind: 'scope_rejected'`
+ *    with expectedScopePrefix + correctedExample
+ *
+ * All bearer fields are optional + type-narrowed (present-iff-known via
+ * conditional spread, NOT always-present-with-falsy-fallback). Backward-compat:
+ * the existing `error.code` field is preserved so pre-existing per-tool parsers
+ * still work; downstream consumers should pattern-match on `envelope.kind`
+ * instead.
+ *
+ * See /opt/bing/.tickets/COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT.md for the
+ * 6-component cascade chain that this type structurally closes.
+ */
+export interface ResponseError {
+  /** Backward-compat: existing `error.code` consumers (e.g., chat hook) still work */
+  code: string;
+  message: string;
+  retryable: boolean;
+  /** Most of these are present-iff-known; see JSDoc above */
+  attemptedPath?: string;
+  suggestedNextAction?: string;
+  /** Bug 3 (DIFF_MISMATCH) — present only on `error_recoverable` with currentFile populated */
+  currentFileContent?: string;
+  currentFileVersion?: number;
+  /** Bug 2 (idle_approach / stall_watchdog) — silenceMs leaked to LLM is rare; useful for tooling */
+  silenceMs?: number;
+  idleTimeoutMs?: number;
+  lastChunkAt?: string;
+  /** Bug 1 (scope_rejected) — allows LLM to construct a valid retry path */
+  expectedScopePrefix?: string;
+  correctedExample?: { example: string; format: string; examples: string[] };
+}
+
+export type ResponseEnvelope =
+  | { kind: 'success'; data: unknown; timestamp: string; requestId?: string; conversationId?: string }
+  | { kind: 'error_recoverable'; error: ResponseError; timestamp: string; requestId?: string; conversationId?: string }
+  | { kind: 'error_fatal'; error: ResponseError; timestamp: string; requestId?: string; conversationId?: string }
+  | { kind: 'idle_approach'; error: ResponseError; idle: { silenceMs: number; idleTimeoutMs: number; lastChunkAt?: string }; streamId?: string; timestamp: string }
+  | { kind: 'scope_rejected'; error: ResponseError; scope: { attemptedPath: string; expectedScopePrefix: string; correctedExample?: { example: string; format: string; examples: string[] } }; timestamp: string }
+  | { kind: 'stall_watchdog'; error: ResponseError; stall: { msSinceLastChunk: number; reason: string }; streamId?: string; timestamp: string };
+
+/** Builder for `kind: 'success'` — minimal data envelope */
+export function successEnvelope(data: unknown, opts?: { requestId?: string; conversationId?: string }): ResponseEnvelope {
+  return {
+    kind: 'success',
+    data,
+    timestamp: new Date().toISOString(),
+    ...(opts ?? {}),
+  };
+}
+
+/** Builder for `kind: 'error_recoverable'` — wraps Bug 3 DIFF_MISMATCH + similar recoverable errors */
+export function errorRecoverableEnvelope(
+  meta: {
+    code: string;
+    message: string;
+    attemptedPath?: string;
+    suggestedNextAction?: string;
+    /** Bug 3 conditional-spread payload: both must be provided to surface */
+    currentFileContent?: string;
+    currentFileVersion?: number;
+  },
+  opts?: { requestId?: string; conversationId?: string },
+): ResponseEnvelope {
+  return {
+    kind: 'error_recoverable',
+    error: {
+      code: meta.code,
+      message: meta.message,
+      retryable: true,
+      ...(meta.attemptedPath !== undefined && { attemptedPath: meta.attemptedPath }),
+      ...(meta.suggestedNextAction !== undefined && { suggestedNextAction: meta.suggestedNextAction }),
+      ...(meta.currentFileContent !== undefined && { currentFileContent: meta.currentFileContent }),
+      ...(meta.currentFileVersion !== undefined && { currentFileVersion: meta.currentFileVersion }),
+    },
+    timestamp: new Date().toISOString(),
+    ...(opts ?? {}),
+  };
+}
+
+/** Builder for `kind: 'error_fatal'` — non-recoverable error envelope */
+export function errorFatalEnvelope(meta: { code: string; message: string; attemptedPath?: string }, opts?: { requestId?: string; conversationId?: string }): ResponseEnvelope {
+  return {
+    kind: 'error_fatal',
+    error: {
+      code: meta.code,
+      message: meta.message,
+      retryable: false,
+      ...(meta.attemptedPath !== undefined && { attemptedPath: meta.attemptedPath }),
+    },
+    timestamp: new Date().toISOString(),
+    ...(opts ?? {}),
+  };
+}
+
+/**
+ * Builder for `kind: 'idle_approach'` — Bug 2 zombie-stream pre-emption.
+ * Emitted BEFORE the full idle-timeout fires so the client can pre-emptively
+ * re-route rather than wait for the full silent-window termination.
+ */
+export function idleApproachEnvelope(meta: {
+  silenceMs: number;
+  idleTimeoutMs: number;
+  streamId?: string;
+  lastChunkAt?: string;
+  /** Optional override of default code + message */
+  code?: string;
+  message?: string;
+}): ResponseEnvelope {
+  return {
+    kind: 'idle_approach',
+    error: {
+      code: meta.code ?? 'IDLE_APPROACH',
+      message: meta.message ?? 'Stream approaching idle timeout',
+      retryable: true,
+      ...(meta.silenceMs !== undefined && { silenceMs: meta.silenceMs }),
+      ...(meta.idleTimeoutMs !== undefined && { idleTimeoutMs: meta.idleTimeoutMs }),
+      ...(meta.lastChunkAt !== undefined && { lastChunkAt: meta.lastChunkAt }),
+    },
+    idle: {
+      silenceMs: meta.silenceMs,
+      idleTimeoutMs: meta.idleTimeoutMs,
+      ...(meta.lastChunkAt !== undefined && { lastChunkAt: meta.lastChunkAt }),
+    },
+    ...(meta.streamId !== undefined && { streamId: meta.streamId }),
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Builder for `kind: 'stall_watchdog'` — Bug 2 zombie-stream terminal signal.
+ * Emitted AFTER the full idle-timeout fires, signaling the stream died.
+ */
+export function stallWatchdogEnvelope(meta: {
+  msSinceLastChunk: number;
+  reason: string;
+  streamId?: string;
+  code?: string;
+  message?: string;
+}): ResponseEnvelope {
+  return {
+    kind: 'stall_watchdog',
+    error: {
+      code: meta.code ?? 'STALL_WATCHDOG',
+      message: meta.message ?? `Stream stalled: ${meta.reason}`,
+      retryable: true,
+    },
+    stall: { msSinceLastChunk: meta.msSinceLastChunk, reason: meta.reason },
+    ...(meta.streamId !== undefined && { streamId: meta.streamId }),
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
+ * Builder for `kind: 'scope_rejected'` — Bug 1 VFS session path normalization.
+ * Emitted when the LLM requests an out-of-scope path; surfaces the expected
+ * scope prefix + a corrected example so the LLM can construct a valid retry.
+ */
+export function scopeRejectedEnvelope(meta: {
+  attemptedPath: string;
+  expectedScopePrefix: string;
+  code?: string;
+  message?: string;
+  correctedExample?: { example: string; format: string; examples: string[] };
+}): ResponseEnvelope {
+  return {
+    kind: 'scope_rejected',
+    error: {
+      code: meta.code ?? 'SCOPE_REJECTED',
+      message: meta.message ?? `Path "${meta.attemptedPath}" is outside the allowed scope "${meta.expectedScopePrefix}"`,
+      retryable: true,
+      attemptedPath: meta.attemptedPath,
+      expectedScopePrefix: meta.expectedScopePrefix,
+      ...(meta.correctedExample !== undefined && { correctedExample: meta.correctedExample }),
+      suggestedNextAction: meta.correctedExample
+        ? `Use a relative path like "${meta.correctedExample.example}". Or call list_files("/") to discover the scope root.`
+        : 'Use a relative path within the active session workspace. Or call list_files("/") to discover the scope root.',
+    },
+    scope: {
+      attemptedPath: meta.attemptedPath,
+      expectedScopePrefix: meta.expectedScopePrefix,
+      ...(meta.correctedExample !== undefined && { correctedExample: meta.correctedExample }),
+    },
+    timestamp: new Date().toISOString(),
+  };
+}
+
 // Endpoint statistics
 interface EndpointStats {
   successes: number

@@ -110,7 +110,7 @@ describe('AutoContinueBanner', () => {
     });
 
     it('renders counter chip with red class when at-cap and reason is max_continuations_reached', () => {
-      const { container } = render(
+      render(
         <AutoContinueBanner
           reason="max_continuations_reached"
           continuationsSoFar={3}
@@ -120,7 +120,7 @@ describe('AutoContinueBanner', () => {
       const chip = screen.getByText('3/3');
       expect(chip.className).toContain('bg-red-500/20');
       expect(chip.className).toContain('text-red-300');
-      expect((container.firstChild as HTMLElement).getAttribute('title')).toContain(
+      expect(chip.getAttribute('title')).toContain(
         'auto-continuation counter',
       );
     });

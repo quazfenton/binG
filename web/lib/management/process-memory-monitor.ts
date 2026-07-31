@@ -102,8 +102,8 @@ export interface ProcessMemoryMonitorConfig {
 }
 
 const DEFAULT_CONFIG: ProcessMemoryMonitorConfig = {
-  softThrottleMb: 2048,       // 2 GB (Bug #43 + memory pressure observed at 1071 MB)
-  criticalMb: 1843,           // 1.8 GB
+  softThrottleMb: 1843,       // 1.8 GB — must be < criticalMb (Bug #88: was inverted 2048/1843)
+  criticalMb: 2048,           // 2 GB (Bug #43 + memory pressure observed at 1071 MB)
   tickIntervalMs: 10_000,     // 10 s
   snapshotCooldownMs: 300_000, // 5 min
   hysteresisRatio: 0.9,

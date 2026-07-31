@@ -468,12 +468,12 @@ describe('selectToolPlan — telemetry reasons', () => {
     const result = selectToolPlan({
       userMessage: 'do not modify src/auth.ts',
     });
+    // The negative regex suppresses code.edit entirely (score → 0 → excluded
+    // from intents + reasons). The meaningful assertion is that the intent
+    // was dropped, not that it lingers with score 0.
+    expect(result.intents).not.toContain('code.edit');
     const edit = result.reasons.find((r) => r.intent === 'code.edit');
-    // If the negative suppressed the intent, the score should be 0.
-    if (edit) {
-      expect(edit.score).toBe(0);
-      expect(edit.negatedSignals.length).toBeGreaterThan(0);
-    }
+    expect(edit).toBeUndefined();
   });
 });
 
@@ -706,7 +706,7 @@ describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () =
   // This pins the opt-in semantics — if a future change inverts the
   // default, this test will fail (because `web.fetch` would no longer
   // require the explicit option).
-  it('item ⑤ opt-in — agentTaskUrlReadsEnabled=true: agentTask URL DOES promote web.fetch', () => {
+  it('item ⑤ opt-in — agentTaskUrlReadsEnabled=true: agentTask URL promotes nullclaw + fallbackUsed=false', () => {
     const result = selectToolPlan(
       {
         userMessage: 'thanks',
@@ -714,7 +714,10 @@ describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () =
       },
       { agentTaskUrlReadsEnabled: true },
     );
-    expect(result.coreTools).toContain('web.fetch');
+    // nullclaw is set by the URL explicit-signal boost, not by baseline;
+    // fallbackUsed flips to false when urlMatch fires.
+    expect(result.sourcePermissions.nullclaw).toBe(true);
+    expect(result.fallbackUsed).toBe(false);
   });
 
   // (⑤ opt-in) Symmetric: when the flag is unset, the agentTask URL is
@@ -726,6 +729,7 @@ describe('selectToolPlan — items ② + ⑤ ALL-CASES-PROVIDED invariant', () =
       userMessage: 'thanks',
       agentTask: 'browse https://example.com/article',
     });
-    expect(result.coreTools).not.toContain('web.browse');
+    expect(result.sourcePermissions.nullclaw).toBe(false);
+    expect(result.fallbackUsed).toBe(true);
   });
 });

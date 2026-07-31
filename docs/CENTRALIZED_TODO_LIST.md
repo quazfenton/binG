@@ -708,10 +708,14 @@
 These are SHOULD-CONSIDER items harvested from completed audits. None are blocking; each is documented in full in a dedicated file.
 
 ### MCP-TOOL-SELECTION-POSTAUDIT (opened 2026-07-15)
-- **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).
-- **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure — 19-line pilot residue → 13 of 19 cleared via Connection-shim pilot 2026-07-16)
+- **Source:** code-review of the MCP tool-selection audit closure (OUTERCATCH-GAP fix + 4 legacy → plan migrations).  - **Status:** 🟡 PARTIAL CLOSURE (4 of 5 tasks DONE; item ④ tsc PARTIAL closure — 11 ambient-extension rounds complete: 3rd→11th, cumulative -98 TS errors / -109 TS2307, 85 residual (~56% reduction from 194 baseline). Full per-round progression table at `#per-round-closure-progression-2026-07-16`. The 4th round (2026-07-16) covers both modules tracked in MCP-ITEM-04-FULL-CLOSURE-EPIC)
 - **Opened:** 2026-07-15
-- **Last updated:** 2026-07-16 — Connection-shim pilot: 13 TS2307 errors cleared via ambient declaration at `lib-shims/ambient.d.ts` L207-L220 (tsc 463 → 450, 2.8% of baseline). User-requested Option A/C rejected because `connection-shim.ts` has a HARD static+dynamic dep on `./connection.ts` (L123 runtime require + L215 static re-exports) — co-move would inflate transitive errors and violate the packages/shared ↔ web/lib/* boundary. Ambient declaration is the architecturally-safer pilot path. Third-step redundancy: no stale `@/lib/database/connection-shim` declaration existed in `lib-shims/ambient.d.ts` pre-pilot (verified via grep); the parallel add was the operative change.
+- **Last updated:** 2026-07-16
+- **Cumulative:** 7 ambient-extension rounds landed. Connection-shim pilot (3rd-round) cleared 13 TS2307 (tsc 463 → 450, 2.8% of baseline) + 6 follow-on rounds (4th/5th/6th/7th/8th/9th) cleared an additional 75 TS2307 + cumulative -79 TS errors / -88 TS2307 / 106 residual / ~45% reduction from 194 baseline / 384 total. All 7 rounds live at `lib-shims/ambient.d.ts` (no separate file per round). NEW: 9th-round (2026-07-16, stable anchor [9th-round ambient extension](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-ninth-round-2026-07-16)) cleared an additional 6 TS2307 (390 → 384 / 112 → 106) with 0% measured TS2305 conversion rate + the same pre-existing TS2339 noise at `agent/task-router.ts` L509/L524/L536. The 9th-round hit the user's pre-round prediction target exactly AT the equality boundary (106 / 384 measured, not strictly under `<106 / <384`). Mathematically `106 < 106` is false under the strict less-than predicate; the bound is satisfied at the equality boundary but not strictly under. A future 10th-round ambient extension would need to push TS2307 to 105 or below to satisfy the strict predicate.
+- **Mechanism:** the 8-error gap between TS2307 cumulative-cleared (72) and total-error-delta (64) reflects +2 +6 TS2305 conversion expansion in the 5th and 7th rounds respectively (consumers reach for specific symbol names whose ambient body-less declarations don't surface as exportable — same mechanism as `agent-session-manager` / `ndjson-parser` / `logger` in earlier rounds; expected side effect, not a regression).
+- **Architecture:** User-requested Option A/C was rejected for the connection-shim because it has a HARD static+dynamic dep on `./connection.ts` (L123 runtime require + L215 static re-exports) — co-move would inflate transitive errors and violate the packages/shared ↔ web/lib/* boundary. Ambient declaration is the architecturally-safer pilot path; the same approach has now been applied successfully across 4 additional rounds.
+- **Pilot check:** no stale `@/lib/database/connection-shim` declaration existed in `lib-shims/ambient.d.ts` pre-pilot (verified via grep); the parallel add was the operative change.
+- **See:** [Per-round closure progression](#per-round-closure-progression-2026-07-16) sub-section below for the round-by-round table.
 
   1. **Corrected command**: vitest paths + cwd recommendation updated; produced 170/172 green.
   2. **OUTERCATCH-GAP**: 2 documented pre-existing failures at route.ts:L945 (expected HTTP 524 vs got 200 — pending OUTERCATCH-GAP closure).
@@ -738,6 +742,38 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md` (closure narrative)
 - **Acceptance:** Full audit suite + new tests green; `pnpm --filter @bing/shared typecheck` PARTIAL exit (19 lines — Option 1 pilot cleared 40 of 59 baseline source-path errors; remaining 19 pre-existing mirror errors require wholesale packages/shared ↔ web/lib/* decoupling).
 
+
+### MCP-TOOL-SELECTION-POSTAUDIT — Per-round closure progression (item ④, 2026-07-16)
+
+**Stable anchor:** `#per-round-closure-progression-2026-07-16`
+
+After the 3rd-round connection-shim Option 1 pilot landed, 4 additional ambient-extension rounds were applied to close remaining TS2307 module-not-found errors. Each round adds 2-3 body-less `declare module '@/lib/...'` declarations to `packages/shared/lib-shims/ambient.d.ts`. Cross-reference the postaudit doc directly via stable anchors below — each anchor lands on the round's specific closure-narrative section.
+
+**Per-round progression table:**
+
+| Round | Modules added | tsc total | TS2307 residual | Round delta (total) | Round delta (TS2307) |
+|---|---|---|---|---|---|
+| Baseline (463) | — | 463 | 194 | — | — |
+| 3rd (connection-shim pilot) | `database/connection-shim` (1) | 450 | 181 | -13 | -13 |
+| 4th | `virtual-filesystem/index.server` + `database/schema/{index,loader}` (3) | 434 | 165 | -16 | -16 |
+| 5th | `terminal/workspace-runtime-service` + `terminal/terminal-manager` + `sandbox/workspacefs-sync-service` (3) | 417 | 146 | -17 | -19 (TS2305 +2 expansion) |
+| 6th | `workspace/workspace-graph-service` + `context/project-detection` + `sandbox/sandbox-orchestrator` (3) | 403 | 132 | -14 | -14 |
+| **7th** | `database/sqlite-failure` + `terminal/workspace-service-manager` + `storage/content-addressable-storage` (3) | **399** | **122** | **-4** | **-10 (TS2305 +6 expansion; 60% conversion rate)** |
+| 8th | `mcp/architecture-integration` + `utils/compression` + `utils/circuit-breaker` (3) | 390 | 112 | -9 | -10 (0% TS2305 conversion — first-time ambient mechanism) |
+| 9th | `management/quota-manager` + `integrations/composio/composio-adapter` (2) | 384 | 106 | -6 | -6 (0% TS2305 conversion) |
+| **10th** | `utils/cache` + `search/ripgrep-vfs-adapter` + `sandbox/workspace-image-registry` + `context/rtk-integration` + `backend/metrics` (5) | **371** | **91** | **-13** | **-15 TS2307 cleared + 5 NEW TS2305 sites at FIRST-ROUND TYPED imports (agent-session-manager × 2 + ndjson-parser × 1 + logger × 2)** |
+| **11th** | `workspace/workspace-session-graph` + `virtual-filesystem/session-path-guard` + `terminal/session/terminal-session-manager` (3, 3-distinct-dirs) | **365** | **85** | **-6** | **-6 TS2307 cleared (3-distinct-dirs diversification maintained; pick swap from workspace-control-plane → terminal-session-manager applied per SHOULDCONSIDER #1)** |
+
+**Cumulative across 9 ambient-extension rounds (3rd-11th)**: -98 TS errors cleared, -109 TS2307 cleared, 85 residual (~56% reduction from 194 baseline). Net TS2305 amplification: +11 sites (unchanged — 11th-round contributes 0 conversion since body-less form is immune; validated empirical mechanism unchanged).
+
+**4 stable anchors** (each lands on the corresponding round's closure-narrative section in `MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md`):
+
+- [`#item-04-fifth-round-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-fifth-round-2026-07-16) — 5th-round ambient extension (terminal + sandbox sub-leaves)
+- [`#item-04-sixth-round-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-sixth-round-2026-07-16) — 6th-round ambient extension (workspace + context + sandbox orchestrator)
+- [`#item-04-seventh-round-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#item-04-seventh-round-2026-07-16) — 7th-round ambient extension (sqlite-failure + workspace-service-manager + content-addressable-storage)
+- [`#decoupling-epic-progress-2026-07-16`](MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#decoupling-epic-progress-2026-07-16) — Historical progression narrative + 3-path forward-trajectory analysis
+
+**Selected-empirical-mechanism note (2026-07-16)**: The 7th-round's TS2305 conversion (6 of 10 TS2307 cleared = 60% conversion rate) is empirically the same body-less-ambient mechanism observed in earlier rounds at `agent-session-manager` (`AgentSession` / `AgentSessionConfig` / `AgentSessionManager`), `ndjson-parser` (`NDJSONParser`), `logger` (`Logger`) — consumers reference specific symbol names whose ambient body-less declarations don't surface them as exportable. Expected side effect, not a regression; the 122 TS2307 residual plus these TS2305 conversions is the next-decoupling-epic surface area.
 
 ### VITEST-WORKSPACE-DEDUPLICATION (opened 2026-07-15)
 - **Source:** Diagnostic from F1 + F2 followups — observed in vitest output that each canonical test failure + each canonical test pass coexists with stale node_modules duplicate runs (pnpm vendored `node_modules/bing/web/__tests__/**`). Inflates reported failures ~2-3x.
@@ -795,6 +831,27 @@ These are SHOULD-CONSIDER items harvested from completed audits. None are blocki
   - [ ] The first surgical fix (`extends: './web/vitest.config.ts'` → `'../web/vitest.config.ts'`) did NOT resolve the failure.
   - [ ] Two hypotheses remain untested: (a) vitest 4 workspace shape mismatch (project fields may need different placement), (b) workspace.ts file-load failure silently drops all projects.
   - [ ] Workaround in place: `web/package.json#test` reverted to plain `"vitest run"` (no --project), and `web/vitest.config.ts` include[] restored to its pre-migration `'**/__tests__/**/*.test.ts'` form so direct-from-web invocations still work.
+
+---
+
+## MCP-POST-CALL-WIRING — Task #1 post-call pipeline (CLOSED 2026-07-23)
+
+- **Source:** MCP-POST-CALL-WIRING.md — companion ticket to the Contract-aware MCP tool pipeline.
+- **Status:** ✅ CLOSED 2026-07-23
+- **Priority:** P1 (audit-trail completeness — pre-call only was half the contract)
+- **Closure evidence:** The production `applyPostCallPipeline` in `architecture-integration.ts:L2078-L2170` already had ALL 5 post-call audit appends wired:
+  - [x] 1. `gatePostCall(contract, { toolName, args, result, errorCount })` invoked AFTER dispatch returns, BEFORE the final return
+  - [x] 2. `wrapWithSentinel(result.output, { toolCallId, onDrop })` invoked AFTER gatePostCall succeeds
+  - [x] 3. Audit append `note: "post-call: success"` / `note: "post-call: failure (err)"` appended after dispatch
+  - [x] 4. Audit append `note: "sentinel-dropped: PATTERN"` appended when `wrapWithSentinel.dropped[]` is non-empty
+  - [x] 5. Audit append `note: "post-gate-rejected: REASON"` appended when gatePostCall returns `{ allowed: false }`
+  - [x] 6. All 5 audit appends use `contract.audit = contract.audit.append(...)` immutable-getter capture pattern
+  - [x] 7. `__tests__/mcp/contract-gated-call.test.ts` extended with 4 new tests (T, U, V, W) asserting the post-call audit sequence + sentinel-drop audit entry
+  - [x] 8. `tsc --noEmit` — 0 errors on `architecture-integration.ts`
+- **Files modified:** `web/__tests__/mcp/contract-gated-call.test.ts` only (production code was already fully wired)
+  - Added `gatePostCall` to test `runPipeline` helper (removed deferred TODO)
+  - Added 4 new tests: T (post-gate invariant rejection), U (post-gate kill-switch), V (failure audit entry), W (sentinel-dropped audit)
+- **Verification:** `npx vitest run __tests__/mcp/contract-gated-call.test.ts` — 23/23 PASS; `npx tsc --noEmit` — 0 errors
 
 ---
 
@@ -881,3 +938,21 @@ Workstream status: CLOSED 2026-07-16 (full closure narrative in /opt/bing/docs/M
 - OUTERCATCH-GAP: route-side CLOSED + test-side CLOSED.
 - Path C discriminant helper: CLOSED (StallWatchdogError errorCode -> HTTP status mapping via `stallWatchdogErrorToStatus`).
 - L141 acceptance row: `[x]` (172/172 FULLY GREEN 2026-07-16).
+
+### CROSS-SHELL-CONTAMINATION-CLOSURE (closed 2026-07-16)
+
+Closes the LIVE TerminalPanel crash surfaced by a fish session on 2026-07-16: `~/.binG-temp/_safe_shell_init.sh (line 65): Unknown builtin "pushd"` — fish inherited a bash wrapper written by a prior bash session via the shared `_safe_shell_init.sh` filename.
+
+- **Source code:** `/opt/bing/web/lib/terminal/shell-init-emitter.ts` — `getSafeShellWrapperPath` helper computes per-shell filename. POSIX sh canonicalization: sh/dash/ash → `_safe_shell_init_posixsh.sh` (uniform canonical filename, no `_safe_shell_init.sh.sh` double-extension). Windows → `_safe_profile.ps1`.
+- **Implementation:**
+  - `/opt/bing/web/lib/terminal/shell-init-emitter.ts` L240-L259 — `getSafeShellWrapperPath` body adds early-return guard `if (isPosixShShell(shellBasename)) return _safe_shell_init_posixsh.sh` BEFORE the existing per-shellBasename return.
+  - `/opt/bing/web/app/api/terminal/local-pty/gateway.ts` L108 — `createSafeShellWrapper` reads `wrapperPath` from `getSafeShellWrapperPath(...)` (centralized helper).
+  - `/opt/bing/web/app/api/terminal/local-pty/gateway.ts` L110-L114 — legacy-cleanup `unlink _safe_shell_init.sh` (best-effort via `.catch(() => {})`) defends against any third-party code reading the legacy shared filename.
+- **Regression guard:** `/opt/bing/web/__tests__/audit-recs/cross-shell-concurrent-isolation.test.ts` — 8 assertions across 5 describe blocks: fish+bash concurrent spawn writes to distinct per-shell files; POSIX sh/dash/ash canonicalize to single canonical filename; zero writes to legacy shared filename across 5-shell concurrent history; per-shell wrapper content differs (mock fingerprint).
+- **Cross-shell-contamination invariant locked:**
+  - Every non-POSIX shell basename gets a unique file (`_safe_shell_init.{fish|bash|zsh|nu|nushell}.sh`).
+  - POSIX sh variants (sh/dash/ash) all map to `_safe_shell_init_posixsh.sh` (SHOULDCONSIDER #2 closure: avoids double-extension, gives operators one stable grep target).
+  - No shell writes to the legacy `_safe_shell_init.sh` (legacy cleanup = defense-in-depth).
+- **Verification (2026-07-16):** vitest on `/opt/bing/web/__tests__/audit-recs/` group: 6/6 files pass, 42/42 tests green (cite-drift 5, finding-1 stall-discriminator 10, finding-2 stress 6, finding-5-6 log-shape 7, postaudit-baseline 6, cross-shell-concurrent-isolation 8). `tsc --noEmit -p tsconfig.json` reports 0 errors.
+- **Stable anchor:** `#cross-shell-contamination-closure-2026-07-16` (referenced by the postaudit doc header + the regression guard's docblock).
+- **Cross-reference:** `/opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md#cross-shell-contamination-closure-2026-07-16` (postaudit doc header anchor mirroring this entry). Test docblock at `/opt/bing/web/__tests__/audit-recs/cross-shell-concurrent-isolation.test.ts` L18.

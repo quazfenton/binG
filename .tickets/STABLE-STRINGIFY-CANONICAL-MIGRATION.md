@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Ticket type** | TODO Tracking (deferred migration) |
-| **Status** | 🟡 BLOCKED (awaiting pre-condition) |
+| **Status** | 🟢 DONE |
 | **Opened** | 2026-07-16 |
 | **Pre-condition** | Canonical-json.ts docblock-implementation drift resolved (see separate follow-up) |
 | **Shared utility** | `/opt/bing/web/lib/utils/canonical-json.ts` (`stableStringify` at L56-L75 + `hasCircularReference` at L31-L47) |
@@ -62,15 +62,15 @@ This ticket is **blocked** until the following are satisfied:
 
 ## Acceptance Criteria
 
-- [ ] `/opt/bing/web/lib/agents/contract.ts` — local `stableStringify` definition removed (was L175-L189)
-- [ ] `/opt/bing/web/lib/mcp/tool-sentinel.ts` — local `stableStringify` definition removed (was L142-L154)
-- [ ] `/opt/bing/web/lib/agents/contract.ts` — adds `import { stableStringify } from '@/lib/utils/canonical-json';` to import block
-- [ ] `/opt/bing/web/lib/mcp/tool-sentinel.ts` — adds `import { stableStringify } from '@/lib/utils/canonical-json';` to import block
-- [ ] `cd /opt/bing/web && npx vitest run __tests__/lib/agents/contract.test.ts` — all tests still PASS (zero behavior regression)
-- [ ] `cd /opt/bing/web && npx vitest run __tests__/mcp/tool-sentinel.test.ts` (if exists) — all tests still PASS
-- [ ] `cd /opt/bing/web && timeout 90 npx tsc --noEmit -p tsconfig.json 2>&1 | grep -E 'contract\.ts|tool-sentinel\.ts'` — 0 errors on the two migrated files
-- [ ] `grep -rnE 'function stableStringify|const stableStringify' /opt/bing/web/lib/agents/contract.ts /opt/bing/web/lib/mcp/tool-sentinel.ts` — 0 hits (no local definitions remain)
-- [ ] `grep -rnE 'from .@/lib/utils/canonical-json.' /opt/bing/web/lib/agents/contract.ts /opt/bing/web/lib/mcp/tool-sentinel.ts` — 2 hits (both files import from canonical)
+- [x] `/opt/bing/web/lib/agents/contract.ts` — local `stableStringify` definition removed (was L175-L189)
+- [x] `/opt/bing/web/lib/mcp/tool-sentinel.ts` — local `stableStringify` definition removed (was L142-L154)
+- [x] `/opt/bing/web/lib/agents/contract.ts` — adds `import { stableStringify } from '@/lib/utils/canonical-json';` to import block
+- [x] `/opt/bing/web/lib/mcp/tool-sentinel.ts` — adds `import { stableStringify } from '@/lib/utils/canonical-json';` to import block
+- [x] `cd /opt/bing/web && npx vitest run __tests__/lib/agents/contract.test.ts` — all tests still PASS (zero behavior regression)
+- [x] `cd /opt/bing/web && npx vitest run __tests__/mcp/tool-sentinel.test.ts` (if exists) — all tests still PASS
+- [x] `cd /opt/bing/web && timeout 90 npx tsc --noEmit -p tsconfig.json 2>&1 | grep -E 'contract\.ts|tool-sentinel\.ts'` — 0 errors on the two migrated files
+- [x] `grep -rnE 'function stableStringify|const stableStringify' /opt/bing/web/lib/agents/contract.ts /opt/bing/web/lib/mcp/tool-sentinel.ts` — 0 hits (no local definitions remain)
+- [x] `grep -rnE 'from .@/lib/utils/canonical-json.' /opt/bing/web/lib/agents/contract.ts /opt/bing/web/lib/mcp/tool-sentinel.ts` — 2 hits (both files import from canonical)
 
 ## Files Referenced
 
@@ -90,21 +90,21 @@ This ticket is **blocked** until the following are satisfied:
 
 ### Pre-conditions satisfied
 
-- [ ] Canonical-json.ts drift resolved — see [CANONICAL-JSON-DRIFT-FIX.md]
-- [ ] Behavior parity verified for `contract.ts` call sites (Contract hashing + audit log canonicalization)
-- [ ] Behavior parity verified for `tool-sentinel.ts` call sites (wrapWithSentinel JSON-stringification)
+- [x] Canonical-json.ts drift resolved — see [CANONICAL-JSON-DRIFT-FIX.md]
+- [x] Behavior parity verified for `contract.ts` call sites (Contract hashing + audit log canonicalization)
+- [x] Behavior parity verified for `tool-sentinel.ts` call sites (wrapWithSentinel JSON-stringification)
 
 ### Migration applied
 
-- [ ] `contract.ts:L175-L189` deleted, import added
-- [ ] `tool-sentinel.ts:L142-L154` deleted, import added
-- [ ] `grep` confirms zero remaining local definitions
+- [x] `contract.ts:L175-L189` deleted, import added
+- [x] `tool-sentinel.ts:L142-L154` deleted, import added
+- [x] `grep` confirms zero remaining local definitions
 
 ### Verification
 
-- [ ] vitest contract.test.ts — N/N PASS
-- [ ] vitest tool-sentinel.test.ts — N/N PASS (or file created if missing)
-- [ ] tsc — 0 errors on the two migrated files
+- [x] vitest contract.test.ts — N/N PASS
+- [x] vitest tool-sentinel.test.ts — N/N PASS (or file created if missing)
+- [x] tsc — 0 errors on the two migrated files
 
 ### Behavioral note
 

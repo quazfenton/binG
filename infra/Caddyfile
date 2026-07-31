@@ -98,6 +98,10 @@
     handle {
         reverse_proxy ninerouter:3000 {
             flush_interval -1
+            transport http {
+                read_timeout  30m
+                write_timeout 30m
+            }
             # 9Router -l flag requires Host: localhost — pass it explicitly
             header_up Host "localhost"
             header_up X-Forwarded-Proto "https"
@@ -114,5 +118,11 @@
             header_down Set-Cookie "; Domain=[^;]*" ";"
             header_down Set-Cookie "Domain=[^;]*; " ""
         }
+    }
+    # Force Connection: close on error responses — prevents cloudflared
+    # tunnel connection-pool poisoning after upstream 429/RST_STREAM.
+    @ninerouter_errors status 4xx 5xx
+    handle @ninerouter_errors {
+        header Connection close
     }
 }

@@ -639,9 +639,9 @@ export class SandboxService {
     return this.getHandle(sandboxId)
   }
 
-  async executeCommand(sandboxId: string, command: string, cwd?: string): Promise<ToolResult> {
+  async executeCommand(sandboxId: string, command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     const handle = await this.getHandle(sandboxId)
-    return handle.executeCommand(command, cwd)
+    return handle.executeCommand(command, cwd, timeout)
   }
 
   async writeFile(sandboxId: string, filePath: string, content: string): Promise<ToolResult> {

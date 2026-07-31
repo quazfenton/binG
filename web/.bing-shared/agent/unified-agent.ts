@@ -41,19 +41,24 @@
  * ```
  */
 
-import { enhancedTerminalManager } from '@/lib/terminal/enhanced-terminal-manager'
-import { getSandboxProvider } from '@/lib/sandbox/providers'
-import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp'
-import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan'
-import type { PreviewInfo } from '@/lib/sandbox/types'
-import type { DesktopHandle } from '@/lib/computer/e2b-desktop-provider-enhanced'
+import { enhancedTerminalManager } from '../../../web/lib/terminal/enhanced-terminal-manager'
+import { getSandboxProvider } from '../../../web/lib/sandbox/providers'
+import { sandboxBridge } from '../../../web/lib/sandbox/sandbox-service-bridge'
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '../../../web/lib/mcp'
+import { createContract } from '../../../web/lib/agents/contract'
+import { selectToolPlan, type SelectToolPlanResult } from '../../../web/lib/tools/select-tool-plan'
+import type { PreviewInfo } from '../../../web/lib/sandbox/types'
+import type { DesktopHandle } from '../../../web/lib/computer/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
-// Option 1 (postaudit item ④): migrated from `@/lib/utils/logger` to
-// direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
-// — a real file inside this package, NOT a cross-package reference into
-// web/lib/*.
-import { createLogger } from '@/lib/utils/logger'
+// Postaudit item ④ (Option A pilot, 2026-07-16): migrated from `@/lib/*`
+// aliased imports to long relative paths `../../../web/lib/*`. The original
+// Option 1 comment promised a local `packages/shared/lib/utils/logger.ts`
+// file — that's NOT landed yet (would require a hoist epic). Option A keeps
+// the cross-package boundary explicit while clearing 33 source-path
+// `TS2307` errors from `tsc --noEmit -p packages/shared/tsconfig.json`.
+// Follow-up: iterative hoist of each `web/lib/*` module into
+// `packages/shared/lib/*` (the architecturally clean endpoint).
+import { createLogger } from '../../../web/lib/utils/logger'
 
 const log = createLogger('UnifiedAgent')
 
@@ -679,6 +684,16 @@ export class UnifiedAgent {
       this.session?.sessionId,
       undefined,
       { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+      createContract({
+        intent: toolName,
+        scope: { paths: [], exclude: [] },
+        capabilities: [toolName],
+        budget: { tokens: 100_000, ms: 300_000, ops: 50 },
+        invariants: [],
+        acceptanceCriteria: [],
+        killSwitches: [],
+        escalationGraph: {},
+      }),
     );
   }
 

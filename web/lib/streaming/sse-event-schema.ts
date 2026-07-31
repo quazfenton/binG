@@ -65,6 +65,8 @@ export const SSE_EVENT_TYPES = {
   TOOL_RESULT: 'tool_result',
   /** Auto-continuation progress: iteration, reason, requestId */
   CONTINUATION: 'continuation',
+  /** Cap exhaustion: continuation limit reached, result is incomplete */
+  CONTINUATION_EXHAUSTED: 'continuation_exhausted',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -238,6 +240,12 @@ export interface SSEDAGTaskStatusPayload {
 export interface SSEDonePayload {
   success: boolean;
   content: string;
+  /** Bug #16 (audit): Reasoning/thinking tokens from the final response,
+   *  accumulated during streaming and emitted in the done event so client
+   *  consumers (e.g. the UI diff viewer, log pipelines) can access the full
+   *  reasoning trace after the stream closes. Models that do not emit
+   *  reasoning (e.g. non-reasoning models) will omit this field entirely. */
+  reasoningContent?: string;
   messageMetadata?: Record<string, unknown> & {
     /** Routing metadata from first-response parsing (when present, enables multi-step auto-continue) */
     routing?: {
@@ -458,6 +466,24 @@ export interface SSEContinuationPayload {
   timestamp?: number;
 }
 
+/** Cap exhaustion: continuation limit reached before completing all tasks. */
+export interface SSEContinuationExhaustedPayload {
+  /** Request ID for correlation */
+  requestId: string;
+  /** Total iterations completed */
+  iteration: number;
+  /** Maximum allowed iterations */
+  maxIterations: number;
+  /** Reason for exhaustion ('max_iterations', 'max_continuations_reached') */
+  reason: string;
+  /** Number of incomplete tasks / signs of remaining work */
+  incompleteSignals?: string[];
+  /** Human-readable description of what was left incomplete */
+  description?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -486,7 +512,8 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.LOOP_ABORT; data: SSELoopAbortPayload }
   | { type: typeof SSE_EVENT_TYPES.TOOL_SUMMARY; data: SSEToolSummaryPayload }
   | { type: typeof SSE_EVENT_TYPES.TOOL_RESULT; data: SSEToolResultPayload }
-  | { type: typeof SSE_EVENT_TYPES.CONTINUATION; data: SSEContinuationPayload };
+  | { type: typeof SSE_EVENT_TYPES.CONTINUATION; data: SSEContinuationPayload }
+  | { type: typeof SSE_EVENT_TYPES.CONTINUATION_EXHAUSTED; data: SSEContinuationExhaustedPayload };
 
 // ---------------------------------------------------------------------------
 // Encoder helpers (backend)
@@ -567,4 +594,42 @@ export const SSE_RESPONSE_HEADERS: Record<string, string> = {
   Expires: '0',
   Connection: 'keep-alive',
   'X-Accel-Buffering': 'no',
+  'Access-Control-Allow-Origin':
+    (typeof process !== 'undefined' && typeof process.env !== 'undefined' && process.env.NEXT_PUBLIC_APP_URL) || '',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-anonymous-session-id',
+  'Vary': 'Origin',
 };
+
+/**
+ * Build complete SSE response headers with optional extras.
+ * Every SSE response branch in the route layer MUST use this function
+ * instead of constructing headers inline, to ensure all responses
+ * consistently include CORS headers and (when applicable) the
+ * anonymous-session cookie.
+ */
+export function buildSSEResponseHeaders(options?: {
+  anonSessionIdToSet?: string;
+  stallMeta?: { fired: boolean; reason?: string };
+  extraHeaders?: Record<string, string>;
+}): Record<string, string> {
+  const headers: Record<string, string> = { ...SSE_RESPONSE_HEADERS };
+
+  if (options?.anonSessionIdToSet) {
+    const isSecure =
+      (typeof process !== 'undefined' && typeof process.env !== 'undefined' && process.env.NODE_ENV === 'production');
+    headers['Set-Cookie'] =
+      `anon-session-id=${options.anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`;
+  }
+
+  if (options?.stallMeta?.fired) {
+    headers['x-stall-fired'] = 'true';
+    headers['x-stall-reason'] = options.stallMeta.reason ?? 'unknown';
+  }
+
+  if (options?.extraHeaders) {
+    Object.assign(headers, options.extraHeaders);
+  }
+
+  return headers;
+}

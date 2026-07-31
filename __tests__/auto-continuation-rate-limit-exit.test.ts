@@ -21,10 +21,14 @@ function isRateLimitError(err: MockError): boolean {
 }
 
 function shouldExitAutoContinuation(err: MockError): boolean {
-  // BUG FIX: Exit auto-continuation loop on rate limit or other provider errors.
-  // Previous behavior continued to iteration 3 even after rate limit.
-  const isRateLimitErr = isRateLimitError(err);
-  return isRateLimitErr || true; // Exit on any error for now
+  // BUG FIX: Exit auto-continuation loop on rate-limit / provider throttle
+  // errors. Previous behavior (`isRateLimitErr || true`) short-circuited to
+  // true unconditionally, making the check dead code and causing unrelated
+  // errors (timeouts, network) to also exit — defeating the rate-limit-
+  // specific observability the surrounding tests assert. Only rate-limit
+  // family signals (429/quota/throttle/too-many-requests) should exit the
+  // loop early; other transient errors let the loop retry per its policy.
+  return isRateLimitError(err);
 }
 
 describe('Auto-Continuation Loop - Rate Limit Exit Fix', () => {

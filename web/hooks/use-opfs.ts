@@ -90,8 +90,15 @@ export function useOPFS(
     }
   );
 
-  const initializedRef = useRef(false);
   const workspaceIdRef = useRef(workspaceId || ownerId);
+  // BUG #2 fix: track which ownerId was last enabled so auto-enable effect
+  // can re-run when the ownerId changes (e.g. anonymous session rotation).
+  // Previously used a one-shot `initializedRef` gate that blocked re-runs
+  // entirely, causing OPFS ref counts to accumulate monotonically without
+  // paired disable() calls. Now the effect's cleanup calls
+  // `opfsAdapter.disable()` on every deps change (ownerId swap, unmount).
+  // The ref prevents spurious re-enables for the same ownerId.
+  const enabledOwnerIdRef = useRef<string | null>(null);
   const enablingRef = useRef(false);  // Prevent concurrent enable calls
 
   // Update online status
@@ -139,35 +146,57 @@ export function useOPFS(
     setIsSyncing(prev => prev === status.isSyncing ? prev : status.isSyncing);
   }, []);
 
-  // Auto-enable on mount
+  // Auto-enable on mount, re-enable when ownerId changes
+  // BUG #2 fix: added cleanup that calls opfsAdapter.disable() on ownerId
+  // swap or unmount, preventing monotonic ref-count accumulation. The
+  // `cancelled` guard prevents setState on unmounted components.
   useEffect(() => {
-    if (!autoEnable || initializedRef.current || !supportInfo.supported) {
+    if (!autoEnable || !supportInfo.supported) {
       return;
     }
 
-    initializedRef.current = true;
+    // If already enabled for this exact ownerId, don't re-enable.
+    // The ref replaces the old one-shot `initializedRef` gate which blocked
+    // re-runs entirely and allowed enableCount to grow unbounded.
+    if (enabledOwnerIdRef.current === ownerId) {
+      return;
+    }
+
+    let cancelled = false;
 
     const enableOPFS = async () => {
       try {
-        // Only enable if not already enabled
-        if (!isEnabled) {
-          await opfsAdapter.enable(ownerId, workspaceIdRef.current);
-          setIsEnabled(true);
-          setIsReady(true);
+        await opfsAdapter.enable(ownerId, workspaceIdRef.current);
+        if (cancelled) return;
+        enabledOwnerIdRef.current = ownerId;
+        setIsEnabled(true);
+        setIsReady(true);
 
-          // Initial stats
-          await refreshStats();
+        // Initial stats
+        await refreshStats();
 
-          // Update sync status
-          updateSyncStatus();
-        }
+        // Update sync status
+        updateSyncStatus();
       } catch (error) {
+        if (cancelled) return;
         console.error('[useOPFS] Failed to enable:', error);
         onError?.(error as Error);
       }
     };
 
     enableOPFS();
+
+    return () => {
+      cancelled = true;
+      // BUG #2 fix: decrement ref count when ownerId changes or component
+      // unmounts. Previously the effect had no cleanup, so enableCount grew
+      // monotonically (console: "incrementing ref count to: 2 → 3 → 4").
+      // `opfsAdapter.disable()` decrements the count and only truly disables
+      // when ALL callers have released (count reaches zero).
+      opfsAdapter.disable().catch((err) => {
+        console.warn('[useOPFS] Cleanup disable failed:', err);
+      });
+    };
   }, [autoEnable, ownerId, supportInfo.supported, onError, updateSyncStatus]);
 
   // Periodic sync status update

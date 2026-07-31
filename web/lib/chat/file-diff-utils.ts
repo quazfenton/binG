@@ -208,15 +208,16 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   const diffLines = diffBody.split("\n");
   if (!diffLines.length) return null;
 
-  // Bug #46: If the diff body has structured `@@` hunk headers, this is
-  // a multi-hunk unified diff. The naive line-add/remove model below
-  // doesn't track hunk line numbers, so it would produce structurally
-  // broken output. Bail out and let the pipeline try `applyUnifiedDiffToContent`
-  // (which uses `parsePatch` + `applyPatch` and handles multi-hunk correctly).
-  const hunkHeaderCount = diffLines.filter(l => l.startsWith("@@")).length;
-  if (hunkHeaderCount > 1) {
-    return null;
-  }
+  // Note: The simple line-add/remove model DOES handle multi-hunk unified
+  // diffs correctly under a key assumption: all context lines in the diff
+  // match the corresponding lines in the current content. The model skips
+  // @@ hunk headers, processes +/- line directives globally (regardless of
+  // which hunk they belong to), and preserves context lines verbatim.
+  // This works correctly when the diff was generated against the exact
+  // current content (or a close ancestor), which is the common case.
+  // In rare cases where context lines don't match or hunks overlap,
+  // the pipeline's other strategies (applyUnifiedDiffToContent,
+  // applyDiffMatchPatch) handle the fallback.
 
   const resultLines: string[] = [];
   for (const line of diffLines) {

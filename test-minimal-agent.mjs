@@ -5,6 +5,8 @@
 
 console.log('🔍 Testing Core Agent Modules Directly\n');
 
+let failed = 0;
+
 // Test 1: Can we import the core modules?
 console.log('Test 1: Module Imports');
 try {
@@ -12,6 +14,7 @@ try {
   execSync('cd /opt/bing/web && node -e "const x = require(\"./lib/mcp/architecture-integration\"); console.log(\"✅ MCP module loads\")"', { encoding: 'utf8', timeout: 5000 });
 } catch (e) {
   console.error('❌ Module import failed:', e.message);
+  failed++;
 }
 
 // Test 2: Check VFS tools registration
@@ -27,9 +30,11 @@ try {
     console.log(`✅ VFS tools exist: write=${hasWrite}, read=${hasRead}, list=${hasList}`);
   } else {
     console.log('❌ VFS tools file not found');
+    failed++;
   }
 } catch (e) {
   console.error('❌ VFS test failed:', e.message);
+  failed++;
 }
 
 // Test 3: Check if file parsing works
@@ -46,6 +51,7 @@ try {
   }
 } catch (e) {
   console.error('❌ Parser test failed:', e.message);
+  failed++;
 }
 
 // Test 4: Check recent chat logs for actual failures
@@ -81,3 +87,7 @@ try {
 }
 
 console.log('\n📊 Core module check complete');
+if (failed > 0) {
+  console.error(`❌ ${failed} test(s) failed`);
+  process.exit(1);
+}
