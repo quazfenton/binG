@@ -26,6 +26,11 @@ export { loadScript, ScriptLoadError } from './script-loader';
 // Tier 8 step 8 observability — observeApplyScript (drop-in metrics wrapper
 // around applyScript) + serializeMetrics (Prometheus text exposition).
 export { observeApplyScript, serializeMetrics } from './observability';
+// Shared default scripts (PO_UNIFIED_AGENT_SCRIPT + PO_MARKER_TAIL_SCRIPT) —
+// previously duplicated as inline `const PO_DEFAULT_SCRIPT = {...}` in 2
+// caller files. Centralized here to prevent silent drift if a 3rd caller
+// lands. See default-scripts.ts for the per-call-site promptId rationale.
+export { PO_UNIFIED_AGENT_SCRIPT, PO_MARKER_TAIL_SCRIPT } from './default-scripts';
 export type {
   PromptStep,
   PromptScript,

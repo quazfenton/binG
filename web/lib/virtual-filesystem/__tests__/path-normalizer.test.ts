@@ -223,3 +223,78 @@ describe('resolveToScopedPath', () => {
       .toBe('workspace/sessions/001/src/app.ts');
   });
 });
+
+describe('normalizeLLMPath — host-prefix stripping (bug fixes)', () => {
+  it('strips /tmp/workspaces/ prefix from absolute host path', () => {
+    expect(normalizeLLMPath('/tmp/workspaces/README.md'))
+      .toBe('tmp/workspaces/README.md');
+  });
+
+  it('strips /tmp/workspaces/ prefix (leading slash removed, segment preserved)', () => {
+    expect(normalizeLLMPath('/tmp/workspaces'))
+      .toBe('tmp/workspaces');
+  });
+
+  it('produces dot for bare scope-level input', () => {
+    expect(normalizeLLMPath('workspace/sessions/001', { scopePath: 'workspace/sessions/001' }))
+      .toBe('.');
+  });
+
+  it('passes bare workspace/ prefix through (delegated to VFS stripWorkspacePrefixes)', () => {
+    // normalizeLLMPath does NOT strip bare "workspace/" — that is handled
+    // by stripWorkspacePrefixes in the VFS service layer.
+    const result = normalizeLLMPath('/workspace/workspace/src/app.ts');
+    // leading slash stripped, workspace/ prefix preserved
+    expect(result).toBe('workspace/workspace/src/app.ts');
+  });
+});
+
+describe('resolveToScopedPath — edge case round-trips', () => {
+  const scope = 'workspace/sessions/001';
+
+  it('scopes a bare filename', () => {
+    expect(resolveToScopedPath('package.json', scope))
+      .toBe('workspace/sessions/001/package.json');
+  });
+
+  it('normalizes /tmp/workspaces prefixed path into valid scoped path', () => {
+    // LLM echoes back an absolute /tmp/workspaces path it saw in a previous error
+    const llmPath = '/tmp/workspaces/src/app.ts';
+    const relative = normalizeLLMPath(llmPath);
+    expect(resolveToScopedPath(relative, scope))
+      .toBe('workspace/sessions/001/tmp/workspaces/src/app.ts');
+  });
+
+  it('round-trips relative → scoped → stripped → relative', () => {
+    const original = 'src/app.ts';
+    const scoped = resolveToScopedPath(original, scope);
+    const display = stripScopePrefixForDisplay(scoped, { scopePath: scope });
+    expect(display).toBe(original);
+  });
+
+  it('handles desktop scope (workspace/) round-trip', () => {
+    const desktopScope = 'workspace';
+    const original = 'src/app.ts';
+    const scoped = resolveToScopedPath(original, desktopScope);
+    expect(scoped).toBe('workspace/src/app.ts');
+    const display = stripScopePrefixForDisplay(scoped, { scopePath: desktopScope });
+    expect(display).toBe('src/app.ts');
+  });
+
+  it('rejects path that escapes scope via workspace/sessions/ prefix', () => {
+    expect(() => resolveToScopedPath('workspace/other-scope/secret.txt', scope))
+      .toThrow('outside the allowed scope');
+  });
+
+  it('resolves root slash to scope root (for file.list default)', () => {
+    const scope = 'workspace/sessions/001';
+    expect(resolveToScopedPath('/', scope)).toBe(scope);
+    expect(resolveToScopedPath('/', 'workspace')).toBe('workspace');
+  });
+
+  it('does NOT double-scope bare workspace keyword (file.list fallback)', () => {
+    // If LLM calls list_files(path="workspace"), treat it as scope root
+    const scope = 'workspace/sessions/001';
+    expect(resolveToScopedPath('workspace', scope)).toBe(scope);
+  });
+});

@@ -10,12 +10,13 @@
  * - sandbox-heavy: For full-stack apps
  */
 
-import { createLogger } from '@/lib/utils/logger';
-import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
-import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
+import { createLogger } from '../../../web/lib/utils/logger';
+import { agentSessionManager } from '../../../web/lib/session/agent/agent-session-manager';
+import type { ExecutionPolicy } from '../../../web/lib/sandbox/types';
+import { determineExecutionPolicy } from '../../../web/lib/sandbox/types';
+import type { ToolIntegrationManager } from '../../../web/lib/tools/tool-integration-system';
 import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
+import { selectToolPlan, type SelectToolPlanResult } from '../../../web/lib/tools/select-tool-plan';
 
 const logger = createLogger('Agent:OpencodeDirect');
 
@@ -120,8 +121,8 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   );
 
   // Use OpencodeV2Provider directly
-  const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
-  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
+  const { OpencodeV2Provider } =    await import('../../../web/lib/sandbox/spawn/opencode-cli');
+  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } =    await import('../../../web/lib/mcp');
 
   const provider = new OpencodeV2Provider({
     session: {
@@ -134,11 +135,20 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
     sandboxHandle: session.sandboxHandle,
   });
 
-  const tools = await getMCPToolsForAI_SDK(userId);
+  // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+  // The `task` variable is already destructured from `options` at the top of
+  // this function (see L124); selecting the plan here unifies the opencode-
+  // direct path with the active /api/chat route's plan-mode contract at
+  // route.ts:L1762-L1814.
+  const toolPlan: SelectToolPlanResult = selectToolPlan({
+    userMessage: task ?? '',
+    authenticated: !!userId,
+  });
+  const tools = await getMCPToolsForAI_SDK(userId, toolPlan);
   const fileChanges: FileChange[] = [];
 
   const result = await provider.runAgentLoop({
-    userMessage: task,
+    userMessage: task ?? '',
     tools: tools.map(t => ({
       name: t.function.name,
       description: t.function.description,
@@ -186,7 +196,15 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       onTool?.(toolName, args, toolResult);
     },
     executeTool: async (name, args) => {
-      const toolResult = await callMCPToolFromAI_SDK(name, args, userId, session.id);
+      // chat-hang-fix back-port: 60s defensive ceiling matching route.ts:1499 agentTurnSignal.
+      const toolResult = await callMCPToolFromAI_SDK(
+        name,
+        args,
+        userId,
+        session.id,
+        undefined,
+        { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+      );
       return {
         success: toolResult.success,
         output: toolResult.output,
@@ -198,7 +216,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   // Sync from sandbox to VFS
   try {
     if (session.sandboxHandle?.id) {
-      const { sandboxFilesystemSync } = await import('@/lib/virtual-filesystem/sync/sandbox-filesystem-sync');
+      const { sandboxFilesystemSync } =    await import('../../../web/lib/virtual-filesystem/sync/sandbox-filesystem-sync');
       await sandboxFilesystemSync.syncSandboxToVFS(session.sandboxHandle.id, userId);
     }
   } catch (syncError) {

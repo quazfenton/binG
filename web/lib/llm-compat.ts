@@ -21,6 +21,7 @@ export const knownGoodFCModels: string[] = [
   'mistral-large-2411',
   'mistral-large-2407',
   'mistral-medium-latest',
+  'mistral-small-latest',
   'gpt-4',
   'gpt-3.5',
   'claude-3',
@@ -157,10 +158,9 @@ export function shouldStripTools(provider: string, modelName: string): boolean {
     return nonFCModels.some(m => lowerModel.includes(m));
   }
 
-  // Mistral Small: unreliable FC unless explicitly known-good
-  if (lowerProvider === 'mistral' && /mistral-small/.test(lowerModel)) {
-    return !isKnownGoodFC(modelName);
-  }
+  // Mistral: Allow tools for ALL models by default (was broken whitelist)
+  // Known bad models will be handled by the fallback text parsing mechanism
+  // Don't strip tools here - let the model try and fail gracefully
 
   // GitHub Copilot (via ninerouter): rejects tool schemas entirely
   if (lowerProvider === 'ninerouter' && lowerModel.startsWith('gh/')) {

@@ -7,14 +7,13 @@
  * SECURITY: Production-ready encryption using Web Crypto API
  */
 
+import { createLogger } from '@/lib/utils/logger';
+
 const STORAGE_KEY = 'bing_user_api_keys'
 const ENCRYPTION_KEY_STORAGE = 'bing_user_encryption_key'
 const IV_STORAGE = 'bing_user_encryption_iv'
 
-const logger = {
-  info: (...args: any[]) => console.log('[UserAPIKeys]', ...args),
-  error: (...args: any[]) => console.error('[UserAPIKeys]', ...args),
-}
+const logger = createLogger('UserAPIKeys')
 
 /**
  * Generate or get encryption key for this browser

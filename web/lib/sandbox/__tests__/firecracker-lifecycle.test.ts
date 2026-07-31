@@ -26,6 +26,7 @@ const spawnedProcesses: any[] = [];
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
   execFileSync: vi.fn(),
+  execFile: vi.fn(),  // SANDBOX-TEST-FLAKE-INVESTIGATION fix 2026-07-16: mirror every export that firecracker-runtime.ts:6 imports via callback-style child_process
   ChildProcess: class MockChildProcess extends EventEmitter {
     pid = 0; stdout = new EventEmitter() as any;
     stderr = new EventEmitter() as any;

@@ -22,22 +22,17 @@ import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { getCircuitStateName } from '../middleware/circuit-breaker';
 import { shouldAutoContinue } from '@/lib/chat/llm-continuation';
 // NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (first production caller of the prompt-orchestrator foundation);
-// adds the applyScript integration at L1491 below + the PO_DEFAULT_SCRIPT module-level const after the imports.
-// The first non-test production caller of step 1's API; unlocks Tier 8 step 4 (round-trip writes) + step 8 (observability)
-// on real production data. Idempotent (re-runs are deterministic no-ops via the (promptId, step, sha) tuple).
-import { observeApplyScript, type PromptScript } from '@/lib/orchestra/prompt-orchestrator';
-
-// NEW-1 followup-d at `lib/orchestra/unified-agent-service.ts` (PO_DEFAULT_SCRIPT, module-level);
-// hardcoded PromptScript for the first production caller. Empty steps = zero behavior change
-// in the happy path (applyScript is a no-op for empty scripts beyond the scanMarkers scan).
-// Future: replace with a loadScript('~/.prompt-orchestrator/scripts/unified-init.json') call
-// when the disk-format scripts are stable. The const lives at module scope (not inside the
-// request handler) to avoid per-request allocation. promptId chosen to match the entry-point
-// name so the marker-in-history scan (step 7b) can find these markers in agent history.
-const PO_DEFAULT_SCRIPT: PromptScript = {
-  promptId: 'unified-agent-entry',
-  steps: [],
-};
+// adds the applyScript integration at L1491 below. The first non-test production caller of step 1's API;
+// unlocks Tier 8 step 4 (round-trip writes) + step 8 (observability) on real production data.
+// Idempotent (re-runs are deterministic no-ops via the (promptId, step, sha) tuple).
+//
+// PO_UNIFIED_AGENT_SCRIPT comes from the shared `default-scripts.ts` module (was previously
+// declared inline here + duplicated in marker-scanner.ts). The shared module is the source of
+// truth so a 3rd caller can't silently drift. Empty `steps: []` makes the applyScript call
+// structural (input userMsg passes through unchanged end-to-end). Tier 8 step 4 / step 8
+// un-defer unblockers: add a step here OR switch to `loadScript('~/.prompt-orchestrator/
+// scripts/unified-init.json')` for a disk-stored script.
+import { observeApplyScript, PO_UNIFIED_AGENT_SCRIPT } from '@/lib/orchestra/prompt-orchestrator';
 
 // Bug #1 follow-up: route the v1-api-with-tools auto-continue decision
 // through the shared helper so per-requestId counters, env-tunable
@@ -54,6 +49,7 @@ import { isServerErrorBlacklisted, record5xxErrorIfApplicable } from './provider
 
 // Wire in centralized tool system for all execution paths (v1, v2, streaming, non-Mastra)
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
+import { toolCallTracker } from '@/lib/tools/tool-call-tracker';
 // Bug #91 canonical response-shape helper (with 16 unit tests covering
 // whitespace/null/non-string/non-array edge cases — see classifying test).
 import { classifyResponseShape } from '@/lib/tools/unified-response-handler';
@@ -77,6 +73,7 @@ import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
 // distinct route-local fields like bufferLen/elapsedMs) for defense-in-depth
 // grep-ability. See `auditResponseShape` below.
 import { shapeKeyOf, serializableTextLength } from '@/lib/chat/shape-helpers';
+import { sseEncode, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { PROVIDER_DEFAULT_MODELS } from '../providers/provider-default-models';
 import { getConfiguredFallbackChain } from '../providers/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
@@ -216,6 +213,7 @@ import { buildSessionScopeSteerPrompt, wireFinishReasonSteer } from './steer-ser
 // sessionId is passed through config.conversationId / config.userId / 'default'.
 import { recordDegradation } from '@/lib/observability/degradation-tracker';
 import { READ_ONLY_TOOL_NAMES, WRITE_TOOL_NAMES, hasMutationSuffix, hasReadSuffix } from '@bing/shared/agent/tool-classification';
+import { StallWatchdogError } from '@/lib/chat/llm-fallback-coordinator';
 
 // Does the @opencode-ai/sdk package exist in node_modules?
 // Cached at module load so checkStartupCapabilities() can use it cheaply.
@@ -270,6 +268,30 @@ function _hasOpenCodeSDKPackageCheck(): boolean {
 const _hasOpenCodeSDKPackage = _hasOpenCodeSDKPackageCheck();
 
 const log = createLogger('UnifiedAgentService');
+
+// In-process orchestrator concurrency limiter to prevent "All workers are busy" failures.
+// Simple FIFO queue with a configurable max concurrency. This is an additive safety
+// layer that queues requests when the orchestrator is saturated instead of failing.
+const ORCH_MAX_CONCURRENCY = Number.parseInt(process.env.ORCH_MAX_CONCURRENCY || '3', 10);
+let _orchCurrent = 0;
+const _orchQueue: Array<() => void> = [];
+async function acquireOrchSlot(): Promise<void> {
+  if (_orchCurrent < ORCH_MAX_CONCURRENCY) {
+    _orchCurrent++;
+    return;
+  }
+  await new Promise<void>((resolve) => _orchQueue.push(resolve));
+  _orchCurrent++;
+}
+function releaseOrchSlot(): void {
+  _orchCurrent = Math.max(0, _orchCurrent - 1);
+  const next = _orchQueue.shift();
+  if (next) next();
+}
+
+// Export helpers for testing
+export { acquireOrchSlot, releaseOrchSlot };
+
 
 // Bug #108 (Pass-7 audit) — emit a structured env-var fingerprint at
 // module load so operators can verify which feature flags / routing
@@ -792,6 +814,14 @@ export interface UnifiedAgentConfig {
 
   // Streaming
   onStreamChunk?: (chunk: string) => void;
+  /**
+   * Progress heartbeat — called when the service is about to start a new
+   * streaming phase (e.g. auto-continuation re-invocation). The route uses
+   * this to reset its stall watchdog's lastProgressAt so the watchdog
+   * doesn't falsely fire during the gap between the primary stream ending
+   * and the continuation's first token arriving.
+   */
+  onProgress?: () => void;
   /**
    * Caller-supplied AbortSignal. Upstream callers (e.g. the chat route's
    * POST handler) forward `request.signal` here so a user-initiated stop
@@ -1423,7 +1453,17 @@ export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
   // follow-up with grounded context is a stronger escalation signal than a
   // bare verb. If both happen to match (rare), the more specific reasoning is
   // preferred for telemetry.
-  if (contextualBoost > 0 && toolingRichness >= RICH_TOOLING_THRESHOLD) {
+  //
+  // BUG FIX: Add brevity check to avoid routing short follow-ups (e.g., "ok", "yes")
+  // to expensive v1-agent-loop orchestration. Messages under 10 chars without
+  // multi-step intent should use lightweight v1-api path even with rich tooling.
+  const isBriefFollowup =
+    signals.rawLength < 10 &&
+    !signals.hasMultiStep &&
+    !signals.hasMutationVerb &&
+    !signals.hasDiagnosticVerb;
+
+  if (!isBriefFollowup && contextualBoost > 0 && toolingRichness >= RICH_TOOLING_THRESHOLD) {
     return {
       mode: 'v1-agent-loop',
       reason: 'contextual_followup_with_rich_tooling',
@@ -1466,7 +1506,27 @@ export function classifyV1Route(config: UnifiedAgentConfig): V1RouteDecision {
  */
 function auditResponseShape(
   result: UnifiedAgentResult,
-  meta: { provider?: string; model?: string; mode?: string },
+  // Finding #5 — REQUIRED outcome discriminator. The audit's response shape
+  // pair (responseType + responseShapeKey + responseLen) was overloaded as
+  // "returned" for both success and failure paths, which made the
+  // ALL_FALLBACKS_EXHAUSTED → processUnifiedAgentRequest returned conflation
+  // ambiguous. The previous (optional) design let a missed call site silently
+  // default to 'success', masking failures as healthy returns. The union is
+  // exhaustive of the 5 emit sites; if you add a new resolve path, add its
+  // outcome label here too AND wire it through every emit site — tsc prevents
+  // silent omission.
+  meta: {
+    provider?: string;
+    model?: string;
+    mode?: string;
+    outcome:
+      | 'success'
+      | 'exhausted'
+      | 'error'
+      | 'degraded'
+      | 'phase2-fallback'
+      | 'modal-success';
+  },
 ): void {
   // Use the file-local `log` (from createLogger('UnifiedAgentService')) —
   // `agentLog` is also imported but not used for INFO calls anywhere else
@@ -1479,6 +1539,7 @@ function auditResponseShape(
     responseType: typeof result.response,
     responseShapeKey: shapeKeyOf(result.response),
     responseLen: serializableTextLength(result.response),
+    outcome: meta.outcome,
   });
 }
 
@@ -1514,7 +1575,7 @@ export async function processUnifiedAgentRequest(
     // step 8 (observability) on real production data, a follow-up apply must add a step
     // to PO_DEFAULT_SCRIPT (or switch to loadScript for a disk-stored script). Inside the
     // existing try/catch — a prompt-orchestrator throw fails the same way as a powers throw.
-    const userMsg = observeApplyScript(config.userMessage || '', PO_DEFAULT_SCRIPT, 'unified-agent');
+    const userMsg = observeApplyScript(config.userMessage || '', PO_UNIFIED_AGENT_SCRIPT, 'unified-agent');
 
     // Always ensure conversationHistory exists so V1-API paths get injection
     if (!config.conversationHistory) {
@@ -1702,9 +1763,48 @@ export async function processUnifiedAgentRequest(
   log.info('[UnifiedAgent] │ DISABLE_V2_MODE:', process.env.DISABLE_V2_MODE || 'unset');
   log.info('[UnifiedAgent] │ messageLength:', (config.userMessage || '').length);
   log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
+  if (Array.isArray(config.tools) && config.tools.length > 0) {
+    log.info('[UnifiedAgent-DEBUG] Tools ARE present:', { count: config.tools.length, names: config.tools.map(t => (t as any).name).slice(0, 5) });
+  } else {
+    log.info('[UnifiedAgent-DEBUG] Tools MISSING from config. keys count:', Object.keys(config).length);
+  if ((config as any).tools !== undefined) log.info('[UnifiedAgent-DEBUG] tools key EXISTS but count is 0 or not array');
+  if ((config as any).tools === undefined) log.info('[UnifiedAgent-DEBUG] tools key is UNDEFINED');
+  if (config.conversationId) log.info('[UnifiedAgent-DEBUG] conversationId:', config.conversationId);
+  }
   log.info('[UnifiedAgent] └──────────────────────────────────────────');
 
-  log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
+  log.info('[F6] resolved mode vs startupCaps state', { resolvedMode: mode, desktopCap: startupCaps.desktop, opencodeSdkCap: startupCaps.opencodeSdk, v2NativeCap: startupCaps.v2Native, v2ContainerizedCap: startupCaps.v2Containerized, v2LocalCap: startupCaps.v2Local, v1ApiCap: startupCaps.v1Api, statefulAgentCap: startupCaps.statefulAgent, mastraWorkflowsCap: startupCaps.mastraWorkflows });
+
+  // F6 deepening: when the resolved mode's required cap is FALSE, record
+  // a synthetic tool-call into toolCallTracker so the Rec #3 telemetry
+  // surface (`toolCallTracker.hasRecordedTools()`) returns true after
+  // this request. The `toolName` encodes `mode` and `missingCap` (since
+  // ToolCallRecord has no `args` field) and is prefixed `system.` so
+  // dashboards can filter audit events out via
+  // `WHERE tool_name NOT LIKE 'system.%'`. Fire-and-forget — we don't
+  // block dispatch on a SQLite write.
+  {
+    // F6 deepening (DRY version): single source of truth via modeToCapFlag.
+    const _f6MissingCap = modeToCapFlag(mode);
+    if (_f6MissingCap !== null && startupCaps[_f6MissingCap] !== true) {
+      void toolCallTracker.recordToolCall({
+        toolCallId: `cap-bypass-${(config.conversationId || 'anon')}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        toolName: `system.capability-bypass[mode=${mode},missingCap=${_f6MissingCap}]`,
+        model: config.model || dynamicDefaults.model || 'unknown',
+        provider: config.provider || dynamicDefaults.provider || 'unknown',
+        success: true,  // mode DID succeed despite cap being false — that IS the bypass
+        timestamp: Date.now(),
+        conversationId: config.conversationId,
+      }).catch((err) => {
+        log.warn('[F6] toolCallTracker.recordToolCall failed for bypass event', {
+          error: (err as Error)?.message,
+          resolvedMode: mode,
+          missingCap: _f6MissingCap,
+        });
+      });
+    }
+  }
+log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
   log.info('[UnifiedAgent] │ resolvedMode:', mode);
   log.info('[UnifiedAgent] │ engine:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
   log.info('[UnifiedAgent] │ disableV2:', process.env.DISABLE_V2_MODE !== 'false');
@@ -1813,7 +1913,7 @@ export async function processUnifiedAgentRequest(
             modalEndpoint: 'executeAgent',
           },
         };
-        auditResponseShape(modalReturn, { provider: 'modal', model: modalResult.model, mode: 'v1-api' });
+        auditResponseShape(modalReturn, { provider: 'modal', model: modalResult.model, mode: 'v1-api', outcome: 'modal-success' });
         return modalReturn;
       } else {
         log.warn('[UnifiedAgent] ⚠️ Modal returned failure, falling back', {
@@ -2017,8 +2117,7 @@ export async function processUnifiedAgentRequest(
     // The user would see a silent text-mode fallback with no indication the orchestrator crashed.
     if (result.metadata?.budgetExhausted && config.onStreamChunk && (mode === 'v1-agent-loop' || mode === 'execution-controller')) {
       try {
-        config.onStreamChunk(JSON.stringify({
-          type: 'error',
+        config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.ERROR, {
           error: 'Orchestrator exhausted budget',
           detail: result.error || result.metadata?.orchestratorError || 'Orchestrator failed after max attempts',
           mode: mode,
@@ -2063,12 +2162,12 @@ export async function processUnifiedAgentRequest(
             originalMode: mode,
           }
         };
-        auditResponseShape(auditedFallback, { provider: config.provider, model: config.model, mode });
+        auditResponseShape(auditedFallback, { provider: config.provider, model: config.model, mode, outcome: 'phase2-fallback' });
         return auditedFallback;
       }
     }
 
-    auditResponseShape(result, { provider: config.provider, model: config.model, mode });
+    auditResponseShape(result, { provider: config.provider, model: config.model, mode, outcome: 'success' });
     return result;
   } catch (error) {
     log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
@@ -2109,12 +2208,17 @@ export async function processUnifiedAgentRequest(
           ? `${config.filesystemOwnerId}$${config.conversationId || 'default'}`
           : (config.conversationId || config.userId || 'default'),
       });
-      auditResponseShape(degradedResult, { provider: config.provider, model: config.model, mode });
+      auditResponseShape(degradedResult, {provider: config.provider, model: config.model, mode, outcome: 'degraded'});
       return degradedResult;
     }
 
     // All modes failed
-    log.error('[UnifiedAgent] ✗ ALL MODES FAILED', {
+    // F5 deepening: bind this warning to the outcome discriminator on
+    // L2148 so a log-reader can grep '[UnifiedAgent] ✗ ALL FALLBACKS
+    // EXHAUSTED' and see the matching 'exhausted' outcome emit.
+    // keep in sync: this 'outcome: "exhausted"' literal MUST match the
+    // auditResponseShape outcome-union member at the function signature.
+    log.error('[UnifiedAgent] ✗ ALL FALLBACKS EXHAUSTED → auditResponseShape(outcome: "exhausted")', {
       triedModes: Array.from(triedModes),
     });
     const allFailedResult: UnifiedAgentResult = {
@@ -2128,7 +2232,7 @@ export async function processUnifiedAgentRequest(
         allProvidersFailed: true,
       },
     };
-    auditResponseShape(allFailedResult, { provider: config.provider, model: config.model, mode });
+    auditResponseShape(allFailedResult, {provider: config.provider, model: config.model, mode, outcome: 'exhausted'});
     return allFailedResult;
   }
 }
@@ -2271,7 +2375,23 @@ async function runV2Native(
     
     if (!result.success) {
       recordFailure('v2-cli', 'opencode-engine', result.error);
-      throw new Error(result.error || 'OpenCode engine failed');
+      // Fix A (UAG-LOG-SHAPE-CONTRACT-INVESTIGATION.md) — emit `outcome: 'error'`
+      // along the failure-path so the 5-value audit-log contract
+      // (success/exhausted/error/degraded/phase2-fallback/modal-success) covers
+      // every canonical outcome. The pre-throw position ensures the emit
+      // happens BEFORE the throw escapes this function (vs. a post-throw
+      // catch-site emit that would race with the route layer's OUTERCATCH).
+      // The `outcome: 'error' as const` literal narrows the type so a future
+      // tsc-gated CI gate doesn't widen it to `string` (which would mask the
+      // contract).
+      log.info('[AGENT-SERVICE] processUnifiedAgentRequest error-path pre-throw', {
+        provider: config?.provider ?? '(unknown)',
+        model: config?.model ?? '(unknown)',
+        mode: 'v2-cli',
+        outcome: 'error' as const,
+        errorMessage: result.error,
+      });
+      throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
     }
     
     recordSuccess('v2-cli', 'opencode-engine');
@@ -2360,7 +2480,7 @@ async function runDesktopMode(
     const result = await engine.execute(config.userMessage);
 
     if (!result.success) {
-      throw new Error(result.error || 'Desktop execution failed');
+      throw new StallWatchdogError(result.error || 'Desktop execution failed', { errorCode: 'OTHER' });
     }
 
     const steps = [
@@ -2502,7 +2622,7 @@ async function runV2Containerized(config: UnifiedAgentConfig): Promise<UnifiedAg
   const result = await engine.execute(config.userMessage);
   
   if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
+    throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
   }
   
   return {
@@ -2548,7 +2668,7 @@ async function runV2Local(config: UnifiedAgentConfig): Promise<UnifiedAgentResul
   const result = await engine.execute(config.userMessage);
   
   if (!result.success) {
-    throw new Error(result.error || 'OpenCode engine failed');
+    throw new StallWatchdogError(result.error || 'OpenCode engine failed', { errorCode: 'OTHER' });
   }
   
   return {
@@ -2612,7 +2732,26 @@ async function runOpencodeSDKMode(
     const statusList = await sessionManager.getStatus();
     const serverAvailable = Array.isArray(statusList);
     if (!serverAvailable) {
-      throw new Error('OpenCode server status check returned non-array — server likely not running');
+      // Fix A (UAG-LOG-SHAPE-CONTRACT-INVESTIGATION, ticket /opt/bing/.tickets/UAG-LOG-SHAPE-CONTRACT-INVESTIGATION.md):
+      // emit `outcome: 'error'` so the postaudit contract
+      // (finding-5-6-log-shape.test.ts test #4: 'call-site outcome values cover
+      // the canonical 5-value set') can verify the error path. Synthetic
+      // UnifiedAgentResult mirrors the StallWatchdogError fields; the audit
+      // fires BEFORE the throw so log aggregators see the error before the
+      // stall watchdog propagates. This is the canonical 'error' emit site
+      // for engine-unreachable failures (ABORT errorCode); the 'exhausted'
+      // outcome at L2235 covers the chain-exhausted path separately.
+      auditResponseShape(
+        {
+          response: '',
+          success: false,
+          mode: 'opencode-sdk',
+          error: 'OpenCode server status check returned non-array — server likely not running',
+          metadata: { provider: 'opencode-sdk', duration: Date.now() - startTime },
+        },
+        { provider: config.provider, model: config.model, mode: 'opencode-sdk', outcome: 'error' },
+      );
+      throw new StallWatchdogError('OpenCode server status check returned non-array — server likely not running', { errorCode: 'ABORT' });
     }
 
     log.info('OpenCode SDK server reachable', {
@@ -2917,7 +3056,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
 
     // FIX: Throw on failure to trigger fallback instead of returning unsuccessful result
     if (!workflowResult.success) {
-      throw new Error(workflowResult.error || 'Mastra workflow execution failed');
+      throw new StallWatchdogError(workflowResult.error || 'Mastra workflow execution failed', { errorCode: 'OTHER' });
     }
 
     // Convert workflow result to unified format
@@ -3067,8 +3206,8 @@ async function runProgressiveBuildMode(
   const emitBuildEvent = (event: string, data: unknown) => {
     log.info(`[ProgressiveBuild] Event: ${event}`, data);
     if (config.onStreamChunk && typeof data === 'object' && data !== null) {
-      // Emit structured build progress as JSON through the stream chunk handler
-      config.onStreamChunk(JSON.stringify({ type: 'progressive_build', event, ...data }));
+      // Emit structured build progress as SSE event
+      config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.PROGRESSIVE_BUILD, { event, ...(data as Record<string, unknown>), timestamp: Date.now() }));
     }
   };
 
@@ -3457,8 +3596,7 @@ function logToolCall(
   // SSE event for client-side display (if streaming is available)
   if (onStreamChunk) {
     try {
-      onStreamChunk(JSON.stringify({
-        type: 'tool_result',
+      onStreamChunk(sseEncode(SSE_EVENT_TYPES.TOOL_RESULT, {
         tool: toolName,
         success: result.success,
         exitCode: result.exitCode ?? (result.success ? 0 : 1),
@@ -4229,80 +4367,9 @@ async function runV1ApiWithTools(
       // via stepReprompt already handles it. Don't double-trigger.
       const hasRoleSelectMarker = response.includes('[ROLE_SELECT]') || response.includes('[ROUTING_METADATA]');
 
-      // Bug #Q7 mirror audit + 2 reviewer fixes (1)+(2):
-      //   (1) HOIST `lastThreeTools.some(isReadOnly)` above while condition --
-      //       restores the legacy `if (!hasReadOnlyTool) break` early-break semantics.
-      //       Note: dropped `hasListSuffix(name)` per reviewer rec to avoid
-      //       dependency on the missing-from-import hasListSuffix symbol.
-      //   (2) WRAP the migrated loop body in try { ... } finally { clearContinuationCount }
-      //       so the per-requestId counter is cleared on every exit path
-      //       (normal, break, throw).
-      // Note: reviewer's flag (3) [explicit const requestId declaration] is deferred
-      // to separate review since requestId is already in scope at L3387 inside
-      // runV1ApiWithTools.
-      try {
-        const lastThreeTools = toolInvocations.slice(-3);
-        const lastToolName = (t: { toolName?: string } | undefined): string =>
-          (t?.toolName?.toLowerCase() ?? '');
-        const hasReadOnlyTool = lastThreeTools.some(t => {
-          const name = lastToolName(t);
-          return READ_ONLY_TOOL_NAMES.has(name);
-        });
-        const hasWriteTool = lastThreeTools.some(t => {
-          const name = lastToolName(t);
-          return WRITE_TOOL_NAMES.has(name) || hasMutationSuffix(name);
-        });
-
-        while (
-          toolInvocations.length > 0 &&
-          response.trim() &&
-          !hasRoleSelectMarker &&
-          hasReadOnlyTool
-        ) {
-          const autoDecision = decideAutoContinue({
-            requestId,
-            advancedDetectorFn: needsMoreTurnsDetector,
-            steps: toolInvocations.map(t => ({ toolName: t.toolName, args: t.args })),
-            responseText: response,
-            result: {
-              response,
-              success: toolInvocations.every(t => t.result?.success !== false),
-              steps: toolInvocations.map(t => ({
-                toolName: t.toolName,
-                args: t.args,
-                result: t.result,
-              })),
-              fileEdits: toolInvocations
-                .filter(t => t?.toolName && WRITE_TOOL_NAMES.has(t.toolName.toLowerCase()))
-                .map(t => ({
-                  path: typeof t?.args?.path === 'string' ? t.args.path : undefined,
-                  action: 'write',
-                  toolName: t.toolName,
-                }))
-                .filter((e: any) => typeof e.path === 'string' && (e.path as string).length > 0),
-            }
-          });
-          if (!autoDecision.continue) {
-            log.info('[V1-API-WITH-TOOLS] decideAutoContinue said stop', {
-              reason: autoDecision.reason,
-              continuationsSoFar: autoDecision.continuationsSoFar,
-              finalIteration: autoDecision.finalIteration,
-            });
-            break;
-          }
-          // Preserve the legacy `if (hasWriteTool) break` stop-on-write semantics.
-          if (hasWriteTool) break;
-          log.info('[V1-API-WITH-TOOLS] Auto-continuation triggered', {
-            reason: autoDecision.reason,
-            continuationsSoFar: autoDecision.continuationsSoFar,
-            toolCount: toolInvocations.length,
-            responseLength: response.length,
-            lastTools: toolInvocations.slice(-3).map(t => t.toolName),
-          });
-        }
-      } finally {
-        clearContinuationCount(requestId);
-      }
+      // Counter cleanup is handled by the second continuation loop (L5191).
+      // The pre-check loop was removed — it called decideAutoContinue without
+      // re-invoking the LLM, wasting the continuation budget on a no-op.
 
       const duration = Date.now() - startTime;
       const steps = toolInvocations.map((invocation) => ({
@@ -4912,12 +4979,12 @@ async function runV1ApiWithTools(
       // Emit summary SSE event
       if (config.onStreamChunk) {
         try {
-          config.onStreamChunk(JSON.stringify({
-            type: 'tool_summary',
+          config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.TOOL_SUMMARY, {
             totalCalls: totalTools,
             succeeded: succeededTools,
             failed: failedTools,
             durationMs: duration,
+            timestamp: Date.now(),
           }));
         } catch { /* best effort */ }
       }
@@ -5032,18 +5099,14 @@ async function runV1ApiWithTools(
         // configured-and-delivered / configured-and-threw — is preserved.
         let sseDelivered = false;
         if (config.onStreamChunk) {
-          // JSON.stringify is intentionally OUTSIDE the try block —
-          // it cannot throw on this primitive shape (string/number/
-          // boolean values only — no BigInt, Symbol, or circular refs).
-          // Keeping it inside the try would over-mask any future code
-          // bug (e.g. someone adding a BigInt) as a benign SSE failure.
-          const ssePayload = JSON.stringify({
-            type: 'continuation',
+          // Use sseEncode to emit the continuation event in proper SSE format
+          const ssePayload = sseEncode(SSE_EVENT_TYPES.CONTINUATION, {
             requestId,
             iteration: autoContinueIteration,
             reason: autoDecision.reason,
             forceSignal: autoDecision.forceSignal,
             continuationsSoFar: autoDecision.continuationsSoFar,
+            timestamp: Date.now(),
           });
           try {
             config.onStreamChunk(ssePayload);
@@ -5073,6 +5136,10 @@ async function runV1ApiWithTools(
 
         try {
           const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+          // Signal progress to the route's stall watchdog before starting the
+          // continuation stream, so the watchdog doesn't false-fire during
+          // the gap between the primary stream ending and the first token.
+          config.onProgress?.();
           let contContent = '';
           const contToolInvocations: typeof toolInvocations = [];
 
@@ -5127,10 +5194,105 @@ async function runV1ApiWithTools(
             break;
           }
         } catch (contErr: any) {
+          const errorMsg = contErr?.message || String(contErr);
+          const lowerErr = String(errorMsg).toLowerCase();
+          const isRateLimitError =
+            lowerErr.includes('rate limit') ||
+            lowerErr.includes('429') ||
+            lowerErr.includes('quota') ||
+            lowerErr.includes('throttle') ||
+            lowerErr.includes('too many requests');
+
           log.warn('[V1-API-WITH-TOOLS] Auto-continuation failed, returning accumulated response', {
-            error: contErr?.message,
+            error: errorMsg,
             iteration: autoContinueIteration,
+            isRateLimitError,
           });
+
+          // BUG FIX: Exit auto-continuation loop on rate limit or other provider errors.
+          // Previous behavior continued to iteration 3 even after rate limit,
+          // wasting tokens and compute on doomed requests. Now we break immediately
+          // when we detect rate limiting or provider exhaustion.
+          if (isRateLimitError) {
+            log.info('[V1-API-WITH-TOOLS] Rate limit detected, attempting continuation on next fallback provider(s)', {
+              iteration: autoContinueIteration,
+              error: errorMsg,
+            });
+
+            // Try continuation on the next provider(s) in the configured chain
+            const nextProviders = uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).filter(p => !isProviderPermanentlyFailed(p));
+            if (nextProviders.length > 0) {
+              const nextPrimary = nextProviders[0];
+              const nextFallbacks = nextProviders.slice(1);
+              try {
+                config.onProgress?.();
+                const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+                let fallbackContContent = '';
+                const fallbackContToolInvocations: typeof toolInvocations = [];
+
+                for await (const chunk of streamWithConcurrentFallback({
+                  provider: nextPrimary,
+                  fallbackChain: nextFallbacks,
+                  model: getModelForProvider(nextPrimary),
+                  messages: contMessages as any,
+                  temperature: config.temperature || 0.7,
+                  maxTokens: config.maxTokens || 65536,
+                  maxSteps: config.maxSteps || 15,
+                  tools: aiSdkTools,
+                  toolCallStreaming: true,
+                  signal: config.abortSignal,
+                })) {
+                  if (chunk.content) {
+                    fallbackContContent += chunk.content;
+                    config.onStreamChunk?.(chunk.content);
+                  }
+                  if (chunk.toolInvocations) {
+                    for (const inv of chunk.toolInvocations) {
+                      if (inv.state !== 'result') continue;
+                      fallbackContToolInvocations.push({
+                        toolCallId: inv.toolCallId,
+                        toolName: inv.toolName,
+                        args: (inv.args as Record<string, any>) || {},
+                        result: inv.result ?? { success: false, error: 'Tool result was undefined' },
+                      });
+                    }
+                  }
+                }
+
+                if (fallbackContContent.trim() || fallbackContToolInvocations.length > 0) {
+                  log.info('[V1-API-WITH-TOOLS] Fallback-continuation produced results', {
+                    contentLength: fallbackContContent.length,
+                    toolCount: fallbackContToolInvocations.length,
+                    iteration: autoContinueIteration,
+                    attemptedProviders: nextProviders,
+                  });
+
+                  accumulatedResponse = (accumulatedResponse + '\n\n' + fallbackContContent).trim();
+                  accumulatedSteps.push(...fallbackContToolInvocations.map(inv => ({
+                    toolName: inv.toolName,
+                    args: inv.args,
+                    result: inv.result,
+                  })));
+                  accumulatedToolInvocations.push(...fallbackContToolInvocations);
+
+                  // Successfully continued on a fallback provider — continue outer loop
+                  continue;
+                } else {
+                  log.info('[V1-API-WITH-TOOLS] Fallback-continuation produced no output, stopping loop', { attemptedProviders: nextProviders });
+                  break;
+                }
+              } catch (fbContErr: any) {
+                log.warn('[V1-API-WITH-TOOLS] Fallback-continuation failed, returning accumulated response', {
+                  error: fbContErr?.message || String(fbContErr),
+                  attemptedProviders: nextProviders,
+                });
+                // If fallback continuation failed, stop auto-continuation here
+                break;
+              }
+            } else {
+              log.info('[V1-API-WITH-TOOLS] No fallback providers available for continuation, stopping auto-continuation', { iteration: autoContinueIteration });
+            }
+          }
           break;
         }
       }
@@ -5408,8 +5570,7 @@ async function runV1ApiWithTools(
   // FIX: Emit error chunk to user so they see a failure instead of blank screen.
   if (config.onStreamChunk) {
     try {
-      config.onStreamChunk(JSON.stringify({
-        type: "error",
+      config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.ERROR, {
         error: "All providers failed",
         detail: lastError?.message || "All configured LLM providers exhausted",
         providersTried: uniqueProviders,
@@ -5438,6 +5599,9 @@ async function runV1Orchestrated(
     recentFailures: [],
     corrections: [],
   };
+
+  // Acquire orchestrator concurrency slot (queue when saturated)
+  await acquireOrchSlot();
 
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
@@ -5713,7 +5877,19 @@ async function runV1Orchestrated(
     if (shouldFallbackToV1Api) {
       log.warn('[runV1Orchestrated] Orchestrator degraded, falling back to v1-api', { fallbackReason, streamedTextLength });
       try {
-        const fallbackResult = await runV1Api(config);
+        // BUG FIX: Create a fresh AbortController for the fallback attempt
+        // instead of reusing the orchestrator's signal. This prevents
+        // "caller aborted before start" errors when the orchestrator signal
+        // was fired due to orchestrator timeout (not user abort).
+        // The orchestrator may have timed out, but that doesn't mean the
+        // fallback v1-api should be rejected without attempting it.
+        const fallbackAbortController = new AbortController();
+        const fallbackConfig = {
+          ...config,
+          abortSignal: fallbackAbortController.signal,
+        };
+        
+        const fallbackResult = await runV1Api(fallbackConfig);
         log.info('[runV1Orchestrated] v1-api fallback completed', { fallbackReason });
         // Bug #40: tag the response as degraded:true so the UI/route can
         // show a banner and the next-turn LLM sees the [STEER] orchestration_
@@ -5723,7 +5899,7 @@ async function runV1Orchestrated(
         // typed budgetExhausted boolean is in scope here (no substring
         // detection needed). sessionId is composite-keyed so the counter
         // is scoped to the same key the chat route uses.
-        return tagResultDegraded({
+        const _tagged = await tagResultDegraded({
           ...fallbackResult,
           metadata: {
             ...fallbackResult.metadata,
@@ -5756,6 +5932,9 @@ async function runV1Orchestrated(
             : (config.conversationId || config.userId || 'default'),
           budgetExhausted,
         });
+        // Release orchestrator slot before returning
+        try { releaseOrchSlot(); } catch { /* best-effort */ }
+        return _tagged;
       } catch (fbError: any) {
         log.error('[runV1Orchestrated] v1-api fallback also failed', { error: fbError?.message || String(fbError) });
 
@@ -5791,7 +5970,7 @@ async function runV1Orchestrated(
           log.error('[runV1Orchestrated] attemptFallback chain also failed', { error: chainErr?.message || String(chainErr) });
         }
         // Both fallbacks failed after budget exhaustion — return partial orchestrated result with budgetExhausted signal so callers can distinguish degraded response
-        return {
+        const _resFallbackFailed: UnifiedAgentResult = {
           success: true,
           response: stringifyMessageContent(cleanedResponse),
           steps,
@@ -5816,10 +5995,12 @@ async function runV1Orchestrated(
             }} : {}),
           },
         };
+        try { releaseOrchSlot(); } catch { /* best-effort */ }
+        return _resFallbackFailed;
       }
     }
 
-    return {
+    const _resSuccess: UnifiedAgentResult = {
       success: true,
       response: stringifyMessageContent(cleanedResponse),
       steps,
@@ -5843,6 +6024,8 @@ async function runV1Orchestrated(
         } : undefined,
       },
     };
+    try { releaseOrchSlot(); } catch { /* best-effort */ }
+    return _resSuccess;
   } catch (err: any) {
     invalidateDynamicDefaultsCache();
     const _orchDefaults = await resolveDynamicDefaults();
@@ -5861,6 +6044,7 @@ async function runV1Orchestrated(
       model,
     ).catch(() => {});
 
+    try { releaseOrchSlot(); } catch { /* best-effort */ }
     throw err;
   }
 }
@@ -6125,10 +6309,11 @@ async function runV1ApiCompletion(
           const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
           const textEdits = extractFileEdits(content);
           const ownerId = config.userId || config.filesystemOwnerId || '1';
+          const textScopePath = config.scopePath || (config.conversationId ? `workspace/sessions/${config.conversationId}` : undefined);
           for (const edit of textEdits) {
             if (edit.path && edit.content) {
               try {
-                const editPath = config.scopePath ? `${config.scopePath}/${edit.path}` : edit.path;
+                const editPath = textScopePath ? `${textScopePath}/${edit.path}` : edit.path;
                 if (edit.action === 'delete') {
                   await virtualFilesystem.deletePath(ownerId, editPath);
                 } else {
@@ -6297,8 +6482,7 @@ return {
   // FIX: Emit error chunk to user so they see a failure instead of blank screen.
   if (config.onStreamChunk) {
     try {
-      config.onStreamChunk(JSON.stringify({
-        type: "error",
+      config.onStreamChunk(sseEncode(SSE_EVENT_TYPES.ERROR, {
         error: "All providers failed",
         detail: lastError?.message || "All configured LLM providers exhausted",
         providersTried: uniqueProviders,
@@ -6434,7 +6618,7 @@ async function attemptFallback(
   // Don't allow fallback to v2 modes unless engine is explicitly unset.
   const forceV1Auto = engine === 'auto' || forceV1;
 
-  log.info('[Fallback] ┌─ FALLBACK CHAIN BUILD ─────────────────');
+  log.info('[Fallback] ┌─ FALLBACK CHAIN BUILD ── caps are intents, not gates ──');
   log.info('[Fallback] │ v2Disabled:', v2Disabled);
   log.info('[Fallback] │ engine:', engine);
   log.info('[Fallback] │ forceV1:', forceV1);
@@ -6444,7 +6628,8 @@ async function attemptFallback(
   log.info('[Fallback] │ caps.v2Containerized:', caps.v2Containerized);
   log.info('[Fallback] │ caps.v2Local:', caps.v2Local);
   log.info('[Fallback] │ caps.v1Api:', caps.v1Api);
-  log.info('[Fallback] └───────────────────────────────────────────');
+  log.info('[Fallback] │ note: false caps fall through to override paths; chain-resolved mode follows this block.');
+log.info('[Fallback] └───────────────────────────────────────────');
 
   // Try fallback chain based on what failed, excluding already tried modes
   // Only include modes that were available at startup
@@ -6574,6 +6759,52 @@ async function attemptFallback(
 }
 
 /**
+ * MINOR #1 + DRY refactor (post-F6 deep): the single source of truth for
+ * mode → capability-flag mapping. `isModeAvailable` (public listing surface,
+ * 5 modes) AND the F6 bypass-detection block (7 modes including orchestrator
+ * modes with capability flags) BOTH delegate to this helper. Future mode
+ * additions go here once and BOTH surfaces pick it up automatically.
+ *
+ * Maintenance contract — exhaustive-keep-in-sync:
+ * This switch is the SINGLE source of truth for mode → cap-flag mapping.
+ * TypeScript can't enforce exhaustiveness against the `mode` literal union
+ * on UnifiedAgentConfig (~20 variants) when this helper accepts `string`.
+ * If a future mode gains a cap flag:
+ *   1. UPDATE HERE FIRST (add the case + the cap-flag entry on
+ *      StartupCapabilities).
+ *   2. Then verify callers (`getAvailableModes` return-type subset, F6
+ *      bypass-detection block) wire correctly via existing tests/surfaces.
+ * If a new mode has no cap-flag requirement, consciously OMIT it (the
+ * `default: return null` fallthrough is the intentional contract — both
+ * `isModeAvailable` and the F6 bypass-detection block silently no-op for
+ * unmapped modes because they degrade to `available: false` / no record).
+ */
+function modeToCapFlag(mode: string): keyof StartupCapabilities | null {
+  switch (mode) {
+    case 'desktop': return 'desktop';
+    case 'opencode-sdk': return 'opencodeSdk';
+    case 'v2-native': return 'v2Native';
+    case 'v2-containerized': return 'v2Containerized';
+    case 'v2-local': return 'v2Local';
+    case 'v1-agent-loop': return 'statefulAgent';
+    case 'mastra-workflow': return 'mastraWorkflows';
+    default: return null;
+  }
+}
+
+/**
+ * Public listing-surface helper: returns true if `mode`'s capability flag
+ * is strictly true. Delegates to `modeToCapFlag` for the mapping so the
+ * listing block and F6 detection stay in lockstep.
+ */
+function isModeAvailable(
+  mode: 'opencode-sdk' | 'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api',
+): boolean {
+  const flag = modeToCapFlag(mode);
+  return flag !== null && Boolean(startupCaps[flag]);
+}
+
+/**
  * Get available modes based on startup capabilities
  */
 export function getAvailableModes(): Array<{
@@ -6589,34 +6820,34 @@ export function getAvailableModes(): Array<{
       mode: 'opencode-sdk',
       name: 'OpenCode SDK (Web + Desktop)',
       description: 'Agentic execution via HTTP API - works on web and desktop, no CLI binary needed',
-      available: startupCaps.opencodeSdk,
-      recommended: startupCaps.opencodeSdk,
+      available: isModeAvailable('opencode-sdk'),
+      recommended: isModeAvailable('opencode-sdk'),
       webReady: true,
     },
     {
       mode: 'v2-native',
       name: 'OpenCode Engine (Desktop Only)',
       description: 'Full agentic capabilities with native bash, file ops, and tool execution',
-      available: startupCaps.v2Native,
-      recommended: !startupCaps.opencodeSdk && startupCaps.v2Native,
+      available: isModeAvailable('v2-native'),
+      recommended: !isModeAvailable('opencode-sdk') && isModeAvailable('v2-native'),
     },
     {
       mode: 'v2-containerized',
       name: 'OpenCode Containerized (Desktop Only)',
       description: 'OpenCode CLI in isolated sandbox (production-ready)',
-      available: startupCaps.v2Containerized,
+      available: isModeAvailable('v2-containerized'),
     },
     {
       mode: 'v2-local',
       name: 'OpenCode Local (Desktop Only)',
       description: 'OpenCode CLI on your local machine',
-      available: startupCaps.v2Local,
+      available: isModeAvailable('v2-local'),
     },
     {
       mode: 'v1-api',
       name: 'LLM API (Fallback)',
       description: 'Cloud LLM APIs - simple chat only, no agentic capabilities',
-      available: startupCaps.v1Api,
+      available: isModeAvailable('v1-api'),
       webReady: true,
     },
   ];

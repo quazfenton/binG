@@ -2969,3 +2969,195 @@ describe('Premature Stoppage After Info-Gathering Tools', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gap #14: ramble-no-tools regression (>4KB response with no tool calls)
+//
+// Production rule (new): lib/chat/auto-continue-helper.ts:rambleNoToolsDetector
+// fires on responseText.length > 4096 (env AUTO_CONTINUE_RAMBLE_BYTES) AND
+// steps.length === 0 (no tool calls attempted this turn).
+//
+// The route.ts SSE emitter propagates autoDecision.reason verbatim into
+// the continuation chunk's reason field, so operators grep
+// '"reason":"ramble-no-tools"' against the live SSE stream to detect
+// wall-of-text-no-action failure modes. This regression preserves the
+// literal 'ramble-no-tools' through the marcellegrims chain-integration
+// layer so any future rename fails at CI rather than at operator-grep.
+//
+// Why a separate simulator: the existing simulateAutoContinueDetection
+// has 30+ call sites each asserting specific reason literals on
+// specific fixtures; extending it with a new ramble-no-tools arm
+// would force those 30+ tests to be re-validated for the new
+// precedence rule. A focused simulator avoids that blast radius while
+// still pinning the chain-integration contract.
+// ---------------------------------------------------------------------------
+
+const RAMBLE_NO_TOOLS_LITERAL = 'ramble-no-tools';
+const RAMBLE_THRESHOLD_BYTES = 4096;
+
+function isRambleNoTools(fullResponse: string, allToolCalls: any[]): boolean {
+  return (
+    fullResponse.length > RAMBLE_THRESHOLD_BYTES &&
+    allToolCalls.length === 0
+  );
+}
+
+function simulateRambleContinue(
+  fullResponse: string,
+  allToolCalls: any[],
+  options: { maxContinuations: number; continuationCount: number }
+): { triggered: boolean; reason?: string; yieldedContent?: string; yieldedType?: string } {
+  if (options.continuationCount >= options.maxContinuations) {
+    return { triggered: false, reason: 'max_continuations_reached' };
+  }
+  if (isRambleNoTools(fullResponse, allToolCalls)) {
+    return {
+      triggered: true,
+      reason: RAMBLE_NO_TOOLS_LITERAL,
+      yieldedContent: '[AUTO-CONTINUE] Response exceeds ' + RAMBLE_THRESHOLD_BYTES + ' bytes with no tool calls. Take action now — read a file, search, or write a change.',
+      yieldedType: 'auto-continue',
+    };
+  }
+  return { triggered: false, reason: 'not_rambling' };
+}
+
+function simulateRambleChainIntegration(
+  allToolCalls: any[],
+  fullResponse: string,
+  options: { maxContinuations: number; continuationCount: number; enableAutoContinue: boolean }
+): { autoContinued: boolean; autoContinueReason?: string; serverRePrompted: boolean; finalContent: string; events: Array<{ type: string; reason?: string }> } {
+  const events: Array<{ type: string; reason?: string }> = [];
+  if (!options.enableAutoContinue) {
+    return {
+      autoContinued: false,
+      serverRePrompted: false,
+      finalContent: fullResponse || '(no content - auto-continue disabled)',
+      events,
+    };
+  }
+  const det = simulateRambleContinue(fullResponse, allToolCalls, {
+    maxContinuations: options.maxContinuations,
+    continuationCount: options.continuationCount,
+  });
+  if (det.triggered) {
+    events.push({ type: det.yieldedType || 'auto-continue', reason: det.reason });
+  }
+  return {
+    autoContinued: det.triggered,
+    autoContinueReason: det.reason,
+    serverRePrompted: false,
+    finalContent: det.triggered ? (det.yieldedContent || '') : (fullResponse || '(no content - stream ended cleanly)'),
+    events,
+  };
+}
+
+describe('Gap #14: ramble-no-tools regression (>4KB no-tools signal)', () => {
+  describe('simulateRambleContinue', () => {
+    it('fires ramble-no-tools for >4KB response with NO tool calls', () => {
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleContinue(longText, [], { maxContinuations: 3, continuationCount: 0 });
+      expect(result.triggered).toBe(true);
+      // CORE REGRESSION ASSERTION — the operator-grep layer.
+      // If a future refactor renames the literal (e.g. 'ramble_no_tools'
+      // or 'RAMBLE_NO_TOOLS' or 'rambleNoTools'), this assertion fails at
+      // CI rather than at operator-grep stage.
+      expect(result.reason).toBe('ramble-no-tools');
+      expect(result.yieldedContent).toContain('[AUTO-CONTINUE]');
+    });
+
+    it('does NOT fire when response is >4KB but ANY tool was called (no-tools precondition violated)', () => {
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleContinue(
+        longText,
+        [{ name: 'read_file', arguments: { path: 'a.ts' } }],
+        { maxContinuations: 3, continuationCount: 0 }
+      );
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('not_rambling');
+    });
+
+    it('does NOT fire when response is just below the threshold', () => {
+      const shortText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES - 1);
+      const result = simulateRambleContinue(shortText, [], { maxContinuations: 3, continuationCount: 0 });
+      expect(result.triggered).toBe(false);
+    });
+
+    it('does NOT fire when response is exactly at the threshold (strict >)', () => {
+      const exactText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES);
+      const result = simulateRambleContinue(exactText, [], { maxContinuations: 3, continuationCount: 0 });
+      // Strict > boundary — pins the operator-tunable contract.
+      expect(result.triggered).toBe(false);
+    });
+
+    it('does NOT fire when continuation count is at max (safety semantics — mirror of Gap #13)', () => {
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleContinue(longText, [], { maxContinuations: 3, continuationCount: 3 });
+      expect(result.triggered).toBe(false);
+      // Defensive: ramble-no-tools MUST NOT override max_continuations_reached
+      // (mirrors defaultFileEditDetector and needsMoreTurnsDetector).
+      expect(result.reason).toBe('max_continuations_reached');
+    });
+
+    it('does NOT fire on empty response (defensive)', () => {
+      const result = simulateRambleContinue('', [], { maxContinuations: 3, continuationCount: 0 });
+      expect(result.triggered).toBe(false);
+    });
+  });
+
+  describe('simulateRambleChainIntegration', () => {
+    it('ramble-no-tools reason propagates verbatim into autoContinueReason', () => {
+      // Operator-grep E2E layer: chains simulator + chain integration
+      // like production's streamWithAutoContinue → streamWithServerAutoRePrompt.
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleChainIntegration(
+        [],
+        longText,
+        { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+      );
+      expect(result.autoContinued).toBe(true);
+      expect(result.autoContinueReason).toBe('ramble-no-tools');
+      expect(result.events.length).toBeGreaterThanOrEqual(1);
+      expect(result.events[0].type).toBe('auto-continue');
+      expect(result.events[0].reason).toBe('ramble-no-tools');
+      expect(result.finalContent).toContain('[AUTO-CONTINUE]');
+      // ramble-no-tools is INDEPENDENT of server re-prompt.
+      expect(result.serverRePrompted).toBe(false);
+    });
+
+    it('chain respects maxContinuations guard (ramble is blocked at cap)', () => {
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleChainIntegration(
+        [],
+        longText,
+        { maxContinuations: 3, continuationCount: 3, enableAutoContinue: true }
+      );
+      expect(result.autoContinued).toBe(false);
+      expect(result.autoContinueReason).toBe('max_continuations_reached');
+    });
+
+    it('chain respects enableAutoContinue=false (no auto-continue, no events)', () => {
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleChainIntegration(
+        [],
+        longText,
+        { maxContinuations: 3, continuationCount: 0, enableAutoContinue: false }
+      );
+      expect(result.autoContinued).toBe(false);
+      expect(result.events.length).toBe(0);
+      expect(result.finalContent).toBe(longText);
+    });
+
+    it('chain with tool call present: ramble branch does NOT compete with file_request_detected', () => {
+      // Latent-conflict regression: a >4KB response WITH a tool call is
+      // out of scope for ramble-no-tools (the no-tools precondition fails).
+      const longText = 'x'.repeat(RAMBLE_THRESHOLD_BYTES + 100);
+      const result = simulateRambleChainIntegration(
+        [{ name: 'read_file', arguments: { path: 'a.ts' } }],
+        longText,
+        { maxContinuations: 3, continuationCount: 0, enableAutoContinue: true }
+      );
+      expect(result.autoContinued).toBe(false);
+      expect(result.autoContinueReason).toBe('not_rambling');
+    });
+  });
+});

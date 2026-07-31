@@ -2,6 +2,9 @@
 import { createContext, useState, useContext, useEffect, ReactNode } from 'react';
 import { FEATURE_FLAGS } from '../.bing-infra-config/config/features';
 import { isDesktopMode } from '@bing/platform/env';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('AuthContext');
 
 /**
  * Safely parse a fetch response as JSON, falling back to a text snippet
@@ -131,10 +134,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
         }
       }
-      console.log('[AuthContext] Session validation failed:', response.status);
+      logger.info('Session validation failed:', response.status);
       return null;
     } catch (error) {
-      console.error('Session validation failed:', error);
+      logger.error('Session validation failed:', error);
       return null;
     }
   };
@@ -151,7 +154,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (response.ok) {
         const data = await response.json();
         if (data.user) {
-          console.log('[AuthContext] Auth0 session found, created local session for:', data.user.email);
+          logger.info('Auth0 session found, created local session for:', data.user.email);
           // Store token if provided
           if (data.token) {
             await setStoredToken(data.token);
@@ -164,14 +167,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } else if (response.status === 401) {
         // No Auth0 session - this is expected, not an error
-        console.log('[AuthContext] No Auth0 session found');
+        logger.info('No Auth0 session found');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        console.warn('[AuthContext] checkAuth0Session returned:', response.status, errorData.error || '');
+        logger.warn('checkAuth0Session returned: ' + response.status + ' ' + (errorData.error || ''));
       }
       return null;
     } catch (error) {
-      console.error('Auth0 session check failed:', error);
+      logger.error('Auth0 session check failed:', error);
       return null;
     }
   };
@@ -210,25 +213,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      console.log('[AuthContext] Initializing auth...');
+      logger.info('Initializing auth...');
       
       // Try session-based validation first
       let validatedUser = await validateSession();
-      console.log('[AuthContext] validateSession result:', validatedUser ? 'found user' : 'no session');
+      logger.info('validateSession result:', validatedUser ? 'found user' : 'no session');
 
       // If no local session, check for Auth0 session
       if (!validatedUser) {
-        console.log('[AuthContext] Checking Auth0 session...');
+        logger.info('Checking Auth0 session...');
         validatedUser = await checkAuth0Session();
-        console.log('[AuthContext] checkAuth0Session result:', validatedUser ? `found user: ${validatedUser.email}` : 'no Auth0 session');
+        logger.info('checkAuth0Session result:', validatedUser ? `found user: ${validatedUser.email}` : 'no Auth0 session');
       }
 
       if (validatedUser) {
-        console.log('[AuthContext] Setting user:', validatedUser.email, 'verified:', validatedUser.emailVerified);
+        logger.info('Setting user: ' + validatedUser.email + ' verified: ' + validatedUser.emailVerified);
         setUser(validatedUser);
       } else {
         // Session is invalid, clean up any stored tokens AND clear user state
-        console.log('[AuthContext] No valid session, clearing user');
+        logger.info('No valid session, clearing user');
         removeStoredToken();
         setUser(null); // CRITICAL: Clear user state when validation fails
       }
@@ -346,7 +349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (transferErr) {
           // Non-fatal — the server-side in-line transfer already ran. Log
           // so we have a breadcrumb if a user reports missing files.
-          console.warn('[AuthContext] transferVFSOnLogin request failed:', transferErr);
+          logger.warn('transferVFSOnLogin request failed:', transferErr);
         }
       }
 
@@ -379,7 +382,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: 'include', // Include cookies for session
       });
     } catch (error) {
-      console.error('Logout API call failed:', error);
+      logger.error('Logout API call failed:', error);
       // Continue with local logout even if API call fails
     }
 
@@ -492,7 +495,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await logout();
       return false;
     } catch (error) {
-      console.error('Token refresh failed:', error);
+      logger.error('Token refresh failed:', error);
       await logout();
       return false;
     }

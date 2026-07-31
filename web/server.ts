@@ -87,6 +87,52 @@ async function startup() {
 
     logger.info('Backend initialized successfully', backendStatus);
 
+    // Pre-warm the better-sqlite3 native binding so it is paid for during
+    // custom-server boot rather than on the first /api/auth/login request.
+    // Mirrors the warmup in instrumentation.ts for the default `next dev`/
+    // `next start` path; runs BEFORE server.listen(port) so the very first
+    // inbound HTTP request sees a warm binding handle.
+    //
+    // Note: this only fires for `tsx server.ts` (`dev:ws` / `start:ws`).
+    // The default `next dev`/`next start` path does NOT load server.ts —
+    // it loads instrumentation.ts via Next's instrumentation hook, which
+    // has the same dedup'd getDatabase() warmup. Both paths share the same
+    // globalThis flag so a process that somehow evaluates both files (e.g.
+    // a manual tsx instrumentation.ts experiment) does not double-warm.
+    const __warmupState__ = (globalThis as unknown as {
+      __betterSqlite3Warmed__?: boolean;
+    });
+    if (!__warmupState__.__betterSqlite3Warmed__) {
+      __warmupState__.__betterSqlite3Warmed__ = true;
+      const __t0__ = process.hrtime.bigint();
+      try {
+        const { getDatabase, isDatabaseConnectionCallable } = await import(
+          '@/lib/database/connection-shim'
+        );
+        // Side-effecting call: triggers `new Database(...)` inside
+        // connection.ts, which loads + JITs the better-sqlite3 native
+        // binding ONCE for this process. Subsequent calls return the
+        // already-warm handle.
+        getDatabase();
+        const __elapsedMs__ = Number(process.hrtime.bigint() - __t0__) / 1e6;
+        if (!isDatabaseConnectionCallable()) {
+          logger.warn(
+            `better-sqlite3 warmup completed in ${__elapsedMs__.toFixed(1)}ms BUT shim fell through to nullDb fallback — native binding NOT pre-cached. ` +
+              `First DB query will pay a degraded-init cost.`,
+          );
+        } else {
+          logger.info(
+            `better-sqlite3 native binding pre-loaded (${__elapsedMs__.toFixed(1)}ms) — /api/auth/login cold-path b0→b1 will skip this cost on first hit`,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          `better-sqlite3 warmup threw after ${(Number(process.hrtime.bigint() - __t0__) / 1e6).toFixed(1)}ms — boot continues; first DB query will retry inline`,
+          err as Error,
+        );
+      }
+    }
+
     // Start provider health checking
     const { startProviderHealthCheck } = await import('@/lib/management/health-checker');
     await startProviderHealthCheck();

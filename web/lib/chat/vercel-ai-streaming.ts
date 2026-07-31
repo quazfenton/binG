@@ -342,6 +342,16 @@ export function classifyToolResult(toolResult: any): ToolResultClassification {
       errorMsg = toolResult
         ? `Unknown error — tool result has keys: [${resultKeys.join(', ')}], no error field`
         : `Unknown error — tool result is ${typeof toolResult}`;
+      // BUG 4 fix — append _recoveryHint in the synthesize branch so the
+      // 100+ `Unknown error — tool result has keys: [..., _recoveryHint], no
+      // error field` log lines in production (visible in
+      // /opt/bing/web/logs/run.log around bash_execute / read_file / apply_diff
+      // failures) carry the actionable guidance the LLM injector attached.
+      // Mirrors the errorObj=object branch above (L338-L340) so every
+      // failure-classification path surfaces _recoveryHint consistently.
+      if (toolResult?._recoveryHint && typeof toolResult._recoveryHint === 'string') {
+        errorMsg += ` [recovery: ${toolResult._recoveryHint}]`;
+      }
     }
     return { isFailure: true, reason: 'success_false', errorMsg };
   }
@@ -1896,10 +1906,13 @@ export async function* streamWithVercelAI(
       // the middle of that would interrupt legitimate output. We pick
       // the higher TEXT_STALL_STEER_MS (60s default) for those states,
       // and keep the tighter STALL_STEER_MS (30s) for genuinely silent
-      // streams (no activity at all). The override only widens the
-      // window — it never tightens it.
+      // streams (no activity at all).
+      //
+      // FIX: Extend the stall window when the model is actively processing tools.
       const isActiveText = lastActivityType === 'text' || lastActivityType === 'reasoning';
-      const effectiveStallSteerMs = isActiveText ? TEXT_STALL_STEER_MS : STALL_STEER_MS;
+      const isActiveTool = lastActivityType === 'tool-call' || lastActivityType === 'tool-result';
+      const effectiveStallSteerMs = (isActiveText || isActiveTool) ? TEXT_STALL_STEER_MS : STALL_STEER_MS;
+
       if (silenceMs >= effectiveStallSteerMs && !stallSteerFiredThisSilence) {
         stallSteerFiredThisSilence = true;
         thinkPingQueue.push({

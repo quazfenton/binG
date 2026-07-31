@@ -16,6 +16,7 @@ import type { ExecutionPolicy } from '@/lib/sandbox/types';
 import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
 import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 
 const logger = createLogger('Agent:OpencodeDirect');
 
@@ -121,7 +122,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
 
   // Use OpencodeV2Provider directly
   const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
-  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
+  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } = await import('@/lib/mcp');
 
   const provider = new OpencodeV2Provider({
     session: {
@@ -134,11 +135,20 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
     sandboxHandle: session.sandboxHandle,
   });
 
-  const tools = await getMCPToolsForAI_SDK(userId);
+  // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+  // The `task` variable is already destructured from `options` at the top of
+  // this function (see L124); selecting the plan here unifies the opencode-
+  // direct path with the active /api/chat route's plan-mode contract at
+  // route.ts:L1762-L1814.
+  const toolPlan: SelectToolPlanResult = selectToolPlan({
+    userMessage: task ?? '',
+    authenticated: !!userId,
+  });
+  const tools = await getMCPToolsForAI_SDK(userId, toolPlan);
   const fileChanges: FileChange[] = [];
 
   const result = await provider.runAgentLoop({
-    userMessage: task,
+    userMessage: task ?? '',
     tools: tools.map(t => ({
       name: t.function.name,
       description: t.function.description,
@@ -186,7 +196,15 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       onTool?.(toolName, args, toolResult);
     },
     executeTool: async (name, args) => {
-      const toolResult = await callMCPToolFromAI_SDK(name, args, userId, session.id);
+      // chat-hang-fix back-port: 60s defensive ceiling matching route.ts:1499 agentTurnSignal.
+      const toolResult = await callMCPToolFromAI_SDK(
+        name,
+        args,
+        userId,
+        session.id,
+        undefined,
+        { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+      );
       return {
         success: toolResult.success,
         output: toolResult.output,

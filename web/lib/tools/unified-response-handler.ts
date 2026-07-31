@@ -5,6 +5,9 @@
 
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation';
 import { parseStructuredPathList } from '@/lib/chat/file-edit-parser';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('UnifiedResponseHandler');
 
 export interface UnifiedResponse {
   success: boolean;
@@ -266,7 +269,7 @@ export class UnifiedResponseHandler {
 
       return { request_files, write_diffs };
     } catch (error) {
-      console.warn('[UnifiedResponseHandler] Failed to parse commands:', error);
+      logger.warn('Failed to parse commands:', error);
       return undefined;
     }
   }

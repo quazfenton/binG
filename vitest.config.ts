@@ -25,9 +25,16 @@ export default defineConfig({
     // `pnpm --filter web test`). Both configs include `.test.tsx` patterns so
     // JSX-renderable test files (e.g. components/ui/__tests__/drawer.test.tsx)
     // auto-discover under either workflow; vitest dedupes overlapping matches.
+    // NOTE: This ROOT config governs ALL tests run via `pnpm test` from the
+    // project root. The web-level config at /opt/bing/web/vitest.config.ts is
+    // loaded ONLY when vitest is invoked from /opt/bing/web/ directly (e.g.
+    // `pnpm --filter web test`). Both configs include `.test.tsx` patterns so
+    // JSX-renderable test files (e.g. components/ui/__tests__/drawer.test.tsx)
+    // auto-discover under either workflow; vitest dedupes overlapping matches.
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx', 'test/**/*.spec.ts', 'test/**/*.spec.tsx', '**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx', '**/__tests__/**/*.spec.ts', '**/__tests__/**/*.spec.tsx'],
     exclude: [
-      'node_modules/',
+      '**/node_modules/**',
+      '**/web/**',
       'dist/',
       '.git/',
     ],

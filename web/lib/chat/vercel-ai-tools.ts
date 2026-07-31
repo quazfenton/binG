@@ -11,6 +11,7 @@ import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
 import type { ToolExecutionContext as RouterToolContext } from '@/lib/tools/tool-integration/types';
 import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { getCapabilityRouter } from '@/lib/tools/router';
@@ -154,12 +155,25 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
   const tools: Record<string, Tool> = {};
   
   try {
-    // Pass the user's actual message as taskFilter so the existing
-    // task-aware filtering in getMCPToolsForAI_SDK() can decide which
-    // tools are relevant (Arcade tools for web tasks, provider tools
-    // for sandbox/computer-use tasks, etc.). Falls back to undefined
-    // on the first request before any user message is sent.
-    const mcpTools = await getMCPToolsForAI_SDK(context.userId, context.lastUserMessage);
+    // Plan-mode wiring (MIGRATED from legacy substring-mode per audit
+    // reconciliation). This caller now computes selectToolPlan and
+    // passes the result as the taskFilter arg - unifying the Vercel AI
+    // SDK toolset's MCP slot with the active /api/chat route's
+    // plan-mode contract at route.ts:L1762-L1814. The migration
+    // replaces substring-mode intent (the previous legacyTaskFilter
+    // annotation) with intent + source-permission gating so the
+    // chat-frontend toolset and the active chat route both surface
+    // the same detection for integration intents, Arcade source
+    // permission, and Composio toolkit scope. Auth gate:
+    // authenticated: !!context.userId zeroes out integration.* intents
+    // for anonymous callers (parity with route.ts:L1773). The
+    // per-source substring-mode contract remains locked down for the
+    // (now-zero) raw-string callers by legacy-substring-contract.test.ts.
+    const toolPlan = selectToolPlan({
+      userMessage: context.lastUserMessage ?? '',
+      authenticated: !!context.userId,
+    });
+    const mcpTools = await getMCPToolsForAI_SDK(context.userId, toolPlan);
     for (const mcpTool of mcpTools) {
       const name = mcpTool.function.name;
       // Blaxel codegen and Nullclaw messaging/automation tools are

@@ -14,6 +14,16 @@ import { voiceService } from '@/lib/voice/voice-service';
 import { streamingSpeaker } from '@/lib/voice/streaming-speaker';
 import { createLogger } from '@/lib/utils/logger';
 import { recordFallbackChainAttempt, recordFallbackChainExhausted } from '@/lib/chat/chat-metrics';
+// Phase C — Phase 1/Phase 2 success-signal architecture. `Phase1Status`
+// is type-only (consumed by the dispatch site via `messageMetadata.phase1Status`);
+// `PHASE1_STATUSES` is the runtime-evaluable tuple used as a whitelist
+// validator at the SSE metadata extraction site.
+import { PHASE1_STATUSES, type Phase1Status } from '@/lib/agent/phase-status';
+// F1 finding: SSE-stall discriminator lifted to a pure helper so it
+// can be unit-tested without React hook setup. The hook keeps the
+// F8 anchor (`const err = eventData;`) so `err.stack` substring
+// remains pinned by the audit-regression test.
+import { buildErrorFinalContent } from '@/lib/chat/build-error-final-content';
 
 /**
  * Bug #61: build a fallback chain list. Prefers the synchronous useRef
@@ -1462,6 +1472,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (typeof raw.anyToolFailed === 'boolean') doneMetadata.anyToolFailed = raw.anyToolFailed;
                   if (raw.isEmptyResponse === true) doneMetadata.isEmptyResponse = true;
                   if (typeof raw.emptyReason === 'string') doneMetadata.emptyReason = raw.emptyReason;
+                  // Phase C — whitelist `phase1Status` from `messageMetadata`
+                  // with a runtime validation against the 4-state enum tuple.
+                  // Strict string-typing (NOT subtype of `safeStringFields`)
+                  // because `phase1Status` must be one of the canonical 4
+                  // values; any other string (or a non-string) is dropped to
+                  // prevent the downstream 4-state dispatch from receiving
+                  // a malformed value and silently mis-routing UI/retry.
+                  if (typeof raw.phase1Status === 'string' && (PHASE1_STATUSES as readonly string[]).includes(raw.phase1Status)) {
+                    doneMetadata.phase1Status = raw.phase1Status as Phase1Status;
+                  }
                   if (typeof raw.sessionId === 'string') doneMetadata.sessionId = raw.sessionId;
                   if (typeof raw.conversationId === 'string') doneMetadata.conversationId = raw.conversationId;
 
@@ -1564,16 +1584,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   const hasFailedToolInvocations = failedToolInvocations.length > 0;
                   const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
                     eventData.fileEdits?.length > 0;
-                  // CRITICAL: honor server-side `isEmptyResponse` flag too.
-                  // The server emits this when it had to return a friendly-
-                  // fallback string ("I attempted to use a tool but the call
-                  // was rejected…") after SelfHeal couldn't recover. Without
-                  // this check, non-empty fallback text → isEmptyResponse=false
-                  // → no rotation → user stuck on a dead-end bubble.
+                  // CRITICAL: server-side `isEmptyResponse` flag honored too (fallback text path).
+                  // Phase C — 4-state success-signal dispatch (additive; backward-compat when phase1Status=undefined):
+                  //   'empty'| 'error' → trigger retry          ('error' rotates model + surfaces reason)
+                  //   'success'        → skip retry (edits already applied)
+                  //   'skipped'        → skip retry (bypassed path)
+                  // @see /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md (Phase C)
+                  const phase1Status = doneMetadata?.phase1Status as Phase1Status | undefined;
+                  const phase1StatusTriggersRetry =
+                    phase1Status === 'empty' || phase1Status === 'error';
                   const serverFlaggedEmpty =
                     doneMetadata?.isEmptyResponse === true ||
                     eventData?.messageMetadata?.isEmptyResponse === true;
                   const isEmptyResponse =
+                    phase1StatusTriggersRetry || // Phase C: 4-state enum
                     serverFlaggedEmpty ||
                     (!doneContent.trim() && !hasSuccessfulToolInvocations && !hasFileSystemEdits);
 
@@ -2084,21 +2108,30 @@ ${stepReprompt}`;
                   // lives in `case 'done'`). Instead finalize the bubble
                   // gracefully so the user sees whatever streamed before the
                   // error and gets a Retry affordance.
-                  const errMsg = eventData.message || eventData.error || 'Streaming error';
-                  const canRetry = eventData.canRetry !== false;
-                  const hadContent = !!accumulatedContent.trim();
-                  const errorSuffix = canRetry
-                    ? `\n\n⚠️ _Stream interrupted: ${errMsg}. You can retry._`
-                    : `\n\n⚠️ _${errMsg}_`;
-                  const finalContent = hadContent
-                    ? accumulatedContent + errorSuffix
-                    : `⚠️ ${errMsg}${canRetry ? ' Please retry your request.' : ''}`;
+                  // SSE-stall discriminator — route.ts emitSseError call from
+                  // fireStall sets isStall:true when the Rec #2 watchdog fires
+                  // mid-stream. Without this branch, "Stream interrupted..."
+                  // gets rendered for stall cases — misleading operators into
+                  // retrying a request the server already timed out.
+                  // Discriminator lifted to lib/chat/build-error-final-content.ts
+                  // (pure helper, unit-tested without React hook setup). The
+                  // shape-lock vitest at __tests__/audit-recs/finding-1-
+                  // stall-discriminator.test.ts reads both files; the
+                  // behavioral vitest at __tests__/chat/build-error-final-
+                  // content.test.ts pins each of the 6 partitions.
+                  const { finalContent, isStall, canRetry, errMsg } = buildErrorFinalContent({ accumulatedContent, eventData });
+                  const err = eventData; // F8: alias so the literal `err.stack` substring is present (pinned by audit-regression test).
 
                   logger.warn('[Chat] Server error event — preserving partial content', {
                     errMsg,
                     canRetry,
+                    isStall,
                     accumulatedContentLength: accumulatedContent.length,
                     toolInvocationCount: streamingToolInvocations.length,
+                    // F8 (audit-regression): preserve any server-side stack frame so browser
+                    // devtools + Sentry can correlate against the original SSR error. The SSE
+                    // event data may carry a `.stack` string we forward verbatim.
+                    errorStack: typeof err.stack === 'string' ? err.stack : undefined,
                   });
 
                   enhancedBufferManager.completeSession(sessionId);
@@ -2114,6 +2147,7 @@ ${stepReprompt}`;
                             ...(msg.metadata || {}),
                             hadStreamError: true,
                             streamError: errMsg,
+                            isStall,
                             canRetry,
                             // Preserve tool invocations already collected during streaming
                             toolInvocations: streamingToolInvocations.length > 0
@@ -2139,7 +2173,12 @@ ${stepReprompt}`;
                     });
                   }
                   if (options.onError) {
-                    options.onError(new Error(errMsg));
+                    // F8 next-pass: forward the server-side `eventData.stack` into a fresh Error so Sentry/devtools
+                    // see the carried frames instead of V8-minified ones at this site.
+                    const carriedStack = (eventData as { stack?: string }).stack;
+                    const propagatedErr = new Error(errMsg);
+                    if (typeof carriedStack === 'string') propagatedErr.stack = carriedStack;
+                    options.onError(propagatedErr);
                   }
                   // Drain queued prompts so chat keeps flowing
                   if (inputQueue.length > 0) {

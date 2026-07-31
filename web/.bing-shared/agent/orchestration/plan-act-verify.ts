@@ -1086,12 +1086,34 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
           usage: fallbackResult.usage || { totalTokens: 0 },
         };
       } catch (fallbackError: any) {
+        // Bug #119 fix: when the plain-text fallback ALSO fails, we were
+        // throwing `lastError` (the ORIGINAL error, e.g. a schema error).
+        // The operator sees "schema error" but the real problem is that the
+        // provider returned invalid JSON in the fallback too.  Throw a
+        // combined error so BOTH failures are visible.
+        const fallbackIsInvalidJson = isInvalidJsonError(fallbackError);
         log.error('callLLM: plain-text fallback also failed', {
           provider,
           model,
           error: fallbackError.message,
+          fallbackIsInvalidJson,
+          originalError: lastError?.message,
         });
-        // Throw the original error — the fallback is best-effort
+        if (fallbackIsInvalidJson) {
+          // The fallback itself got invalid JSON from the provider —
+          // surface that as the error so the operator knows the provider
+          // is returning garbage in BOTH modes (structured + plain-text).
+          const combined = new Error(
+            `Plain-text fallback also failed with Invalid JSON response ` +
+            `(provider=${provider} model=${model}). ` +
+            `Original error: ${lastError?.message ?? 'unknown'}`
+          );
+          (combined as any).cause = fallbackError;
+          (combined as any).isInvalidJsonFallback = true;
+          throw combined;
+        }
+        // Non-JSON fallback failure: still throw the original error since
+        // it is the most relevant signal for the caller's fallback chain.
         throw lastError;
       }
     }
@@ -1114,9 +1136,9 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         const result = await this.config.executeTool(name, args);
 
         // Record successful tool call in telemetry
-        import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-          const structuredResult = buildToolResult(name, args, result);
-          toolCallTracker.recordToolCall({
+        try {
+          const mod = await import('@/lib/tools/tool-call-tracker');
+          mod.toolCallTracker.recordToolCall({
             model: this.validatedConfig.model,
             provider: this.validatedConfig.provider,
             toolName: name,
@@ -1124,16 +1146,27 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
             timestamp: Date.now(),
             toolCallId,
           });
-        }).catch((err) => { log.debug?.('PlanActVerify: recordToolResult failed:', err); });
+          mod.toolCallTracker.recordInvocationPayload({
+            timestamp: Date.now(),
+            model: this.validatedConfig.model,
+            provider: this.validatedConfig.provider,
+            toolName: name,
+            redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+            originStack: createOriginStack(),
+            toolCallId,
+          });
+        } catch (err) {
+          log.debug?.('PlanActVerify: recordToolResult failed:', err);
+        }
 
         return result;
       } catch (error: any) {
         attempt++;
         if (attempt > maxRetries) {
           // Record failed tool call in telemetry
-          import('@/lib/tools/tool-call-tracker').then(({ toolCallTracker }) => {
-            const structuredResult = buildToolResult(name, args, undefined, error);
-            toolCallTracker.recordToolCall({
+          try {
+            const mod = await import('@/lib/tools/tool-call-tracker');
+            mod.toolCallTracker.recordToolCall({
               model: this.validatedConfig.model,
               provider: this.validatedConfig.provider,
               toolName: name,
@@ -1142,7 +1175,18 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
               timestamp: Date.now(),
               toolCallId,
             });
-          }).catch((err) => { log.debug?.('PlanActVerify: executeTool telemetry failed:', err); });
+            mod.toolCallTracker.recordInvocationPayload({
+              timestamp: Date.now(),
+              model: this.validatedConfig.model,
+              provider: this.validatedConfig.provider,
+              toolName: name,
+              redactedArgs: JSON.stringify(redactArgsForLogging(args)),
+              originStack: createOriginStack(),
+              toolCallId,
+            });
+          } catch (err) {
+            log.debug?.('PlanActVerify: executeTool telemetry failed:', err);
+          }
 
           throw new Error(`Tool ${name} failed after ${maxRetries} retries: ${error.message}`);
         }

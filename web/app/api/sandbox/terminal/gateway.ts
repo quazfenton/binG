@@ -4,8 +4,44 @@ import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { sandboxCreationRateLimiter } from '@/lib/utils/rate-limiter';
 import { createLogger } from '@/lib/utils/logger';
+import {
+  getSandboxBindingService,
+  type SandboxBinding,
+  type SandboxProvider,
+} from '@/lib/redis/sandbox-binding-service';
 
 const logger = createLogger('TerminalAPI');
+
+/**
+ * Phase 1 — dual-write the new binding to Redis for cross-pod coordination.
+ * The service is fail-open by design (see sandbox-binding-service.ts), so
+ * a Redis hiccup here never propagates to the caller: the SQLite row is
+ * the source of truth, the Redis write is just a fast-path cache.
+ *
+ * Mirrors the existing `inferProviderFromSandboxId` fallback chain used
+ * at L93 of this file, so the provider field stays consistent.
+ */
+async function syncSandboxBindingToRedis(
+  userId: string,
+  sessionId: string,
+  sandboxId: string,
+): Promise<void> {
+  const provider = (sandboxBridge.inferProviderFromSandboxId(sandboxId)
+    || (process.env.SANDBOX_PROVIDER as any) || 'daytona') as SandboxProvider;
+  const now = Date.now();
+  const ttlSeconds = 24 * 60 * 60; // 24h — matches REDIS_BINDING_DEFAULT_TTL_SECONDS
+  const binding: SandboxBinding = {
+    sessionId,
+    userId,
+    sandboxId,
+    wsUrl: `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}`,
+    provider,
+    createdAt: now,
+    expiresAt: now + ttlSeconds * 1000,
+    status: 'active',
+  };
+  await getSandboxBindingService().upsertBinding(binding, ttlSeconds);
+}
 
 // Track per-user sandbox creation failures to prevent infinite retry loops.
 // When sandbox creation fails for a user, subsequent attempts are blocked
@@ -35,6 +71,28 @@ function setSandboxFailureEntry(userId: string, error: string): void {
 function clearSandboxFailureEntry(userId: string): void {
   const g = globalThis as any;
   if (g[USER_FAILURE_TRACKER_KEY]) delete g[USER_FAILURE_TRACKER_KEY][userId];
+}
+
+// Phase 1 — spam-suppression for the cache-miss observability line.
+// Without this, a sustained Redis hiccup (where getBinding returns null due
+// to fail-soft on a Redis error, not a true cache miss) would emit a warn
+// line for EVERY existing-verify POST. At ~100 RPS that's ~6,000 warns per
+// minute of outage — floods alerts and hides the rare natural-TTL-expiry
+// events that genuinely deserve attention. Deliberate asymmetry from the
+// per-user `__terminalSandboxFailure__` tracker above: cache-miss is a
+// Redis-global concern (not per-user), so a single scalar timestamp is
+// sufficient. A natural-expiry event hits warn after 24h of inactivity so
+// the collision probability with hiccup noise is negligible.
+const LAST_BINDING_WARN_KEY = '__bindingCacheMissLastWarnAt__';
+const BINDING_WARN_SPAM_WINDOW_MS = 60_000;
+function shouldEmitBindingCacheMissWarn(): boolean {
+  const g = globalThis as any;
+  const lastWarnAt = g[LAST_BINDING_WARN_KEY] as number | undefined;
+  if (lastWarnAt != null && Date.now() - lastWarnAt < BINDING_WARN_SPAM_WINDOW_MS) {
+    return false;
+  }
+  g[LAST_BINDING_WARN_KEY] = Date.now();
+  return true;
 }
 
 
@@ -103,6 +161,43 @@ export async function POST(req: NextRequest) {
           sandboxId: userSession.sandboxId,
           userId: authResult.userId,
         });
+        // Phase 1 — refresh the binding in Redis ONLY on cache miss.
+        // On cache hit (the common case after the first POST in a session),
+        // no Redis write happens — the existing binding's TTL counts down
+        // naturally toward expiry. This is intentional: it forces a 24h
+        // no-activity window before the binding is reaped from Redis, so a
+        // long-quiet user does not pin a stale sandbox-mapping forever.
+        // On cache miss (first POST, cluster restart, Redis eviction, or
+        // natural TTL expiry), rehydrate so cross-pod routing resumes.
+        const bindingService = getSandboxBindingService();
+        const existingBinding = await bindingService.getBinding(userSession.sessionId);
+        if (!existingBinding) {
+          // Observability: this branch fires on every cache miss. In the steady
+          // state (a true cache miss after natural TTL expiry) it's a few hits
+          // per day per user. During a Redis hiccup, getBinding returning null
+          // is fail-soft and we'd otherwise silently amplify Redis traffic 4x
+          // (1 GET + 3 SET/SADD/EXPIRE per POST). Spam-suppressed via
+          // shouldEmitBindingCacheMissWarn(): first miss in any 60s window
+          // is warn-level (incident-visible viagrep); sustained misses demote
+          // to debug to avoid 6k/min line floods during outages.
+          if (shouldEmitBindingCacheMissWarn()) {
+            logger.warn('Phase 1 binding cache miss — rehydrating into Redis', {
+              sessionId: userSession.sessionId,
+              userId: authResult.userId,
+              provider: sandboxBridge.inferProviderFromSandboxId(userSession.sandboxId) || process.env.SANDBOX_PROVIDER || 'daytona',
+            });
+          } else {
+            logger.debug('Phase 1 binding cache miss — suppressed (in 60s window after previous warn)', {
+              sessionId: userSession.sessionId,
+              userId: authResult.userId,
+            });
+          }
+          await syncSandboxBindingToRedis(
+            authResult.userId,
+            userSession.sessionId,
+            userSession.sandboxId,
+          );
+        }
         return NextResponse.json({
           sessionId: userSession.sessionId,
           sandboxId: userSession.sandboxId,
@@ -176,6 +271,14 @@ export async function POST(req: NextRequest) {
       );
       // Success — clear any previous failure entry
       clearSandboxFailureEntry(authResult.userId);
+      // Phase 1 — dual-write binding to Redis (fail-open). If the service
+      // throws (it shouldn't — it's fail-open), the SQLite source of truth
+      // still has the row and the catch below returns 500.
+      await syncSandboxBindingToRedis(
+        authResult.userId,
+        session.sessionId,
+        session.sandboxId,
+      );
       return NextResponse.json({
         sessionId: session.sessionId,
         sandboxId: session.sandboxId,
@@ -241,9 +344,15 @@ export async function DELETE(req: NextRequest) {
     });
     
     await terminalManager.killTerminal(sessionId);
-    
+
+    // Phase 1 — drop the Redis binding so cross-pod routing stops returning
+    // this session immediately. Fail-open: if Redis hiccups, the binding TTL
+    // will eventually expire (24h) and the SQLite expireSession() call above
+    // already marks the row as 'expired'.
+    await getSandboxBindingService().deleteBinding(sessionId, authResult.userId);
+
     logger.info('Terminal session killed successfully', { sessionId });
-    
+
     return NextResponse.json({ success: true });
   } catch (error) {
     const err = error as Error;

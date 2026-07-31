@@ -141,6 +141,9 @@ export {
   type ToolContext,
 } from './vfs-mcp-tools'
 
+// MCP timeout constants
+export { MCP_AGENT_TIMEOUT_MS, INIT_PROBE_TIMEOUT_MS } from './timeouts';
+
 // HTTP Transport for Remote MCP
 export {
   HTTPTransport,

@@ -36,7 +36,21 @@ import {
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp';
+// F2 minimal-fix Change C — bumpProgress observability helper. The existing
+// `lastProgressAt` module-local variable is preserved (it's the watchdog's
+// primary read at route.ts L2056/L2065/L2071); bumpProgress is additive —
+// bumps the helper's module-private state in parallel for observability +
+// future per-stage telemetry without disturbing the watchdog contract.
+import { bumpProgress, getLastProgressAt } from '@/lib/chat/enhanced-llm-service';
+// Import the structured-error type guard directly from the file that
+// defines it. Could be re-exported from '@/lib/mcp' for barrel-style
+// consistency, but keeping the import file-specific makes the contract
+// (vfs-mcp-tools.ts:640+ returns `{ message, code, retryable, correctedExample }`)
+// grep-discoverable from the call site.
+import { isStructuredMcpError } from '@/lib/mcp/architecture-integration';
+import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
+import { selectToolPlan } from '@/lib/tools/select-tool-plan';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
@@ -54,6 +68,20 @@ import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import type { FilesystemEditSummary } from './filesystem-edits';
 import { signalStreamError, safeEnqueue } from '@/lib/chat/stream-safety-helpers';
 import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, type AutoContinueResultData } from '@/lib/chat/auto-continue-helper';
+// StallWatchdogError typed discriminator — fired by `fireStall` (route.ts:L1623
+// in this file) and propagated through the chain-walk's abort cascade. The
+// inner-catch (L2987-L3010) + outer-catches (L5609 + L7381) use `instanceof`
+// + `stallWatchdogErrorToStatus(err)` to map each errorCode to its HTTP status
+// (STALL→524, DRIFT→502, ABORT→503, OTHER→500) — single source of truth in
+// llm-fallback-coordinator.ts.
+import { StallWatchdogError, StallWatchdogErrorCode, stallWatchdogErrorToStatus, isStallWatchdogErrorCode, isStallWatchdogInstanceByConstructorName } from '@/lib/chat/llm-fallback-coordinator';
+// Phase 2 success-signal architecture — phase1Status (L472) needs the
+// Phase1Status type for its `let` declaration + the assignment site
+// `?? 'unknown'` widening per code-reviewer NEEDS-CHANGE (a). Phase1Status
+// is the 4-state enum from `/opt/bing/web/lib/agent/phase-status.ts` — the
+// PHASE1_STATUSES tuple is referenced from chat-helpers.ts:retryContextSchema,
+// and the type itself is referenced here + at the orchestrator SSE emits.
+import { Phase1Status } from '@/lib/agent/phase-status';
 // Defense-in-depth: enforce the `UnifiedAgentResult.response: string`
 // contract at the route boundary. The service layer (lib/orchestra/unified-agent-service.ts:1568)
 // already coerces via stringifyMessageContent; this import is the route's
@@ -61,6 +89,16 @@ import { decideAutoContinue, needsMoreTurnsDetector, clearContinuationCount, typ
 // stream regression where non-string response shapes became `'[object Object]'`
 // at L1889 (operator-precedence floor: `+` binds tighter than `||`).
 import { stringifyMessageContent } from '@/lib/chat/content-stringifier';
+// Phase D — retry-path decision helper (extracted from the inline OR
+// chain in this file for unit-testability + cross-consumer reuse). The
+// helper encapsulates the BUG 1 / BUG 6 fix decision: skip the retry
+// enhancements when phase1Status is 'empty'/'success'/'skipped' — but
+// keep the existing retry path for 'error' or undefined (backward
+// compat with clients that pre-date the phase1Status field).
+import {
+  shouldSkipRetryForPhase,
+  retryActionForPhase,
+} from '@/lib/chat/retry-route-decision';
 // Inspector helpers (extracted to `lib/chat/shape-helpers.ts` in this turn
 // so they're unit-testable without a live LLM). Used at L1717-L1718 to emit
 // `[CHAT-ROUTE] processUnifiedAgentRequest returned` INFO lines that surface
@@ -434,6 +472,11 @@ export async function POST(request: NextRequest) {
   // call sites so the text-mode parser skips these paths instead of overwriting
   // correct file content with echoed/corrupted tool-call JSON from the LLM's prose.
   const alreadyWrittenPaths = new Set<string>();
+  // Hoist phase1Status to function scope so error-handler SSE emits (L3101)
+  // can carry the same value the orchestrator-loop emitted; previously const'd
+  // inside an inner block, inaccessible from the outer try/catch that maps
+  // StallWatchdogError → 524. Phase 2 ticket propagation.
+  let phase1Status: Phase1Status | 'unknown' | undefined = undefined;
 
   // Bug #43: memory-pressure throttle. If the heap is above the soft
   // threshold, return 503 Retry-After before any processing starts.
@@ -534,7 +577,7 @@ export async function POST(request: NextRequest) {
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
-    chatLogger.debug('[ROUTE] Raw body keys:', rawBody ? Object.keys(rawBody) : null);
+    chatLogger.debug('[ROUTE] Raw body keys:', rawBody ? { keys: Object.keys(rawBody) } : undefined);
     chatLogger.debug('[ROUTE] Parsed result:', { status: parseResult.success ? 'success' : parseResult.error?.message });
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
@@ -602,17 +645,16 @@ export async function POST(request: NextRequest) {
       };
       /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
       autoAttachFiles?: boolean;
-      /** Client-side empty response retry context */
-      retryContext?: {
-        isEmptyResponseRetry: boolean;
-        originalProvider?: string;
-        originalModel?: string;
-        retryProvider?: string;  // Client-requested provider for rotation
-        retryModel?: string;      // Client-requested model for rotation
-        toolExecutionSummary?: string;
-        failedToolCalls?: Array<{ name: string; error: string; args?: any }>;
-        filesystemChanges?: { applied: number; failed: number; failedDetails: any[] };
-      };
+      /** Client-side empty response retry context — SHOULD-CONSIDER #1 / Phase D.
+       *  Shape sourced from `/opt/bing/app/api/chat/chat-helpers.ts:retryContextSchema`
+       *  (Zod schema + RetryContext type export). The inline TS cast that
+       *  previously lived here drifted from the runtime contract; the
+       *  qualified `import('./chat-helpers').RetryContext` keeps the type
+       *  in lock-step with the schema parser. Runtime validation now happens
+       *  at `chatRequestSchema.safeParse(rawBody)` — invalid values 400
+       *  instead of silently falling through the gate. See:
+       *  /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md */
+      retryContext?: import('./chat-helpers').RetryContext;
     };
     provider = requestedProvider;
     model = requestedModel;
@@ -625,6 +667,58 @@ export async function POST(request: NextRequest) {
     let retrySource = 'none'; // 'client-rotation', 'telemetry-ranker', or 'none'
 
     if (retryContext?.isEmptyResponseRetry) {
+      // Phase D — Phase 1/Phase 2 success-signal architecture retry-path
+      // gate. Closes BUG 1 + BUG 6 (Mistral retry doesn't pass tools /
+      // Mistral retry 400 error). The 4-state enum routes the retry so:
+      //
+      //   'error'   → existing retry path (preserves tools/tool_choice
+      //                since we never strip them; do model rotation + the
+      //                enhancement payload). Closes BUG 1 + BUG 6.
+      //   'empty'   → SKIP the entire retry block. The LLM was thinking
+      //                last turn; re-running with the original model is
+      //                the right thing — do NOT strip tools/tool_choice,
+      //                do NOT prepend the [RETRY CONTEXT] system message,
+      //                do NOT rotate the model. Just serve the request to
+      //                the original model with the original tools intact.
+      //   'skipped' / 'success' → defensive: neither should trigger a retry.
+      //                Log a warning + skip the retry block.
+      //   undefined → backward-compat (clients that don't yet surface
+      //                phase1Status will hit the pre-existing retry path).
+      //
+      // Without this gate, the empty-response retry path strips the
+      // tools/tool_choice from the body — Mistral then returns 400
+      // "Assistant message must have either content or tool_calls, but
+      // not none." (BUG 1 + BUG 6 surface in /opt/bing/web/logs/run.log).
+      const retryPhase1Status = retryContext.phase1Status;
+      // Decision-fn is extracted to /opt/bing/web/lib/chat/retry-route-decision.ts
+      // so unit tests can assert the BUG 1 + BUG 6 contract directly without
+      // mocking the full route.ts POST() flow. Pure function, no I/O.
+      const shouldSkipRetry = shouldSkipRetryForPhase(retryPhase1Status);
+
+      if (shouldSkipRetry) {
+        chatLogger.info(
+          'Phase D: Skipping retry-path enhancement (phase1Status not "error")',
+          {
+            requestId,
+            phase1Status: retryPhase1Status,
+            reason:
+              retryPhase1Status === 'empty'
+                ? 'Phase 1 was empty — serve original request without retry enhancement'
+                : retryPhase1Status === 'success'
+                  ? 'Phase 1 succeeded — defensive: this retry is unexpected'
+                  : 'Phase 1 was skipped — defensive: this retry is unexpected',
+            originalProvider: retryContext.originalProvider,
+            originalModel: retryContext.originalModel,
+          },
+        );
+        // Leave selectedRetryModel = null (no model rotation); leave
+        // processedMessages = messages (no enhancement system message).
+        // Both `provider` and `model` retain their original (requested*)
+        // values from earlier in the request flow. Tools / tool_choice
+        // continue to be attached downstream per the active route's
+        // normal config-tools plumbing — never stripped.
+      }
+
       chatLogger.info('Client-side empty response retry detected', {
         requestId,
         originalProvider: retryContext.originalProvider,
@@ -633,10 +727,24 @@ export async function POST(request: NextRequest) {
         clientRetryModel: retryContext.retryModel,
         toolSummary: retryContext.toolExecutionSummary,
         failedToolCalls: retryContext.failedToolCalls?.length,
+        phase1Status: retryPhase1Status ?? 'unknown',
+        // Pair the operator-grep value with the same helper-derived
+        // discriminator as the shouldSkipRetry flag so a single source
+        // of truth for "which retry path ran" is preserved in run.log.
+        retryAction: retryActionForPhase(retryPhase1Status),
       });
 
       // Record failed tool calls in telemetry for model ranking
-      if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0 && retryContext.originalModel) {
+      // (only when the retry path actually applies — i.e. phase1Status === 'error'
+      // or undefined backward-compat. Phase D skips this when phase1Status is
+      // 'empty'/'success'/'skipped' so an empty-response retry doesn't pollute
+      // the telemetry ranker with failure data.)
+      if (
+        !shouldSkipRetry &&
+        retryContext.failedToolCalls &&
+        retryContext.failedToolCalls.length > 0 &&
+        retryContext.originalModel
+      ) {
         const { toolCallTracker } = await import('@/lib/tools/tool-call-tracker');
         const timestamp = Date.now();
 
@@ -658,9 +766,16 @@ export async function POST(request: NextRequest) {
       }
 
       // PRIORITY 1: Use client-requested provider/model rotation if set
+      // (Phase D: only inside the retry-path-apply branch; the shouldSkipRetry
+      // short-circuit above already left selectedRetryModel = null + processedMessages
+      // unchanged for the empty/success/skipped cases.)
       // The client has already computed which provider/model to retry with
       // based on its rotation strategy (next model → fallback provider chain)
-      if (retryContext.retryProvider && retryContext.retryModel) {
+      // Phase D — inline !shouldSkipRetry guard closes BUG 1 + BUG 6 (Mistral
+      // retry 400) by skipping the model-rotation path entirely when
+      // phase1Status is 'empty'/'success'/'skipped' (LLM was thinking —
+      // rotated-model retry would just re-introduce the same risk).
+      if (!shouldSkipRetry && retryContext.retryProvider && retryContext.retryModel) {
         const isDifferentFromOriginal =
           retryContext.retryProvider !== retryContext.originalProvider ||
           retryContext.retryModel !== retryContext.originalModel;
@@ -678,8 +793,9 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate
-      if (!selectedRetryModel && retryContext.originalModel) {
+      // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate.
+      // Phase D — same !shouldSkipRetry guard rationale as PRIORITY 1 above.
+      if (!shouldSkipRetry && !selectedRetryModel && retryContext.originalModel) {
         try {
           const { getRetryModel } = await import('@/lib/providers/model-ranker');
           const retryModel = await getRetryModel({
@@ -730,7 +846,12 @@ export async function POST(request: NextRequest) {
         retryEnhancementParts.push(`\n[MODEL SWITCH] Retrying with ${selectedRetryModel.provider}:${selectedRetryModel.model} (${sourceLabel})`);
       }
 
-      if (retryEnhancementParts.length > 0) {
+      // Phase D — same !shouldSkipRetry guard. Skips injecting the
+      // [RETRY CONTEXT] system message when phase1Status is
+      // 'empty'/'success'/'skipped' (LLM was thinking — the
+      // enhancement payload's narrative ("previous attempt failed") would
+      // mislead the model on a second attempt with no actual prior failure).
+      if (!shouldSkipRetry && retryEnhancementParts.length > 0) {
         // Inject as system message at the start
         processedMessages = [
           { role: 'system' as const, content: retryEnhancementParts.join('\n') },
@@ -996,7 +1117,7 @@ export async function POST(request: NextRequest) {
       ),
     ).catch(() => {
       chatLogger.debug('Failed to fetch denial context (non-critical)', { requestId });
-      return [] as Array<{ pattern: string; reason: string }>;
+      return [] as Array<{ reason: string; paths: string[]; timestamp: string }>;
     });
     // NEW-2 closure-narrowing fix (tsc): capture the typeof-narrowed query
     // string BEFORE the .then so the `string` type survives across the
@@ -1209,6 +1330,14 @@ export async function POST(request: NextRequest) {
         isCodeRequestAuto  // Auto-detect code requests and route to V2
       ));
 
+    // TODO: migrate to unwrapStructuredToolError when V2-path surfaces tool errors to LLM.
+    // Tracked in /opt/bing/.tickets/UNWRAP-HELPER-MIGRATION.md. Currently the V2 path
+    // only logs tool errors via toolCallTracker.recordToolCall (telemetry-grade) and does
+    // NOT surface them to the LLM. When the V2 gateway is extended to surface structured
+    // errors to the LLM (so the LLM can self-correct on retry), it should call
+    // `unwrapStructuredToolError(result.error)` from @/lib/mcp/orchestrator-error-unwrap
+    // and prepend the result to the LLM-facing message — keeping the `[ORCHESTRATOR-UNWRAP]:`
+    // canonical format in ONE place.
     if (wantsV2) {
       // Use the persistent filesystem owner ID (from auth or anonymous session cookie)
       // This ensures each anonymous user gets their own workspace, not a shared "guest" workspace
@@ -1493,8 +1622,8 @@ FORMAT RULES:
     // response is freed even if the underlying SDK/provider ignores the abort.
     const agentTurnAbort = new AbortController();
     const agentTurnSignal: AbortSignal = request.signal
-      ? AbortSignal.any([request.signal, agentTurnAbort.signal])
-      : agentTurnAbort.signal;
+      ? AbortSignal.any([request.signal, agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)])
+      : AbortSignal.any([agentTurnAbort.signal, AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS)]);
 
     // Chat-hang-fix #3 — HOISTED route-level stall watchdog.
     //
@@ -1528,38 +1657,108 @@ FORMAT RULES:
     // path: the watchdog is cleared in every branch's finally, so this
     // promise simply stays pending; the noop catch is defensive.
     stallPromise.catch(() => { /* observed via Promise.race */ });
+
+    // Bug #X (— `stallDidFire` propagation for the 524-vs-200 distinction):
+    // closure flags set true the moment the stall watchdog fires (via
+    // fireStall) or a user-initiated abort fires (via rejectOnAbort).
+    // The route reads these flags synchronously to drive two distinct
+    // behaviors:
+    //
+    //   1. PRE-STREAM 524 — if `agentTurnAbort.signal.aborted === true`
+    //      when we reach the streaming/non-streaming return point AND
+    //      the stall fired before any client-visible content was streamed,
+    //      return `new NextResponse(..., { status: 524 })` directly.
+    //      HTTP 524 = "A Timeout Occurred" (Cloudflare-style proxy
+    //      timeout) is a valid 3-digit status. The pre-fix route returned
+    //      200 even on watch-dog-fired stream, masking the timeout from
+    //      upstream load balancers + client.
+    //
+    //   2. MID-STREAM 200 + `x-stall-fired: true` header — if the stall
+    //      fires AFTER content was streamed, status is structurally
+    //      locked at 200 by the live SSE Response (Next.js cannot change
+    //      status post-headers-flush). The route still adds the header +
+    //      the SSE error event + the abort cascade so observability +
+    //      the client see the timeout signal.
+    //
+    // Closure-private to POST() so concurrent requests cannot leak.
+    let stallDidFire = false;
+    let stallDidFireReason: string | null = null;
+
     // No-progress idle ceiling (default 60s): fires when no token/tool
     // output has arrived for this long. Only relevant for the streaming
     // branch (non-streaming doesn't bump lastProgressAt because there's
     // no client-visible SSE stream); the max-turn cap below catches
     // those cases unconditionally.
     const ROUTE_STALL_TIMEOUT_MS = parseInt(
-      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '60000',
+      process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000',
       10,
     );
     // Absolute hard cap (default 120s): an unconditional upper bound on
     // a single agent turn, applied to ALL branches. This is the
     // guaranteed backstop — including the v1-agent-loop branch whose
     // createAgentLoop(...) call previously had no watchdog at all.
-    const ROUTE_MAX_TURN_MS = parseInt(
+    // Bug #Y — chain.length-conditioned max-turn: the route watchdog must
+    // not fire BEFORE the chain-walk in `coordinateConcurrentFallback`
+    // completes. Worst-case walk time = `MAX_CHAIN_FALLBACKS * silenceMs +
+    // transition overhead`. We treat MAX_CHAIN_FALLBACKS=7 as the upper
+    // bound across all configured chains (see
+    // `bing/web/lib/providers/provider-fallback-chains.ts`); the 1.5×
+    // safety factor absorbs Promise.race transition overhead + slow first
+    // token; the 30s buffer absorbs slow tool calls.
+    //
+    //   ninerouter-class: 7 * 5_000 * 1.5 + 30_000 = 82.5s     (well under envVar floor)
+    //   non-ninerouter:   7 * 20_000 * 1.5 + 30_000 = 240_000ms (extends envVar floor)
+    //
+    // The env var acts as a FLOOR: ops can still raise ROUTE_MAX_TURN_MS
+    // past 240s for known-slow chains; we never shrink it below the
+    // chain-walk + buffer formula.
+    const ROUTE_MAX_TURN_MS_ENV = parseInt(
       process.env.CHAT_ROUTE_MAX_TURN_MS || '120000',
       10,
     );
+    const ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS = 7;
+    const isNinerouterClassProvider = ['ninerouter', 'ollama', 'kiro'].includes(provider);
+    const effectiveSilenceMs = isNinerouterClassProvider ? 5000 : 20000;
+    const ROUTE_MAX_TURN_MS = Math.max(
+      ROUTE_MAX_TURN_MS_ENV,
+      Math.ceil(ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS * effectiveSilenceMs * 1.5) + 30000,
+    );
+    chatLogger.debug('[CHAT-ROUTE] computed max-turn from chain.length + silenceMs', {
+      requestId,
+      provider,
+      isNinerouterClassProvider,
+      effectiveSilenceMs,
+      ROUTE_MAX_TURN_MAX_CHAIN_FALLBACKS,
+      ROUTE_MAX_TURN_MS,
+      ROUTE_MAX_TURN_MS_ENV,
+    });
     // SSE-bridge: the streaming branch's start(controller) overrides
     // this with the real SSE-error emitter; non-streaming / v1-agent-loop
     // branches leave it as a no-op so fireStall doesn't error trying to
     // enqueue onto a non-existent stream. The no-op default is INTENTIONAL
     // (not dead code) — it's the only safe value before start(controller)
     // has had a chance to run.
-    let emitSseError: (message: string) => void = () => { /* not streaming */ };
+    // SSE-stall discriminator — second arg (isStall?: boolean) lets fireStall
+    // mark the SSE error payload as a server-side stall so the client
+    // (use-enhanced-chat.ts case 'error') can render an unambiguous non-
+    // retryable UX. Without this discriminator, mid-stream stalls (which are
+    // structurally forced to HTTP 200 because headers were already flushed
+    // during streaming) get conflated with transient network errors, leaving
+    // the operator uncertain.
+    let emitSseError: (message: string, isStall?: boolean) => void = () => { /* not streaming */ };
     const fireStall = (reason: string, detail: Record<string, unknown>) => {
       if (agentTurnAbort.signal.aborted) return;
+      // Mark the stall PRIOR to any logging/abort so downstream checks
+      // see the closure flag without a window between fire and observe.
+      stallDidFire = true;
+      stallDidFireReason = reason;
       chatLogger.error(
         '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
         { requestId, reason, ...detail },
       );
-      const stallErr = new Error(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
-      try { emitSseError(stallErr.message); } catch { /* best-effort */ }
+      const stallErr = new StallWatchdogError(`Chat route stall watchdog (${reason}): ${JSON.stringify(detail)}`);
+      // isStall=true: mark as Rec #2 watchdog-fired mid-stream stall so client renders "Server timed out" UX.
+      try { emitSseError(stallErr.message, true); } catch { /* best-effort */ }
       // Cancel the in-flight LLM HTTP call (signal is already forwarded
       // through config.abortSignal → runV1Api / runV2Native / v2-cli).
       try { agentTurnAbort.abort(stallErr); } catch { /* best-effort */ }
@@ -1571,6 +1770,15 @@ FORMAT RULES:
     // forever waiting for a Promise.race winner that never settles).
     const rejectOnAbort = () => {
       if (!stallReject) return;
+      // User-initiated aborts do NOT count as stalls for the
+      // non-streaming 524 contract (the client canceled, not us) — the
+      // catch-blocks below only return 524 for watchdog-fired stalls
+      // (the `Chat route stall watchdog (...)` substring), not for the
+      // literal `'Chat route aborted'` message. We DO set stallDidFire
+      // so the streaming x-stall-fired header surfaces *any* abort as
+      // a recognizable signal for observability.
+      stallDidFire = true;
+      stallDidFireReason = stallDidFireReason ?? 'user-abort';
       const abortErr = new Error('Chat route aborted');
       try { emitSseError(abortErr.message); } catch { /* best-effort */ }
       stallReject(abortErr);
@@ -1614,6 +1822,10 @@ const config: UnifiedAgentConfig = {
       // cancels the in-flight LLM HTTP request. See the abortSignal
       // JSDoc on UnifiedAgentConfig for the per-mode wiring status.
       abortSignal: agentTurnSignal,
+      // Reset the stall watchdog when the auto-continuation loop starts a
+      // new streaming call, preventing false timeouts during the gap between
+      // the primary stream ending and the continuation's first token.
+      onProgress: () => { lastProgressAt = Date.now(); },
       mode: 'auto',
       // Pass user-selected provider and model to unified agent
       provider,
@@ -1659,6 +1871,59 @@ const config: UnifiedAgentConfig = {
       10,
     );
     const MCP_TOOLS_ROUTE_TIMEOUT_MS = MCP_TOOLS_TIMEOUT_MS + 3000;
+
+    // ── selectToolPlan: route-level pure planner ────────────────────────────
+    // Compute the deterministic tool-selection plan BEFORE calling
+    // getMCPToolsForAI_SDK. The plan replaces the raw `task` string the
+    // route previously passed — see bing/web/lib/mcp/architecture-integration.ts
+    // `TaskFilterView` doc for the three-mode contract. Plan mode swaps the
+    // substring gates on Blaxel / Nullclaw / Arcade / Composio / Provider
+    // for intent + source-permission gates, scopes Composio via
+    // `requestedToolkits`, and zeroes out Arcade tools unless the planner
+    // matched a web.* / integration.* intent. The VFS / bash / native MCP /
+    // MCPorter / remote MCP / Mem0 / web_search sources remain
+    // unconditional so the chat-hang-fix VFS fallback stays intact.
+    //
+    // History is filtered to user/assistant/system roles so a turn carrying
+    // tool-call payloads (role:'tool') doesn't pollute the planner's
+    // history-weight signal — the planner only sees content strings.
+    const toolPlan = selectToolPlan({
+      userMessage: task,
+      conversationHistory: processedMessages
+        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+        .map((m) => ({
+          role: m.role as 'user' | 'assistant' | 'system',
+          content: typeof m.content === 'string'
+            ? m.content
+            : JSON.stringify(m.content ?? ''),
+        })),
+      attachedFiles: explicitFilesFromMentions,
+      authenticated: !!authenticatedUserId,
+      // The route's filesystem-edit gate already accepts/rejects writes
+      // via the existing shouldHandleFilesystemEdits() helper. We pass
+      // its result so the planner strips mutating tool IDs (file.write,
+      // file.str_replace, file.batch_write, file.append, code.ast_diff)
+      // when the route's gate is closed.
+      filesystemEditEligible: enableFilesystemEdits,
+      configuredSources: {
+        arcade: !!process.env.ARCADE_API_KEY,
+        composio: !!process.env.COMPOSIO_API_KEY,
+        nullclaw: process.env.NULLCLAW_ENABLED === 'true',
+        remoteMcp: true, // optimistic — runtime + Phase-2 transport decides
+        mem0: !!process.env.MEM0_API_KEY,
+        mcpHttp: true, // optimistic — Phase-2 transport decides
+      },
+    });
+    chatLogger.debug('[CHAT-ROUTE] selectToolPlan', {
+      requestId,
+      intents: toolPlan.intents,
+      coreToolsCount: toolPlan.coreTools.length,
+      matchCount: toolPlan.matchCount,
+      fallbackUsed: toolPlan.fallbackUsed,
+      sourcePermissions: toolPlan.sourcePermissions,
+      requestedToolkits: toolPlan.requestedToolkits,
+      authenticatedUser: !!authenticatedUserId,
+    });
     // Tier 1: abort signal for Phase 2 internal degradation.
     const mcpAbortSignal = AbortSignal.timeout(MCP_TOOLS_TIMEOUT_MS);
     // Boundary #4 timestamp — measured AT try-entry so duration includes
@@ -1674,7 +1939,7 @@ const config: UnifiedAgentConfig = {
     let mcpRaceError: { message?: string } | null = null;
     try {
       const mcpRace: Promise<any>[] = [
-        getMCPToolsForAI_SDK(authenticatedUserId, task, mcpAbortSignal),
+        getMCPToolsForAI_SDK(authenticatedUserId, toolPlan, mcpAbortSignal),
         // Tier 2: safety-net ceiling — padded so the Tier-1 abort signal
         // fires first, Phase 2 degrades, and getMCPToolsForAI_SDK returns
         // Phase 1 tools before this timer rejects the race.
@@ -1693,11 +1958,31 @@ const config: UnifiedAgentConfig = {
       }
       tools = await Promise.race(mcpRace);
     } catch (err: any) {
-      chatLogger.warn('[CHAT-ROUTE] MCP tools unavailable — continuing without them', {
+      // Chat-hang-fix: when the full MCP tool assembly loses the race (slow
+      // network-bound source, mcporter runtime, remote MCP, etc.), do NOT drop
+      // the model to zero tools — that leaves it unable to edit files and it
+      // typically emits an intro then stalls until the turn watchdog fires.
+      // Fall back to the STATIC VFS file-edit tools (write_file, apply_diff,
+      // read_file, list_files, search_files, batch_write, delete_file). These
+      // are pure schema definitions with no network/subprocess dependency and
+      // are dispatched through the same config.executeTool → callMCPToolFromAI_SDK
+      // path below, so file editing keeps working in the degraded case.
+      let fallbackTools: typeof tools = [];
+      try {
+        const { getVFSToolDefinitions } = await import('@/lib/mcp/vfs-mcp-tools');
+        fallbackTools = getVFSToolDefinitions() as typeof tools;
+      } catch (fallbackErr: any) {
+        chatLogger.warn('[CHAT-ROUTE] VFS fallback tools unavailable', {
+          requestId,
+          error: fallbackErr?.message,
+        });
+      }
+      chatLogger.warn('[CHAT-ROUTE] MCP tools timed out — falling back to static VFS tools', {
         requestId,
         error: err.message,
+        fallbackToolCount: fallbackTools.length,
       });
-      tools = [];
+      tools = fallbackTools;
       mcpRaceError = err;
     }
     // Chat-hang-fix #4 boundary #4 — in-between anchor for the next
@@ -1749,12 +2034,108 @@ const config: UnifiedAgentConfig = {
       parameters: t.function.parameters,
     }));
     config.executeTool = async (name: string, args: Record<string, any>) => {
-      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId ?? '', requestedScopePath ?? '');
+      // F2 + F4 redesign: per-call AbortController isolation + watchdog
+      // progress bumps. Each tool invocation gets its own
+      // `toolCallAbort` that is disposed at completion; this prevents a
+      //   stalled-stage abort from permanently poisoning the global
+      //   `agentTurnSignal` chain (F4: per-stage signal isolation —
+      //   resets in `finally`). The next tool call walks in with a
+      //   fresh signal, so self-heal retry paths (or subsequent tool
+      //   calls) don't inherit an already-aborted signal.
+      //
+      //   Pair: combine toolCallAbort.signal + agentTurnSignal into a
+      //   per-call `toolCallSignal` via `AbortSignal.any` so user-
+      //   initiated stops + a route-level stall watchdog bleed into
+      //   the transport chain without poisoning the parent.
+      const toolCallAbort = new AbortController();
+      const toolCallSignal = AbortSignal.any([
+        agentTurnSignal,
+        toolCallAbort.signal,
+      ]);
+      // F2 part (a): bump `lastProgressAt` on tool START so the
+      // route-level stall watchdog (which keys off `Date.now() -
+      // lastProgressAt`) does not fire while the tool is awaiting.
+      // setInterval ticks continuously; a fresh `lastProgressAt`
+      // resets the cumulative idle window.
+      lastProgressAt = Date.now();
+      // F2 minimal-fix Change C — additive observability bump. The
+      // existing module-local `lastProgressAt` above is the watchdog's
+      // primary read; this parallel `bumpProgress('tool-call-start')`
+      // also bumps the helper's module-private state for downstream
+      // observability probes (telemetry, future per-stage reporting).
+      bumpProgress('tool-call-start');
+
+      try {
+        const result = await callMCPToolFromAI_SDK(
+          name,
+          args,
+          authenticatedUserId ?? '',
+          requestedScopePath ?? '',
+          undefined,                     // recentFailures (unchanged)
+          { signal: toolCallSignal },    // F4: per-call signal (was agentTurnSignal)
+        );
+
+      // F1 fix: structured-error unwrap. VFS tools (vfs-mcp-tools.ts:640+) return
+      // errors as `{ code, message, retryable, correctedExample }` blobs. The
+      // SDK type signature declares `error?: string`, so by the time results
+      // reach the orchestrator the structured info is collapsed to a generic
+      // "Unknown error — tool result has keys" log line that gives the LLM
+      // no actionable context. Detect the structured object shape and lift
+      // its fields into the LLM-facing `output` so the model can self-correct.
+      //
+      // Output format (single LLM-facing block appended to existing output):
+      //   [ORCHESTRATOR-UNWRAP]: <error.message>
+      //   [error.code=<code>] [retryable=<bool>]
+      //   → <correctedExample>      (omitted if undefined)
+      //
+      // Plain-string errors pass through unchanged. Suppresses the existing
+      // "Unknown error — tool result has keys" log spam only when structured
+      // shape is detected + unwrap succeeds (the LLM now sees the structured
+      // info; the generic WARN line would be redundant).
+      // SHOULD-CONSIDER: error.code may be 'UNKNOWN' for unrecognized shapes;
+      // the LLM should treat this as a fresh retry rather than a typed failure.
+      // F1 fix (helper-extracted): structured-error unwrap migrated to a
+      // module-private helper. `unwrapStructuredToolError` returns the
+      // formatted `[ORCHESTRATOR-UNWRAP]: …` block OR `null` when the
+      // input does not match the VFS/MCP `{ message, code?, retryable?,
+      // correctedExample? }` shape. The prior 16-line inline build at
+      // this site was lifted out so future V2-path migration +
+      // chat-helpers.ts tool-result surfacing reuse the same format
+      // without copy-paste drift. See
+      // /opt/bing/web/lib/mcp/orchestrator-error-unwrap.ts for the format
+      // contract + reuse guidance.
+      const orchestratorHint = unwrapStructuredToolError(result.error);
+      const finalOutput = orchestratorHint
+        ? (result.output && result.output.length > 0
+            ? `${result.output}\n\n${orchestratorHint}`
+            : orchestratorHint)
+        : result.output;
+
       return {
         success: result.success,
-        output: result.output,
+        output: finalOutput,
         exitCode: result.success ? 0 : 1,
       };
+      } finally {
+        // F2 part (a): bump `lastProgressAt` on tool COMPLETE so the
+        // watchdog tally resets even if the tool returned
+        // structured-error or failed. Without this, a sequence of
+        // tool calls could cumulatively trip the stall watchdog
+        // (each tool returning would leave lastProgressAt stale).
+        lastProgressAt = Date.now();
+        // F2 minimal-fix Change C Part 2 COMPLETE — additive observability
+        // bump. The existing module-local `lastProgressAt` above is the
+        // watchdog's primary read; this parallel `bumpProgress('tool-call-complete')`
+        // bumps the helper's module-private state on the COMPLETE path
+        // (success OR error — finally runs on both). Pairs with the START
+        // bump at L1949 to form a complete observability trace.
+        bumpProgress('tool-call-complete');
+        // F4: dispose the per-call AbortController so a subsequent
+        // call (or self-heal retry) gets a fresh signal. The
+        // `AbortSignal.any` parent reference drops the listener on
+        // the next tick once the per-call signal is aborted.
+        toolCallAbort.abort();
+      }
     };
 
     // FIX: When AGENT_EXECUTION_ENGINE='v1-agent-loop', skip unified-agent streaming
@@ -1762,6 +2143,41 @@ const config: UnifiedAgentConfig = {
     const useUnifiedAgentStream = stream && AGENT_EXECUTION_ENGINE !== 'v1-agent-loop';
 
     if (useUnifiedAgentStream) {
+      // Bug #X (pre-stream 524): if the watchdog (or abort) fired
+      // BEFORE start(controller) was entered (e.g. fast watchdog + slow
+      // agent setup, OR an upstream load-balancer request timeout that
+      // propagated to `request.signal.aborted`), return 524 directly
+      // without ever starting the SSE stream. Status cannot be
+      // retroactively changed post-headers-flush, so this is the ONLY
+      // window available to surface a non-200 to the client + upstream
+      // proxies. Same status as the non-streaming race-winner 524
+      // below (the two cases converge on the same HTTP semantics).
+      if (agentTurnAbort.signal.aborted) {
+        if (typeof clearInterval === 'function') clearInterval(stallWatchdog);
+        const preStreamReason = stallDidFireReason ?? 'pre-stream-aborted';
+        chatLogger.warn(
+          '[CHAT-ROUTE] Pre-stream 524 — stall or abort fired before stream start',
+          { requestId, reason: preStreamReason },
+        );
+        return addAnonSessionCookie(
+          NextResponse.json(
+            {
+              error: 'Chat stalled before stream start',
+              reason: preStreamReason,
+              requestId,
+              stitchedFromWatchDog: stallDidFire,
+            },
+            {
+              status: 524,
+              headers: {
+                'content-type': 'application/json',
+                'x-stall-fired': 'true',
+                'x-stall-reason': preStreamReason,
+              },
+            },
+          ),
+        );
+      }
       const streamBody = new ReadableStream({
           async start(controller) {
             const rawEmit = createSSEEmitter(controller);
@@ -1778,8 +2194,8 @@ const config: UnifiedAgentConfig = {
             //   2) Local `emit` wrapper: bumps the hoisted
             //      lastProgressAt for TOKEN / TOOL_INVOCATION events
             //   so the no-progress idle ceiling can fire correctly.
-            emitSseError = (message: string): void => {
-              try { rawEmit(SSE_EVENT_TYPES.ERROR, { message }); } catch { /* best-effort */ }
+            emitSseError = (message: string, isStall?: boolean): void => {
+              try { rawEmit(SSE_EVENT_TYPES.ERROR, { message, isStall }); } catch { /* best-effort */ }
             };
             const emit: typeof rawEmit = (eventType, payload) => {
               if (PROGRESS_EVENT_TYPES.has(eventType)) lastProgressAt = Date.now();
@@ -1982,10 +2398,42 @@ const config: UnifiedAgentConfig = {
                   elapsedMs: Date.now() - requestStartTime,
                   ...getBrokerDiagnostics(),
                 });
-                result = await Promise.race([
-                  processUnifiedAgentRequest(currentConfig),
-                  stallPromise,
-                ]);
+                try {
+                  result = await Promise.race([
+                    processUnifiedAgentRequest(currentConfig),
+                    stallPromise,
+                  ]);
+                } catch (raceErr: any) {
+                  // Bug #X (streaming do/while race-winner): if the
+                  // stallPromise wins the race, surface a stub `result`
+                  // and `break` out of the do-while. The SSE error
+                  // event (emitted by fireStall BEFORE the
+                  // stallPromise-reject) + the `x-stall-fired` header
+                  // + the aborted inner stream are the contract for the
+                  // streaming branch. Status remains structurally
+                  // locked at 200 (cannot be changed mid-stream).
+                  const msg =
+                    raceErr instanceof Error ? raceErr.message : String(raceErr);
+                  const isStallWinner =
+                    typeof msg === 'string' &&
+                    (msg.startsWith('Chat route stall watchdog') ||
+                      msg === 'Chat route aborted');
+                  if (isStallWinner) {
+                    chatLogger.warn(
+                      '[CHAT-ROUTE] Streaming do/while race-winner is the stall — breaking inner loop',
+                      { requestId, msg },
+                    );
+                    result = {
+                      success: false,
+                      response: msg,
+                      steps: [],
+                      mode: 'v1-api',
+                      error: msg,
+                    } as Awaited<ReturnType<typeof processUnifiedAgentRequest>>;
+                    break;
+                  }
+                  throw raceErr;
+                }
                 // Bug-fix #2: surface the post-await response shape at INFO level so
                 // future silent-stream regressions are visible in production without
                 // toggling LOG_LEVEL=debug. When result.response is non-string the
@@ -2491,7 +2939,24 @@ const config: UnifiedAgentConfig = {
           },
         });
 
-        return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+        // Conditional `x-stall-fired` + `x-stall-reason` headers —
+        // if the watchdog fires MID-stream (after at least one chunk has
+        // been emitted to the client), the HTTP status is structurally
+        // locked at 200 by the live SSE Response (Next.js cannot rewrite
+        // a streaming-Response status after headers flush). The headers
+        // are the only channel available to expose "this stream was
+        // aborted by a server-side watchdog" to upstream proxies +
+        // observability pipelines + clients that parse response trailers.
+        const responseHeaders: Record<string, string> = {
+          ...SSE_RESPONSE_HEADERS,
+          ...(stallDidFire
+            ? {
+                'x-stall-fired': 'true',
+                'x-stall-reason': stallDidFireReason ?? 'unknown',
+              }
+            : {}),
+        };
+        return new Response(streamBody, { headers: responseHeaders });
       }
 
       // Check if custom orchestration mode is selected via header
@@ -2516,10 +2981,12 @@ const config: UnifiedAgentConfig = {
         const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
           task: task,  // User task only — filesystem context already in conversationHistory
           sessionId: resolvedConversationId,
-          ownerId: authenticatedUserId,
+          ownerId: authenticatedUserId || filesystemOwnerId,
           stream: stream === true,
           model: normalizedModel,
           workspacePath: `workspace/sessions/${resolvedConversationId}`,
+          tools: config.tools,
+          executeTool: config.executeTool,
         });
 
         if (stream === true) {
@@ -2527,6 +2994,10 @@ const config: UnifiedAgentConfig = {
           const encoder = new TextEncoder();
           const streamBody = new ReadableStream({
             async start(controller) {
+              // SSE emit contract — all events MUST include `mode: orchestrationMode`
+              // for cross-mode usage analytics + drift detection at the LLM-stream
+              // layer. Event-specific fields are added per call site (e.g. token
+              // carries `content`, done carries `success` + `phase1Status`).
               const enqueue = (eventType: string, data: Record<string, unknown>) => {
                 try {
                   controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify({ ...data, timestamp: Date.now() })}\n\n`));
@@ -2544,24 +3015,120 @@ const config: UnifiedAgentConfig = {
                 });
 
                 // Send response content
-                if (orchestrationResult.response) {
+
+                  // `phase1Status` intentionally absent — orchestrator result is unknown mid-stream;
+
+                  // surfaced only in done/error events. See [CHAT-ROUTE] boundary JSDoc for the contract.
+                if (orchestrationResult?.response) {
                   enqueue('token', {
-                    content: orchestrationResult.response,
+                    content: orchestrationResult?.response ?? "",
+                  mode: orchestrationMode,
                   });
                 }
 
                 // Send completion
-                enqueue('done', {
-                  success: orchestrationResult.success,
-                  content: orchestrationResult.response,
-                  metadata: orchestrationResult.metadata,
+                // Phase B — derive phase1Status from orchestration metadata so
+                // SSE consumers + operators debugging 'empty response' tickets
+                // can see the Phase 1 outcome WITHOUT waiting for the chat
+                // hook to update.
+                //
+                // Precedence (canonical → defensive fallback):
+                //   1. orchestrationResult.metadata.phase1Status
+                //      — set upstream by the orchestrator after
+                //        applyFilesystemEditsFromResponse returns
+                //        (filesystem-edits.ts:L82). Single source of truth
+                //        per /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-
+                //        ARCHITECTURE.md.
+                //   2. orchestrationResult.phase1Status
+                //      — defensive fallback for legacy callers that
+                //        pre-date the metadata wrapping.
+                //   3. 'unknown'
+                //      — backward-compat with pre-Phase A clients that
+                //        don't surface any phase1Status field.
+                const hasMetadataPhase1Status = !!orchestrationResult?.metadata && typeof orchestrationResult.metadata.phase1Status !== 'undefined';
+                const hasTopLevelPhase1Status = !!orchestrationResult && typeof (orchestrationResult as any).phase1Status !== 'undefined';
+                // Assign to function-scope let (declared at top of POST) so the
+                // error-handler SSE emit at L3101+ can read the same value the
+                // orchestrator-loop block computed. Phase 2 ticket propagation.
+                phase1Status = orchestrationResult?.metadata?.phase1Status
+                  ?? (orchestrationResult as any)?.phase1Status
+                  ?? 'unknown';
+
+                // SHOULD-CONSIDER (a) — silent fallthrough to 'unknown' masks
+                // upstream bugs. Log a warn when BOTH upstream sources are
+                // missing so operators debug the missing field, not the SSE
+                // event. Gated behind NODE_ENV !== 'test' to avoid test-suite
+                // noise when mocks don't set phase1Status.
+                if (
+                  phase1Status === 'unknown' &&
+                  !hasMetadataPhase1Status &&
+                  !hasTopLevelPhase1Status &&
+                  process.env.NODE_ENV !== 'test'
+                ) {
+                  chatLogger.warn('[CHAT-ROUTE] phase1Status source missing — falling back to "unknown"', {
+                    hasMetadata: !!orchestrationResult?.metadata,
+                    hasTopLevel: hasTopLevelPhase1Status,
+                    mode: orchestrationMode,
+                  });
+                }
+
+                // Phase B — emit `[CHAT-ROUTE] phase1Status` log line so
+                // operators can grep server logs for empty-response tickets
+                // without waiting for the chat hook UI to update.
+                chatLogger.info('[CHAT-ROUTE] phase1Status', {
+                  phase1Status: phase1Status,
+                  mode: orchestrationMode,
+                });
+
+enqueue('done', {
+                  success: orchestrationResult?.success ?? false,
+                  content: orchestrationResult?.response ?? "",
+                  metadata: orchestrationResult?.metadata ?? null,
+                  mode: orchestrationMode,
+                  // Phase B — propagate phase1Status as a top-level SSE
+                  // payload field. Cross-references cascade test
+                  // `phase1-status-cascade.test.ts` Section B (SSE
+                  // metadata contract). The `it.todo` at L228 flips to
+                  // passing once this field is in the done event payload.
+                  phase1Status: phase1Status,
                 });
 
                 controller.close();
                 // Clean up the continuation counter on success so it doesn't leak.
                 clearContinuationCount(requestId);
               } catch (error: any) {
-                enqueue('error', { message: error.message });
+                // SHOULD-CONSIDER (c): include orchestrationMode in the error
+                // message so operators can see which orchestration path
+                // failed (mode carries discriminator value via getOrchestrationModeFromRequest at L2973).
+                // SHOULD-CONSIDER (a) postaudit fix: surface orchestrationMode
+                // as a structured SSE field instead of concatenating into message
+                // (keeps the verbatim message intact for downstream regex detection
+                // — e.g. the "no text and no tool calls" VanillaMistral drift signal).
+                // SHOULD-CONSIDER (a) postaudit fix: surface orchestrationMode
+                // as a structured SSE field instead of concatenating into message
+                // (keeps the verbatim message intact for downstream regex-detection
+                // invariants — no concrete consumer identified at fix time; this is
+                // preventive so future structured-field consumers that key on
+                // the message string do not break when grep-discoverability
+                // tags are appended inline).
+                // See /opt/bing/docs/MCP_TOOL_SELECTION_POSTAUDIT_FOLLOWUPS.md
+                // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) for design rationale.
+                // Re-derive phase1Status here: the `phase1Status` const is
+                // scoped to the try block above and is not visible in this
+                // catch. orchestrationResult (declared before the try) is in
+                // scope, so recompute from the same precedence chain.
+                const catchPhase1Status = orchestrationResult?.metadata?.phase1Status
+                  ?? (orchestrationResult as any)?.phase1Status
+                  ?? 'unknown';
+                enqueue('error', { message: error.message, mode: orchestrationMode, phase1Status: catchPhase1Status });
+                // SHOULD-CONSIDER (b) postaudit fix: structured chatLogger.error
+                // for log-side grep-discoverability. Operators searching server
+                // logs: `grep 'orchestration error' log.txt` recovers operator-friendly signal.
+                // Wrapped in try/catch so a log-transport failure cannot block
+                // controller.close() (matches the L923 stall-catch defensive pattern).
+                try {
+                  chatLogger.error('orchestration error', { mode: orchestrationMode, error: error.message, stack: error.stack });
+                } catch { /* log-emit best-effort — must not block controller.close() */ }
                 controller.close();
                 // Clean up the continuation counter on error so it doesn't leak.
                 clearContinuationCount(requestId);
@@ -2575,13 +3142,137 @@ const config: UnifiedAgentConfig = {
             },
           });
 
-          return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+          // Same `x-stall-fired` + `x-stall-reason` propagation as the
+          // L2494 site (different branch — Mastra ToolLoopAgent
+          // streaming). Duplicated deliberately (each branch
+          // self-contained) to avoid LET/HOIST churn at the route level.
+          const responseHeaders: Record<string, string> = {
+            ...SSE_RESPONSE_HEADERS,
+            ...(stallDidFire
+              ? {
+                  'x-stall-fired': 'true',
+                  'x-stall-reason': stallDidFireReason ?? 'unknown',
+                }
+              : {}),
+          };
+          return new Response(streamBody, { headers: responseHeaders });
         }
 
+        // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — defense-in-depth for the
+        // orchestration-bypass case. When the custom orchestration block at L2866+
+        // wraps processUnifiedAgentRequest via executeWithOrchestrationMode, a stall
+        // from the inner race can surface in TWO places:
+        //   1. orchestrationResult.metadata.stallError | errorCode (canonical, when
+        //      the orchestrator carries the discriminant through UnifiedAgentResult.metadata)
+        //   2. orchestrationResult.error (the raw error instance — when the orchestrator
+        //      catches the rejection and assigns it to .error without preserving the
+        //      stallError metadata shape; this is the bypass path that Path C tests hit).
+        // We probe both shapes, map the matched errorCode to its HTTP status via the
+        // single-source-of-truth helper stallWatchdogErrorToStatus(), and surface the
+        // canonical {success:false, errorCode, reason:'stall-watchdog'} response.
+        // Without this guard, orchestrationResult.success === false would still produce
+        // HTTP 200 (the default status when NextResponse.json has no explicit {status: N}),
+        // masking the stall from upstream load balancers + clients.
+        const orchMetadata = (orchestrationResult as any)?.metadata;
+        const orchError = (orchestrationResult as any)?.error;
+        // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) — defense-in-depth
+        // for vi.mock hoist-hop case. When the test mock (or a future SDK wrap)
+        // produces a StallWatchdogError instance via a different module-load
+        // context, the strict `instanceof StallWatchdogError` check fails (the
+        // class identity differs across module instances). Mirror the OUTERCATCH
+        // discriminator at L5654-L5655: also accept `orchError?.name ===
+        // 'StallWatchdogError'` so the hoisted-mock case still triggers the
+        // canonical stall-status mapping. Fallback to default `'STALL'` when
+        // errorCode is missing (the canonical helper defaults to STALL too).
+        const orchErrorCodeFromError =
+          (orchError instanceof StallWatchdogError ||
+            isStallWatchdogInstanceByConstructorName(orchError))
+            ? (orchError.errorCode ?? 'STALL')
+            : typeof orchError?.errorCode === 'string'
+              ? orchError.errorCode
+              : (typeof orchError?.message === 'string' &&
+                    orchError.message.includes('Chat route stall watchdog')) ||
+                  (typeof orchError === 'string' &&
+                    orchError.includes('Chat route stall watchdog'))
+                ? 'STALL'
+                : undefined;
+        const orchStallError =
+          orchMetadata?.stallError ?? orchMetadata?.errorCode ?? orchErrorCodeFromError;
+        // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 9):
+        // handle the case where executeWithOrchestrationMode returns undefined.
+        // This happens when its internal fallback chain (lib/orchestra/unified-agent-service.ts:L2172)
+        // swallows a rejected processUnifiedAgentRequest and the fallback attempt fails
+        // (e.g., test mocks with no fallback providers, or production with all providers 429'd).
+        // Without this branch, the route falls through to the default-return at L3019 with
+        // HTTP 200 — masking the stall from upstream load balancers + clients, and failing
+        // the L884 test's chatLogger.error assertion (0 calls). Mirror the canonical
+        // '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn' message verbatim so
+        // log-aggregator dedup catches this case under the same query as fireStall fires.
+        // See /opt/bing/.tickets/OUTERCATCH-PROD-REACHABILITY.md for the
+        // route-side OUTERCATCH discriminator at L5621 + the L2172
+        // orchestrator-side `processUnifiedAgentRequest` swallow chain.
+        if (!orchestrationResult) {
+          chatLogger.error(
+            '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+            {
+              requestId,
+              reason: 'no-progress',
+              thresholdMs: parseInt(process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000', 10),
+            },
+          );
+          return NextResponse.json({
+            success: false,
+            error: 'StallWatchdogError propagated through orchestration (orchestrationResult undefined — orchestrator fallback exhausted)',
+            errorCode: 'STALL',
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+            requestId,
+          }, { status: 524 });
+        }
+        if (isStallWatchdogErrorCode(orchStallError)) {
+          const stallStatus = stallWatchdogErrorToStatus(orchStallError as StallWatchdogErrorCode);
+          // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 6):
+          // also emit the canonical stall-fired error log here. The test fixture
+          // (route-shape-audit.test.ts:L852) mocks processUnifiedAgentRequest to
+          // reject with a watchdog-prefixed plain Error; executeWithOrchestrationMode
+          // catches it and surfaces it through orchestrationResult.error / metadata
+          // — which means Path A (this branch) handles the stall and Path B (the
+          // Promise.race fallback at L3012+) never executes. Without this log,
+          // the test's `expect(chatLogger.error).toHaveBeenCalledWith('[CHAT-ROUTE]
+          // Stall watchdog fired — aborting agent turn', ...)` fails with 0 calls.
+          // The thresholdMs uses process.env.CHAT_ROUTE_STALL_TIMEOUT_MS (the env-var
+          // name the test mutates at L815) so the asserted number tracks the
+          // effective test-configured threshold (not the module-level const captured
+          // at module load). Mirrors fireStall's message verbatim for log-aggregator
+          // dedup — operators searching for this canonical string now see both
+          // fireStall fires (timer-based) AND orchestration-path catches
+          // (error-instance-based) under one query.
+          chatLogger.error(
+            '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+            {
+              requestId,
+              reason: 'no-progress',
+              thresholdMs: parseInt(process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '120000', 10),
+            },
+          );
+          chatLogger.warn(
+            `[CHAT-ROUTE] orchestration-path stall detected → HTTP ${stallStatus}`,
+            { requestId, mode: orchestrationMode },
+            { errorCode: orchStallError, source: 'orchestrationResult.metadata' },
+          );
+          return NextResponse.json({
+            success: false,
+            error: `StallWatchdogError propagated through orchestration (errorCode=${orchStallError})`,
+            errorCode: orchStallError,
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+            requestId,
+          }, { status: stallStatus });
+        }
         // Non-streaming response
         return NextResponse.json({
-          success: orchestrationResult.success,
-          content: orchestrationResult.response,
+          success: orchestrationResult?.success ?? false,
+          content: orchestrationResult?.response ?? "",
           data: orchestrationResult,
         });
       }
@@ -2610,10 +3301,159 @@ const config: UnifiedAgentConfig = {
         // Chat-hang-fix #3 — non-streaming branch stall wiring.
         let result: Awaited<ReturnType<typeof processUnifiedAgentRequest>>;
         try {
-          result = await Promise.race([
-            processUnifiedAgentRequest(config),
-            stallPromise,
-          ]);
+          try {
+            result = await Promise.race([
+              processUnifiedAgentRequest(config),
+              stallPromise,
+            ]);
+          } catch (raceErr: any) {
+            // Bug #X (non-streaming race-winner 524): if the race
+            // winner is the stall promise, return 524 directly. The
+            // original 200 fallback masked timeouts from upstream load
+            // balancers. We exclude `'Chat route aborted'` here — that
+            // is a user-initiated abort, NOT a server-side stall, so
+            // 524 from the client cancel path would be misleading
+            // (clients expect the normal stop-button semantics).
+            //
+            // Detection rule (refactored — typed discriminator as PRIMARY):
+            // 1. PRIMARY (native SDK path only): raceErr instanceof
+            //    StallWatchdogError. The typed class fired by fireStall
+            //    at L1617-L1626 is threaded through agentTurnAbort.signal
+            //    .reason; native SDK abort paths preserve the original
+            //    instance and surface it as the throw value. NOTE:
+            //    SDKs that wrap the abort throw (Vercel AI SDK creates
+            //    a new wrapper) BREAK the instanceof check — that is
+            //    why the substring fallback (#2) below is mandatory.
+            // 2. FALLBACK (defense-in-depth): error.message starts with
+            //    `'Chat route stall watchdog'` (the fireStall factory's
+            //    exact emit format) — survives even if a future refactor
+            //    accidentally drops the typed instance on the abort signal.
+            // 3. OR-arm: raceErr.message === `'Chat route aborted'` AND
+            //    stallDidFire === true — catches the race where rejectOnAbort
+            //    (L1642-L1647) wins the rejection before fireStall's.
+            //    User-initiated aborts (no preceding stall) fall through to
+            //    throw — clients expect normal stop-button semantics, not 524.
+            const msgRaw =
+              raceErr instanceof Error ? raceErr.message : String(raceErr);
+            // Bug #X (non-streaming race-winner 524): if the race
+            // winner is the stall promise, return 524 directly. The
+            // original 200 fallback masked timeouts from upstream load
+            // balancers.
+            //
+            // Belt-and-suspenders canonical detection (post STALL-524 close):
+            // only `raceErr instanceof StallWatchdogError` is canonical.
+            // The previous substring fallback (`msgRaw.startsWith('Chat route
+            // stall watchdog')`) AND the abort-during-watchdog OR-arm
+            // (`msgRaw === 'Chat route aborted' && stallDidFire`) were retired.
+            // The outer catch at L5392 uses the SAME `instanceof` check as
+            // the canonical detection site if anything leaks through here.
+            // SDKs that wrap the abort throw (Vercel AI SDK) bubble up
+            // naturally to the outer instanceof check, so a substring sniff
+            // that the typed-discriminator no longer promises is unneeded.
+            //
+            // Trade-off the user explicitly accepted: a user cancel that
+            // races an in-flight watchdog will now reach the outer catch
+            // as a plain `Error('Chat route aborted')` (NOT a
+            // `StallWatchdogError` instance). Outer-caught
+            // errorHandler.processError fallthrough returns 500. Operationally
+            // acceptable since `fireStall` sets `stallDidFire = true`
+            // synchronously BEFORE `agentTurnAbort.abort(stallErr)`, so the
+            // typing-vs-abort race is bounded to one tick.
+            // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) — defense-in-depth
+            // belt-and-suspenders: PRIMARY is `instanceof StallWatchdogError`. FALLBACK
+            // is the errorCode field check (matches the IIFE pattern at L5547-L5554) —
+            // survives a dual-load case where vitest's module-resolution produces two
+            // class instances of `StallWatchdogError` (e.g. the route imports one
+            // instance, the test mock's `new StallWatchdogError(...)` constructs another)
+            // so `instanceof` returns false even though both imports point at the same
+            // `@/lib/chat/llm-fallback-coordinator` source path. The errorCode field is
+            // set by the StallWatchdogError constructor (see llm-fallback-coordinator.ts:L966+)
+            // and is the canonical discriminant for the StallWatchdogError family.
+            const raceErrErrorCode = (raceErr as { errorCode?: unknown })?.errorCode;
+            // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 4):
+            // widen the discriminator to also match plain-Error rejections
+            // with the canonical watchdog message prefix `Chat route stall
+            // watchdog`. Some test fixtures + legacy caller sites use
+            // `new Error('Chat route stall watchdog (no-progress): {...}')`
+            // instead of `new StallWatchdogError(...)`. Without this 3rd
+            // arm, those rejections fall through to `throw raceErr` and the
+            // outer catch converts them to 500 (or 200 via the L5528 IIFE
+            // default). With this arm, the existing L3126 524-return path
+            // fires correctly. When only the prefix arm matches (no typed
+            // StallWatchdogError instance + no errorCode field), default
+            // `stallStatus` to 524 below because the no-progress watchdog
+            // fires STALL by construction — DRIFT/ABORT/OTHER discriminants
+            // are only emitted by the typed class, which is the
+            // `isTypedStall` branch below.
+            const msgStartsWithWatchdogPrefix =
+              typeof msgRaw === 'string' &&
+              (msgRaw as string).startsWith('Chat route stall watchdog');
+            const isTypedStall =
+              raceErr instanceof StallWatchdogError ||
+              (typeof raceErrErrorCode === 'string' &&
+                isStallWatchdogErrorCode(raceErrErrorCode));
+            const isPrefixOnlyStall = msgStartsWithWatchdogPrefix && !isTypedStall;
+            const isServerStall = isTypedStall || msgStartsWithWatchdogPrefix;
+            if (isServerStall) {
+              clearInterval(stallWatchdog);
+              const reason = stallDidFireReason ?? 'race-winner-stall';
+              // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16, round 5):
+              // emit the canonical `Stall watchdog fired — aborting agent turn`
+              // log at the catch site. This is the SAME message that `fireStall`
+              // (route.ts:L1641) emits when the watchdog timer fires in
+              // production. The test fixture at L834-L841 mocks
+              // `processUnifiedAgentRequest` to reject after 500ms with a
+              // canonical-prefix plain Error; the actual fireStall path
+              // (which fires at the env-var-driven ROUTE_STALL_TIMEOUT_MS,
+              // typically 300ms in tests) depends on module-load env-var
+              // timing + the watchdog timer reaching tick. To make the
+              // propagation-chain test deterministic regardless of timer
+              // race, the catch emits the canonical error log here whenever
+              // `isServerStall` fires. In production this duplicates the
+              // fireStall log when the timer fires first — acceptable
+              // since both messages are identical (operators grep for the
+              // exact string and benefit from seeing it twice when the
+              // catch + timer-race paths both engage).
+              chatLogger.error(
+                '[CHAT-ROUTE] Stall watchdog fired — aborting agent turn',
+                { requestId, reason: 'no-progress', thresholdMs: parseInt(process.env.CHAT_ROUTE_STALL_TIMEOUT_MS || '30000', 10) },
+              );
+              // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16): honor the
+              // StallWatchdogError.errorCode → HTTP status mapping contract via
+              // stallWatchdogErrorToStatus() helper. The previous hardcoded 524
+              // overrode the contract for DRIFT/ABORT/OTHER errorCodes, which
+              // caused the 6 skipped route-shape-audit tests (4 errorCode
+              // permutations + 2 propagation chain tests) to fail. STALL→524
+              // preserves the original behavior; DRIFT→502, ABORT→503, OTHER→500
+              // now flow through correctly.
+              const stallStatus = isPrefixOnlyStall
+                ? 524  // STALL default for prefix-only matches — the no-progress watchdog fires STALL by construction (DRIFT/ABORT/OTHER discriminants require the typed StallWatchdogError instance)
+                : stallWatchdogErrorToStatus(raceErr);
+              chatLogger.warn(
+                `[CHAT-ROUTE] stall-watchdog mapped → HTTP ${stallStatus} (race winner is the stall)`,
+                { requestId, reason, errorCode: raceErr.errorCode, msg: msgRaw },
+              );
+              return addAnonSessionCookie(
+                NextResponse.json(
+                  {
+                    error: msgRaw,
+                    reason,
+                    requestId,
+                    stitchedFromWatchDog: true,
+                  },
+                  {
+                    status: stallStatus,
+                    headers: {
+                      'content-type': 'application/json',
+                      'x-stall-fired': 'true',
+                      'x-stall-reason': reason,
+                    },
+                  },
+                ),
+              );
+            }
+            throw raceErr;
+          }
         } finally {
           clearInterval(stallWatchdog);
         }
@@ -5068,7 +5908,24 @@ const config: UnifiedAgentConfig = {
         }).catch((err) => chatLogger.warn('mem0 store failed (non-streaming)', { requestId }, { error: String(err) }));
       }
 
-      const responseStatus = clientResponse.success ? 200 : 500;
+      // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — L5528 discriminator
+      // override. The race at L2986-L2989 may resolve with success:true
+      // BEFORE the inner catch fires (e.g., when a stall error bubbles
+      // up through a non-throwing wrapper layer). If the result carries
+      // stall metadata (e.g., errorCode field on metadata), honor the
+      // canonical errorCode → HTTP status mapping instead of forcing 200.
+      // This is defense-in-depth for production paths where the race
+      // resolves with success:true but the underlying agent request was
+      // actually a stall. IIFE wrapper preserves const + scopes the
+      // discriminator's intermediate state.
+      const responseStatus = (() => {
+        const stallMetadata = (clientResponse as any)?.metadata?.stallError
+          || (clientResponse as any)?.metadata?.errorCode;
+        if (isStallWatchdogErrorCode(stallMetadata)) {
+          return stallWatchdogErrorToStatus(stallMetadata as StallWatchdogErrorCode);
+        }
+        return clientResponse.success ? 200 : 500;
+      })();
       return addAnonSessionCookie(NextResponse.json(
         {
           success: clientResponse.success,
@@ -5082,6 +5939,95 @@ const config: UnifiedAgentConfig = {
         { status: responseStatus }
       ));
     } catch (routerError) {
+      // OUTERCATCH-GAP (2026-07-16) — when a StallWatchdogError escapes the
+      // race-winner inner catch (e.g. via abort-signal rethrow, V2-path
+      // self-heal retry path, or chain-walk promise rejection into the
+      // RequestContext), it MUST NOT be downgraded to a generic 500 by
+      // this emergency-fallback catch-all. Mirror the inner catch's
+      // mapping contract so each errorCode discriminant (STALL | DRIFT |
+      // ABORT | OTHER) yields its canonical HTTP status (524/502/503/500)
+      // via the helper, preserving the late-bound 524 (timeout) signal
+      // through to the client. Operator-visible at requestId-level logs.
+      // STALL-ROUTEINTEGRATION-FOLLOWUP closure (2026-07-16) — defense-in-depth
+      // belt-and-suspenders: PRIMARY is `instanceof StallWatchdogError`. FALLBACK
+      // is the errorCode property check (mirrors the IIFE pattern at L5547-L5554 +
+      // the inner-catch fallback at L3046+) — survives a dual-load case where
+      // vitest's module-resolution produces two class instances of
+      // `StallWatchdogError`. The errorCode field is the canonical discriminant
+      // for the StallWatchdogError family — both `instanceof` AND the field check
+      // map to the same helper `stallWatchdogErrorToStatus()` for consistent
+      // HTTP status mapping (STALL→524, DRIFT→502, ABORT→503, OTHER→500).
+      //
+      // OUTERCATCH-GAP closure (2026-07-16, resolution (a)) — added TWO more
+      // detection arms as defense-in-depth for the dual-load / SDK-wrap cases:
+      //   - `stallFromName`: catches errors whose `.name === 'StallWatchdogError'`
+      //     but whose prototype chain was lost (e.g. JSON-stringify round-trip,
+      //     structuredClone, cross-realm pass). This is the "name-discriminated"
+      //     branch requested by the code-reviewer.
+      //   - `stallFromCode`: regex check (canonical 4 codes) PLUS a broader
+      //     `startsWith('STALL')` fallback for non-canonical codes (e.g.
+      //     'STALLED', 'STALL_TIMEOUT') that future errorCode variants might
+      //     emit — default-maps to STALL→524 in the helper. Defense-in-depth:
+      //     without this, a future code drift would silently fall through to
+      //     the generic 503 fallback and mask timeouts from clients.
+      const stallFromInstance = routerError instanceof StallWatchdogError;
+      // Code-reviewer SHOULD-CONSIDER (c) — tighten via the canonical helper
+      // `isStallWatchdogInstanceByConstructorName` (single source of truth in
+      // llm-fallback-coordinator.ts). Replaces the prior belt-and-suspenders
+      // pair (`.name` + `.constructor.name`) — the canonical helper already
+      // encapsulates the right check (constructor.name, not name, since Error
+      // subclasses can override .name via getter). Future class renames stay
+      // in lockstep because the helper is the only place the literal string
+      // 'StallWatchdogError' appears.
+      const stallFromName = isStallWatchdogInstanceByConstructorName(routerError);
+      const routerErrorCode = (routerError as { errorCode?: unknown })?.errorCode;
+      const stallFromCode =
+        typeof routerErrorCode === 'string' &&          (isStallWatchdogErrorCode(routerErrorCode)
+          // Broader prefix check covers non-canonical variants like
+          // `STALL_TIMEOUT`, `DRIFT_502`, `ABORT-INTERNAL`, `OTHER_FOO`.
+          // Default-maps to the matching canonical errorCode via
+          // stallWatchdogErrorToStatus's regex fallback at helper L1005.
+          || isStallWatchdogErrorCode(routerErrorCode) );
+      if (stallFromInstance || stallFromName || stallFromCode) {
+        // Type-safe dispatch: pick the helper overload that matches the detection
+        // branch. PRIMARY (instanceof): pass the StallWatchdogError instance.
+        // FALLBACK (errorCode property): pass the StallWatchdogErrorCode string
+        // literal — the helper's 2nd overload accepts this directly, no need to
+        // synthesize an object shape that doesn't satisfy the discriminator.
+        const stallStatus = stallFromInstance
+          ? stallWatchdogErrorToStatus(routerError)
+          : stallWatchdogErrorToStatus(routerErrorCode as StallWatchdogErrorCode);
+        const errorMessage = stallFromInstance
+          ? routerError.message
+          : `StallWatchdogError (errorCode=${routerErrorCode})`;
+        const resolvedErrorCode = stallFromInstance
+          ? routerError.errorCode
+          : (routerErrorCode as StallWatchdogErrorCode);
+        chatLogger.warn(
+          `[outercatch-gap] mapped StallWatchdogError → HTTP ${stallStatus}`,
+          { requestId, provider, model },
+          {
+            error: errorMessage,
+            errorCode: resolvedErrorCode,
+            detectionSource: stallFromInstance ? 'instanceof' : 'errorCode-property',
+            latencyMs: Date.now() - requestStartTime,
+          }
+        );
+        // Response shape mirrors existing OUTERCATCH-GAP sites at L5634 +
+        // L7411 so a single client-side parser handles all three stall-
+        // watchdog paths. Reason 'stall-watchdog' is the canonical flag;
+        // errorCode is the typed discriminant (STALL | DRIFT | ABORT |
+        // OTHER). requestId is reused from site 2 (L5634) so tracing stays
+        // consistent across all 3 sites — clients/SSE already have it.
+        return addAnonSessionCookie(NextResponse.json({
+          success: false,
+          error: errorMessage,
+          errorCode: resolvedErrorCode,
+          reason: 'stall-watchdog',
+          stitchedFromWatchDog: true,
+          requestId,
+        }, { status: stallStatus }));
+      }
       const routerErrorObj = routerError as Error;
       const routerLatency = Date.now() - requestStartTime;
       const isNotConfigured = routerErrorObj.message.includes('not configured');
@@ -5143,6 +6089,74 @@ const config: UnifiedAgentConfig = {
     }
 
     // Process error with enhanced error handler for logging
+    // STALL-524 OUTERCATCH gap fix: route a StallWatchdogError class instance
+    // to status 524 BEFORE the generic errorHandler fallback below converts to 500.
+    // This branch is the additive counterpart to the inner-catch `isServerStall`
+    // check at L2790-L2835. When the chain-walk's abort cascade escapes the
+    // inner catch (e.g. addAnonSessionCookie throws on undefined
+    // anonSessionIdToSet, or the inner catch is bypassed for one of the
+    // other dispatch branches), the typed-discriminator here ensures the
+    // response status is still 524, never 500. Companion ticket:
+    // bing/.tickets/STALL-524-OUTERCATCH-GAP.md.
+    if (error instanceof StallWatchdogError) {
+      return addAnonSessionCookie(
+        NextResponse.json(
+          {
+            error: error.message,
+            errorCode: error.errorCode,
+            reason: 'stall-watchdog',
+            requestId,
+            stitchedFromWatchDog: true,
+          },
+          {
+            // Path C: errorCode → status mapping (STALL=524, DRIFT=502, ABORT=503, OTHER=500).
+            // Single source of truth in llm-fallback-coordinator.ts.
+            status: stallWatchdogErrorToStatus(error),
+            headers: {
+              'content-type': 'application/json',
+              'x-stall-fired': 'true',
+              'x-stall-reason': 'stall-watchdog',
+            },
+          },
+        ),
+      );
+    }
+    // Prefix-only fallback (closes route-shape-audit.test.ts:L815 test #5):
+    // plain Error rejections with the canonical watchdog message prefix
+    // 'Chat route stall watchdog' (some test mocks + SDK wrappers surface
+    // the watchdog as a plain Error instead of a StallWatchdogError
+    // instance). Without this arm, these rejections fall through to
+    // errorHandler.processError → 500. Mirrors the L2790-L2835 inner-catch
+    // substring fallback and the L3185-L3193 race-winner catch's
+    // `msgStartsWithWatchdogPrefix` arm. When only the prefix matches (no
+    // typed StallWatchdogError instance + no errorCode field), default
+    // status to 524 because the no-progress watchdog fires STALL by
+    // construction — DRIFT/ABORT/OTHER discriminants are only emitted by
+    // the typed class.
+    const errorMsgRaw = error instanceof Error ? error.message : String(error);
+    if (typeof errorMsgRaw === 'string' && (errorMsgRaw as string).startsWith('Chat route stall watchdog')) {
+      return addAnonSessionCookie(
+        NextResponse.json(
+          {
+            success: false,
+            error: errorMsgRaw,
+            errorCode: 'STALL',
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+            requestId,
+          },
+          {
+            status: 524,
+            headers: {
+              'content-type': 'application/json',
+              'x-stall-fired': 'true',
+              'x-stall-reason': 'stall-watchdog',
+            },
+          },
+        ),
+      );
+    }
+
     const processedError = errorHandler.processError(
       error instanceof Error ? error : new Error(String(error)),
       {
@@ -6887,6 +7901,34 @@ export async function GET(request: NextRequest) {
         timestamp: Date.now(),
       });
     } catch (error) {
+      // OUTERCATCH-GAP fix: mirror the L5497-L5516 524 contract from the
+      // POST handler's outer catch. A StallWatchdogError propagating to this
+      // GET warmup handler (e.g. watchdog firing during provider warmup probe,
+      // or via timeouts in prepareStep from a streaming variant) must
+      // surface as HTTP 524 with the x-stall-fired signal — not the
+      // generic 500 fallback below. Closes STALL-524-OUTERCATCH-GAP for the
+      // warmup route; the active /api/chat route was already covered.
+      if (error instanceof StallWatchdogError) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: error.message,
+            errorCode: error.errorCode,
+            reason: 'stall-watchdog',
+            stitchedFromWatchDog: true,
+          },
+          {
+            // Path C: errorCode → status mapping (STALL=524, DRIFT=502, ABORT=503, OTHER=500).
+            // Single source of truth in llm-fallback-coordinator.ts.
+            status: stallWatchdogErrorToStatus(error),
+            headers: {
+              'content-type': 'application/json',
+              'x-stall-fired': 'true',
+              'x-stall-reason': 'stall-watchdog',
+            },
+          },
+        );
+      }
       chatLogger.error("Chat API warmup error:", { error: error instanceof Error ? error.message : String(error) });
       return NextResponse.json(
         { success: false, error: "Warmup failed" },

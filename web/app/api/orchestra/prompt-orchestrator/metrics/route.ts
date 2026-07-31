@@ -19,13 +19,16 @@
  * can pick up both. The /api/observability/metrics endpoint is general;
  * this one is prompt-orchestrator-specific.
  *
- * Auth-gating: in production the platform's standard request-auth resolver
- * (see /api/metrics/route.ts which gates via METRICS_API_KEY env) would
- * apply. For step 8 we defer the auth wrapper to a follow-up: the dev-mode
- * path is plain GET and the route is purely additive (no side effects, no
- * PII only metric counters).
+ * Auth-gating (applied 2026-07-08 polish follow-up): in production the
+ * route is gated behind either (a) a custom METRICS_API_KEY env var that
+ * the scraper must send as the `x-metrics-key` header, or (b) the standard
+ * auth-0 session resolver (resolveRequestAuth with allowAnonymous=false).
+ * In dev mode the gate is skipped. This mirrors /api/metrics/route.ts.
  */
+import { NextRequest, NextResponse } from 'next/server';
+
 import { serializeMetrics } from '@/lib/orchestra/prompt-orchestrator/observability';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 // Mark the route dynamic so Next.js never tries to statically prerender it.
 export const dynamic = 'force-dynamic';
@@ -38,8 +41,28 @@ export const dynamic = 'force-dynamic';
  * acceptable for the operator-debug scope defined in
  * `docs/prompt-orchestrator-deferred-steps.md#L20` (ROI threshold is ~10
  * QPS sustained; persistent-store needs come later).
+ *
+ * Auth (production-only): either METRICS_API_KEY env (header check) OR
+ * auth-0 session (request-auth). Mirrors /api/metrics/route.ts.
  */
-export async function GET(): Promise<Response> {
+export async function GET(request: NextRequest): Promise<Response> {
+  if (process.env.NODE_ENV === 'production') {
+    const configuredMetricsKey = process.env.METRICS_API_KEY;
+    // Empty string (or unset env var) is treated as 'key not configured'
+    // (JS truthy check), so it falls through to the auth-0 check below.
+    if (configuredMetricsKey) {
+      const providedMetricsKey = request.headers.get('x-metrics-key');
+      if (providedMetricsKey !== configuredMetricsKey) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else {
+      const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+      if (!authResult.success || !authResult.userId) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    }
+  }
+
   const body = serializeMetrics();
   return new Response(body, {
     status: 200,

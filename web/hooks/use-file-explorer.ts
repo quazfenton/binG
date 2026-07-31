@@ -29,6 +29,9 @@
 import { useState, useCallback } from 'react';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils/utils';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('FileExplorer');
 
 export interface FileOperationResult {
   success: boolean;
@@ -104,7 +107,7 @@ export function useFileExplorer() {
       // Neither file nor directory — path doesn't exist
       return { exists: false, path, canOverwrite: false };
     } catch (error) {
-      console.error('Failed to check path:', error);
+      logger.error('Failed to check path:', error);
       return { exists: false, path, canOverwrite: false };
     }
   }, []);
@@ -183,7 +186,7 @@ export function useFileExplorer() {
 
       return { success: true, path: newPath };
     } catch (error: any) {
-      console.error('Rename failed:', error);
+      logger.error('Rename failed:', error);
       return { success: false, error: error.message };
     } finally {
       setIsOperating(false);
@@ -249,7 +252,7 @@ export function useFileExplorer() {
 
       return { success: true, path: targetPath };
     } catch (error: any) {
-      console.error('Move failed:', error);
+      logger.error('Move failed:', error);
       return { success: false, error: error.message };
     } finally {
       setIsOperating(false);
@@ -322,7 +325,7 @@ export function useFileExplorer() {
 
       return { success: true, path: targetPath };
     } catch (error: any) {
-      console.error('Copy failed:', error);
+      logger.error('Copy failed:', error);
       return { success: false, error: error.message };
     } finally {
       setIsOperating(false);
@@ -367,7 +370,7 @@ export function useFileExplorer() {
 
       return { success: true, path };
     } catch (error: any) {
-      console.error('Delete failed:', error);
+      logger.error('Delete failed:', error);
       return { success: false, error: error.message };
     } finally {
       setIsOperating(false);

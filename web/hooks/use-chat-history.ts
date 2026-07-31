@@ -3,6 +3,9 @@
 import React, { useCallback, useRef } from "react"
 import type { Message, ChatHistory } from "@/types"
 import { v4 as uuidv4 } from 'uuid'
+import { createLogger } from '@/lib/utils/logger'
+
+const logger = createLogger('ChatHistory')
 
 const STORAGE_KEY = "ayooo_chat_chat_history"
 
@@ -52,7 +55,7 @@ export function useChatHistory() {
       cacheRef.current = chatHistoryCache
       return processedChats
     } catch (error) {
-      console.error("[useChatHistory] Error parsing chat history, clearing invalid data:", error)
+      logger.error("Error parsing chat history, clearing invalid data:", error)
       localStorage.removeItem(STORAGE_KEY)
       const emptyChats: ChatHistory[] = []
       chatHistoryCache = { chats: emptyChats, timestamp: now }
@@ -103,7 +106,7 @@ export function useChatHistory() {
 
       } else {
         // Chat not found, save as a new chat
-        console.warn(`[useChatHistory] Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`)
+        logger.warn(`Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`)
         const newChatId = uuidv4() // Use uuid for new chats
         const chatHistory: ChatHistory = {
           id: newChatId,
@@ -126,7 +129,7 @@ export function useChatHistory() {
       )
 
       if (isDuplicate) {
-        console.log("[useChatHistory] Duplicate chat content detected. Not saving.")
+        logger.info("Duplicate chat content detected. Not saving.")
         return existingChats[0]?.id || "" // Return the ID of the existing duplicate, or empty
       }
 

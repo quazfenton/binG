@@ -4,6 +4,9 @@ import { useCallback, useEffect, useState } from "react"
 import type { Message, ChatHistory } from "@/types"
 import { v4 as uuidv4 } from 'uuid';
 import { useAuth } from "@/contexts/auth-context";
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('ChatHistorySync');
 
 const STORAGE_KEY = "ayooo_chat_chat_history"
 const SYNC_DEBOUNCE_MS = 2000 // Sync to server after 2 seconds of inactivity
@@ -51,7 +54,7 @@ export function useChatHistorySync() {
         }))
       }));
     } catch (error) {
-      console.error("[useChatHistorySync] Error parsing chat history, clearing invalid data:", error);
+      logger.error("Error parsing chat history, clearing invalid data:", error);
       localStorage.removeItem(STORAGE_KEY);
       return [];
     }
@@ -77,15 +80,15 @@ export function useChatHistorySync() {
 
       if (response.ok) {
         setLastSyncedAt(new Date());
-        console.log("[useChatHistorySync] Synced chat to server:", chat.id);
+        logger.info("Synced chat to server:", chat.id);
       } else if (response.status === 403) {
         // Server storage disabled, that's fine
-        console.log("[useChatHistorySync] Server storage disabled, using localStorage only");
+        logger.info("Server storage disabled, using localStorage only");
       } else {
-        console.error("[useChatHistorySync] Failed to sync to server:", await response.text());
+        logger.error("Failed to sync to server:", await response.text());
       }
     } catch (error) {
-      console.error("[useChatHistorySync] Error syncing to server:", error);
+      logger.error("Error syncing to server:", error);
     }
   }, [isServerSyncEnabled]);
 
@@ -116,11 +119,11 @@ export function useChatHistorySync() {
               .slice(0, 50);
             
             localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedChats));
-            console.log("[useChatHistorySync] Loaded and merged chats from server");
+            logger.info("Loaded and merged chats from server");
           }
         }
       } catch (error) {
-        console.error("[useChatHistorySync] Error loading from server:", error);
+        logger.error("Error loading from server:", error);
       }
     };
 
@@ -172,7 +175,7 @@ export function useChatHistorySync() {
         updatedChats = [savedChat, ...updatedChats.filter((chat: ChatHistory) => chat.id !== chatIdToUpdate)];
         finalChatId = chatIdToUpdate;
       } else {
-        console.warn(`[useChatHistorySync] Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`);
+        logger.warn(`Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`);
         const newChatId = uuidv4();
         savedChat = {
           id: newChatId,
@@ -193,7 +196,7 @@ export function useChatHistorySync() {
       );
 
       if (isDuplicate) {
-        console.log("[useChatHistorySync] Duplicate chat content detected. Not saving.");
+        logger.info("Duplicate chat content detected. Not saving.");
         return existingChats[0]?.id || "";
       }
 
@@ -241,10 +244,10 @@ export function useChatHistorySync() {
           });
 
           if (!response.ok && response.status !== 403) {
-            console.error("[useChatHistorySync] Failed to delete from server:", await response.text());
+            logger.error("Failed to delete from server:", await response.text());
           }
         } catch (error) {
-          console.error("[useChatHistorySync] Error deleting from server:", error);
+          logger.error("Error deleting from server:", error);
         }
       }
     },

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# .husky/pre-commit — gates prompt-orchestrator shape on `git commit`
+#
+# Runs the CLI shape-lock against `web/lib/orchestra/prompt-orchestrator/
+# default-scripts.ts` BEFORE the commit is finalized. Exits 1 on any of the
+# 5 invariants drifting:
+#   1. declaration-presence  (PO_UNIFIED_AGENT_SCRIPT or PO_MARKER_TAIL_SCRIPT missing)
+#   2. canonical-promptId    (promptId mismatch on either const)
+#   3. empty-steps-contract  (steps: is not [] on either const)
+#   4. disjoint-prompt-ids   (both promptIds collapsed to the same value)
+#
+# Mirrors the vitest snapshot (`web/lib/orchestra/prompt-orchestrator/
+# __tests__/default-scripts.test.ts`) but runs AT COMMIT TIME without
+# requiring vitest — ensures no silent shape drift can land in the repo.
+#
+# Composition with the other 2 production guards:
+#   - Static-file audit:    unified-agent-prompt-orchestrator-audit.test.ts Test 2c (vitest)
+#   - Vitest snapshot:      __tests__/default-scripts.test.ts (vitest)
+#   - THIS CLI:             scripts/check-default-scripts-shape.ts (vitest-free, runnable in shell hook)
+#
+# Operates on `web/` (process.cwd() relative). Invoke from repo root after
+# `cd web` or by passing the path directly via the `tsx scripts/...` arg.
+set -e
+
+echo "[pre-commit] ▦ default-scripts shape-lock"
+# Run from `web/` regardless of where `git commit` was invoked from — `git`
+# sets the cwd to the repo root, so resolve relative to the husky hook path.
+WEB_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$WEB_DIR"
+
+npx tsx scripts/check-default-scripts-shape.ts

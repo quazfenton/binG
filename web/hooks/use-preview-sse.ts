@@ -30,6 +30,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkspacePreview } from '@/lib/terminal/workspace-preview-registry';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('PreviewSSE');
 
 // ============================================================================
 // Types
@@ -165,11 +168,11 @@ export function usePreviewSSE(
 
         default:
           if (process.env.NODE_ENV === 'development') {
-            console.log('[PreviewSSE] Unknown event type:', event.type);
+            logger.debug('Unknown event type:', event.type);
           }
       }
     } catch (e) {
-      console.warn('[PreviewSSE] Failed to parse event:', (event.data || '').slice(0, 100));
+      logger.warn('Failed to parse event:', (event.data || '').slice(0, 100));
     }
   }, []);
 
@@ -267,7 +270,7 @@ export function usePreviewSSE(
         }
       };
     } catch (e: any) {
-      console.error('[PreviewSSE] Failed to create EventSource:', e.message);
+      logger.error('Failed to create EventSource:', e.message);
       callbacksRef.current.onError?.(e.message || 'Failed to connect to preview SSE');
     }
   }, [handleSSEEvent]);

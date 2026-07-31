@@ -10,7 +10,7 @@
  * This test validates that conversion path end-to-end across all 6 mem0 tools.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // Mock server-only to prevent RSC import errors in test environment
@@ -38,6 +38,17 @@ const EXPECTED_MEM0_TOOLS = [
 ];
 
 describe('mem0_* tool schema conversion (getMCPToolsForAI_SDK path)', () => {
+  // F2 minimal fix: buildMem0Tools gates on isMem0Configured() which reads
+  // process.env.MEM0_API_KEY. Test env (vitest) has no key set, so the
+  // inner gate returns false and buildMem0Tools returns {}. Setting the
+  // env var before each test and clearing it after isolates the test from
+  // any external process state and prevents leakage across files.
+  beforeEach(() => {
+    process.env.MEM0_API_KEY = 'test-mem0-api-key';
+  });
+  afterEach(() => {
+    delete process.env.MEM0_API_KEY;
+  });
   it('should convert all mem0 tool parameters from Zod to valid JSON Schema', async () => {
     // Import the mem0 tool builder (must be done after mocks)
     const { buildMem0Tools } = await import('@/lib/powers/mem0-power');

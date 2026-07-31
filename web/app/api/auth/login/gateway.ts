@@ -6,6 +6,7 @@ import { checkUserRateLimit } from '@/lib/middleware/rate-limiter';
 import { generateCsrfToken, setCsrfCookie } from '@/lib/auth/csrf';
 import { generateMfaToken } from '@/lib/auth/jwt';
 import { transferVFSOnLogin } from '@/lib/auth/transfer-anon-vfs';
+import { logLoginFailure, logLoginSuccess } from '@/lib/auth/auth-audit-logger';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Auth:Login');
@@ -57,6 +58,12 @@ export async function POST(request: NextRequest) {
     const ipAddress = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
     const userAgent = request.headers.get('user-agent') || 'unknown';
 
+    // COLD-PATH BOUNDARY (b0): capture single high-precision start so the
+    // pre_response boundary below can report the login-roundtrip delta
+    // without plumbing hrtime through every helper. Bigint arithmetic,
+    // sub-µs cost — does not affect the latency budget.
+    const tLoginStart = process.hrtime.bigint();
+
     // Login user
     const result = await authService.login(
       { email, password },
@@ -64,9 +71,13 @@ export async function POST(request: NextRequest) {
     );
 
     if (!result.success) {
-      // MED-5 fix: Log login failure for invalid credentials
+      // MED-5 fix: Log login failure for invalid credentials. Audit log
+      // is awaited so the rejection is logged IN-LINE with the 401
+      // response — this preserves the MED-5 invariant that every
+      // credential rejection is recorded before the response leaves.
+      // Stays awaited (cheap, ~few-ms DB insert) — the cold-path fix is
+      // applied to the success-path audit below, not here.
       try {
-        const { logLoginFailure } = await import('@/lib/auth/auth-audit-logger');
         await logLoginFailure(email, 'invalid_credentials', request);
       } catch (auditError) {
         logger.warn('Audit log failed:', auditError);
@@ -208,15 +219,27 @@ export async function POST(request: NextRequest) {
         error: error instanceof Error ? error.message : String(error),
         source: 'login-gateway-inline',
       });
-    });
-
-  // MED-5 fix: Log successful login
-    try {
-      const { logLoginSuccess } = await import('@/lib/auth/auth-audit-logger');
-      await logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });
-    } catch (auditError) {
-      logger.warn('Audit log failed:', auditError);
-    }
+    });    // MED-5 fix: Log successful login. Fire-and-forget so the cookie
+    // + response can return immediately. The same shape as the VFS
+    // transfer above — non-fatal by design (failures are surfaced
+    // internally via logAuthEvent → logger.warn so they appear in
+    // run.log without blocking the response). The audit row is
+    // written synchronously inside the function before this call site
+    // returns to the response-build path. Saves the cold-path
+    // roundtrip of the audit insert on the success path (small on
+    // warm, ~50-100ms on cold path right after dynamic-import
+    // resolution).
+    //
+    // NOTE: this is a plain call (no `void`, no `.catch()` chain).
+    // `logLoginSuccess` is declared as `(...): void` (synchronous),
+    // so neither `void foo()` nor `foo().catch(h)` compiles — TS2339
+    // fires on either (void discards into undefined, the .catch then
+    // lands on undefined). The right shape is exactly what you see:
+    // call it, ignore the void result, the function's internal
+    // logAuthEvent handles its own errors. ESLint's no-floating-promises
+    // rule is satisfied because the call returns void synchronously
+    // (no Promise to float).
+    logLoginSuccess(String(result.user?.id), email, request, { mfaEnabled });
 
     // Set session cookie
     const response = NextResponse.json({
@@ -268,6 +291,19 @@ export async function POST(request: NextRequest) {
       sameSite: 'lax',
       maxAge: 0,
       path: '/',
+    });
+
+    // COLD-PATH BOUNDARY (b1): log the post-bcrypt, post-audit,
+    // post-VFS-fire-and-forget delta so the next 5380ms observation
+    // can isolate whether the remaining latency is in:
+    //   - authService.login (bcryptjs verify) — expected ~4.2 s on cost-12
+    //   - this gateway wrapper (audit + cookies) — should be ~ms-level
+    // When subtracting bcryptjs from this delta, the residual is the
+    // true cold-path tightness of the gateway itself.
+    logger.info('login gateway cold-path timing', {
+      boundary: 'pre_response',
+      elapsedMs: Number(process.hrtime.bigint() - tLoginStart) / 1e6,
+      mfaEnabled,
     });
 
     return response;

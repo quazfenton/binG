@@ -878,6 +878,20 @@ export class SessionManager {
       if (session.status === 'idle' || session.state === 'idle') idle++;
     }
 
+    // F9: Audit-grade active-vs-total sanity. The heartbeat interval reads
+    // `stats.activeSessions` and reports it to ops. If active ever exceeds
+    // total, the count has drifted — log loudly so an operator can
+    // correlate against request logs. Cheap O(1) check, fires only on
+    // drift, no per-tick overhead in the steady-state case.
+    if (active > this.sessions.size) {
+      logger.warn('[F9] getStats count drift: active > totalSessions', {
+        active,
+        total: this.sessions.size,
+        idle,
+        totalUsers: this.userSessions.size,
+      });
+    }
+
     return {
       totalSessions: this.sessions.size,
       activeSessions: active,

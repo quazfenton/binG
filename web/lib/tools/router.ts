@@ -33,6 +33,7 @@ import { recordDegradation } from '../observability/degradation-tracker';
 import path from 'path';
 import os from 'os';
 import { sliceLines } from '../utils/slice-lines';
+import { isDesktopMode } from '@bing/platform/env';
 
 const logger = createLogger('Tools:CapabilityRouter');
 
@@ -207,12 +208,15 @@ class VFSProvider implements CapabilityProvider {
   private readonly methods: Record<string, (ownerId: string, input: any, context: ToolExecutionContext) => Promise<any>> = {
     'file.read': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-      const file = await virtualFilesystem.readFile(ownerId, input.path);
+      const { resolveToScopedPath, stripScopePrefixForDisplay } = await import('../virtual-filesystem/path-normalizer');
+      const scopePath = context.scopePath || 'workspace';
+      const scopedPath = resolveToScopedPath(input.path, scopePath);
+      const file = await virtualFilesystem.readFile(ownerId, scopedPath);
       const hasLineRange = input.startLine != null || input.endLine != null;
       const content = sliceLines(file.content, input.startLine, input.endLine);
       return {
         content,
-        path: file.path,
+        path: stripScopePrefixForDisplay(file.path, { scopePath }),
         language: file.language,
         size: file.size,
         version: file.version,
@@ -226,9 +230,12 @@ class VFSProvider implements CapabilityProvider {
 
     'file.write': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const { resolveToScopedPath, stripScopePrefixForDisplay } = await import('../virtual-filesystem/path-normalizer');
+      const scopePath = context.scopePath || 'workspace';
+      const scopedPath = resolveToScopedPath(input.path, scopePath);
       const file = await virtualFilesystem.writeFile(
         ownerId,
-        input.path,
+        scopedPath,
         input.content,
         input.language,
         input.append
@@ -237,7 +244,7 @@ class VFSProvider implements CapabilityProvider {
             ? { failIfExists: true }
             : undefined
       );
-      return { success: true, path: file.path, bytesWritten: file.size };
+      return { success: true, path: stripScopePrefixForDisplay(file.path, { scopePath }), bytesWritten: file.size };
     },
 
     'file.batch_write': async (ownerId, input, context) => {
@@ -260,10 +267,13 @@ class VFSProvider implements CapabilityProvider {
 
     'file.str_replace': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const { resolveToScopedPath, stripScopePrefixForDisplay } = await import('../virtual-filesystem/path-normalizer');
+      const scopePath = context.scopePath || 'workspace';
       const { path: filePath, oldString, newString, allowMultiple } = input;
+      const scopedPath = resolveToScopedPath(filePath, scopePath);
 
       // Read current file
-      const file = await virtualFilesystem.readFile(ownerId, filePath);
+      const file = await virtualFilesystem.readFile(ownerId, scopedPath);
       const content = file.content;
 
       // Count occurrences (single split for both count and replacement)
@@ -272,7 +282,7 @@ class VFSProvider implements CapabilityProvider {
       if (occurrences === 0) {
         return {
           success: false,
-          path: filePath,
+          path: stripScopePrefixForDisplay(filePath, { scopePath }),
           replacements: 0,
           error: `String not found in ${filePath}: "${oldString.length > 80 ? oldString.slice(0, 80) + '...' : oldString}"`,
         };
@@ -280,7 +290,7 @@ class VFSProvider implements CapabilityProvider {
       if (!allowMultiple && occurrences > 1) {
         return {
           success: false,
-          path: filePath,
+          path: stripScopePrefixForDisplay(filePath, { scopePath }),
           replacements: 0,
           error: `Found ${occurrences} occurrences of the string in ${filePath}, but allowMultiple is false. Use allowMultiple=true to replace all, or provide a more specific string.`,
         };
@@ -293,40 +303,49 @@ class VFSProvider implements CapabilityProvider {
         : content.replace(oldString, newString);
 
       // Write back
-      await virtualFilesystem.writeFile(ownerId, filePath, newContent, file.language);
+      await virtualFilesystem.writeFile(ownerId, scopedPath, newContent, file.language);
 
       return {
         success: true,
-        path: filePath,
+        path: stripScopePrefixForDisplay(scopedPath, { scopePath }),
         replacements,
         content: newContent,
       };
     }, 'file.append': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const { resolveToScopedPath, stripScopePrefixForDisplay } = await import('../virtual-filesystem/path-normalizer');
+      const scopePath = context.scopePath || 'workspace';
+      const scopedPath = resolveToScopedPath(input.path, scopePath);
       const file = await virtualFilesystem.writeFile(
         ownerId,
-        input.path,
+        scopedPath,
         input.content,
         input.language,
         { failIfExists: false, append: true }
       );
-      return { success: true, path: file.path, bytesWritten: file.size };
+      return { success: true, path: stripScopePrefixForDisplay(file.path, { scopePath }), bytesWritten: file.size };
     },
 
     'file.delete': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-      const result = await virtualFilesystem.deletePath(ownerId, input.path);
+      const { resolveToScopedPath } = await import('../virtual-filesystem/path-normalizer');
+      const scopePath = context.scopePath || 'workspace';
+      const scopedPath = resolveToScopedPath(input.path, scopePath);
+      const result = await virtualFilesystem.deletePath(ownerId, scopedPath);
       return { deletedCount: result.deletedCount, path: input.path };
     },
 
     'file.list': async (ownerId, input, context) => {
       const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
-      const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'workspace');
+      const { resolveToScopedPath, stripScopePrefixForDisplay } = await import('../virtual-filesystem/path-normalizer');
+      const scopePath = context.scopePath || 'workspace';
+      const scopedPath = resolveToScopedPath(input.path || '/', scopePath);
+      const listing = await virtualFilesystem.listDirectory(ownerId, scopedPath);
       return {
-        path: listing.path,
+        path: stripScopePrefixForDisplay(listing.path, { scopePath }),
         nodes: listing.nodes.map(node => ({
           name: node.name,
-          path: node.path,
+          path: stripScopePrefixForDisplay(node.path, { scopePath }),
           type: node.type,
           language: node.language,
           size: node.size,
@@ -557,7 +576,7 @@ class LocalFilesystemProvider implements CapabilityProvider {
   }
 
   isAvailable(): boolean {
-    return true; // Always available on server
+    return isDesktopMode();
   }
 
   /**

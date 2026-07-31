@@ -197,7 +197,7 @@ export class OpencodeV2Provider implements LLMProvider {
             '/workspace/',
             isWindows
               ? `${process.env.TEMP || process.env.TMP || 'C:\\temp'}\\workspace\\`
-              : '/home/user/workspace/'
+              : (this.sandboxHandle ? '/home/user/workspace/' : '/tmp/workspace/')
           );
         } else {
           localWorkspaceDir = '';
@@ -1148,6 +1148,37 @@ export class OpencodeV2Provider implements LLMProvider {
       const isWindows = process.platform === 'win32';
       const { execFile } = require('child_process');
 
+      let resolvedCwd = cwd;
+      if (cwd) {
+        const path = require('path');
+        const sanitized = this.sanitizePath(cwd);
+        if (sanitized) {
+          if (sanitized.startsWith('workspace/')) {
+            const relativePart = sanitized.replace(/^workspace\//, '');
+            resolvedCwd = isWindows
+              ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'workspace', relativePart)
+              : path.join('/tmp/workspace', relativePart);
+          } else if (sanitized.startsWith('/workspace/')) {
+            resolvedCwd = sanitized.replace(
+              '/workspace/',
+              isWindows
+                ? `${process.env.TEMP || process.env.TMP || 'C:\\temp'}\\workspace\\`
+                : (this.sandboxHandle ? '/home/user/workspace/' : '/tmp/workspace/')
+            );
+          }
+        }
+      }
+
+      // Ensure local directory exists
+      if (resolvedCwd && !this.sandboxHandle) {
+        const fs = require('fs');
+        try {
+          fs.mkdirSync(resolvedCwd, { recursive: true });
+        } catch (e) {
+          logger.warn(`[OpencodeV2Provider] Failed to create local directory ${resolvedCwd}:`, e);
+        }
+      }
+
       // Execute via shell (required for stdin redirect, pipes, etc.)
       const shell = isWindows ? 'cmd.exe' : '/bin/sh';
       const shellArg = isWindows ? '/c' : '-c';
@@ -1160,7 +1191,7 @@ export class OpencodeV2Provider implements LLMProvider {
         shell,
         [shellArg, command],
         {
-          cwd,
+          cwd: resolvedCwd,
           env: {
             ...process.env,
             OPENCODE_MODEL: process.env.OPENCODE_MODEL,

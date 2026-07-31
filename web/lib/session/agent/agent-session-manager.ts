@@ -16,13 +16,13 @@ import { getSandboxProvider, getSandboxProviderWithFallback } from '../../sandbo
 import type { SandboxHandle, SandboxCreateConfig } from '../../sandbox/providers/sandbox-provider';
 import { createLogger } from '../../utils/logger';
 import { sessionManager } from '../session-manager';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import type { ExecutionPolicy } from '../../sandbox/types';
 import {
   getExecutionPolicyConfig,
   requiresCloudSandbox,
   allowsLocalFallback,
   getPreferredProviders,
-} from '@/lib/sandbox/types';
+} from '../../sandbox/types';
 
 const logger = createLogger('Agent:SessionManager');
 

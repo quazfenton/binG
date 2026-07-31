@@ -175,6 +175,32 @@ const DEFAULT_SILENCE_MS = 20000;
 const DEFAULT_HARD_DEADLINE_MS = 30000;
 
 /**
+ * In-cluster "ninerouter-class" provider set — providers whose first-token
+ * (TTFT) arrival IS the reliability signal because they hit in-cluster
+ * edge-GPU routes (a stuck-tool hang pattern that no other provider class
+ * exhibits). Detected via `Bug #Y`: the coordinator defaults
+ * `silenceMs` to 5_000 ms for any primary whose name is in this set so the
+ * fallback chain walks faster on a TTFT stall. Other providers keep the
+ * 20_000 ms default — a working-but-slow primary is more valuable than a
+ * premature steal of its first chunk.
+ *
+ * Declared `as const` so the runtime array is a `readonly
+ * ['ninerouter', 'ollama', 'kiro']` literal-tuple type — narrows
+ * downstream call-site `primaryProvider: string` arguments to one of the
+ * three member literals at compile time where consumers want
+ * exhaustiveness checks (e.g. the provider-discrimination `it.each`
+ * matrix in `__tests__/llm-fallback-coordinator.test.ts`).
+ *
+ * Single source of truth for the membership list — referenced by both
+ * the production `silenceMs` default in
+ * `coordinateConcurrentFallback(...)` and the matching test parametrisation,
+ * so adding a 4th ninerouter-class provider in the future is a one-line
+ * change here (no risk of the test matrix drifting out of sync with the
+ * heuristic).
+ */
+export const NINEROUTER_CLASS_PROVIDERS = ['ninerouter', 'ollama', 'kiro'] as const;
+
+/**
  * Discriminated union for the first-race result (primary chunk vs silence
  * timeout). Errors are also represented here so they can be surfaced.
  */
@@ -221,7 +247,16 @@ export async function* coordinateConcurrentFallback<T>(
     createPrimaryStream,
     createFallbackStream,
     signal,
-    silenceMs = DEFAULT_SILENCE_MS,
+    // Bug #Y — silenceMs default: ninerouter-class providers (in-cluster
+    // edge-GPU routes through ninerouter / ollama / kiro) have a stuck-tool
+    // hang pattern where the first-token (TTFT) arrival is a reliable
+    // health signal. Default silenceMs to 5s for these so the coordinator
+    // walks the fallback chain faster when TTFT stalls; keep the 20s default
+    // for cross-provider AND quality-of-service-sensitive providers so we
+    // don't prematurely steal a working-but-slow primary's first token.
+    silenceMs = (NINEROUTER_CLASS_PROVIDERS as readonly string[]).includes(primaryProvider)
+      ? 5000
+      : DEFAULT_SILENCE_MS,
     hardDeadlineMs = DEFAULT_HARD_DEADLINE_MS,
     idleTimeoutPerChunkMs,
     requestId = `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -246,6 +281,7 @@ export async function* coordinateConcurrentFallback<T>(
     } catch (err) {
       if (isAbortError(err, signal)) {
         logger.debug('Concurrent fallback: primary setup aborted (silenceMs disabled)', { primaryProvider, model, requestId });
+        rethrowIfStallReason(signal);
         return;
       }
       throw err;
@@ -273,6 +309,7 @@ export async function* coordinateConcurrentFallback<T>(
     } catch (err) {
       if (isAbortError(err, signal)) {
         logger.debug('Concurrent fallback: primary setup aborted by user (no fallbacks)', { primaryProvider, model, requestId });
+        rethrowIfStallReason(signal);
         return;
       }
       throw err;
@@ -350,10 +387,12 @@ export async function* coordinateConcurrentFallback<T>(
     // User aborted during the silence race — primary is still running but
     // the caller doesn't want the result. Abort primary and return.
     primaryHandle.abort();
+    rethrowIfStallReason(signal);
     return;
   }
 
   // first.kind === 'timeout' — primary was silent for `silenceMs`. Walk
+  // the configured fallback chain.
   // the configured fallback chain, racing each entry against the
   // still-in-flight primary with a per-fallback hard deadline. If the
   // fallback stalls past `hardDeadlineMs` (or errors, or fails to set up),
@@ -398,13 +437,14 @@ export async function* coordinateConcurrentFallback<T>(
   let pendingPrimary: Promise<IteratorResult<T>> | null = primaryPromiseAtStart;
 
   for (let fallbackIndex = 0; fallbackIndex < chain.length; fallbackIndex++) {
-    // Defense-in-depth: re-check user signal between iterations.
-    if (signal?.aborted) {
-      primaryHandle.abort();
-      return;
-    }
+  // Defense-in-depth: re-check user signal between iterations.
+  if (signal?.aborted) {
+    primaryHandle.abort();
+    rethrowIfStallReason(signal);
+    return;
+  }
 
-    const fallbackProvider = chain[fallbackIndex];
+  const fallbackProvider = chain[fallbackIndex];
     const raceStartTime = Date.now();
     let fallbackHandle: StreamHandle<T>;
     try {
@@ -429,6 +469,7 @@ export async function* coordinateConcurrentFallback<T>(
           requestId,
         });
         primaryHandle.abort();
+        rethrowIfStallReason(signal);
         return;
       }
       logger.warn(
@@ -452,9 +493,43 @@ export async function* coordinateConcurrentFallback<T>(
     if (signal?.aborted) {
       fallbackHandle.abort();
       primaryHandle.abort();
+      rethrowIfStallReason(signal);
       return;
     }
+    // Isolate this fallback's lifecycle with a dedicated AbortController so
+    // aborts targeted at this fallback do NOT accidentally propagate to other
+    // iterations or the primary. Wrap the factory-provided abort handle so
+    // the controller and the handle remain in sync and cleanup listeners are
+    // well-scoped.
+    const fallbackLifecycleController = new AbortController();
+    const fallbackLifecycleSignal = fallbackLifecycleController.signal;
+
+    // Wrap the factory's abort to ensure idempotence and to fire the
+    // lifecycle signal for any listeners we attach below.
+    const originalFallbackAbort = fallbackHandle.abort;
+    let fallbackAborted = false;
+    const wrappedFallbackAbort = (): void => {
+      if (fallbackAborted) return;
+      fallbackAborted = true;
+      try {
+        originalFallbackAbort();
+      } catch (e) {
+        // swallow — abort handles should be best-effort
+      }
+      try {
+        // ensure our lifecycle signal is also aborted so any attached
+        // listeners inside this coordinator can observe the cancellation
+        // without depending on the factory's implementation.
+        fallbackLifecycleController.abort();
+      } catch (e) {
+        // ignore
+      }
+    };
+    // Replace the handle's abort with the wrapped version
+    fallbackHandle.abort = wrappedFallbackAbort;
+
     const fallbackIt = fallbackHandle.gen[Symbol.asyncIterator]();
+
 
     // Build the primary chunk promise for this race iteration. Three
     // paths: (1) cache-consume when a prior iter pinned a non-done chunk,
@@ -618,12 +693,14 @@ export async function* coordinateConcurrentFallback<T>(
     if (signal?.aborted) {
       primaryHandle.abort();
       fallbackHandle.abort();
+      rethrowIfStallReason(signal);
       return;
     }
 
     if (raceResult.kind === 'aborted') {
       primaryHandle.abort();
       fallbackHandle.abort();
+      rethrowIfStallReason(signal);
       return;
     }
 
@@ -764,6 +841,28 @@ export async function* coordinateConcurrentFallback<T>(
       maybeResetServerErrorOnSuccess(fallbackProvider);
     }
 
+    // Tag winner chunk when it came from a fallback so callers (e.g. the
+    // streaming continuation harness) can detect a fallback-continue and
+    // merge tokens/emit a single consolidated SSE metadata event. The
+    // `raceResult.value` is the raw chunk emitted by the provider; augment
+    // its `.metadata` object defensively if present.
+    try {
+      if (raceResult.source === 'fallback') {
+        const v = raceResult.value as any;
+        if (v && typeof v === 'object') {
+          v.metadata = {
+            ...(v.metadata || {}),
+            fallbackOccurred: true,
+            fallbackProvider,
+            fallbackIndex,
+            fallbackChain: chain.slice(0, fallbackIndex + 1),
+          };
+        }
+      }
+    } catch (e) {
+      // Best-effort tagging; do not break streaming on metadata attach failures
+    }
+
     yield raceResult.value;
 
     const winnerIt = raceResult.source === 'primary' ? primaryIt : fallbackIt;
@@ -834,6 +933,119 @@ export class IdleTimeoutError extends Error {
   name = 'IdleTimeoutError' as const;
   constructor(timeoutMs: number) {
     super(`Stream idle timeout: no chunk received within ${timeoutMs}ms`);
+  }
+}
+
+/**
+ * Typed discriminator for the route-level stall watchdog + downstream
+ * stall-family errors.
+ *
+ * `errorCode` discriminant (Path C, 2026-07-16) lets the chat route map
+ * each stall subtype to a distinct HTTP status:
+ *   - 'STALL' (default): no-progress / max-turn watchdog fired → 524
+ *   - 'DRIFT': LLM stream deviated from expected shape → 502
+ *   - 'ABORT': user/system aborted mid-request → 503
+ *   - 'OTHER': generic stall-related error → 500
+ *
+ * The chat route's `fireStall` (in `app/api/chat/route.ts`) creates THIS
+ * error class (instead of a plain `Error`) when the no-progress or
+ * max-turn watchdog fires. The abort cascade flows through
+ * `agentTurnSignal` (a combined `AbortSignal.any([request.signal,
+ * agentTurnAbort.signal])`) to the chain-walk's `signal` parameter, with
+ * the StallWatchdogError carried as `signal.reason`. The chain-walk
+ * re-throws on abort ONLY when the reason is a StallWatchdogError, so
+ * user-initiated aborts keep their silent-return semantics. The route's
+ * outer catch (L5609 + L7381) sees `err instanceof StallWatchdogError`
+ * and returns HTTP `stallWatchdogErrorToStatus(err)` instead of 500.
+ *
+ * Defined next to `IdleTimeoutError` so the chain-walk's typed-error
+ * vocabulary lives in one place.
+ */
+export type StallWatchdogErrorCode = 'STALL' | 'DRIFT' | 'ABORT' | 'OTHER';
+
+export class StallWatchdogError extends Error {
+  name = 'StallWatchdogError' as const;
+  readonly errorCode: StallWatchdogErrorCode;
+  constructor(message: string, opts?: { errorCode?: StallWatchdogErrorCode }) {
+    super(message);
+    this.errorCode = opts?.errorCode ?? 'STALL';
+  }
+}
+
+/**
+ * Map a StallWatchdogError's `errorCode` discriminant to the HTTP status
+ * the chat route should return.
+ *
+ * Single source of truth for the mapping so inner + outer catches in
+ * `app/api/chat/route.ts` (L2987-L3010, L5609, L7381) all derive status
+ * from the same function. Exhaustive switch over the discriminated
+ * union ensures TypeScript catches missing cases at compile time.
+ */
+/**
+ * Map a `StallWatchdogError` (or its `errorCode` alone) to the canonical HTTP
+ * status the chat route should return. Two overloads:
+ *   - `stallWatchdogErrorToStatus(error: StallWatchdogError)` — preferred when
+ *     you have the error instance (used by the route's inner/outer catches).
+ *   - `stallWatchdogErrorToStatus(errorCode: StallWatchdogErrorCode)` — preferred
+ *     for defense-in-depth discriminators that already validated a string code
+ *     and want to avoid allocating a throwable just to map it (used by the
+ *     L5528 IIFE discriminator that consumes a metadata field of unknown type).
+ * The implementation signature accepts `StallWatchdogError | StallWatchdogErrorCode`
+ * and dispatches by typeof — keeping the exhaustiveness guard in one place.
+ */
+/**
+ * Type guard that narrows an arbitrary value to the {@link StallWatchdogErrorCode}
+ * string-literal union. Encapsulates the `/^(STALL|DRIFT|ABORT|OTHER)$/` regex
+ * so route-side discriminators become `if (isStallWatchdogErrorCode(x))` and
+ * the downstream `as StallWatchdogErrorCode` cast is compiler-verified (not a
+ * string-only assumption).
+ */
+export function isStallWatchdogErrorCode(value: unknown): value is StallWatchdogErrorCode {
+  return typeof value === 'string' && /^(STALL|DRIFT|ABORT|OTHER)$/.test(value);
+}
+
+/**
+ * Canonical StallWatchdogError discriminator by constructor.name — used by the
+ * orchestrator non-streaming discriminator + OUTERCATCH to survive vi.mock
+ * hoist-hop cases where `instanceof StallWatchdogError` returns false because
+ * the test mock's `new StallWatchdogError(...)` constructs an instance via a
+ * different module-load context. Matches the JS pattern of reading
+ * `value.constructor.name` rather than `value.name` so a future Error subclass
+ * that overrides `.name` (e.g. a re-export wrapper) doesn't accidentally match
+ * when it shouldn't. Companion to `isStallWatchdogErrorCode` (which discriminates
+ * by `errorCode` string field) — call both for defense-in-depth.
+ */
+export function isStallWatchdogInstanceByConstructorName(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { constructor?: { name?: unknown } }).constructor?.name === 'StallWatchdogError'
+  );
+}
+
+/** Map a {@link StallWatchdogError} (or its `errorCode` directly) to its HTTP status code.
+ * @example stallWatchdogErrorToStatus(new StallWatchdogError('drift', { errorCode: 'DRIFT' })) // → 502
+ * @example stallWatchdogErrorToStatus('STALL')                                                  // → 524
+ */
+export function stallWatchdogErrorToStatus(error: StallWatchdogError): number;
+export function stallWatchdogErrorToStatus(errorCode: StallWatchdogErrorCode): number;
+export function stallWatchdogErrorToStatus(
+  input: StallWatchdogError | StallWatchdogErrorCode,
+): number {
+  const code: StallWatchdogErrorCode =
+    input instanceof StallWatchdogError ? input.errorCode : input;
+  switch (code) {
+    case 'STALL': return 524;
+    case 'DRIFT': return 502;
+    case 'ABORT': return 503;
+    case 'OTHER': return 500;
+    default: {
+      // Exhaustiveness guard: if a new errorCode is added to StallWatchdogErrorCode
+      // without being mapped here, TypeScript's `never` check fires here at compile
+      // time and the runtime fallback throws. Single source of truth.
+      const _exhaustive: never = code;
+      throw new Error(`stallWatchdogErrorToStatus: unhandled errorCode "${_exhaustive}"`);
+    }
   }
 }
 
@@ -935,4 +1147,25 @@ function isAbortError(err: unknown, signal: AbortSignal | undefined): boolean {
   if (!signal) return false;
   const e = err as { name?: string; code?: string } | null | undefined;
   return Boolean(e && (e.name === 'AbortError' || e.code === 'ABORT_ERR'));
+}
+
+/**
+ * Helper: if `signal?.reason` is a `StallWatchdogError`, throw it.
+ * No-op for non-stall aborts (incl. user-initiated AbortError).
+ *
+ * Called at every silent-return-on-abort site in
+ * `coordinateConcurrentFallback` so the typed discriminator survives
+ * the chain-walk's mid-iteration abort and surfaces in the route's
+ * outer catch (which then maps to HTTP 524). MUST be invoked BEFORE
+ * the `return;` because `return` in an `AsyncGenerator` does NOT
+ * propagate any error to the downstream `for await` consumer.
+ *
+ * Defensive: only throws when `signal.reason instanceof StallWatchdogError`.
+ * User aborts typically have reason = AbortError (or undefined in older
+ * Node), so those fall through and stay silent.
+ */
+function rethrowIfStallReason(signal: AbortSignal | undefined): void {
+  if (signal?.reason instanceof StallWatchdogError) {
+    throw signal.reason;
+  }
 }

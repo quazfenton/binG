@@ -3,6 +3,9 @@ import { toolAuthManager as toolAuthorizationManager } from './tool-authorizatio
 import type { LLMMessage } from '../providers/llm-providers';
 import type { ToolExecutionContext } from '../tools';
 import { authService } from '../auth/auth-service';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('ToolContext');
 
 export interface ToolDetectionResult {
   detectedTool: string | null;
@@ -599,7 +602,7 @@ export class ToolContextManager {
           };
       }
     } catch (error: any) {
-      console.error('[ToolContext] processOAuthCapability failed:', error);
+      logger.error('processOAuthCapability failed:', error);
       return {
         success: false,
         action: 'execute',

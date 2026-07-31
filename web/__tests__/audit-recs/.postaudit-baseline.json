@@ -1,0 +1,60 @@
+{
+  "version": "2026-07-16.1",
+  "capturedAt": "2026-07-16T12:50:00Z",
+  "postauditAcceptanceFiles": [
+    "app/api/chat/__tests__/route-shape-audit.test.ts",
+    "__tests__/api/chat/route-tool-list.test.ts",
+    "__tests__/mcp/legacy-substring-contract.test.ts",
+    "__tests__/mcp/request-to-final-list.test.ts",
+    "__tests__/tools/select-tool-plan.test.ts",
+    "lib/tools/__tests__/select-tool-plan.test.ts",
+    "lib/chat/__tests__/stall-watchdog-error.test.ts"
+  ],
+  "summary": {
+    "numTotalTests": 186,
+    "numPassedTests": 180,
+    "numFailedTests": 0,
+    "numSkippedTests": 6
+  },
+  "trackedSkipped": [
+    {
+      "file": "app/api/chat/__tests__/route-shape-audit.test.ts",
+      "testPath": "POST /api/chat \u2014 route-level stall watchdog (bounds indefinite hangs) non-streaming 524 engages via instance check alone when message drifts from canonical",
+      "ticket": "bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md"
+    },
+    {
+      "file": "app/api/chat/__tests__/route-shape-audit.test.ts",
+      "testPath": "POST /api/chat \u2014 route-level stall watchdog (bounds indefinite hangs) surfaces the stallDidFire propagation chain when the non-streaming race winner is the stall watchdog",
+      "ticket": "bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md"
+    },
+    {
+      "file": "app/api/chat/__tests__/route-shape-audit.test.ts",
+      "testPath": "Path C: StallWatchdogError errorCode \u2192 HTTP status errorCode=ABORT \u2192 HTTP 503",
+      "ticket": "bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md"
+    },
+    {
+      "file": "app/api/chat/__tests__/route-shape-audit.test.ts",
+      "testPath": "Path C: StallWatchdogError errorCode \u2192 HTTP status errorCode=DRIFT \u2192 HTTP 502",
+      "ticket": "bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md"
+    },
+    {
+      "file": "app/api/chat/__tests__/route-shape-audit.test.ts",
+      "testPath": "Path C: StallWatchdogError errorCode \u2192 HTTP status errorCode=OTHER \u2192 HTTP 500",
+      "ticket": "bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md"
+    },
+    {
+      "file": "app/api/chat/__tests__/route-shape-audit.test.ts",
+      "testPath": "Path C: StallWatchdogError errorCode \u2192 HTTP status errorCode=STALL \u2192 HTTP 524",
+      "ticket": "bing/.tickets/STALL-ROUTEINTEGRATION-FOLLOWUP.md"
+    }
+  ],
+  "trackedFailed": [],
+  "acknowledgedOrphans": [],
+  "thresholds": {
+    "minTotalTests": 186,
+    "minPassedTests": 180,
+    "maxFailedTests": 0,
+    "maxUntrackedSkippedTests": 0,
+    "maxUntrackedFailedTests": 0
+  }
+}

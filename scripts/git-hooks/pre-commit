@@ -55,15 +55,16 @@ if [ -n "$staged_ts" ]; then
       continue
     fi
     # 2. Em-dash density scan (ADVISORY if high)
-    EM=$(LC_ALL=C grep -cP '\xE2\x80\x94' "$f" 2>/dev/null || echo 0)
+    EM=$(LC_ALL=C grep -cP '\xE2\x80\x94' "$f" 2>/dev/null || true)
     LINES=$(wc -l < "$f")
+    EM=${EM:-0}
     if [ "$LINES" -le 0 ] || [ "$EM" -le 0 ]; then
       printf "[pre-commit]   %s: OK (0 em-dashes)\n" "$f"
       continue
     fi
     DENSITY=$(python3 -c "print(f'{$EM/$LINES:.4f}')" 2>/dev/null || echo "?")
     printf "[pre-commit]   %s: %d em-dashes / %d lines = %s per line\n" "$f" "$EM" "$LINES" "$DENSITY"
-    if python3 -c "import sys; sys.exit(0 if $EM >= 30 and float('$DENSITY') >= 0.02 else 1)" 2>/dev/null; then
+    if [ "$DENSITY" != "?" ] && python3 -c "import sys; sys.exit(0 if $EM >= 30 and float('$DENSITY') >= 0.02 else 1)" 2>/dev/null; then
       printf "[pre-commit]     ADVISORY: high em-dash density — §9.1 flagged list; future str_replace on this file should use §10 preflight or Python heredoc bypass (see docs/str-replace-resilience.md).\n"
       advisory_count=$((advisory_count + 1))
     fi

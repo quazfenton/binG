@@ -6,6 +6,25 @@
 #
 set -o pipefail
 
+# ── Step 0a: Gate on default-scripts shape-lock (preview-deploy gate) ──
+# Runs the CLI shape-lock against `web/lib/orchestra/prompt-orchestrator/
+# default-scripts.ts` BEFORE the build. Exits 1 on shape drift, which
+# short-circuits `next build` and prevents the preview from deploying with
+# drifted per-call-site constants. Mirrors the vitest snapshot at
+# `__tests__/default-scripts.test.ts` but runs WITHOUT vitest — so the
+# Vercel buildCommand catches drift before the snapshot ever has a chance
+# to mismatch in CI vitest runs.
+echo "▦ default-scripts shape-lock gate..."
+npx tsx scripts/check-default-scripts-shape.ts
+GATE_EXIT=$?
+if [ $GATE_EXIT -ne 0 ]; then
+  echo ""
+  echo "✗ default-scripts shape-lock gate FAILED (exit $GATE_EXIT)"
+  echo "  Run locally:  npx tsx scripts/check-default-scripts-shape.ts"
+  echo "  Or self-test: npx tsx scripts/check-default-scripts-shape.ts --self-test"
+  exit $GATE_EXIT
+fi
+
 OUTDIR="out"
 STDERR_LOG="/tmp/next-build-stderr.log"
 

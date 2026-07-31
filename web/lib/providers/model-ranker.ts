@@ -44,18 +44,69 @@ interface ModelTelemetry {
 const _modelTelemetryCache = new Map<string, ModelTelemetry>();
 
 /**
+ * Rec #3 verifier: confirms the tool-call tracker has recorded at least one
+ * tool call before model-ranker reads from it. caller's verdict signal:
+ *
+ *   - `true`  → tracker has at least one recorded tool call → telemetry reads
+ *               are well-grounded.
+ *   - `false` → tracker is empty (cold-start, post-flush, or test seed) OR
+ *               the check threw (logged here so operators see why rotation
+ *               fell back to provider-level estimates).
+ *
+ * Designed to be safe to call repeatedly; does NOT mutate tracker state. NOT
+ * exported as a guard that callers should gate `getModelToolStats` on —
+ * the cold-start race (first LLM call before any tool fires) would populate
+ * the cache with zero tool stats, which is still meaningful for provider/
+ * latency scoring. Use it purely as a log-verifier before reading telemetry.
+ */
+export async function hasRecordedTools(): Promise<boolean> {
+  try {
+    return await toolCallTracker.hasRecordedTools();
+  } catch (error) {
+    logger.warn('[ModelRanker] hasRecordedTools() check failed — rotation may run on empty telemetry', {
+      error,
+    });
+    return false;
+  }
+}
+
+/**
  * Refresh the per-model telemetry cache by fetching the latest performance data
  * and tool call stats. Call this periodically (e.g. every 5 minutes) to keep
  * data current, or call it in tests after seeding telemetry.
  *
- * This is a no-op on failure — the scoring logic gracefully falls back to
- * provider-level estimates when a model isn't in the cache yet.
+ * Telemetry-read failures (both `getModelPerformance` and `getModelToolStats`)
+ * propagate to the outer catch — no silent `.catch(() => [])`. Operators see
+ * tracked-empty conditions via the explicit logger.warn calls below.
  */
 export async function refreshModelTelemetryCache(): Promise<void> {
   try {
+    // Rec #3 verifier: BEFORE attempting the cache-refresh, surface whether
+    // the tool-call tracker has any recorded data. cold-start (no tool calls
+    // yet) is expected — we log it warn-level so operators can correlate
+    // downstream rotation decisions with the empty-tracker signal.
+    void hasRecordedTools()
+      .then((recorded) => {
+        if (!recorded) {
+          logger.warn(
+            '[ModelRanker] refreshModelTelemetryCache: toolCallTracker empty — ' +
+              'cache will be populated with provider-level estimates only',
+          );
+        }
+      })
+      .catch(() => {
+        /* hasRecordedTools() already logs internally; do not double-log */
+      });
+
+    // Rec #3 fix: previously this line was `toolCallTracker.getModelToolStats(10).catch(() => [])`
+    // which silently swallowed telemetry-read errors and made rotation blind
+    // when tracker access failed. Removing the inner .catch(() => []) means
+    // any tracker rejection now propagates to the outer catch and gets a
+    // visible logger.error — operator can correlate the rotation quality drop
+    // with a real telemetry-read failure rather than guessing.
     const [performance, toolStats] = await Promise.all([
       chatRequestLogger.getModelPerformance(10),
-      toolCallTracker.getModelToolStats(10).catch(() => []),
+      toolCallTracker.getModelToolStats(10),
     ]);
 
     // Index tool stats by provider:model key for O(1) merge
@@ -115,7 +166,16 @@ export async function refreshModelTelemetryCache(): Promise<void> {
       toolStatsCount: toolStats.length,
       inMemorySupplementCount,
     });
-  } catch { /* best-effort — fallback to provider-level estimates */ }
+  } catch (error) {
+    // Rec #3 fix: was `catch { /* best-effort */ }` — silently dropped the
+    // error. Now logs the failure visibly so operators see when telemetry
+    // reads fail (SQLite down, tracker unavailable, etc.) and can correlate
+    // downstream rotation quality drops with the actual cause.
+    logger.error(
+      '[ModelRanker] refreshModelTelemetryCache failed — rotation falls back to provider-level estimates',
+      { error },
+    );
+  }
 }
 
 // Fire-and-forget: populate cache at module load without blocking the module's

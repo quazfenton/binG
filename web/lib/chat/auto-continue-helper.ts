@@ -130,6 +130,7 @@ export type AutoContinueReason =
   | 'file_edits_present'
   | 'needs_more_turns'
   | 'read-then-stall'
+  | 'read-loop'
   | 'deep-research-loop'
   | 'failure-cascade'
   | 'write-verify-loop'
@@ -143,7 +144,8 @@ export type AutoContinueReason =
   | 'edits-mismatch'
   | 'empty-after-tools'
   | 'unclosed-code-block'
-  | 'mid-sentence-cutoff';
+  | 'mid-sentence-cutoff'
+  | 'ramble-no-tools';
 
 const log = createLogger('AutoContinue');
 
@@ -248,6 +250,7 @@ export const DETECTOR_BUCKET_REASONS: Set<string> = new Set<string>([
   'file_edits_present',           // defaultFileEditDetector
   'needs_more_turns',             // needsMoreTurnsDetector fallback (signal[0] undefined)
   'read-then-stall',
+  'read-loop',
   'deep-research-loop',
   'failure-cascade',
   'write-verify-loop',
@@ -262,6 +265,7 @@ export const DETECTOR_BUCKET_REASONS: Set<string> = new Set<string>([
   'empty-after-tools',
   'unclosed-code-block',
   'mid-sentence-cutoff',
+  'ramble-no-tools',              // rambleNoToolsDetector (>4KB response, 0 tool calls)
 ]);
 
 /**
@@ -333,6 +337,15 @@ function _enrichResultData(
   const lowered = responseResolved.toLowerCase();
   const responseLen = responseResolved.length;
   if (responseLen > 0) {
+    // Note: the 'ramble-no-tools' signal is NOT pre-computed here.
+    // The `_enrichResultData` pre-compute runs once and pushes signal
+    // names onto `incompleteSignals`, but no current detector consumes
+    // that array (the existing detectors read `result.response` /
+    // `result.steps` / `fileEdits` directly). To avoid dead work in the
+    // hot path of `decideAutoContinue`, the ramble rule lives ONLY in
+    // the opt-in `rambleNoToolsDetector` function. Callers who want the
+    // signal pass `advancedDetectorFn: rambleNoToolsDetector`.
+    //
     // announced-next-step — LLM explicitly said it will do something next.
     const announcedNextStep = /\b(i'll now\b|\blet me\b|\bnext i('ll| will)\b|\bi will (start|begin|proceed|continue)\b|\bnow i('ll| will)\b)/;
     if (responseLen < 500 && announcedNextStep.test(lowered)) {
@@ -551,6 +564,46 @@ export function needsMoreTurnsDetector(
     force: true,
     reason: det.signals?.[0] ?? 'needs_more_turns',
   };
+}
+
+/**
+ * Ramble-no-tools detector: forces a continuation when the model
+ * produces a >4KB response (env-tunable via `AUTO_CONTINUE_RAMBLE_BYTES`)
+ * AND no tool calls were attempted this turn. This catches the failure
+ * mode where an LLM writes a wall of explanatory text without taking
+ * any action — almost always indicates it should be nudged to actually
+ * DO something (read a file, run a search, write a file). Sub-tool-call
+ * scenarios are handled by `needsMoreTurnsDetector` (read-then-stall,
+ * deep-research-loop); this detector specifically catches the
+ * tool-less-response wall of text.
+ *
+ * - Mirrors the safety-semantics of `defaultFileEditDetector`:
+ *   returns `null` on `max_continuations_reached` so the detector
+ *   never overrides the cap-reached stop.
+ * - Mirrors the contract of `needsMoreTurnsDetector`:
+ *   returns `null` when `result` is undefined (no signal source).
+ * - The threshold default (4096 bytes) matches the user-facing
+ *   narrative (">4KB no-tools signal") and is conservative enough
+ *   to avoid false positives in health responses (e.g. model
+ *   explaining a long-form decision tree).
+ */
+export function rambleNoToolsDetector(
+  result: DetectableResult | undefined,
+  continuationDecision: ContinuationDecision,
+): AutoContinueDetectorOverride | null {
+  if (continuationDecision.reason === 'max_continuations_reached') return null;
+  if (!result) return null;
+  const response = (result.response || '').trim();
+  if (!response) return null;
+  const threshold = parseInt(
+    process.env.AUTO_CONTINUE_RAMBLE_BYTES || '4096',
+    10,
+  );
+  const steps = Array.isArray(result.steps) ? result.steps : [];
+  if (response.length > threshold && steps.length === 0) {
+    return { force: true, reason: 'ramble-no-tools' };
+  }
+  return null;
 }
 
 export interface AutoContinueInput {

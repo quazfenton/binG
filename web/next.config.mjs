@@ -8,6 +8,12 @@ const isDesktopBuild = process.env.DESKTOP_MODE === 'true' || process.env.DESKTO
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // F8: Audit-grade source-map config — preserves stack frames in browser
+  // console errors so `[F8] err.stack` in use-enhanced-chat.ts can resolve
+  // minified line numbers back to source. Default off in production
+  // (Next 14.x default is false). Without this: error.stack in prod shows
+  // "<anonymous>:1:1" — useless for triage.
+  productionBrowserSourceMaps: true,
   // Static export — Vercel only serves frontend assets
   // Backend API routes are handled externally (OCI, 9router, etc.)
   // Disabled during dev so API routes work locally without 500 errors.

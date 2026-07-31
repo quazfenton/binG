@@ -101,6 +101,14 @@ class ToolCallTracker {
   private memoryInvocations: any[] = [];
   /** Deduplication set: tracks seen toolCallIds to prevent double-counting */
   private seenToolCallIds = new Set<string>();
+  /**
+   * Counter incremented in recordToolCall + recordToolCalls (batch) catch
+   * blocks when SQLite INSERT silently throws. Exposed via
+   * `getDisconnectCountForTests()` so production monitors can alert on
+   * repeated silent demotions (records fall through to memoryRecords
+   * without ever reaching the durable store).
+   */
+  private disconnectCount = 0;
 
   /**
    * Initialize the SQLite database (shared with chat-request-logger)
@@ -276,6 +284,7 @@ class ToolCallTracker {
         return;
       } catch (error) {
         logger.warn('SQLite insert failed, falling back to memory', { tool: record.toolName, error });
+        this.disconnectCount++;  // ship-ready metric: read via getDisconnectCountForTests()
       }
     }
 
@@ -339,6 +348,7 @@ class ToolCallTracker {
         return;
       } catch (error) {
         logger.warn('SQLite batch insert failed, falling back to memory', error);
+        this.disconnectCount++;  // ship-ready metric
       }
     }
 
@@ -350,16 +360,39 @@ class ToolCallTracker {
    * Get per-model tool stats for the last N minutes.
    * Returns stats sorted by tool success rate (best first).
    * Uses SQLite if available, falls back to in-memory records.
+   *
+   * SEV-10 (2026-07-08 fix): the prior version's `if (this.db)` short-circuit
+   * caused the read pipeline to return [] whenever `recordToolCall`'s SQLite
+   * INSERT silently threw (schema drift, db lock, missing `tool_calls` table
+   * despite defensive CREATE TABLE IF NOT EXISTS, SEV-9 follow-on). The catch
+   * block on the write path fell through to `memoryRecords.push(record)` — so
+   * writes succeeded IN MEMORY only — but the read path queried SQLite only
+   * and missed those records. Net: `refreshModelTelemetryCache()` (every 5 min
+   * via `setInterval` in model-ranker.ts) returned empty `toolStats` on every
+   * refresh even after successful tool calls. The fix merges SQLite rows
+   * AND memoryRecords at the (provider, model, tool_name) granularity, with
+   * sums, before `aggregateToolStats` collapses to provider:model groups.
+   * Idempotent for the happy case (memoryRecords empty when SQLite writes
+   * succeed) and self-healing for the disconnect case (memoryRecords catches
+   * the rows SQLite missed).
    */
   async getModelToolStats(minutesBack: number = 30): Promise<ModelToolStats[]> {
     await this.initialize();
+    const cutoffTime = Date.now() - minutesBack * 60 * 1000;
 
-    let records: ToolCallRecord[] = [];
-
+    // 1) Read SQLite if available (best-effort). Empty array if db missing
+    //    OR if the SELECT threw (logged below) — either way, the merge in
+    //    step 3 still runs against memoryRecords.
+    let sqliteRows: Array<{
+      provider: string;
+      model: string;
+      tool_name: string;
+      totalCalls: number;
+      successes: number;
+      failures: number;
+    }> = [];
     if (this.db) {
       try {
-        const cutoffTime = Date.now() - minutesBack * 60 * 1000;
-
         const stmt = this.db.prepare(`
           SELECT
             provider,
@@ -372,48 +405,67 @@ class ToolCallTracker {
           WHERE timestamp >= ?
           GROUP BY provider, model, tool_name
         `);
+        sqliteRows = stmt.all(cutoffTime) as typeof sqliteRows;
+      } catch (error) {
+        logger.warn('SQLite query failed, falling back to memory merge', error);
+        sqliteRows = [];
+      }
+    }
 
-        const results = stmt.all(cutoffTime) as Array<{
-          provider: string;
-          model: string;
-          tool_name: string;
-          totalCalls: number;
-          successes: number;
-          failures: number;
-        }>;
-
-        return this.aggregateToolStats(results.map(r => ({
+    // 2) Always pull memoryRecords for the same window. This is the SEV-10
+    //    disconnect patch: when writes fall through to memoryRecords (because
+    //    SQLite INSERT threw), the next periodic read MUST consult this list
+    //    or return empty even though the writes "succeeded".
+    const memGrouped = new Map<string, { provider: string; model: string; tool_name: string; totalCalls: number; successes: number; failures: number }>();
+    for (const r of this.memoryRecords) {
+      if (r.timestamp < cutoffTime) continue;
+      const k = `${r.provider}:${r.model}:${r.toolName}`;
+      const existing = memGrouped.get(k);
+      if (existing) {
+        existing.totalCalls += 1;
+        if (r.success) existing.successes += 1;
+        else existing.failures += 1;
+      } else {
+        memGrouped.set(k, {
           provider: r.provider,
           model: r.model,
-          toolName: r.tool_name,
-          totalCalls: r.totalCalls,
-          successes: r.successes,
-          failures: r.failures,
-        })));
-      } catch (error) {
-        logger.warn('SQLite query failed, using memory fallback', error);
+          tool_name: r.toolName,
+          totalCalls: 1,
+          successes: r.success ? 1 : 0,
+          failures: r.success ? 0 : 1,
+        });
       }
     }
 
-    // In-memory fallback
-    const cutoffTime = Date.now() - minutesBack * 60 * 1000;
-    const recentRecords = this.memoryRecords.filter(r => r.timestamp >= cutoffTime);
-
-    // Group by provider:model:toolName
-    const grouped = new Map<string, { provider: string; model: string; toolName: string; totalCalls: number; successes: number; failures: number }>();
-
-    for (const record of recentRecords) {
-      const key = `${record.provider}:${record.model}:${record.toolName}`;
-      if (!grouped.has(key)) {
-        grouped.set(key, { provider: record.provider, model: record.model, toolName: record.toolName, totalCalls: 0, successes: 0, failures: 0 });
+    // 3) Sum-merge at (provider, model, tool_name) granularity. Both sources
+    //    are pre-grouped by SQLite's GROUP BY and the loop above, so this is
+    //    a straight sum (no double-counting when a record happens to live in
+    //    both — which the current write path doesn't do, but defence-in-depth
+    //    against a future refactor that double-pushes on the success path).
+    const combined = new Map<string, { provider: string; model: string; tool_name: string; totalCalls: number; successes: number; failures: number }>();
+    for (const r of sqliteRows) {
+      combined.set(`${r.provider}:${r.model}:${r.tool_name}`, r);
+    }
+    for (const r of memGrouped.values()) {
+      const k = `${r.provider}:${r.model}:${r.tool_name}`;
+      const existing = combined.get(k);
+      if (existing) {
+        existing.totalCalls += r.totalCalls;
+        existing.successes += r.successes;
+        existing.failures += r.failures;
+      } else {
+        combined.set(k, r);
       }
-      const entry = grouped.get(key)!;
-      entry.totalCalls++;
-      if (record.success) entry.successes++;
-      else entry.failures++;
     }
 
-    return this.aggregateToolStats(Array.from(grouped.values()));
+    return this.aggregateToolStats(Array.from(combined.values()).map(r => ({
+      provider: r.provider,
+      model: r.model,
+      toolName: r.tool_name,
+      totalCalls: r.totalCalls,
+      successes: r.successes,
+      failures: r.failures,
+    })));
   }
 
   /** Aggregate raw tool stats records into ModelToolStats array */
@@ -612,6 +664,137 @@ class ToolCallTracker {
    */
   clearDedupCache(): void {
     this.seenToolCallIds.clear();
+  }
+
+  /**
+   * Reset in-memory records + the disconnect counter + the SQLite
+   * `tool_calls` table (test-only helper). All three track the same
+   * SQLite-failure fallthrough surface — disconnect tests want a clean
+   * slate between runs so the writes under test are the ONLY signals
+   * visible to subsequent assertions. Without the SQLite reset, the
+   * happy-path write from test 1 leaks into test 2's disconnect-proof
+   * assertion (the SQLite `EXISTS(...)` finds the leftover row, making
+   * the disconnect-proof assertion pass for the wrong reason).
+   */
+  __resetMemoryRecordsForTests(): void {
+    this.memoryRecords.length = 0;
+    this.disconnectCount = 0;
+    if (this.db) {
+      try {
+        this.db.prepare('DELETE FROM tool_calls').run();
+      } catch {
+        // Best-effort: helper is for vitest; if the table is drifted /
+        // unavailable, the next test's reset will catch up. Don't
+        // throw — callers expect a silent cleanup.
+      }
+    }
+  }
+
+  /**
+   * Reset redacted invocation payloads (test-only helper).
+   * Separate from memoryRecords because `recordInvocationPayload` has its
+   * own fallthrough path (memoryInvocations) that some tests inspect
+   * independently.
+   */
+  __resetInvocationsForTests(): void {
+    this.memoryInvocations.length = 0;
+  }
+
+  /**
+   * Integration helper: returns true if any tool calls have been recorded
+   * (either in SQLite OR in the in-memory fallback). The audit's behavioral
+   * rec #3 called for an integration test that "runs and asserts nonzero" —
+   * this method is the lightweight boolean surface that lets that test
+   * exist without inspecting the read API for shape.
+   *
+   * SEV-10 disconnect patch (2026-07-08): the read pipeline used to miss
+   * records that fell through to memoryRecords because of a SQLite INSERT
+   * failure. `getModelToolStats` was patched to merge both sources; this
+   * method is the boolean alternative for callers that only need an
+   * existence check ("do we have ANY tool-call telemetry?").
+   *
+   * Async-by-design: mirrors the rest of the public read surface
+   * (getModelToolStats, getRecentInvocations, getRawRecords) so consumers
+   * who already await can drop this in directly.
+   *
+ * Lifetime existence only — not time-windowed. For time-windowed
+ * checks, use `getModelToolStats(N).then(s => s.length > 0)` instead.
+   */
+  async hasRecordedTools(): Promise<boolean> {
+    await this.initialize();
+    // Fast path: memoryRecords has entries — true, regardless of SQLite state.
+    // This is the SEV-10 proof path: even if the SQLite INSERT fell through
+    // to memoryRecords because of a schema-drift / lock / missing-table
+    // failure, `hasRecordedTools()` still reports `true` because the writes
+    // are durably tracked in the in-memory fallback.
+    if (this.memoryRecords.length > 0) return true;
+    // Slow path: query SQLite with the canonical EXISTS subquery (idiomatic
+    // SQLite shape for boolean existence checks; returns 0/1 without a row
+    // payload). Empty result → false.
+    if (this.db) {
+      try {
+        const stmt = this.db.prepare(
+          'SELECT EXISTS(SELECT 1 FROM tool_calls) AS has_records',
+        );
+        const row = stmt.get() as { has_records: number } | undefined;
+        return row?.has_records === 1;
+      } catch (error) {
+        // SQLite unavailable (schema drift, lock). Caller cannot
+        // confirm any record exists. Return false honestly.
+        logger.warn('SQLite EXISTS failed in hasRecordedTools', error);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Read the current disconnect count (test-only counter).
+   * Counts recordToolCall + recordToolCalls (batch) SQLite-failure
+   * fallthroughs since the last reset. Useful for asserting that the
+   * monkey-patched SQLite-prepare-throws test paths actually do fall
+   * through to memoryRecords.
+   */
+  getDisconnectCountForTests(): number {
+    return this.disconnectCount;
+  }
+
+  /**
+   * Test-only mock helper: monkey-patches `db.prepare` so subsequent
+   * INSERTs into `tool_calls` throw on .run() — every write falls
+   * through to memoryRecords, exercising the SEV-10 disconnect path.
+   * Returns a restore function that callers MUST invoke (via
+   * `try/finally`) to undo the patch.
+   *
+   * Centralizes the previously-inline monkey-patch shape that appeared
+   * in 2 disconnect tests (the audit reviewer flagged it as a drift
+   * risk — three easy-to-miss invariants: an exact INSERT-into-tool_calls
+   * regex that filter-defends `CREATE TABLE IF NOT EXISTS` and SELECT
+   * statements; the `.bind(db)` capture so `originalPrepare(sql)` keeps
+   * its `this`; and the finally-restore that, when missing, leaves the
+   * SQLite handle broken across sibling tests).
+   *
+   * Error message is fixed (no caller-customizable string) — the helper
+   * exists to enforce a single, recognizable signature in vitest output,
+   * not to give each test its own message.
+   */
+  simulateInsertDisconnectForTests(db: any): () => void {
+    const originalPrepare = db.prepare.bind(db);
+    db.prepare = (sql: string) => {
+      if (/INSERT INTO tool_calls/i.test(sql)) {
+        return {
+          run: (..._args: any[]) => {
+            throw new Error(
+              'Simulated read/write disconnect — SQLite INSERT intentionally throws (test-only)',
+            );
+          },
+        };
+      }
+      return originalPrepare(sql);
+    };
+    return () => {
+      db.prepare = originalPrepare;
+    };
   }
 }
 

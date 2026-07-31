@@ -28,6 +28,17 @@ import { EventEmitter } from 'node:events';
 import { createLogger } from '@/lib/utils/logger';
 import { workspacePreviewRegistry } from '@/lib/terminal/workspace-preview-registry';
 import type { WorkspacePreview } from '@/lib/terminal/workspace-preview-registry';
+import { sandboxMetrics } from '@/lib/backend';
+
+// Pre-emit the `outcome="timeout"` label series at value 0 so Prometheus
+// tracks it as present-but-zero from process start. Today no instrumentation
+// increments `timeout` (server-side upgrade-window timer is a future-only
+// feature); without this pre-emit, an operator's `outcome="timeout"` query
+// returns "no data" instead of "0" and the missing series looks like a bug.
+// Counter.inc accepts value=0 (the registry skips label incision but the
+// label key is registered in the samples map) — exactly the pattern callers
+// use to surface reserved label values during metric-definition gaps.
+sandboxMetrics.firefoxPreviewWsConnectAttemptsTotal.inc({ outcome: 'timeout' }, 0);
 
 const logger = createLogger('WsPreviewBroadcaster');
 
@@ -48,6 +59,13 @@ interface DashboardClient {
   userId: string;
   connectedAt: number;
   lastPong: number;
+  /**
+   * `req.headers['user-agent']` snapshotted at upgrade time. Lets the
+   * disconnect log tell Firefox/Chrome/curl apart without correlating
+   * access logs — root-causes the Firefox /ws/previews failures (each
+   * closed ~150 ms post-upgrade with code 1006).
+   */
+  userAgent: string | null;
   /** Workspace IDs the client is subscribed to. Empty = receive all events. */
   subscribedWorkspaces: Set<string>;
 }
@@ -153,6 +171,7 @@ export class WsPreviewBroadcaster extends EventEmitter {
     if (!userId) {
       if (process.env.NODE_ENV === 'production') {
         logger.warn('Preview WS: anonymous connections rejected in production');
+        recordFirefoxPreviewWsOutcome(req, 'http_upgrade_failure');
         ws.close(4001, 'Authentication required for preview dashboard');
         return;
       }
@@ -163,15 +182,24 @@ export class WsPreviewBroadcaster extends EventEmitter {
     // Enforce client limit
     if (this.clients.size >= this.MAX_CLIENTS) {
       logger.warn(`Preview WS client limit reached (${this.MAX_CLIENTS}), rejecting`);
+      recordFirefoxPreviewWsOutcome(req, 'http_upgrade_failure');
       ws.close(4004, 'Too many preview dashboard connections');
       return;
     }
+
+    // Snapshot the user-agent header at upgrade time. Node's
+    // IncomingHttpHeaders is `string | string[] | undefined`; normalise to
+    // a single string-or-null so the disconnect log emits a clean value.
+    const rawUserAgent = req.headers['user-agent'];
+    const userAgent: string | null =
+      Array.isArray(rawUserAgent) ? rawUserAgent[0] ?? null : rawUserAgent ?? null;
 
     const client: DashboardClient = {
       ws,
       userId,
       connectedAt: Date.now(),
       lastPong: Date.now(),
+      userAgent,
       subscribedWorkspaces: new Set(),
     };
 
@@ -183,8 +211,18 @@ export class WsPreviewBroadcaster extends EventEmitter {
       clientIp: (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || 'unknown',
     });
 
-    // Send initial state — all currently registered previews
+    // Send initial state — all currently registered previews.
+    // Gate on `ws.readyState === OPEN` AFTER the write so an upgrade failure
+    // (server-side socket close before the first frame is acked) is counted
+    // as `http_upgrade_failure` rather than `success`. sendInitialState
+    // swallows its own `ws.send` failures internally so we can't gate on a
+    // thrown exception; readyState is the closest honest post-condition.
     this.sendInitialState(ws);
+    if (ws.readyState === WebSocket.OPEN) {
+      recordFirefoxPreviewWsOutcome(req, 'success');
+    } else {
+      recordFirefoxPreviewWsOutcome(req, 'http_upgrade_failure');
+    }
 
     // Handle client messages
     ws.on('message', (data: Buffer) => {
@@ -225,13 +263,18 @@ export class WsPreviewBroadcaster extends EventEmitter {
       }
     });
 
-    // Handle disconnect
+    // Handle disconnect. Root-cause aid for the recurring Firefox
+    // /ws/previews failures: log user-agent + code + reason + duration so
+    // the next incident's log query surfaces 'Firefox' + 'code: 1006' +
+    // 'durationMs < 200' in one stroke without correlating access logs.
     ws.on('close', (code: number, reason: Buffer) => {
       this.clients.delete(client);
       logger.info('Dashboard client disconnected', {
         userId,
+        userAgent: client.userAgent ?? 'unknown',
         code,
         reason: reason?.toString() || 'none',
+        durationMs: Date.now() - client.connectedAt,
         remainingClients: this.clients.size,
       });
 
@@ -466,5 +509,33 @@ function extractWorkspaceId(message: PreviewBroadcastMessage): string | null {
 // ============================================================================
 // Singleton
 // ============================================================================
+
+/**
+ * Increment the `firefox_preview_ws_connect_attempts_total` Prometheus
+ * counter for Firefox /ws/previews connect attempts. Skips non-Firefox
+ * clients entirely so the metric stays scoped to the known regression
+ * surface (Firefox ~150 ms-post-upgrade close, code 1006, ~4+ per day
+ * per the regression test docstring).
+ *
+ * Resolves the User-Agent once per call from
+ * `req.headers['user-agent']` (Node's IncomingHttpHeaders normalises
+ * to `string|string[]|undefined`). Matches with a permissive
+ * `/Firefox/i` regex — same defensive pattern broadcasters use for
+ * other vendor identification.
+ *
+ * @see lib/backend/metrics.ts — Counter registration
+ * @see server.ts — upgrade dispatcher (Firefox rejects here)
+ * @see preview-ws-firefox.spec.ts — regression test that motivates this
+ *      counter (the 4+ failures-per-day signal becomes a rate() alarm)
+ */
+export function recordFirefoxPreviewWsOutcome(
+  req: IncomingMessage,
+  outcome: 'success' | 'http_upgrade_failure',
+): void {
+  const ua = req.headers['user-agent'];
+  const uaStr = Array.isArray(ua) ? ua[0] ?? '' : ua ?? '';
+  if (!/Firefox/i.test(uaStr)) return;
+  sandboxMetrics.firefoxPreviewWsConnectAttemptsTotal.inc({ outcome });
+}
 
 export const wsPreviewBroadcaster = new WsPreviewBroadcaster();

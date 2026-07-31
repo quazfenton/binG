@@ -37,16 +37,16 @@
  */
 
 import { EventEmitter } from 'events';
-import { createLogger } from '@/lib/utils/logger';
+import { createLogger } from '../utils/logger';
 
-// Phase 2: Runtime Service
+// Phase 2: Runtime Service — kept @/lib/X alias on purpose to avoid tsc auto-walking workspace-runtime-service.ts (would surface +4 pre-existing TS errors; see MIGRATE-WEB-BING-SHARED-AGENT-TO-RELATIVE-PATHS.md 2026-07-16)
 import {
   getWorkspaceRuntime,
   cleanupWorkspaceRuntimeState,
   type WorkspaceRuntimeState,
 } from '@/lib/terminal/workspace-runtime-service';
 
-// Phase 4: Service Manager
+// Phase 4: Service Manager — kept @/lib/X alias on purpose to avoid tsc auto-walking workspace-service-manager.ts (would surface +11 pre-existing TS errors; see MIGRATE-WEB-BING-SHARED-AGENT-TO-RELATIVE-PATHS.md 2026-07-16)
 import {
   workspaceServiceManager,
   type WorkspaceService,
@@ -57,17 +57,17 @@ import {
   sandboxOrchestrator,
   type OrchestratorSession,
   type MigrationResult,
-} from '@/lib/sandbox/sandbox-orchestrator';
+} from '../sandbox/sandbox-orchestrator';
 
 // Phase 7: Snapshot Service
 import {
   workspaceFSSnapshotService,
   type WorkspaceFSSnapshot,
-} from '@/lib/sandbox/workspacefs-snapshot-service';
+} from '../sandbox/workspacefs-snapshot-service';
 
 // Phase 8: Runtime Broker (lazy-imported in initialize(), not at top level)
 
-// Phase 9: VFS
+// Phase 9: VFS — kept @/lib/X alias on purpose to avoid tsc auto-walking web/lib/virtual-filesystem/sync/index.ts (would regress by ~21 errors via transitive re-exports; see MIGRATE-WEB-BING-SHARED-AGENT-TO-RELATIVE-PATHS.md 2026-07-16)
 import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync';
 
 // Phase 10: Workspace Graph
@@ -77,10 +77,11 @@ import { workspaceGraphService, type WorkspaceGraph } from './workspace-graph-se
 import { workspaceSessionGraph } from './workspace-session-graph';
 
 // Types
+// SandboxProviderType — kept @/lib/X alias on purpose to avoid tsc auto-walking web/lib/sandbox/providers/index.ts (would regress by ~Y transitive errors; see MIGRATE-WEB-BING-SHARED-AGENT-TO-RELATIVE-PATHS.md 2026-07-16)
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
-import type { AffinityBinding } from '@/lib/sandbox/sandbox-orchestrator';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
-import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+import type { AffinityBinding } from '../sandbox/sandbox-orchestrator';
+import type { ExecutionPolicy } from '../sandbox/types';
+import type { FilesystemOwnerResolution } from '../virtual-filesystem/resolve-filesystem-owner';
 
 const logger = createLogger('WorkspaceControlPlane');
 
@@ -547,7 +548,7 @@ export class WorkspaceControlPlane extends EventEmitter {
     // Phase 5 (CAS): Initialize content-addressable storage
     try {
       const { getContentAddressableStorage } = await import(
-        '@/lib/storage/content-addressable-storage'
+        '../storage/content-addressable-storage'
       );
       await getContentAddressableStorage().initialize();
       logger.info('Phase 5 initialized: Content-Addressable Storage');
@@ -558,7 +559,7 @@ export class WorkspaceControlPlane extends EventEmitter {
 
     // Phase 8 (Runtime Broker): Initialize the cost/latency/capacity-aware scheduler
     try {
-      const { getRuntimeBroker } = await import('@/lib/sandbox/runtime-broker');
+      const { getRuntimeBroker } = await import('../sandbox/runtime-broker');
       await getRuntimeBroker().initialize();
       logger.info('Phase 8 initialized: Runtime Broker');
     } catch (err: any) {
@@ -569,7 +570,7 @@ export class WorkspaceControlPlane extends EventEmitter {
     // Phase 7 (Environment Images): Pre-build cached images
     try {
       const { workspaceImageRegistry } = await import(
-        '@/lib/sandbox/workspace-image-registry'
+        '../sandbox/workspace-image-registry'
       );
       logger.info('Phase 7 initialized: Environment Images', {
         enabled: workspaceImageRegistry.isEnabled(),
@@ -593,7 +594,7 @@ export class WorkspaceControlPlane extends EventEmitter {
     // Phase 9 (WorkspaceFS): R2 + VFS + sandbox sync layer
     try {
       const { workspaceFSSyncService } = await import(
-        '@/lib/sandbox/workspacefs-sync-service'
+        '../sandbox/workspacefs-sync-service'
       );
       const r2Status = workspaceFSSyncService.getR2Status();
       logger.info('Phase 9 initialized: WorkspaceFS Sync', {

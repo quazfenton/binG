@@ -37,6 +37,7 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { InvalidModelError } from '@/lib/orchestra/steer-service';
 import { checkProviderHealth } from '@/lib/orchestra/provider-health';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
@@ -1402,7 +1403,13 @@ const config: UnifiedAgentConfig = {
       })(),
     };
 
-    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, task);
+    // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation) —
+    // recovery-staging snapshot, not in standard tsc include (see route-bug86.patch).
+    const toolPlan: SelectToolPlanResult = selectToolPlan({
+      userMessage: task,
+      authenticated: !!authenticatedUserId,
+    })
+    const tools = await getMCPToolsForAI_SDK(authenticatedUserId, toolPlan)
     config.tools = tools.map(t => ({
       name: t.function.name,
       description: t.function.description,

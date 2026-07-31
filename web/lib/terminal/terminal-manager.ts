@@ -14,7 +14,7 @@
 
 import { getSandboxProvider, type SandboxHandle, type PtyHandle as ProviderPtyHandle, type SandboxProviderType } from '../sandbox/providers'
 import { updateSession } from '../storage/session-store'
-import type { PreviewInfo } from '@/lib/sandbox/types'
+import type { PreviewInfo } from '../sandbox/types'
 import { enhancedPortDetector } from '../previews/enhanced-port-detector'
 import {
   saveTerminalSession,

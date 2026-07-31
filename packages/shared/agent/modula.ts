@@ -260,6 +260,8 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
+          tools: (request as any).tools,
+          executeTool: (request as any).executeTool,
         });
 
         result = {
@@ -286,6 +288,8 @@ export async function executeWithOrchestrationMode(
           userId: request.ownerId,
           conversationId: request.sessionId,
           mode: 'auto', // Uses AGENT_EXECUTION_ENGINE auto-detection
+          tools: (request as any).tools,
+          executeTool: (request as any).executeTool,
         });
 
         result = {
@@ -320,6 +324,8 @@ export async function executeWithOrchestrationMode(
           systemPrompt,
           maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
           mode: 'auto', // Let unified agent auto-select best execution mode
+          tools: (request as any).tools,
+          executeTool: (request as any).executeTool,
         });
 
         result = {
@@ -1520,12 +1526,25 @@ export async function executeWithOrchestrationMode(
   } catch (error: any) {
     const duration = Date.now() - startTime;
 
-    logger.error('Orchestration mode execution failed', { 
-      mode, 
+    logger.error('Orchestration mode execution failed', {
+      mode,
       error: error.message,
       duration,
       stack: error.stack,
     });
+
+    // STALL-ROUTEINTEGRATION-FOLLOWUP (2026-07-16) — preserve the canonical
+    // StallWatchdogError discriminant through the orchestration catch. Without
+    // this propagation, the route's L2953-L2977 defense-in-depth detector
+    // (and the L5547-L5554 success-path IIFE) cannot distinguish a server-side
+    // stall from any other orchestrator failure — they all stringify to
+    // `{success:false, error: '<message>'}` and the route returns HTTP 200,
+    // masking timeouts from upstream load balancers + clients. The same
+    // `instanceof + errorCode-property` dual-detect pattern is used at the
+    // route's L3043+ inner-catch + L5577+ outer-catch sites.
+    const errorCodeProp = typeof error?.errorCode === 'string' ? error.errorCode : undefined;
+    const preserveStallMetadata =
+      errorCodeProp !== undefined && /^(STALL|DRIFT|ABORT|OTHER)$/.test(errorCodeProp);
 
     return {
       success: false,
@@ -1534,6 +1553,12 @@ export async function executeWithOrchestrationMode(
         agentType: mode,
         errorType: error.name || 'Unknown',
         duration,
+        // STALL-ROUTEINTEGRATION-FOLLOWUP — propagate errorCode/stallError so the
+        // route's L2953 detector + L5547 IIFE can map to canonical HTTP status
+        // (STALL→524, DRIFT→502, ABORT→503, OTHER→500) via stallWatchdogErrorToStatus.
+        ...(preserveStallMetadata
+          ? { errorCode: errorCodeProp, stallError: errorCodeProp }
+          : {}),
       },
     };
   }

@@ -13,6 +13,9 @@ import { toolCallTracker } from '@/lib/tools/tool-call-tracker';
 
 describe('orchestrator reproduction harness', () => {
   it('captures constructed tool calls and aggregates redacted payloads', async () => {
+    // Reset stale telemetry from other tests
+    toolCallTracker.__resetInvocationsForTests();
+
     // simple executeTool that succeeds when path present, fails when missing
     const executeTool = async (name: string, args: any) => {
       if (!args || !args.path) {
@@ -32,18 +35,20 @@ describe('orchestrator reproduction harness', () => {
     (orchestrator as any).callLLM = async (_task: string, _history: any[]) => {
       callIndex++;
       if (callIndex === 1) {
+        // generatePlan phase: return a parseable plan in text
         return {
-          text: '',
+          text: '[{"action": "write index.html", "tool": "write_file"}]',
           done: false,
-          toolCalls: [{ id: 't1', name: 'write_file', arguments: { path: 'workspace/sessions/000/index.html', content: '<html></html>' } }],
+          toolCalls: [],
           usage: { totalTokens: 0 },
         };
       }
       if (callIndex === 2) {
+        // tool execution phase: valid write_file
         return {
           text: '',
           done: false,
-          toolCalls: [{ id: 't2', name: 'write_file', arguments: {} }],
+          toolCalls: [{ id: 't1', name: 'write_file', arguments: { path: 'workspace/sessions/000/index.html', content: '<html></html>' } }],
           usage: { totalTokens: 0 },
         };
       }

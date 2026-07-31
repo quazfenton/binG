@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('Prewarm');
 
 
 
@@ -25,7 +28,7 @@ export async function GET(request?: Request) {
       timestamp: Date.now(),
     });
   } catch (error) {
-    console.error("Prewarm error:", error);
+    logger.error("Prewarm error:", error);
     return NextResponse.json(
       { error: "Failed to pre-warm" },
       { status: 500 }

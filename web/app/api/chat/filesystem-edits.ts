@@ -13,6 +13,16 @@ import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from 
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { extractScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import { applySearchReplace } from './chat-helpers';
+// Phase A — Phase 1/Phase 2 success-signal architecture. Imports the unified
+// status enum + derivation helper so applyFilesystemEditsFromResponse can
+// return phase1Status alongside the legacy status field. The derivation
+// priority is documented at lib/agent/phase-status.ts: errors win over
+// applied; explicit `skipped` wins over both; otherwise applied ≥ 1 = success
+// / 0 = empty.
+import {
+  derivePhase1Status,
+  type Phase1Status,
+} from '@/lib/agent/phase-status';
 
 const PATH_CONTROL_CHARS_RE = /[\r\n\t\0]/;
 const PATH_HEREDOC_RE = /(<<<|>>>|===)/;
@@ -41,7 +51,12 @@ export interface FilesystemEditSummary {
 
 export interface FilesystemEditResult {
   transactionId: string | null;
-  status: 'auto_applied' | 'accepted' | 'denied' | 'reverted_with_conflicts' | 'none';
+  status:
+    | 'auto_applied'
+    | 'accepted'
+    | 'denied'
+    | 'reverted_with_conflicts'
+    | 'none';
   applied: FilesystemEditSummary[];
   errors: string[];
   requestedFiles: Array<{ path: string; content: string; language: string; version: number }>;
@@ -59,6 +74,12 @@ export interface FilesystemEditResult {
     diffBody?: string;
     reason: string;
   }>;
+  /** Phase A — unified 4-state Phase 1 outcome signal propagated downstream.
+   *  Derived from (applied.length, errors.length) at the final return site so
+   *  every return path covers the contract. The legacy `status` field above is
+   *  preserved for backward compatibility with existing consumers. See
+   *  /opt/bing/.tickets/PHASE1-PHASE2-SUCCESS-SIGNAL-ARCHITECTURE.md. */
+  phase1Status: Phase1Status;
 }
 
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
@@ -326,6 +347,8 @@ export async function applyFilesystemEditsFromResponse(input: {
     deleteTargets.length;
 
   if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
+    // Phase A — early return for invalid-paths case.
+    // Phase F — same picker-layer integration as L828
     return {
       transactionId: null,
       status: 'none',
@@ -334,6 +357,10 @@ export async function applyFilesystemEditsFromResponse(input: {
       requestedFiles: [],
       scopePath: input.scopePath,
       sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
+      phase1Status: derivePhase1Status({
+        applied: (input.alreadyWrittenPaths?.size || 0),
+        errors: invalidPathErrors.length,
+      }),
     };
   }
 
@@ -365,6 +392,11 @@ export async function applyFilesystemEditsFromResponse(input: {
     scopePath: input.scopePath,
     sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
     pendingEdits: pendingEdits.length > 0 ? pendingEdits : undefined,
+    // Phase A — initial value of phase1Status gets overwritten just before
+    // the final return (below) once `result.applied` + `result.errors` have
+    // been populated. Initializing here to 'empty' satisfies the TS
+    // required-field contract for the in-flight mutations.
+    phase1Status: 'empty',
   };
 
   if (transaction) {
@@ -744,7 +776,7 @@ export async function applyFilesystemEditsFromResponse(input: {
           result.commitId = commitResult.commitId;
         }
       } catch (commitError) {
-        console.error('[Chat] Auto-commit failed:', commitError);
+        chatLogger.error('Auto-commit failed:', { error: commitError });
       }
     }
   }
@@ -780,6 +812,30 @@ export async function applyFilesystemEditsFromResponse(input: {
     errors: result.errors.length,
     errorMessages: result.errors.slice(0, 3),
     status: result.status,
+    phase1Status: result.phase1Status,
+  });
+
+  // Phase A — derive the final phase1Status from accumulated (applied.length,
+  // errors.length). This is the LAST mutation before return so every
+  // return path (early-return, final-return, error-mutation paths above)
+  // surface the correct phase1Status. The `skipped` derivation input is
+  // omitted here because this function is never bypassed when called —
+  // phase-status.ts path-level handling is the responsibility of the
+  // caller (route.ts).
+  //
+  // Bug #48/Phase F — picker-layer integration of `alreadyWrittenPaths`:
+  // paths already written by structured tool calls in this turn are
+  // structurally-committed (VFS write succeeded at the tool layer) but
+  // don't appear in `result.applied` because the text-mode parser blocked
+  // them at the top of this function. Without integrating
+  // `input.alreadyWrittenPaths?.size`, phase1Status underreports actual
+  // applied work as 'empty' (BUG 2/5) when only structured writes
+  // succeeded. Adding the size gives downstream consumers (route.ts
+  // retry-surface, SSE metadata, chat hook, loop-guard) the correct
+  // success signal.
+  result.phase1Status = derivePhase1Status({
+    applied: result.applied.length + (input.alreadyWrittenPaths?.size || 0),
+    errors: result.errors.length,
   });
 
   return result;

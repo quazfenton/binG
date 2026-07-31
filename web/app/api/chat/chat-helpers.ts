@@ -3,9 +3,17 @@
  *
  * Non-parser helpers extracted from route.ts. Response-text parsing now lives
  * in '@/lib/chat/file-edit-parser' so backend and UI consume the same logic.
+ *
+ * Tool-result surfacing note: when this file grows helpers that surface
+ * structured MCP errors (`{ message, code?, retryable?, correctedExample? }`)
+ * to the LLM, they MUST use `unwrapStructuredToolError` from
+ * `@/lib/mcp/orchestrator-error-unwrap` rather than building the
+ * `[ORCHESTRATOR-UNWRAP]: …` block inline. This keeps the canonical format
+ * in one place. Tracked in /opt/bing/.tickets/UNWRAP-HELPER-MIGRATION.md.
  */
 
 import { z } from 'zod';
+import { PHASE1_STATUSES } from '@/lib/agent/phase-status';
 
 // ============================================================================
 // Zod Schemas
@@ -15,6 +23,52 @@ export const chatMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z.union([z.string(), z.array(z.any())]),
 }).passthrough();
+
+/**
+ * Zod schema for the client-side empty-response retry context.
+ *
+ * SHOULD-CONSIDER #1 (Phase D): single source of truth for the retry-path's
+ * payload shape. Lives BEFORE `chatRequestSchema` so the `retryContext`
+ * field reference doesn't require a TS forward-declaration hack.
+ *
+ * - `isEmptyResponseRetry` defaults to `false` (SHOULD-CONSIDER #a) so
+ *   legacy callers sending `retryContext: {}` empty-object bodies still
+ *   parse cleanly — preserves the original inline-cast's permissive
+ *   runtime behaviour rather than rejecting well-formed legacy payloads.
+ * - All other fields are optional (preserves backward-compat with clients
+ *   that pre-date Phase D).
+ * - `phase1Status` references the canonical `PHASE1_STATUSES` tuple
+ *   from `/opt/bing/web/lib/agent/phase-status.ts` (SHOULD-CONSIDER #c).
+ *   Adding a new status value (e.g. `'partial'`) automatically propagates
+ *   to schema validation without human-only drift.
+ */
+export const retryContextSchema = z.object({
+  isEmptyResponseRetry: z.boolean().default(false),
+  originalProvider: z.string().optional(),
+  originalModel: z.string().optional(),
+  retryProvider: z.string().optional(),
+  retryModel: z.string().optional(),
+  toolExecutionSummary: z.string().optional(),
+  failedToolCalls: z.array(z.object({
+    name: z.string(),
+    error: z.string(),
+    args: z.any().optional(),
+  })).optional(),
+  filesystemChanges: z.object({
+    applied: z.number(),
+    failed: z.number(),
+    failedDetails: z.array(z.any()),
+  }).optional(),
+  phase1Status: z.enum(PHASE1_STATUSES).optional(),
+});
+
+/**
+ * Inferred TypeScript type — exported so route.ts can drop the inline TS
+ * cast and use `import('./chat-helpers').RetryContext` in the body type.
+ * The inference keeps the type in lock-step with the Zod schema through
+ * `z.infer<typeof retryContextSchema>`.
+ */
+export type RetryContext = z.infer<typeof retryContextSchema>;
 
 export const chatRequestSchema = z.object({
   messages: z.array(chatMessageSchema).min(1, 'Messages array cannot be empty'),
@@ -43,6 +97,7 @@ export const chatRequestSchema = z.object({
     applyFileEdits: z.boolean().optional(),
     scopePath: z.string().optional(),
   }).optional(),
+  retryContext: retryContextSchema.optional(),
 });
 
 // ============================================================================

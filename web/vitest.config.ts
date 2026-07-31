@@ -147,6 +147,20 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     pool: 'forks', // Required for AsyncLocalStorage support (toolContextStore)
+    // include[] temporarily RESTORED (workspace.ts migration has a known
+    // unresolved blocker with `--project web`). Once the migration is
+    // re-attempted, revert to `include: []` per the audit-ticket's intent.
+    // SEE: F4 in /opt/bing/docs/CENTRALIZED_TODO_LIST.md (status: PARTIAL).
+    //
+    // LOGICAL GROUP: audit-recs
+    // The audit-recs family (finding-1-stall-discriminator.test.ts,
+    //  finding-2-stall-watchdog-stress.test.ts,
+    //  finding-5-6-log-shape.test.ts) is picked up automatically by the glob
+    // below. To run just this group: `pnpm test:audit-recs`. The path-based
+    // selector covers ALL files under `__tests__/audit-recs/` so the family
+    // ships as a single self-contained discoverable group without colliding
+    // with the vitest-workspace migration tracked in F4 (see audit-ticket
+    // /opt/bing/docs/CENTRALIZED_TODO_LIST.md, F4 section).
     include: ['**/__tests__/**/*.test.ts', '**/__tests__/**/*.test.tsx', '**/*.test.ts', '**/*.test.tsx'],
     exclude: [
       '**/node_modules/**',
@@ -154,6 +168,22 @@ export default defineConfig({
       '**/.next/**',
       ...INTEGRATION_TEST_PATTERNS,
       ...UNIMPLEMENTED_MODULE_TEST_PATTERNS,
+      // Postaudit-baseline regression guard is wired explicitly into the
+      // root orchestrator via /opt/bing/package.json#test:postaudit-baseline
+      // (chained with `;` + POSIX-sh status tracking so both main + guard
+      // exit codes propagate to CI). We exclude it from default glob
+      // discovery UNLESS the CLI invocation explicitly targets the
+      // audit-recs suite — in that case the test must run, otherwise the
+      // explicit chain becomes a no-op (vitest applies exclude globally).
+      // The argv check catches both `pnpm --filter ./web test:audit-recs`
+      // (passes `__tests__/audit-recs/`) and `pnpm test:postaudit-baseline`
+      // (delegates to the same script) so the guard always runs when
+      // explicitly invoked.
+      ...(process.argv.some(
+        (a) => a.includes('audit-recs') || a.includes('postaudit-baseline'),
+      )
+        ? []
+        : ['**/__tests__/audit-recs/postaudit-baseline.test.ts']),
     ],
     testTimeout: 30000,
     env: {

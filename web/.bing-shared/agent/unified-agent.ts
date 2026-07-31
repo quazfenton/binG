@@ -44,10 +44,15 @@
 import { enhancedTerminalManager } from '@/lib/terminal/enhanced-terminal-manager'
 import { getSandboxProvider } from '@/lib/sandbox/providers'
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge'
-import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp'
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, MCP_AGENT_TIMEOUT_MS } from '@/lib/mcp'
+import { selectToolPlan, type SelectToolPlanResult } from '@/lib/tools/select-tool-plan'
 import type { PreviewInfo } from '@/lib/sandbox/types'
 import type { DesktopHandle } from '@/lib/computer/e2b-desktop-provider-enhanced'
 import { GitManager, type GitStatusResult } from './git-manager'
+// Option 1 (postaudit item ④): migrated from `@/lib/utils/logger` to
+// direct local relative path. Resolves to `packages/shared/lib/utils/logger.ts`
+// — a real file inside this package, NOT a cross-package reference into
+// web/lib/*.
 import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('UnifiedAgent')
@@ -665,7 +670,16 @@ export class UnifiedAgent {
 
     log.debug(`Calling MCP tool: ${toolName}`)
     const userId = this.config.userId || 'anonymous-agent'
-    return callMCPToolFromAI_SDK(toolName, args, userId, this.session?.sessionId);
+    // chat-hang-fix back-port: 60s defensive ceiling matching route.ts:1499 agentTurnSignal.
+    // Engages the Step A signal plumbing even though there's no upstream signal here.
+    return callMCPToolFromAI_SDK(
+      toolName,
+      args,
+      userId,
+      this.session?.sessionId,
+      undefined,
+      { signal: AbortSignal.timeout(MCP_AGENT_TIMEOUT_MS) },
+    );
   }
 
   /**
@@ -677,7 +691,18 @@ export class UnifiedAgent {
     }
 
     log.debug('Listing MCP tools...')
-    const tools = await getMCPToolsForAI_SDK(this.config.userId, this.config.task)
+    // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+    const toolPlan: SelectToolPlanResult = selectToolPlan({
+      // TODO(MCP-TOOL-SELECTION-POSTAUDIT item-3): populate userMessage from getCurrentUserTurn()
+      // once the UnifiedAgent class exposes a current-turn accessor.
+      // For now we route the agent's standing task through the new
+      // `agentTask` field so it does not collide with the planner's
+      // current-turn weighting (selectToolPlan turns > history > task).
+      userMessage: '',
+      agentTask: this.config.task || '',
+      authenticated: !!this.config.userId,
+    })
+    const tools = await getMCPToolsForAI_SDK(this.config.userId, toolPlan)
     log.debug(`Found ${tools.length} MCP tools`)
     return tools.map(t => ({ name: t.function.name, description: t.function.description }))
   }
@@ -687,7 +712,18 @@ export class UnifiedAgent {
 
     try {
       log.debug('Initializing MCP...')
-      const tools = await getMCPToolsForAI_SDK(this.config.userId, this.config.task)
+      // Plan-mode wiring (migrated from legacy substring-mode per audit reconciliation).
+      const toolPlan: SelectToolPlanResult = selectToolPlan({
+        // TODO(MCP-TOOL-SELECTION-POSTAUDIT item-3): populate userMessage from getCurrentUserTurn()
+      // once the UnifiedAgent class exposes a current-turn accessor.
+      // For now we route the agent's standing task through the new
+      // `agentTask` field so it does not collide with the planner's
+      // current-turn weighting (selectToolPlan turns > history > task).
+      userMessage: '',
+      agentTask: this.config.task || '',
+        authenticated: !!this.config.userId,
+      })
+      const tools = await getMCPToolsForAI_SDK(this.config.userId, toolPlan)
       this.mcpInitialized = true
       log.info(`MCP initialized with ${tools.length} tools`)
     } catch (error: any) {

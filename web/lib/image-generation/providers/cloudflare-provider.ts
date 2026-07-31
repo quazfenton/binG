@@ -15,6 +15,9 @@ import type {
   ImageGenerationErrorType,
 } from '../types';
 import { ASPECT_RATIO_DIMENSIONS, ImageGenerationErrorType as ErrorType } from '../types';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('CloudflareProvider');
 
 export interface CloudflareImageGenerationOptions {
   prompt: string;
@@ -107,7 +110,7 @@ export class CloudflareImageProvider implements ImageGenerationProvider {
       );
     }
 
-    console.log('[CloudflareProvider] Starting image generation with prompt:', params.prompt.substring(0, 100));
+    logger.info('Starting image generation with prompt:', params.prompt.substring(0, 100));
 
     const startTime = Date.now();
     const controller = new AbortController();
@@ -204,7 +207,7 @@ export class CloudflareImageProvider implements ImageGenerationProvider {
 
       const duration = Date.now() - startTime;
 
-      console.log(`[CloudflareProvider] Generation completed in ${duration}ms`);
+      logger.info(`Generation completed in ${duration}ms`);
 
       return {
         success: true,

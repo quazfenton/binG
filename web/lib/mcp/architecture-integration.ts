@@ -10,11 +10,32 @@
 import { mcpToolRegistry } from './registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
-import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
+import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers, INIT_PROBE_TIMEOUT_MS } from './http-transport'
 import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger';
 import { redactArgsForLogging } from '@/lib/errors/logging-utils';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+// Pure planner type (see web/lib/tools/select-tool-plan.ts). When the
+// active chat route passes the SELECTED plan as the taskFilter signal
+// (instead of the raw user message string), the per-source filters
+// below switch from substring matching to intent + source-permission
+// gates. The original string taskFilter path is preserved for the 4
+// other callers (unified-agent, opencode-direct, task-router,
+// vercel-ai-tools) that pass a raw prompt string.
+// Type-only import — erased after compilation so it cannot introduce
+// a runtime circular dependency, even though `select-tool-plan.ts`
+// itself imports nothing from `lib/mcp`.
+import type { SelectToolPlanResult } from '@/lib/tools/select-tool-plan';
+// Task #1 (2026-07-16) production wiring — Contract-aware MCP tool
+// pipeline. Each of the 5 features (validateArguments, gatePreCall,
+// gatePostCall, wrapWithSentinel, contract.audit.append) is exported
+// by its own module and composed into the optional 7th-param `contract`
+// path of `callMCPToolFromAI_SDK` below. When `contract` is undefined,
+// the existing 7-branch body runs unchanged.
+import type { Contract } from '@/lib/agents/contract';
+import { validateArguments } from '@/lib/agents/argument-policy';
+import { gatePreCall, gatePostCall } from '@/lib/agents/contract';
+import { wrapWithSentinel, TOOL_SENTINEL_OPEN, TOOL_SENTINEL_CLOSE } from '@/lib/agents/tool-sentinel';
 // Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
 import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
@@ -303,17 +324,67 @@ let cachedMCPorterTools: Array<{
   }
 }> = []
 
+// Chat-hang-fix (mcporter): dedup + hard-timeout guard for the mcporter tool
+// cache refresh. mcporter is a runtime/process-spawning architecture (it can
+// `createRuntime()` + connect stdio/http servers). On the hosted web server a
+// slow or hung mcporter runtime (e.g. an npx spawn, a dead remote URL, or a
+// DESKTOP_MODE leak) must NEVER block the per-request tool assembly. This
+// refresh is a *cache* fill, so it is safe to run in the background and let
+// callers read whatever is currently cached (empty on first call, populated
+// once a prior background refresh lands).
+let mcporterRefreshInFlight: Promise<void> | null = null
+const MCPORTER_REFRESH_TIMEOUT_MS = parseInt(
+  process.env.MCPORTER_LIST_TIMEOUT_MS || '30000',
+  10,
+)
+
 async function refreshMCPorterToolsCache(): Promise<void> {
   if (!mcporterIntegration.isEnabled()) {
     cachedMCPorterTools = []
     return
   }
 
-  try {
-    cachedMCPorterTools = await getMCPorterToolDefinitions()
-  } catch (error: any) {
-    logger.warn(`Failed to refresh mcporter tools: ${error?.message || 'unknown error'}`)
+  // Dedup concurrent refreshes — a single in-flight listTools() is shared by
+  // all callers so a burst of chat requests doesn't spawn N mcporter runtimes.
+  if (mcporterRefreshInFlight) {
+    return mcporterRefreshInFlight
   }
+
+  mcporterRefreshInFlight = (async () => {
+    try {
+      // Hard ceiling so a hung mcporter runtime (unbounded connect/listTools)
+      // can't keep the in-flight promise — and thus a background timer — alive
+      // forever. On timeout we keep the previous cache and move on.
+      const defs = await Promise.race([
+        getMCPorterToolDefinitions(),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`mcporter refresh timed out after ${MCPORTER_REFRESH_TIMEOUT_MS}ms`)),
+            MCPORTER_REFRESH_TIMEOUT_MS,
+          ),
+        ),
+      ])
+      cachedMCPorterTools = defs
+    } catch (error: any) {
+      logger.warn(`Failed to refresh mcporter tools: ${error?.message || 'unknown error'}`)
+    } finally {
+      mcporterRefreshInFlight = null
+    }
+  })()
+
+  return mcporterRefreshInFlight
+}
+
+/**
+ * Kick off an mcporter cache refresh WITHOUT awaiting it, so the caller's
+ * critical path (per-request tool assembly) never blocks on the mcporter
+ * runtime. The `.catch()` swallows any rejection (refreshMCPorterToolsCache
+ * already logs+degrades internally; this is belt-and-suspenders so an unhandled
+ * rejection can't crash the process).
+ */
+function scheduleMCPorterToolsRefresh(): void {
+  if (!mcporterIntegration.isEnabled()) return
+  void refreshMCPorterToolsCache().catch(() => {})
 }
 
 /**
@@ -322,6 +393,54 @@ async function refreshMCPorterToolsCache(): Promise<void> {
  * Call this during app initialization to make MCP tools available
  * to the main LLM call implementation
  */
+/**
+ * Connect to all configured HTTP MCP servers in parallel, each bounded
+ * by INIT_PROBE_TIMEOUT_MS (5s). Replaces the prior sequential for-loop
+ * (Step C of the chat-hang-fix full plan).
+ *
+ * Failure semantics: a single dead transport reduces to one warn line;
+ * healthy siblings still register. Partial MCP availability is preferred
+ * over a hard-fail that kills all of initializeMCPForArchitecture1.
+ */
+export async function probeAndRegisterRemoteMCPServers(
+  httpServers: Array<{
+    name: string
+    url: string
+    apiKey?: string
+    bearerToken?: string
+    headers?: Record<string, string>
+  }>,
+): Promise<void> {
+  if (httpServers.length === 0) {
+    logger.info('No HTTP MCP servers configured — remote MCP tools will be unavailable');
+    return;
+  }
+  logger.debug('HTTP servers detected', { count: httpServers.length, servers: httpServers.map(s => s.name) });
+  logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP... (parallel probe, ${INIT_PROBE_TIMEOUT_MS}ms/server ceiling)`);
+
+  await Promise.allSettled(
+    httpServers.map(async (server) => {
+      try {
+        const transport = createHTTPTransport({
+          url: server.url,
+          apiKey: server.apiKey,
+          bearerToken: server.bearerToken,
+          headers: server.headers,
+          transportType: 'streamable-http',
+        });
+        // Per-server probe ceiling. AbortSignal.timeout creates a one-shot
+        // signal that flips at +INIT_PROBE_TIMEOUT_MS; combined with the
+        // transport's internal 30s timeout via Step A's AbortSignal.any.
+        await transport.listTools({ signal: AbortSignal.timeout(INIT_PROBE_TIMEOUT_MS) });
+        registerHTTPTransport(server.name, transport);
+        logger.info(`Connected to remote MCP server: ${server.name}`);
+      } catch (error: any) {
+        logger.warn(`Failed to connect to remote MCP server ${server.name}:`, error.message);
+      }
+    })
+  );
+}
+
 export async function initializeMCPForArchitecture1(): Promise<void> {
   try {
     // Guard: Don't reinitialize if already done (prevents mcporter restart on every connect click)
@@ -393,28 +512,11 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
       logger.info('Web mode — local stdio MCP servers skipped (use remote HTTP servers instead)')
     }
 
-    // Connect to remote HTTP servers (both desktop and web mode)
-    if (httpServers.length > 0) {
-      logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP...`)
-      for (const server of httpServers) {
-        try {
-          const transport = createHTTPTransport({
-            url: server.url,
-            apiKey: server.apiKey,
-            bearerToken: server.bearerToken,
-            headers: server.headers,
-            transportType: 'streamable-http',
-          })
-          // Test connection by listing tools
-          await transport.listTools()
-          // Register the transport for tool discovery and execution
-          registerHTTPTransport(server.name, transport)
-          logger.info(`Connected to remote MCP server: ${server.name}`)
-        } catch (error: any) {
-          logger.warn(`Failed to connect to remote MCP server ${server.name}:`, error.message)
-        }
-      }
-    }
+    // Connect to remote HTTP servers (both desktop and web mode) via
+    // probeAndRegisterRemoteMCPServers — parallel probe bounded by
+    // INIT_PROBE_TIMEOUT_MS = 5000ms per server. Was sequential before;
+    // with N dead servers the worst-case was N × 30s (the transport default).
+    await probeAndRegisterRemoteMCPServers(httpServers);
 
     await refreshMCPorterToolsCache()
 
@@ -611,6 +713,611 @@ export async function getComposioMCPTools(
 }
 
 /**
+ * Discriminated view of the taskFilter signal. Built once at the top of
+ * `getMCPToolsForAI_SDK` and consumed by each per-source filter below —
+ * keeps each branch a single `if (view.kind === 'plan')` /
+ * `else if (view.kind === 'string')` test rather than re-doing the
+ * type guard at every site.
+ *
+ *   - 'plan'   : the active chat route passed a `SelectToolPlanResult`
+ *                (see web/lib/tools/select-tool-plan.ts). Per-source
+ *                filters switch to intent-based + source-permission
+ *                gating derived from the plan. Auth-gated sources
+ *                (Composio, Arcade, integration.*) can be scoped by
+ *                `requestedToolkits`. Resolves the substring-matcher
+ *                defects identified in the active-route review (P1
+ *                finding #6 — Arcade broad match, finding #7 —
+ *                Composio fail-open for unknown names).
+ *   - 'string' : legacy callers (unified-agent.ts, opencode-direct.ts,
+ *                task-router.ts, vercel-ai-tools.ts) still pass a raw
+ *                user-message string. Falls back to the original
+ *                substring gates for backward compat.
+ *   - 'none'   : no signal at all. Per-source filters return the
+ *                unfiltered source catalog (behavior pre-planner).
+ */
+export type TaskFilterView =
+  | {
+      kind: 'plan';
+      intents: ReadonlySet<string>;
+      sourcePermissions: SelectToolPlanResult['sourcePermissions'];
+      requestedToolkits: ReadonlyArray<string>;
+      fallbackUsed: boolean;
+    }
+  | { kind: 'string'; taskLower: string }
+  | { kind: 'none' };
+
+function isSelectToolPlan(value: unknown): value is SelectToolPlanResult {
+  // Duck-typing guard. We only check fields we actually consume
+  // (intents + sourcePermissions). No deep validation — the plan is
+  // built by the pure planner at web/lib/tools/select-tool-plan.ts.
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'intents' in value &&
+    Array.isArray((value as any).intents) &&
+    'sourcePermissions' in value &&
+    typeof (value as any).sourcePermissions === 'object' &&
+    (value as any).sourcePermissions !== null
+  );
+}
+
+/**
+ * Duck-typed validation of the structured-error shape that VFS tools
+ * (vfs-mcp-tools.ts:640+) return from tool results. The orchestrator
+ * previously did an unsafe `as { code?: string; message?: string; ...}`
+ * cast after `typeof result.error === 'object'`; this guard tightens
+ * the contract so any future SDK signature change surfaces as a
+ * TypeScript-level regression at the call site rather than a silent
+ * runtime type shift.
+ *
+ * Mirrors the spec from SHOULD-CONSIDER #1 of the orchestrator
+ * structured-error review (audit F1 followup): the resulting narrowed
+ * type `{ message: string; code?: string; retryable?: boolean;
+ * correctedExample?: string }` lets call sites read `e.message`,
+ * `e.code`, `e.retryable`, `e.correctedExample` with full
+ * compile-time type-safety — TypeScript flags field-name typos that the
+ * prior prose-only contract missed.
+ *
+ * @param value - The candidate error blob (typically `result.error`).
+ * @returns `true` if `value` is a non-null object with a non-empty `message`
+ *          string. Field-name shapes (presence of `code` / `retryable` /
+ *          `correctedExample`) are intentionally NOT validated here — those
+ *          fields are optional and downstream code already defensively
+ *          guards them with `?? 'UNKNOWN'` / `typeof === 'boolean'` patterns.
+ */
+export function isStructuredMcpError(
+  value: unknown,
+): value is { message: string; code?: string; retryable?: boolean; correctedExample?: string } {
+  if (value === null || typeof value !== 'object') return false;
+  const candidate = value as { message?: unknown };
+  return typeof candidate.message === 'string' && candidate.message.length > 0;
+}
+
+// Exported for unit-test access (see
+// /opt/bing/web/__tests__/mcp/legacy-substring-contract.test.ts:
+// `requireFullCatalog` sentinel contract tests + view.branch coverage).
+export function computeTaskFilterView(
+  taskFilter: string | SelectToolPlanResult | undefined,
+  options?: { requireFullCatalog?: boolean },
+): TaskFilterView {
+  // Compile-enforced typed sentinel: short-circuit to `kind: 'none'`
+  // BEFORE consulting `taskFilter` so a `SelectToolPlanResult` or
+  // non-empty string can never reach `kind === 'plan'` or
+  // `kind === 'string'`. The per-source filter helpers
+  // (`filterBlaxelToolsByView` etc.) all have a `view.kind === 'none'`
+  // branch that returns `[...all]` — i.e. the unfiltered source catalog —
+  // which is exactly what tools-only consumers need.
+  //
+  // Cap bypass (resolved 2026-07-16, MCP-CAPBYPASS ticket):
+  // `getMCPToolsForAI_SDK` reads `options?.requireFullCatalog` at the
+  // `normalizeAndCapTools` call site (L1666-L1668) and threads
+  // `Number.POSITIVE_INFINITY` for `maxBudget` when the sentinel is true.
+  // Tools-only helpers in `enhanced-llm-service.ts`
+  // (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`) therefore
+  // receive the FULL MCP catalog even when `MCP_TOOLS_MAX_TOTAL` would
+  // otherwise cap it. The active /api/chat route does NOT pass the
+  // sentinel, so the 25-tool budget protecting LLM-list size is
+  // preserved (no risk of leaking Infinity to the chat path).
+  if (options?.requireFullCatalog === true) {
+    return { kind: 'none' };
+  }
+  if (isSelectToolPlan(taskFilter)) {
+    return {
+      kind: 'plan',
+      intents: new Set(taskFilter.intents),
+      sourcePermissions: taskFilter.sourcePermissions,
+      requestedToolkits: taskFilter.requestedToolkits ?? [],
+      fallbackUsed: !!taskFilter.fallbackUsed,
+    };
+  }
+  if (typeof taskFilter === 'string' && taskFilter.length > 0) {
+    return { kind: 'string', taskLower: taskFilter.toLowerCase() };
+  }
+  return { kind: 'none' };
+}
+
+// ── Per-source filter helpers (extracted for unit-test access) ────────────
+//
+// PURE functions: each takes the unfiltered upstream tool list (as
+// returned by the per-source SDK call) plus the discriminating
+// `TaskFilterView`, and returns the filtered tool list. NO module-
+// level state, NO SDK calls — fully deterministic. Identical substring
+// / plan-intent logic that was previously inlined in
+// `getMCPToolsForAI_SDK`. Exported so the legacy-substring-contract
+// test suite (`bing/web/__tests__/mcp/legacy-substring-contract.test.ts`)
+// can invoke them directly, bypassing the vitest SDK-mock module-cache
+// re-evaluation fragility observed across mock-pattern rewrites (which
+// manifests as mock overrides on alias-keyed `vi.mock(...)` not
+// propagating through the relative-path static imports inside
+// `getMCPToolsForAI_SDK`).
+
+export function filterBlaxelToolsByView(
+  allBlaxelTools: ReadonlyArray<MCPSchema>,
+  view: TaskFilterView,
+): MCPSchema[] {
+  if (view.kind === 'plan') {
+    const hasCodeRead = view.intents.has('code.read');
+    const hasCodeSearch = view.intents.has('code.search');
+    const hasCodeEdit = view.intents.has('code.edit');
+    return allBlaxelTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.includes('search') || name.includes('grep')) return hasCodeRead || hasCodeSearch;
+      if (name.includes('apply') || name.includes('reapply')) return hasCodeEdit;
+      return false;
+    });
+  }
+  if (view.kind === 'string') {
+    const taskLower = view.taskLower;
+    const needsCodeSearch = taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('codebase');
+    const needsCodegen = taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('implement');
+    return allBlaxelTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
+      if (name.includes('apply') || name.includes('reapply')) return needsCodegen;
+      return false;
+    });
+  }
+  return [...allBlaxelTools];
+}
+
+export function filterNullclawToolsByView(
+  allNullclawTools: ReadonlyArray<MCPSchema>,
+  view: TaskFilterView,
+): MCPSchema[] {
+  // Strip the always-on status sentinel before category-gating.
+  const stripped = allNullclawTools.filter(
+    tool => (tool.function?.name || '').toLowerCase() !== 'nullclaw_status',
+  );
+  if (view.kind === 'plan') {
+    const hasIntegration =
+      view.intents.has('integration.gmail') ||
+      view.intents.has('integration.slack') ||
+      view.intents.has('integration.github');
+    const hasWeb = view.intents.has('web.fetch') || view.intents.has('web.search');
+    const hasShellOrComputer =
+      view.intents.has('bash.run') ||
+      view.intents.has('computer.use') ||
+      view.intents.has('container.ops');
+    return stripped.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return hasIntegration;
+      if (name.includes('browse') || name.includes('automate')) return hasWeb;
+      return hasShellOrComputer;
+    });
+  }
+  if (view.kind === 'string') {
+    const taskLower = view.taskLower;
+    const needsMessaging =
+      taskLower.includes('send') ||
+      taskLower.includes('message') ||
+      taskLower.includes('discord') ||
+      taskLower.includes('telegram');
+    const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
+    return stripped.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
+      if (name.includes('browse') || name.includes('automate')) return needsBrowse;
+      return false;
+    });
+  }
+  return [...stripped];
+}
+
+export function filterArcadeToolsByView(
+  allArcadeTools: ReadonlyArray<MCPSchema>,
+  view: TaskFilterView,
+): MCPSchema[] {
+  if (view.kind === 'plan') {
+    const arcadeGranted = view.sourcePermissions.arcade;
+    const hasWeb = view.intents.has('web.fetch') || view.intents.has('web.search');
+    const hasIntegration =
+      view.intents.has('integration.gmail') ||
+      view.intents.has('integration.slack') ||
+      view.intents.has('integration.github');
+    if (!(arcadeGranted && (hasWeb || hasIntegration))) return [];
+    return allArcadeTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (hasWeb && (name.includes('web') || name.includes('browse') || name.includes('search'))) return true;
+      if (hasIntegration && (name.includes('gmail') || name.includes('slack') || name.includes('github'))) return true;
+      return false;
+    });
+  }
+  if (view.kind === 'string') {
+    const taskLower = view.taskLower;
+    const needsWebAutomation =
+      taskLower.includes('browse') || taskLower.includes('web') || taskLower.includes('automation');
+    return allArcadeTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      return needsWebAutomation || name.includes('browse') || name.includes('web');
+    });
+  }
+  return [...allArcadeTools];
+}
+
+export function filterComposioToolsByView(
+  allComposioTools: ReadonlyArray<MCPSchema>,
+  view: TaskFilterView,
+): MCPSchema[] {
+  // Plan-mode toolkit scope gating (auth + per-toolkit whitelist) is
+  // applied ENVELOPE-WIDE in `getMCPToolsForAI_SDK` via the
+  // `composioToolkitRequest` parameter passed to the SDK call (so the
+  // SDK only returns tools in the requested prefix scope). The per-tool
+  // filter below operates on tools the SDK already returned, applying
+  // the secondary per-tool prefix match for plan-mode + the LEGACY
+  // substring fall-through for 'string'-mode.
+  if (view.kind === 'plan') {
+    const composioGranted = view.sourcePermissions.composio;
+    const requested = view.requestedToolkits;
+    if (!(composioGranted && requested.length > 0)) return [];
+    const requestedPrefixes = new Set(requested.map(t => t.toLowerCase()));
+    return allComposioTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      const toolkit = String((tool as any).toolkit || '').toLowerCase();
+      if (requestedPrefixes.has(toolkit)) return true;
+      for (const prefix of requestedPrefixes) {
+        if (name.startsWith(`${prefix}_`) || name.startsWith(`${prefix}-`)) return true;
+      }
+      return false;
+    });
+  }
+  if (view.kind === 'string') {
+    const taskLower = view.taskLower;
+    const needsGmail = taskLower.includes('gmail') || taskLower.includes('email') || taskLower.includes('send mail');
+    const needsSlack = taskLower.includes('slack') || taskLower.includes('message') || taskLower.includes('channel');
+    const needsGoogleDrive = taskLower.includes('drive') || taskLower.includes('google drive') || taskLower.includes('upload file');
+    const needsGithub = taskLower.includes('github') || taskLower.includes('git') || taskLower.includes('pull request') || taskLower.includes('issue');
+    const needsNotion = taskLower.includes('notion') || taskLower.includes('page') || taskLower.includes('workspace');
+    return allComposioTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.includes('gmail') || name.includes('email')) return needsGmail;
+      if (name.includes('slack') || name.includes('message')) return needsSlack;
+      if (name.includes('drive') || name.includes('google')) return needsGoogleDrive;
+      if (name.includes('github') || name.includes('git')) return needsGithub;
+      if (name.includes('notion')) return needsNotion;
+      // LEGACY substring `return true` fall-through preserved verbatim
+      // (the prior substring-mode contract — no fail-closed).
+      return true;
+    });
+  }
+  return [...allComposioTools];
+}
+
+export function filterProviderToolsByView(
+  allProviderTools: ReadonlyArray<MCPSchema>,
+  view: TaskFilterView,
+): MCPSchema[] {
+  if (view.kind === 'plan') {
+    const hasComputerIntent = view.intents.has('computer.use');
+    const hasAgentOrShellIntent =
+      view.intents.has('bash.run') ||
+      view.intents.has('container.ops') ||
+      view.intents.has('computer.use');
+    const hasSandboxIntent =
+      view.intents.has('container.ops') ||
+      view.intents.has('build.test') ||
+      view.intents.has('bash.run');
+    return allProviderTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.startsWith('daytona_')) return hasComputerIntent;
+      if (name.startsWith('e2b_')) return hasAgentOrShellIntent;
+      if (name.startsWith('codesandbox_')) return hasSandboxIntent;
+      if (name.startsWith('sprites_')) return false;
+      return false;
+    });
+  }
+  if (view.kind === 'string') {
+    const taskLower = view.taskLower;
+    const needsComputerUse =
+      taskLower.includes('screenshot') ||
+      taskLower.includes('computer_use') ||
+      taskLower.includes('desktop_automation');
+    const needsAgentOffload =
+      taskLower.includes('agent') || taskLower.includes('complex_task') || taskLower.includes('e2b');
+    const needsSandbox = taskLower.includes('sandbox') || taskLower.includes('isolated');
+    const needsCheckpoint = taskLower.includes('checkpoint') || taskLower.includes('sprite');
+    return allProviderTools.filter(tool => {
+      const name = (tool.function?.name || '').toLowerCase();
+      if (name.startsWith('daytona_')) return needsComputerUse;
+      if (name.startsWith('e2b_')) return needsAgentOffload;
+      if (name.startsWith('codesandbox_')) return needsSandbox;
+      if (name.startsWith('sprites_')) return needsCheckpoint;
+      // LEGACY substring-mode `return true` fall-through preserved
+      // (unrecognized name prefix passes through the substring gate).
+      return true;
+    });
+  }
+  return [...allProviderTools];
+}
+
+// ── Phase 2 partial-success-safe deadline wrapper ─────────────────────────
+//
+// Lifts Phase 2 out of the original all-or-nothing `Promise.race` against
+// the route-level signal (L920-L1015 of the prior version) into per-source
+// race-and-fallback wrappers. P1 finding #5 from the prior review —
+// "Phase 2 timeout is all-or-nothing" — is the rationale: when the route
+// signal fired mid-Phase-2, the prior `Promise.race` rejection cascaded
+// to a `.catch` that returned [EMPTY, EMPTY, EMPTY, {}] for ALL 4 source
+// slots — wiping successful siblings (e.g. Composio + Remote + Mem0 tools
+// that already resolved while Arcade was the slow source).
+//
+// `fetchWithDeadline<T>` accepts (a) the underlying fetch promise for a
+// source, (b) a fallback value to return on failure, (c) a per-source
+// deadline, and (d) the optional route-level signal. It races the fetch
+// against BOTH the deadline AND the signal — whichever wins, the wrapper
+// resolves with either the real result (winner = fetch) OR the fallback
+// (winner = deadline or signal). The outer `Promise.all([4 wrappers])`
+// then reaps whatever resolved successfully; partial successes are
+// preserved exactly when the prior race-then-catch chain would have
+// erased them.
+//
+// Per-source timer + signal listener are cleared in `finally` so a fetch
+// that resolves first does not leak its deadline timer (Node would keep
+// it alive in `lib/internal/timers.js` until the original ms elapsed).
+function fetchWithDeadline<T>(
+  sourceName: string,
+  promise: Promise<T>,
+  fallback: T,
+  timeoutMs: number,
+  routeSignal?: AbortSignal | null,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutFailure = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`[${sourceName}] timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+
+  // The signal failure promise is built early so its reject listener is
+  // attached BEFORE the function returns; otherwise a synchronous abort
+  // (already-aborted signal) would race against the wrapper's cleanup
+  // and the wrapper could settle to fallback before the listener fires.
+  // Two sub-cases:
+  //   - signal already aborted at entry → reject immediately so the race
+  //     resolves to fallback in the same microtask.
+  //   - signal pending → attach the listener; reject runs only when the
+  //     signal actually aborts.
+  let signalFailure: Promise<never> | null = null;
+  let signalListener: (() => void) | undefined;
+  if (routeSignal) {
+    if (routeSignal.aborted) {
+      // Synchronously-rejected promise. No `.catch` swallow needed: the
+      // race below includes this slot and the wrapper's own
+      // `.catch((err) => fallback)` already handles the rejection.
+      signalFailure = Promise.reject(
+        new Error(`[${sourceName}] aborted by route signal`),
+      );
+    } else {
+      signalFailure = new Promise<never>((_, reject) => {
+        signalListener = () =>
+          reject(new Error(`[${sourceName}] aborted by route signal`));
+        routeSignal.addEventListener('abort', signalListener, { once: true });
+      });
+    }
+  }
+
+  const cleanup = () => {
+    // Cleanup runs ON the Promise's settlement — NOT synchronously on
+    // return. The earlier `try { return Promise.race().catch() } finally
+    // { ... }` pattern was wrong: the `finally` block fires the moment
+    // the return expression evaluates (i.e. synchronously, BEFORE the
+    // race settled), so the timer was cleared and the signal listener
+    // detached before either could resolve the race. Hung sources then
+    // hung the outer Promise.all forever because the deadline / abort
+    // paths were dead. The fix is to defer cleanup to the promise chain.
+    if (timer) clearTimeout(timer);
+    if (signalListener && routeSignal) {
+      routeSignal.removeEventListener('abort', signalListener);
+    }
+  };
+
+  const race: Array<Promise<T | never>> = [promise, timeoutFailure];
+  if (signalFailure) race.push(signalFailure);
+
+  return Promise.race<T>(race)
+    .catch((err: any) => {
+      // Per-source failure surfaces at WARN — operators can chart which
+      // source is partial-degraded without scraping the assembled tool
+      // list shape. A successful sibling's slot keeps its full result
+      // (the per-source wrapper keeps its own state; siblings are
+      // governed by their own wrapper).
+      logger.warn(
+        `[MCP-Tools] Phase 2 source ${sourceName} degraded to empty: ${err?.message || err}`,
+      );
+      return fallback;
+    })
+    .finally(cleanup);
+}
+
+// ── Normalize / dedup / cap pipeline (audit remediation step #5) ─────────
+//
+// Replaces the prior flat-concat spread at the bottom of
+// getMCPToolsForAI_SDK. The new pipeline is a strict 3-stage contract:
+//
+//   1. Build a SOURCE-LABELLED bundle per upstream tool source. The
+//      origin label propagates into rejection telemetry so operators can
+//      see WHICH source's tool lost the dedup race.
+//   2. Sort bundles by SOURCE_PRECEDENCE_ORDER (static — operator-curated
+//      and in-process fixtures outrank async-discovered SDK catalogs
+//      on `tool.function.name` collision). Walk in that order, set
+//      map[name] = {tool, origin}. First occurrence wins; collisions are
+//      recorded in `rejectedByName`.
+//   3. Apply a hard cap (default 25, env MCP_TOOLS_MAX_TOTAL). The cap
+//      EXEMPTS the workflow-companion set so the unified-agent execution
+//      loop is never stranded (write_file, bash_execute, etc. retain
+//      even when the rest of the list is full). Excess non-exempt
+//      entries are recorded in `rejectedByBudget`.
+
+type MCPSchema = { type: 'function'; function: { name: string; description?: string; parameters: any } };
+
+type ToolOrigin =
+  | 'native'    // operator-curated MCP registry connections
+  | 'mcporter'  // cached mcporter runtimes
+  | 'blaxel'    // Blaxel codegen SDK
+  | 'arcade'    // Arcade SDK (auth-gated)
+  | 'provider'  // E2B / Daytona / CodeSandbox / Sprites
+  | 'nullclaw'  // Nullclaw MCP bridge (browser/desktop)
+  | 'composio'  // Composio SDK (auth-gated)
+  | 'git'       // git shadow-commit (currently empty)
+  | 'vfs'       // in-process VFS filesystem
+  | 'bash'      // in-process shell
+  | 'mem0'      // Mem0 memory SDK
+  | 'remote'    // HTTP MCP transport (operator-configured)
+  | 'web_search'; // synthetic search fallback
+
+interface ToolBundle {
+  origin: ToolOrigin;
+  tools: MCPSchema[];
+}
+
+// Static precedence. FIRST occurrence wins on `tool.function.name`
+// collision. Order rationale:
+//   - native FIRST: operator-curated MCP registry connections are the
+//     most-trusted surface; they should never be silently shadowed by
+//     an async-discovered SDK duplicate.
+//   - vfs + bash early: in-process fixtures, low-latency, fully under
+//     the unified-agent control loop. Their names typically match
+//     executor capabilities (write_file, bash_execute) so a duplicate
+//     from a third-party SDK is suppressed under this ordering.
+//   - composio + arcade + remote mid: auth-gated SDK results /
+//     configured HTTP transports — useful but lower priority than
+//     in-process.
+//   - mem0 + provider + nullclaw + blaxel + mcporter + web_search + git
+//     low: async-best-effort fills; their duplicates lose.
+//
+// Audit ordering rationale (remediation step #5): "Establish source
+// precedence for duplicate names" — first-wins is the simplest
+// deterministic contract, no per-tool scoring to maintain, fully
+// table-testable. Score-based dedup was evaluated and rejected: per-
+// source weights drift when a source's reliability changes, and the
+// resulting weight-table churn propagates into test fixtures across
+// the codebase.
+const SOURCE_PRECEDENCE_ORDER: ReadonlyArray<ToolOrigin> = [
+  'native',
+  'vfs',
+  'bash',
+  'composio',
+  'arcade',
+  'remote',
+  'mem0',
+  'provider',
+  'nullclaw',
+  'blaxel',
+  'web_search',  // synthetic search fallback (SearXNG/DuckDuckGo/Nullclaw-injected) — operator-essential, beats async-best-effort
+  'mcporter',    // async-best-effort cache; cullable when the budget runs out
+  'git',         // currently empty; placeholder for forward-compat
+];
+
+// Workflow companions — never dropped by the cap so the
+// unified-agent execution loop continues to have the minimum tool set
+// the orchestrator dispatcher fans out. Aligned to the AI SDK toolset
+// at /opt/bing/web/lib/chat/vercel-ai-tools.ts and the VFS surface at
+// /opt/bing/web/lib/mcp/vfs-mcp-tools.ts. choose_role / role_selection
+// are AI-SDK-only and registered separately by the Vercel toolset — NOT
+// included here because they're not MCP tools.
+const WORKFLOW_COMPANIONS = new Set<string>([
+  'write_file',
+  'apply_diff',
+  'batch_write',
+  'delete_file',
+  'move_file',
+  'read_file',
+  'list_files',
+  'search_files',
+  'bash_execute',
+  'web_search',
+]);
+
+// Per-call env-var read (NOT module-level const). Module-level exposure
+// would lock the cap at module-load value, defeating per-test env
+// mutation (vitest tests like CAP-isolation and TELEMETRY-suite set
+// `process.env.MCP_TOOLS_MAX_TOTAL = 'N'` AFTER importing the module;
+// a const would silently keep the load-time fallback 25 and the test
+// asserts would fail because no cap ever engaged).
+function getToolsMaxTotal(): number {
+  return parseInt(process.env.MCP_TOOLS_MAX_TOTAL || '25', 10);
+}
+
+function normalizeAndCapTools(
+  bundles: ReadonlyArray<ToolBundle>,
+  options: { maxBudget: number; exempt: ReadonlySet<string> },
+): {
+  kept: MCPSchema[];
+  rejectedByName: Array<{ name: string; winner: ToolOrigin; loser: ToolOrigin }>;
+  rejectedByBudget: string[];
+} {
+  // 1. Sort bundles by precedence (insertion-time stable; alphabetical
+  //    not required because Map iteration preserves insertion order).
+  const precedenceIdx = (o: ToolOrigin): number => SOURCE_PRECEDENCE_ORDER.indexOf(o);
+  const sorted = bundles
+    .filter((b) => Array.isArray(b.tools))
+    .sort((a, b) => precedenceIdx(a.origin) - precedenceIdx(b.origin));
+
+  // 2. Dedup by `tool.function.name`. First occurrence wins; collisions
+  //    surface in `rejectedByName` with both `winner` (kept) and
+  //    `loser` (dropped) origin attribution.
+  const map = new Map<string, { tool: MCPSchema; origin: ToolOrigin }>();
+  const rejectedByName: Array<{ name: string; winner: ToolOrigin; loser: ToolOrigin }> = [];
+  for (const bundle of sorted) {
+    for (const tool of bundle.tools) {
+      const name = tool?.function?.name;
+      if (!name || typeof name !== 'string') continue;
+      const existing = map.get(name);
+      if (existing) {
+        rejectedByName.push({ name, winner: existing.origin, loser: bundle.origin });
+        continue;
+      }
+      map.set(name, { tool, origin: bundle.origin });
+    }
+  }
+
+  // 3. Apply cap. Workflow companions are exempt.
+  //    Iteration order through map preserves precedence (we inserted
+  //    bundles in precedence-sorted order above), so exempt entries
+  //    appear first in the kept list and budget-fills come from the
+  //    higher-precedence end of the non-exempt pool.
+  const exemptEntries: Array<{ tool: MCPSchema; origin: ToolOrigin }> = [];
+  const budgetedEntries: Array<{ tool: MCPSchema; origin: ToolOrigin }> = [];
+  for (const [, entry] of map) {
+    if (options.exempt.has(entry.tool.function.name)) {
+      exemptEntries.push(entry);
+    } else {
+      budgetedEntries.push(entry);
+    }
+  }
+  const budgetForNonExempt = Math.max(options.maxBudget - exemptEntries.length, 0);
+  const kept: MCPSchema[] = [
+    ...exemptEntries.map((e) => e.tool),
+    ...budgetedEntries.slice(0, budgetForNonExempt).map((e) => e.tool),
+  ];
+  const rejectedByBudget = budgetedEntries
+    .slice(budgetForNonExempt)
+    .map((e) => e.tool.function.name);
+
+  return { kept, rejectedByName, rejectedByBudget };
+}
+
+/**
  * Get MCP tools in AI SDK format for Architecture 1
  *
  * Use this in your chat/agent implementation to get MCP tools
@@ -621,10 +1328,45 @@ export async function getComposioMCPTools(
  * tool list is assembled per-request to reflect current state.
  *
  * @param userId - User ID for session-scoped tools
- * @param taskFilter - Optional task type to filter tools (e.g., 'code_edit', 'integration', 'computer_use')
- *                     When provided, only tools relevant to the task type are included
+ * @param taskFilter - Optional task type to filter tools. Accepts:
+ *                     - A raw prompt string (legacy callers — substring-gated
+ *                       source filtering, original behavior).
+ *                     - A `SelectToolPlanResult` from `selectToolPlan()`
+ *                       (active route — intent + source-permission gated
+ *                       source filtering; toolkits scoped via
+ *                       `requestedToolkits`).
+ *                     When provided, only tools relevant to the request
+ *                     are included.
+ * @param options.requireFullCatalog - Compile-enforced typed sentinel.
+ *                     When `true`, forces `view.kind === 'none'` regardless
+ *                     of the `taskFilter` arg. The unfiltered per-source
+ *                     catalog reaches `normalizeAndCapTools`, so per-source
+ *                     substring/plan gates are bypassed AND the cap portion
+ *                     of the pipeline is bypassed via
+ *                     `maxBudget: Number.POSITIVE_INFINITY` at L1666-L1668.
+ *                     Used by tools-only helpers in `enhanced-llm-service.ts`
+ *                     (`resolveMCPToolName`, `extractToolCallsFromLLMResponse`)
+ *                     that depend on the FULL MCP tool catalog for fuzzy
+ *                     name matching and JSON-Schema lookup tables. The
+ *                     intent is: a future operator who edits this signature
+ *                     is forced to make the unfiltered dependency explicit
+ *                     at the call site (compile error if the sentinel is
+ *                     forgotten) rather than the prior prose-only contract.
+ *                     The active /api/chat route does NOT pass the sentinel,
+ *                     so `MCP_TOOLS_MAX_TOTAL` cap (default 25) still
+ *                     protects the LLM list size — Infinity is scoped only
+ *                     to the 2 helper callers that genuinely need the full
+ *                     catalog. Resolved via MCP-CAPBYPASS ticket; audit
+ *                     reference in
+ *                     /opt/bing/docs/MCP_CAPBYPASS_FOLLOWUP.md.
  */
-export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string, signal?: AbortSignal) {
+export async function getMCPToolsForAI_SDK(
+  userId?: string,
+  taskFilter?: string | SelectToolPlanResult,
+  signal?: AbortSignal,
+  options?: { requireFullCatalog?: boolean },
+) {
+  const view = computeTaskFilterView(taskFilter, options);
   const callStart = Date.now();
 
   // =============================================================================
@@ -647,6 +1389,19 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
   // assignment-before-read for cachedMCPorterTools preserved (only read
   // downstream after this PA resolves). ~5-30ms/request saved when
   // mcporter is enabled; zero overhead when disabled.
+  // Chat-hang-fix (mcporter): the mcporter cache refresh is NO LONGER awaited
+  // in this critical path. It was previously the 5th slot of this Promise.all,
+  // which meant a slow/hung mcporter runtime (createRuntime + connect/listTools
+  // has no built-in ceiling) blocked the ENTIRE per-request tool assembly. When
+  // getMCPToolsForAI_SDK is wrapped by the chat route's Promise.race timeout,
+  // that block caused the route to discard ALL tools — including the static VFS
+  // file-edit tools that need no network/subprocess — leaving the model with
+  // zero tools (root cause of the "intro text then indefinite stall" hang).
+  // The refresh now runs in the background (bounded + deduped) and callers read
+  // whatever `cachedMCPorterTools` currently holds. Empty on first request,
+  // populated on subsequent ones once the background refresh lands.
+  scheduleMCPorterToolsRefresh();
+
   const [
     providerToolDefs,
     vfsToolDefs,
@@ -657,12 +1412,6 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     import('./vfs-mcp-tools'),
     import('../bash/bash-tool'),
     import('../powers/mem0-power'),
-    // 5th slot value is irrelevant — refresh returns void and is ignored
-    // by the 4-element destructure. Promise.resolve(undefined) is explicit
-    // (vs Phase 2's sentinel-default style) since this op has no useful value.
-    mcporterIntegration.isEnabled()
-      ? refreshMCPorterToolsCache()
-      : Promise.resolve(undefined),
     // NEW-C3 (2026-07-07, /opt/bing/docs/async-parallelization-opportunities.md
     // §NEW-1 followup-c NEW-C3): pre-flight module-cache warming for the 2
     // lazy-init singletons hoisted from getBlaxelProviderInstance (L1018) +
@@ -706,20 +1455,9 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     function: { name: string; description?: string; parameters: any };
   }> = [];
   if (process.env.BLAXEL_API_KEY) {
-    const allBlaxelTools = getBlaxelCodegenToolDefinitions();
-    if (taskFilter) {
-      const taskLower = taskFilter.toLowerCase();
-      const needsCodeSearch = taskLower.includes('search') || taskLower.includes('find') || taskLower.includes('codebase');
-      const needsCodegen = taskLower.includes('generate') || taskLower.includes('create') || taskLower.includes('implement');
-      blaxelTools = allBlaxelTools.filter(tool => {
-        const name = (tool.function?.name || '').toLowerCase();
-        if (name.includes('search') || name.includes('grep')) return needsCodeSearch;
-        if (name.includes('apply') || name.includes('reapply')) return needsCodegen;
-        return false;
-      });
-    } else {
-      blaxelTools = allBlaxelTools;
-    }
+    // Filter logic extracted to `filterBlaxelToolsByView` for unit-test
+    // access. Same plan/string/none branching as before.
+    blaxelTools = filterBlaxelToolsByView(getBlaxelCodegenToolDefinitions(), view);
   }
 
   // ----- Nullclaw tools (sync) -----
@@ -728,21 +1466,10 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     function: { name: string; description?: string; parameters: any };
   }> = [];
   if (process.env.NULLCLAW_ENABLED === 'true') {
-    const allNullclawTools = nullclawMCPBridge.getToolDefinitions();
-    const filteredTools = allNullclawTools.filter(tool => (tool.function?.name || '').toLowerCase() !== 'nullclaw_status');
-    if (taskFilter) {
-      const taskLower = taskFilter.toLowerCase();
-      const needsMessaging = taskLower.includes('send') || taskLower.includes('message') || taskLower.includes('discord') || taskLower.includes('telegram');
-      const needsBrowse = taskLower.includes('browse') || taskLower.includes('web_automation');
-      nullclawTools = filteredTools.filter(tool => {
-        const name = (tool.function?.name || '').toLowerCase();
-        if (name.includes('discord') || name.includes('telegram') || name.includes('send')) return needsMessaging;
-        if (name.includes('browse') || name.includes('automate')) return needsBrowse;
-        return false;
-      });
-    } else {
-      nullclawTools = filteredTools;
-    }
+    // Filter logic extracted to `filterNullclawToolsByView` for
+    // unit-test access. Status sentinel stripping + plan/string/none
+    // branching preserved verbatim.
+    nullclawTools = filterNullclawToolsByView(nullclawMCPBridge.getToolDefinitions(), view);
   }
 
   // =============================================================================
@@ -763,113 +1490,135 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
   // =============================================================================
   type ArcadeShape = Array<{ type: 'function'; function: { name: string; description?: string; parameters: any } }>;
   const EMPTY: ArcadeShape = [];
-  const phase2Promise = Promise.all([
-    process.env.ARCADE_API_KEY ? getArcadeToolDefinitions() : Promise.resolve(EMPTY),
-    (process.env.COMPOSIO_API_KEY && userId) ? getComposioMCPTools(userId) : Promise.resolve(EMPTY),
-    hasRemoteMCPServers()
-      ? getRemoteMCPTools().catch((error: any) => {
-          logger.warn('Failed to get remote MCP tools:', error.message);
-          return EMPTY;
-        })
-      : Promise.resolve(EMPTY),
-    mem0Importer.isMem0Configured()
-      ? mem0Importer.buildMem0Tools({ userId, sessionId: userId })
-      : Promise.resolve({} as Record<string, any>),
-  ]);
-  const phase2Result: [
-    ArcadeShape,
-    ArcadeShape,
-    ArcadeShape,
-    Record<string, any>,
-  ] = signal
-    ? await Promise.race([
-        phase2Promise,
-        new Promise<never>((_, reject) => {
-          if (signal.aborted) {
-            reject(new Error('aborted'));
-            return;
-          }
-          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-        }),
-      ]).catch((error: any) => {
-        // Signal fired before Phase 2 resolved — degrade gracefully to EMPTY
-        // for all 4 slots so the route still assembles whatever tools
-        // completed in time.
-        logger.warn('[MCP-Tools] Phase 2 aborted by signal, returning empty slots', {
-          error: error?.message || String(error),
-        });
-        return [EMPTY, EMPTY, EMPTY, {}] as [
-          ArcadeShape,
-          ArcadeShape,
-          ArcadeShape,
-          Record<string, any>,
-        ];
-      })
-    : await phase2Promise;
+  // Composio Phase-2 toolkit scoping: when the plan signals an explicit
+  // list of integration toolkits (e.g. `['gmail']`, `['slack']`,
+  // `['github']`) and grants `composio` source permission, scope the
+  // SDK call to those toolkits so the cache+registry don't have to be
+  // walked for the full ~800-tool catalog. Auth gating remains the
+  // planner's responsibility (plan.sourcePermissions.composio is
+  // false for unauthenticated callers) — but the SDK call also
+  // requires `userId`, so we keep the existing `userId` guard intact.
+  // Composite sentinel logic for the Composio Phase-2 SDK call:
+  //   - `string[]` (non-null): scope the SDK call to this list. Plan
+  //     mode only — when composio permission is granted AND at least
+  //     one toolkit slug was requested, scope the SDK call so we
+  //     don't fan-out to the full ~800-tool catalog.
+  //   - `null`: SKIP the SDK call. Plan mode only — composio was
+  //     denied (unauthenticated / no grant) OR granted but no
+  //     toolkits requested. Skipping avoids a wasted SDK import +
+  //     fetch. The post-Phase-2 composioTools filter then sees an
+  //     EMPTY array and produces an EMPTY result — which is the
+  //     correct fail-closed behavior (P1 finding #7).
+  //   - `undefined`: legacy 'string' / 'none' paths. Pass-through
+  //     to the SDK with NO toolkits so it returns its full catalog
+  //     and the legacy substring filter downstream can reduce it
+  //     to the matching subset.
+  let composioToolkitRequest: string[] | null | undefined;
+  if (view.kind === 'plan') {
+    composioToolkitRequest = (view.sourcePermissions.composio && view.requestedToolkits.length > 0)
+      ? [...view.requestedToolkits]
+      : null;
+  }
+  // Legacy / no-filter paths leave composioToolkitRequest as `undefined`
+  // — the SDK is then called with no toolkit scope and returns the full
+  // catalog, which the post-Phase-2 substring filter trims down.
+
+  // Per-source deadline for Phase 2 dynamic fetches. Configurable via
+  // env var so ops can tune for known-slow sources (e.g. remote MCP
+  // pointing at a busy gateway). Default 800ms — intentionally LESS
+  // than the route-level MCP_TOOLS_TIMEOUT_MS (1000ms by default in
+  // route.ts) so per-source warns fire BEFORE the route blanket-aborts
+  // and operators see which source actually hung. With both deadlines
+  // armed at their defaults the per-source timer wins ~200ms ahead of
+  // the route signal, surfacing per-source diagnostics the route-level
+  // blanket would have suppressed.
+  const PHASE2_SOURCE_TIMEOUT_MS = parseInt(
+    process.env.MCP_PHASE2_SOURCE_TIMEOUT_MS || '800',
+    10,
+  );
+
+  // Partial-success-safe Phase 2 fan-out. Each of the 4 dynamic fetches
+  // is wrapped in `fetchWithDeadline`, which races the underlying
+  // promise against BOTH a per-source deadline AND the route-level
+  // `signal` (if any). On any race-loss the wrapper resolves to a
+  // per-source `fallback` value (EMPTY for tool lists, `{}` for Mem0);
+  // sources that resolved successfully are preserved by the outer
+  // Promise.all reaping whatever didn't fail. P1 finding #5 from the
+  // prior review ("Phase 2 timeout is all-or-nothing") is fixed: a
+  // hung Arcade no longer erases Composio / Remote / Mem0 results
+  // that already resolved. See `fetchWithDeadline` doc above for the
+  // full partial-success contract.
   const [
     allArcadeTools,
     allComposioTools,
     fetchedRemoteTools,
     mem0ToolMap,
-  ] = phase2Result;
+  ] = await Promise.all([
+    process.env.ARCADE_API_KEY
+      ? fetchWithDeadline(
+          'Arcade',
+          getArcadeToolDefinitions(),
+          EMPTY,
+          PHASE2_SOURCE_TIMEOUT_MS,
+          signal ?? null,
+        )
+      : Promise.resolve(EMPTY),
+    (process.env.COMPOSIO_API_KEY && userId && composioToolkitRequest !== null)
+      ? fetchWithDeadline(
+          'Composio',
+          getComposioMCPTools(userId, composioToolkitRequest),
+          EMPTY,
+          PHASE2_SOURCE_TIMEOUT_MS,
+          signal ?? null,
+        )
+      : Promise.resolve(EMPTY),
+    hasRemoteMCPServers()
+      ? fetchWithDeadline(
+          'RemoteMCP',
+          getRemoteMCPTools(false, { signal }),
+          EMPTY,
+          PHASE2_SOURCE_TIMEOUT_MS,
+          signal ?? null,
+        )
+      : Promise.resolve(EMPTY),
+    mem0Importer.isMem0Configured()
+      ? fetchWithDeadline(
+          'Mem0',
+          mem0Importer.buildMem0Tools({ userId, sessionId: userId }),
+          {} as Record<string, any>,
+          PHASE2_SOURCE_TIMEOUT_MS,
+          signal ?? null,
+        )
+      : Promise.resolve({} as Record<string, any>),
+  ]);
 
-  let remoteTools: ArcadeShape = fetchedRemoteTools;
-
-  // Arcade filter (sync after Phase 2).
+  let remoteTools: ArcadeShape = fetchedRemoteTools;  // Arcade filter (sync after Phase 2).
   let arcadeTools: ArcadeShape = [];
   if (process.env.ARCADE_API_KEY) {
-    if (taskFilter) {
-      const taskLower = taskFilter.toLowerCase();
-      const needsWebAutomation = taskLower.includes('browse') || taskLower.includes('web') || taskLower.includes('automation');
-      arcadeTools = allArcadeTools.filter(tool => {
-        const name = (tool.function?.name || '').toLowerCase();
-        return needsWebAutomation || name.includes('browse') || name.includes('web');
-      });
-    } else {
-      arcadeTools = allArcadeTools;
-    }
+    // Filter logic extracted to `filterArcadeToolsByView` for unit-test
+    // access. Same plan/string/none branching preserved verbatim.
+    arcadeTools = filterArcadeToolsByView(allArcadeTools, view);
   }
 
-  // Composio filter (sync after Phase 2).
+  // Composio filter (sync after Phase 2 — Phase-2 SDK call was already
+  // toolkit-scoped above when `view.kind === 'plan'` AND requestedToolkits
+  // were non-empty; this pass just enforces per-tool slug parity when
+  // the SDK call returned the unfiltered catalog).
   let composioTools: ArcadeShape = [];
   if (process.env.COMPOSIO_API_KEY && userId) {
-    if (taskFilter) {
-      const taskLower = taskFilter.toLowerCase();
-      const needsGmail = taskLower.includes('gmail') || taskLower.includes('email') || taskLower.includes('send mail');
-      const needsSlack = taskLower.includes('slack') || taskLower.includes('message') || taskLower.includes('channel');
-      const needsGoogleDrive = taskLower.includes('drive') || taskLower.includes('google drive') || taskLower.includes('upload file');
-      const needsGithub = taskLower.includes('github') || taskLower.includes('git') || taskLower.includes('pull request') || taskLower.includes('issue');
-      const needsNotion = taskLower.includes('notion') || taskLower.includes('page') || taskLower.includes('workspace');
-      composioTools = allComposioTools.filter(tool => {
-        const name = (tool.function?.name || '').toLowerCase();
-        if (name.includes('gmail') || name.includes('email')) return needsGmail;
-        if (name.includes('slack') || name.includes('message')) return needsSlack;
-        if (name.includes('drive') || name.includes('google')) return needsGoogleDrive;
-        if (name.includes('github') || name.includes('git')) return needsGithub;
-        if (name.includes('notion')) return needsNotion;
-        return true;
-      });
-    } else {
-      composioTools = allComposioTools;
-    }
+    // Filter logic extracted to `filterComposioToolsByView` for
+    // unit-test access. Same plan/string/none branching preserved
+    // (including the LEGACY `return true` substring-mode fall-through).
+    composioTools = filterComposioToolsByView(allComposioTools, view);
   }
 
-  // Provider-tools taskFilter (sync; providerTools is a Phase 1 let-bound result).
-  if (taskFilter) {
-    const taskLower = taskFilter.toLowerCase();
-    const needsComputerUse = taskLower.includes('screenshot') || taskLower.includes('computer_use') || taskLower.includes('desktop_automation');
-    const needsAgentOffload = taskLower.includes('agent') || taskLower.includes('complex_task') || taskLower.includes('e2b');
-    const needsSandbox = taskLower.includes('sandbox') || taskLower.includes('isolated');
-    const needsCheckpoint = taskLower.includes('checkpoint') || taskLower.includes('sprite');
-    providerTools.splice(0, providerTools.length, ...providerTools.filter(tool => {
-      const name = (tool.function?.name || '').toLowerCase();
-      if (name.startsWith('daytona_')) return needsComputerUse;
-      if (name.startsWith('e2b_')) return needsAgentOffload;
-      if (name.startsWith('codesandbox_')) return needsSandbox;
-      if (name.startsWith('sprites_')) return needsCheckpoint;
-      return true;
-    }));
-  }
+  // Provider-tools taskFilter (sync; providerTools is a Phase 1 let-bound result).
+  // Filter logic extracted to `filterProviderToolsByView` for unit-test
+  // access. providerTools is `const` (Phase 1 let-bound result), so we
+  // splice the helper's return value into the existing array. The
+  // helper handles plan / string / none branches internally; 'none'
+  // passes through unchanged.
+  providerTools.splice(0, providerTools.length, ...filterProviderToolsByView(providerTools, view));
 
   // Git shadow-commit is omitted from the default tool list — audit rationale preserved.
   const gitTools: Array<{ type: 'function'; function: { name: string; description?: string; parameters: any } }> = [];
@@ -941,7 +1690,43 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     logger.warn('[MCP-Tools] web_search omitted — no search backend available (Nullclaw has no container, no SearXNG/DuckDuckGo configured)');
   }
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools, ...webSearchTools];
+  // Audit step #5: source-bundled normalize/dedup/cap pipeline.
+  // Replaces the prior flat-concat spread. Each source contributes one
+  // labelled bundle; normalizeAndCapTools re-orders by SOURCE_PRECEDENCE_ORDER
+  // (operator-curated and in-process fixtures outrank async-discovered SDK
+  // catalogs on `tool.function.name` collision).
+  // Workflow companions (write_file, bash_execute, web_search, etc.) are
+  // exempt from the cap so the unified-agent execution loop is never
+  // stranded. Telemetry surfaces candidate/selected/rejected counts.
+  const bundles: ToolBundle[] = [
+    { origin: 'native', tools: nativeTools },
+    { origin: 'mcporter', tools: cachedMCPorterTools },
+    { origin: 'blaxel', tools: blaxelTools },
+    { origin: 'arcade', tools: arcadeTools },
+    { origin: 'provider', tools: providerTools },
+    { origin: 'nullclaw', tools: nullclawTools },
+    { origin: 'composio', tools: composioTools },
+    { origin: 'git', tools: gitTools },
+    { origin: 'vfs', tools: vfsTools },
+    { origin: 'bash', tools: bashTools },
+    { origin: 'mem0', tools: mem0Tools },
+    { origin: 'remote', tools: remoteTools },
+    { origin: 'web_search', tools: webSearchTools },
+  ];
+
+  // Cap-bypass for tools-only helpers (MCP-CAPBYPASS): when the caller
+  // passed `{ requireFullCatalog: true }`, maxBudget = Infinity so
+  // `normalizeAndCapTools` skips the `MCP_TOOLS_MAX_TOTAL` cap. The
+  // active /api/chat route does NOT pass the sentinel (it passes a
+  // `SelectToolPlanResult` so the view.kind === 'plan' branch applies
+  // and cap remains in effect), so this branch ONLY widens the cap for
+  // the 2 helper callers in `enhanced-llm-service.ts` that genuinely
+  // need the full MCP catalog.
+  const normalization = normalizeAndCapTools(bundles, {
+    maxBudget: options?.requireFullCatalog === true ? Number.POSITIVE_INFINITY : getToolsMaxTotal(),
+    exempt: WORKFLOW_COMPANIONS,
+  });
+  const tools = normalization.kept;
 
   const elapsed = Date.now() - callStart;
 
@@ -950,21 +1735,33 @@ export async function getMCPToolsForAI_SDK(userId?: string, taskFilter?: string,
     return [];
   }
 
-  logger.info(`[MCP-Tools] Assembled ${tools.length} tools in ${elapsed}ms`, {
-    native: nativeTools.length,
-    mcporter: cachedMCPorterTools.length,
-    blaxel: blaxelTools.length,
-    arcade: arcadeTools.length,
-    provider: providerTools.length,
-    nullclaw: nullclawTools.length,
-    composio: composioTools.length,
-    git: gitTools.length,
-    vfs: vfsTools.length,
-    bash: bashTools.length,
-    mem0: mem0Tools.length,
-    remote: remoteTools.length,
-    webSearch: webSearchTools.length,
-  });
+  // candidate = sum across all source bundles (pre-dedup). selected =
+  // post-dedup, post-cap. rejectedByName/rejectedByBudget feed the audit's
+  // telemetry contract. Sample sizes are bounded to keep individual log
+  // lines readable for grep workflows; full lists live in-memory and
+  // can be fetched via deeper metrics paths if needed.
+  //   - rejectedByNameSample: 8 — operators can spot the surprising wins/losses
+  //   - rejectedByBudgetSample: 8 — cap-cull is more visible than dedup,
+  //     slightly larger sample helps diagnose which tools the floor is excluding
+  //   - selectedNamesSample:  12 — the LLM-facing floor; this many suffice
+  //     to identify which capabilities reached the model
+  const candidateCount = bundles.reduce((sum, b) => sum + b.tools.length, 0);
+  const maxTotal = getToolsMaxTotal();
+  logger.info(
+    `[MCP-Tools] Assembled ${tools.length}/${candidateCount} candidates in ${elapsed}ms (max=${maxTotal})`,
+    {
+      selectedCount: tools.length,
+      candidateCount,
+      rejectedByNameCount: normalization.rejectedByName.length,
+      rejectedByBudgetCount: normalization.rejectedByBudget.length,
+      rejectedByNameSample: normalization.rejectedByName.slice(0, 8),
+      rejectedByBudgetSample: normalization.rejectedByBudget.slice(0, 8),
+      selectedNamesSample: tools
+        .slice(0, 12)
+        .map((t) => t?.function?.name)
+        .filter((n): n is string => typeof n === 'string'),
+    },
+  );
 
   return tools;
 }
@@ -1251,11 +2048,170 @@ async function executeArcadeTool(
   }
 }
 
+// MCP-POST-CALL-WIRING.md closure (round 1 of 2, 2026-07-16) —
+// `applyPostCallPipeline` is the module-private post-call helper that
+// enforces the canonical order required by the audit thread:
+//   1. gatePostCall — runs the post-invocation invariants + kill-switch
+//      gates; if rejected, appends a `post-gate-rejected` audit entry
+//      (with `halted: true`) and returns a sentinel-wrapped error
+//      WITHOUT calling wrapWithSentinel (a kill-switch hit is the
+//      canonical "blocked" outcome, not a sentinel-cleaned output).
+//   2. wrapWithSentinel — runs the dispatch output through the
+//      injection-pattern scrubber; emits an `onDrop` callback per drop
+//      for forensics (currently a no-op stub — extended in a follow-up
+//      audit pass to emit a structured chatLogger line).
+//   3. contract.audit.append({ note: 'post-call: success|failure' }) —
+//      the canonical post-call audit entry, mirroring the runPipeline
+//      test helper's note convention exactly.
+//   4. contract.audit.append({ note: 'sentinel-dropped: <patterns>' })
+//      — conditional on sentinelWrap.dropped.length > 0; skipped when
+//      no patterns matched (no audit noise for clean tool outputs).
+//
+// The helper is a no-op when `contract` is undefined (backward-compat:
+// existing callers without a Contract see pre-2026 behavior — the helper
+// is only invoked at the round-1 VFS branch call site which guards on
+// `contract ? applyPostCallPipeline(...) : result`). The 14 dispatch-
+// branch return sites beyond the VFS branch are tracked as round-2
+// follow-up to either wrap each return with this helper OR refactor
+// the dispatch body into a single-result helper that funnels all
+// returns through one exit point.
+function applyPostCallPipeline(
+  result: { success: boolean; output: string; error?: string },
+  contract: Contract,
+  toolName: string,
+  toolCallId: string,
+  args?: Readonly<Record<string, unknown>>,
+): { success: boolean; output: string; error?: string } {
+  // 1. gatePostCall — post-invocation invariant + kill-switch check.
+  //    Mirrors runPipeline's gatePostCall usage (the test helper invokes
+  //    gatePostCall at the same position with the same argument shape).
+  //    gatePostCall's declared return type IS GateResult (contract.ts:L415),
+  //    and GateResult exposes `reason?` (contract.ts:L385-L389) — no cast
+  //    is needed. When args is undefined the helper defaults to {} so the
+  //    gate still runs (matches the post-call pipeline intent even when
+  //    the call site did not capture the original args).
+  const postGate = gatePostCall(contract, {
+    toolName,
+    args: args ?? {},
+    result,
+    errorCount: 0,
+  });
+  if (!postGate.allowed) {
+    contract.audit = contract.audit.append({
+      toolName,
+      toolCallId,
+      note: `post-gate-rejected: ${postGate.reason ?? 'unknown'}`,
+      halted: true,
+    });
+    return {
+      ...result,
+      success: false,
+      // Sentinel-pair via exported constants (TOOL_SENTINEL_OPEN +
+      // TOOL_SENTINEL_CLOSE from @/lib/agents/tool-sentinel) so a future
+      // sentinel-format change propagates here without silent drift.
+      output: `${TOOL_SENTINEL_OPEN}${TOOL_SENTINEL_CLOSE}`,
+      error: `kill-switch post-call: ${postGate.reason ?? 'unknown'}`,
+    };
+  }
+
+  // 2. wrapWithSentinel — injection-pattern scrub on the dispatch output.
+  //    onDrop emits a structured logger.debug line for forensics. The
+  //    excerptPreview field is the first 200 chars of the dropped content
+  //    (truncated for log-size hygiene) so operators can pattern-match
+  //    against known injection signatures — logging only the length
+  //    defeats the audit purpose.
+  const sentinelWrap = wrapWithSentinel(result.output, {
+    toolCallId,
+    // Canonical onDrop signature is POSITIONAL (pattern, content,
+    // toolCallId) — verified at lib/agents/tool-sentinel.ts (the file
+    // contract-gated-call.test.ts imports from). The parallel
+    // lib/mcp/tool-sentinel.ts uses the object shape; we import from
+    // lib/agents (canonical). excerptPreview is the first 200 chars of
+    // dropped content for forensics — logging only the length defeats
+    // the audit purpose.
+    onDrop: (pattern: string, content: string, dropToolCallId: string) => {
+      logger.debug('[MCP-Sentinel] dropped', {
+        toolCallId: dropToolCallId,
+        pattern,
+        excerptPreview: content.slice(0, 200),
+        excerptLen: content.length,
+      });
+    },
+  });
+
+  // 3. post-call audit append — success/failure note, mirroring the
+  //    runPipeline note convention exactly (the test helper asserts this
+  //    note shape on lines L142-L146).
+  const postNote = result.success
+    ? 'post-call: success'
+    : `post-call: failure (${result.error ?? 'unknown'})`;
+  contract.audit = contract.audit.append({
+    toolName,
+    toolCallId,
+    note: postNote,
+  });
+
+  // 4. sentinel-drop audit append — conditional on drops.length > 0.
+  //    Skipped entirely when no patterns matched (audit line is only
+  //    emitted when there's something to record, avoiding log noise
+  //    for clean tool outputs).
+  if (sentinelWrap.dropped.length > 0) {
+    contract.audit = contract.audit.append({
+      toolName,
+      toolCallId,
+      note: `sentinel-dropped: ${sentinelWrap.dropped.map((d: { pattern: string }) => d.pattern).join('|')}`,
+    });
+  }
+
+  return {
+    ...result,
+    output: sentinelWrap.wrapped,
+  };
+}
+
+/**
+ * Code-reviewer SHOULD-CONSIDER (b) refactor — module-private thin wrapper
+ * that consolidates the 15 `return contract ? applyPostCallPipeline(VAR,
+ * contract, toolName, toolCallId, args) : VAR;` patterns across the
+ * dispatch body into single-line helper calls. Strict no-op functionally
+ * (the ternary body is exactly equivalent) — consolidation wins:
+ *   - One place for the contract-vs-undefined decision (was duplicated
+ *     at every wrap site; a future change to the unconditional-vs-bypass
+ *     logic only requires editing this helper).
+ *   - Param ordering matches the call-site convention `(contract,
+ *     toolName, toolCallId, args, result)` so the helper reads like
+ *     "wrap this tool's result with this contract's gates".
+ *   - Param order DIFFERS from `applyPostCallPipeline(result, contract,
+ *     toolName, toolCallId, args)` which takes result FIRST (canonical
+ *     for the `pipeline(X, ...context)` shape). The re-order here trades
+ *     canonical shape for call-site readability — a deliberate ergonomic
+ *     choice documented in the JSDoc above.
+ *   - Accepts `Contract | undefined` to match the call sites where the
+ *     route layer passes `contract` as the optional 7th param of
+ *     `callMCPToolFromAI_SDK` (see signature at L2190). When contract is
+ *     undefined, the helper short-circuits to `result` unchanged — same
+ *     backward-compat behavior as the prior ternary pattern.
+ *
+ * Future maintenance: adding a new dispatch branch should use this helper
+ * (NOT the inline ternary pattern). Adding a new gate (e.g., per-tool
+ * token-budget enforcement) requires editing only `wrapDispatch` to add
+ * the gate call before delegating to `applyPostCallPipeline`.
+ */
+function wrapDispatch(
+  contract: Contract | undefined,
+  toolName: string,
+  toolCallId: string,
+  args: Readonly<Record<string, unknown>> | undefined,
+  result: { success: boolean; output: string; error?: string },
+): { success: boolean; output: string; error?: string } {
+  return contract ? applyPostCallPipeline(result, contract, toolName, toolCallId, args) : result;
+}
+
 /**
  * Call MCP tool from Architecture 1 (AI SDK)
  *
  * Use this when the LLM requests a tool call
- * 
+ *
  * Caching strategy:
  * - list_files: fully cached (TTL 30s)
  * - search_files: fully cached (TTL 30s)  
@@ -1268,7 +2224,89 @@ export async function callMCPToolFromAI_SDK(
   userId: string,  // Required for Arcade tools
   scopePath?: string,  // VFS scope path for session-scoped file operations
   recentFailures?: string[],  // Recent tool execution errors (≥2 biases toward debugger in role_selection)
+  options?: { signal?: AbortSignal },  // External watchdog plumbing (chat-hang-fix). Forwarded to remote MCP HTTP transport only.
+  contract?: Contract,  // Task #1 production wiring (2026-07-16) — optional 7th param.
+                          // When undefined, the existing dispatch body runs unchanged (backward-compat).
+                          // When provided, the 5-feature pipeline (validate → gatePre → dispatch → gatePost → sentinel-wrap → audit) wraps the call.
 ): Promise<{ success: boolean; output: string; error?: string; __aiSdkOnly?: boolean }> {
+  // ============ Contract-aware pre-call pipeline (Task #1) ============
+  // Runs BEFORE the existing try/catch so a pre-call failure returns an
+  // early structured error WITHOUT entering the existing dispatch logic.
+  // Backward-compat: if `contract` is undefined, this block is skipped
+  // (no overhead) and the existing 7-branch dispatch body runs unchanged.
+  const contractActive = contract !== undefined;
+  const toolCallId = contractActive
+    ? `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    : '<no-contract>';
+  if (contractActive) {
+    // Task #1 (2026-07-16) — Contract-aware MCP tool pipeline (PRE-CALL ONLY).
+    // AuditLine real shape: { seq, at, toolName, toolCallId, resultHash?, note?, halted? }
+    //   - No `kind`/`phase`/`args`/`ts` fields — use `note:` for label, drop raw `args`
+    // AuditLog is IMMUTABLE — `append` returns a NEW AuditLog; must capture return
+    //   - `contract.audit = contract.audit.append(...)` not just `contract.audit.append(...)`
+    // GateResult from lib/agents/contract uses `allowed` (not `ok`). GateResult
+    // from lib/agents/argument-policy uses `ok`.
+    // MCP-POST-CALL-WIRING.md closure (round 1 of 2, 2026-07-16) — the
+    // post-call pipeline (gatePostCall → wrapWithSentinel → post-call audit
+    // append → sentinel-drop audit append) is now defined below as the
+    // module-private `applyPostCallPipeline` helper and is wired into the
+    // VFS branch (the most-representative dispatch return site at L2340-L2344)
+    // to demonstrate the canonical order. The remaining 13 dispatch-branch
+    // return sites bypass the post-call pipeline in this round — tracked as
+    // a follow-up ticket to either wrap each remaining return with
+    // applyPostCallPipeline OR refactor the dispatch body into a single-result
+    // helper (`dispatchCore(...)`) that funnels all returns through one exit
+    // point. Per the runPipeline order reference at
+    // /opt/bing/web/__tests__/mcp/contract-gated-call.test.ts:L72-L163, the
+    // helper enforces: 1) gatePostCall (rejects via kill-switch, returns
+    // sentinel-wrapped error), 2) wrapWithSentinel on the dispatch output,
+    // 3) post-call audit append (success/failure note), 4) sentinel-drop
+    // audit append (conditional on drops.length > 0).
+    contract!.audit = contract!.audit.append({
+      toolName,
+      toolCallId,
+      note: 'pre-call',
+    });
+    const validation = validateArguments(toolName, args);
+    // Use explicit `=== false` discriminant check (rather than `!validation.ok`)
+    // so TS reliably narrows the GateResult discriminated union to the failure
+    // branch where `reason` is present. Negation narrowing slips in some TS
+    // versions + project tsconfig settings, so the explicit check is the
+    // canonical safe pattern.
+    if (validation.ok === false) {
+      // Hoist the narrowing into a local binding so downstream template
+      // literals can read `validation.reason` without TS narrowing slips.
+      const failReason: string = validation.reason;
+      contract!.audit = contract!.audit.append({
+        toolName,
+        toolCallId,
+        note: `validation-rejected: ${failReason}`,
+      });
+      return {
+        success: false,
+        output: '',
+        error: `Argument validation failed: ${failReason}`,
+      };
+    }
+    const preGate = gatePreCall(contract!, {
+      toolName,
+      args,
+      errorCount: recentFailures?.length ?? 0,
+    });
+    if (!preGate.allowed) {
+      contract!.audit = contract!.audit.append({
+        toolName,
+        toolCallId,
+        note: `pre-gate-rejected: ${preGate.reason ?? 'unknown'}`,
+      });
+      return {
+        success: false,
+        output: '',
+        error: `Pre-call gate failed: ${preGate.reason ?? 'unknown'}`,
+      };
+    }
+  }
+
   try {
     // Bug #37 (regression): canonicalize LLM-invented tool names (e.g.
     // 'list_directory' → 'list_files') BEFORE any registry/cache lookup.
@@ -1344,15 +2382,17 @@ export async function callMCPToolFromAI_SDK(
               toolResultCache.delete(cacheKey);
             } else {
               logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
-              return { success: true, output: cachedData };
+              const __dispatchResult: { success: boolean; output: string; error?: string } = { success: true, output: cachedData };
+              return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
             }
           } else {
             // Fully cacheable: list_files, search_files
             logger.debug(`Cache hit for ${toolName}: ${cacheKey}`);
-            return {
+            const __dispatchResult: { success: boolean; output: string; error?: string } = {
               success: true,
               output: typeof cached === 'string' ? cached : JSON.stringify(cached),
             };
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
           }
         }
       }
@@ -1362,14 +2402,14 @@ export async function callMCPToolFromAI_SDK(
     if (toolName.startsWith('blaxel_') && process.env.BLAXEL_API_KEY) {
       const result = await executeBlaxelCodegenTool(toolName, args)
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return result;
+      return wrapDispatch(contract, toolName, toolCallId, args, result);
     }
 
     // Check if it's an Arcade tool
     if (toolName.startsWith('arcade_') && process.env.ARCADE_API_KEY) {
       const result = await executeArcadeTool(toolName, args, userId);
       if (cacheEnabled && cacheKey) toolResultCache.set(cacheKey, result.output, 60000);
-      return result;
+      return wrapDispatch(contract, toolName, toolCallId, args, result);
     }
 
     // NEW: Check if it's a provider-specific advanced tool
@@ -1379,12 +2419,14 @@ export async function callMCPToolFromAI_SDK(
       toolName.startsWith('codesandbox_') ||
       toolName.startsWith('sprites_')
     ) {
-      return executeProviderAdvancedTool(toolName, args)
+      const __dispatchResult = await executeProviderAdvancedTool(toolName, args);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
     }
 
     // NEW: Check if it's a Nullclaw tool
     if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
-      return nullclawMCPBridge.executeTool(toolName, args, userId)
+      const __dispatchResult = await nullclawMCPBridge.executeTool(toolName, args, userId);
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
     }
 
     // NEW: Check if it's a remote MCP tool (from HTTP transport servers)
@@ -1393,7 +2435,8 @@ export async function callMCPToolFromAI_SDK(
       const remoteServerNames = (await import('./http-transport')).getHTTPTransportNames();
       for (const serverName of remoteServerNames) {
         if (toolName.startsWith(`${serverName}_`)) {
-          return callRemoteMCPTool(toolName, args);
+          const __dispatchResult = await callRemoteMCPTool(toolName, args, { signal: options?.signal });
+          return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
         }
       }
     }
@@ -1477,11 +2520,21 @@ export async function callMCPToolFromAI_SDK(
         toolResultCache.set(cacheKey, resultOutput, ttl);
       }
 
-      return {
+      // MCP-POST-CALL-WIRING.md closure (round 1 of 2) — wire the canonical
+      // post-call pipeline into the VFS branch (the most-representative
+      // dispatch return site) so the order (gatePostCall → wrapWithSentinel
+      // → post-call audit append → sentinel-drop audit append) is exercised
+      // end-to-end on a real dispatch result. The helper is a no-op when
+      // `contract` is undefined (backward-compat: existing callers without
+      // a Contract see pre-2026 behavior). Other dispatch branches are
+      // tracked as a follow-up to wrap with applyPostCallPipeline OR
+      // refactor into a single-result helper.
+      const dispatchResult = {
         success: (result as any)?.success !== false,
         output: resultOutput,
         error: (result as any)?.error,
       };
+      return wrapDispatch(contract, toolName, toolCallId, undefined, dispatchResult);
     }
 
     // Check if it's the web_search tool
@@ -1511,10 +2564,11 @@ export async function callMCPToolFromAI_SDK(
               url: r.url || '',
               snippet: r.content || r.snippet || '',
             }));
-            return {
+            const __dispatchResult: { success: boolean; output: string; error?: string } = {
               success: true,
               output: JSON.stringify({ results, query: args.query, source: 'searxng' }),
             };
+            return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
           }
         }
 
@@ -1526,17 +2580,19 @@ export async function callMCPToolFromAI_SDK(
           conversationId: args.conversationId,
         } as any);
 
-        return {
+        const __dispatchResult: { success: boolean; output: string; error?: string } = {
           success: true,
           output: JSON.stringify({ ...result, source: 'duckduckgo' }),
         };
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
       } catch (error: any) {
         logger.error('[WebSearch] Failed', { error: error.message });
-        return {
+        const __dispatchResult: { success: boolean; output: string; error?: string } = {
           success: false,
           output: '',
           error: error.message || 'Web search failed',
         };
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
       }
     }
 
@@ -1603,11 +2659,12 @@ export async function callMCPToolFromAI_SDK(
           threadId: sessionId,
         } as any);
 
-        return {
+        const __dispatchResult: { success: boolean; output: string; error?: string } = {
           success: (result as any)?.success !== false,
           output: (result as any)?.output || JSON.stringify(result),
           error: (result as any)?.error,
         };
+        return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
       }
     }
 
@@ -1634,11 +2691,12 @@ export async function callMCPToolFromAI_SDK(
         invalidateToolResultCache(args?.path);
       }
 
-      return {
+      const __dispatchResult: { success: boolean; output: string; error?: string } = {
         success: nativeResult.success,
         output: nativeResult.content,
         error: nativeResult.isError ? nativeResult.content : undefined,
       }
+      return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
     }
 
     const mcporterResult = await callMCPorterTool(toolName, args);
@@ -1648,14 +2706,15 @@ export async function callMCPToolFromAI_SDK(
       invalidateToolResultCache(args?.path);
     }
     logger.debug(`mcporter tool result: ${toolName}`, { success: mcporterResult.success })
-    return mcporterResult
+    return wrapDispatch(contract, toolName, toolCallId, args, mcporterResult);
   } catch (error: any) {
     logger.error(`MCP tool call failed: ${toolName}`, error)
-    return {
+    const __dispatchResult: { success: boolean; output: string; error?: string } = {
       success: false,
       output: '',
       error: error.message || 'Tool call failed',
     }
+    return wrapDispatch(contract, toolName, toolCallId, args, __dispatchResult);
   }
 }
 
