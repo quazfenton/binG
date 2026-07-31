@@ -1577,7 +1577,13 @@ export async function* runStatefulAgentStreaming(
   const model = getVercelModel(provider, modelName);
 
   // Compute a tool plan for plan-based capability filtering.
-  const toolPlan = selectToolPlan({ userMessage });
+  const toolPlan = selectToolPlan({
+    userMessage,
+    conversationHistory: [],
+    attachedFiles: [],
+    authenticated: Boolean(options?.userId),
+    filesystemEditEligible: true,
+  });
 
   // Initialize tools from vercel-ai-tools
   const { getAllTools } = await import('@/lib/chat/vercel-ai-tools');

@@ -1211,9 +1211,10 @@ function convertMessages(messages: LLMMessage[]): {
     }
 
     // Handle multi-modal content — convert images to text placeholders for now
-    // Also extract tool-call parts from array content for AI SDK compatibility
+    // Also extract tool-call/tool-result parts from array content for AI SDK compatibility
     const textParts: string[] = [];
     let toolCallsFromContent: any[] = [];
+    let toolResultParts: any[] = [];
     for (const c of msg.content) {
       if (c.type === 'text') {
         textParts.push(c.text || '');
@@ -1227,8 +1228,20 @@ function convertMessages(messages: LLMMessage[]): {
           name: toolCall.toolName,
           arguments: toolCall.args || toolCall.arguments || {},
         });
+      } else if (c.type === 'tool-result') {
+        toolResultParts.push(c);
       }
     }
+
+    // Tool-role messages with tool-result parts — preserve as array content
+    if (msg.role === 'tool' && toolResultParts.length > 0) {
+      chatMessages.push({
+        role: 'tool',
+        content: toolResultParts,
+      });
+      continue;
+    }
+
     const textContent = textParts.join(' ');
 
     const hasSeparateToolCalls = Array.isArray((msg as any).tool_calls) && (msg as any).tool_calls.length > 0;

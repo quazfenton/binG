@@ -3,8 +3,8 @@
 > **Ticket ID:** `COMPREHENSIVE-BUG-AUDIT-AGENTIC-CHAT`
 > **Status:** 🔴 P1 (production — LLM response halting, MCP broken, tool chain failures, behavioral cascade)
 > **Opened:** 2026-07-22
-> **Last updated:** 2026-07-24 (Session 5: 2 more fixes applied, CONTEXT-LOSS-AUDIT verified)
-> **Priority:** 🔴 P1 (production — LLM response halting, MCP broken, tool chain failures)
+> **Last updated:** 2026-07-24 (Session 7: Issue 4 auto-continue rate-limit backoff)
+> **Priority:** 🔴 P1 → 🟡 P2 (see Session 6 note) (production — LLM response halting, MCP broken, tool chain failures)
 > **Effort:** ~5–7 days engineering (11 fixes shipped, ~12 remaining items)
 > **Impact:** Fixes the core agentic chat reliability problem (LLM stops after 1 tool call) and identifies all systemic failure patterns including the 6-component cascade failure chain.
 
@@ -128,17 +128,16 @@ All 5 findings from the context-loss audit were verified against production code
 ### P1 Items
 
 #### Issue 1 — Zombie Streams: 19+ Minute Silence (P1)
-- **Log lines:** 9827–9829, 9881–9883
-- **Pattern:** Streams survive 19+ minutes with 1M+ ms silence after `bash_execute` tool calls.
-- **Impact:** Resources leaked. Memory accumulates. Concurrent zombie streams block new requests.
-- **Evidence:** Stream A: 1,163,235ms silence; Stream B: 1,051,570ms; Stream C: 899,562ms; Stream D: 422,478ms.
+- **Status:** 🟢 RESOLVED — BUG2-ZOMBIE-STREAM-REAPER closed; zombie-stream-reaper.ts ships with registerStream/unregisterStream/updateStreamActivity + sweep interval + forceReap on threshold exceed.
 - **Root cause:** Stall watchdog timer not properly attached to zombie stream controllers, or abort signal not propagated.
+- **Resolution:** Module-level reaper (globalThis Map + setInterval sweep + forceReap) catches per-stream setTimeout escapes at the module level regardless of how the per-stream timer was attached. Backstop fires within 5 min of lastActivityTime going silent.
 
-#### Issue 2 — DIFF_MISMATCH Cascade (P1)
+#### Issue 2 — DIFF_MISMATCH Cascade (P1) — **FIXED Session 6**
 - **Lines:** 27527, 28257, 29167, 31147
 - **Pattern:** LLM writes the same file 3× across auto-continue iterations, then applies diff against v1 content after v2 already overwrote it.
 - **Impact:** Every auto-continue turn produces stale diffs that fail. Cascade: diff fails → try bash_execute → bash fails (zero providers) → loop-guard kills turn.
 - **Root cause:** No `read_file` verification between writes. The LLM doesn't check current file state before generating diffs.
+- **Fix (Session 6, 2026-07-24):** Created `/opt/bing/web/lib/chat/diff-mismatch-recovery.ts` with `buildDiffMismatchRecoverySteer`, `extractDiffMismatchMeta`, `tagToolResultWithDiffMismatchRecovery`. The streaming layer (`vercel-ai-streaming.ts`) injects forced `read_file` steer into DIFF_MISMATCH error tool results. The router (`lib/tools/router.ts`) detects DIFF_MISMATCH via `hasDiffMismatchTag` and enhances retry prompts with file path + explicit read instructions.
 
 #### Issue 3 — MCP Gateway Not Configured (P1—config)
 - **Pattern:** No `MCP_GATEWAY_URL` or `MCP_CLI_PORT` environment variables set. Bootstrap checks silently skip MCP initialization.
@@ -147,26 +146,40 @@ All 5 findings from the context-loss audit were verified against production code
 
 ### P2 Items
 
-#### Issue 4 — Auto-Continue Rate Limit Cascade at Step 3 (P2)
+#### Issue 4 — Auto-Continue Rate Limit Cascade at Step 3 (P2) — **FIXED Session 7**
 - **Lines:** 31838–31968
 - **Pattern:** The ONLY model producing useful tool calls (step-3.7-flash) gets rate-limited at iteration 3. Fallback models produce zero tool calls.
 - **Impact:** Task stops mid-execution with no error message.
 - **Root cause:** No backoff for rate-limited working model before falling back to non-working models.
+- **Fix (Session 7, 2026-07-24):** `unified-agent-service.ts` auto-continue catch block now:
+  1. Detects `isRateLimitError` from error message keywords ('rate limit', '429', 'quota', 'throttle', 'too many requests')
+  2. Increments `_rateLimitRetryCount` per provider for exponential backoff progression
+  3. Calls `waitForRateLimitBackoff(contErr, currentRetryCount, config.abortSignal)` — 1s, 2s, 4s, 8s (max 10s) exponential delay, respects Retry-After headers
+  4. Checks `config.abortSignal?.aborted` after backoff; breaks loop if aborted
+  5. Retries the SAME provider via `streamWithConcurrentFallback` with `fallbackChain: []`
+  6. On retry success: accumulates response and tool invocations, resets retry count, `continue`s outer loop
+  7. On retry failure: falls through to existing fallback-provider chain
 
 #### Issue 5 — 429 Rate Limiting Cascade (P2)
 - **Count:** 81 occurrences
 - **Pattern:** 429 on ninerouter → cascade through all fallback providers → all fail.
 - **Impact:** All providers exhausted, no recovery possible.
 
-#### Issue 6 — Phase 1 Time-Budget Exceeded (P2)
+#### Issue 6 — Phase 1 Time-Budget Exceeded (P2) — **FIXED Session 6**
 - **Line:** 2611
 - **Pattern:** After 30s, tool-enabled response aborted, falls back to text-only mode. All tool calls skipped.
 - **Root cause:** Model takes too long to decide which tools to call.
+- **Fix (Session 6, 2026-07-24):** Two bugs fixed in `vercel-ai-streaming.ts`:
+  1. `Math.min` → `Math.max` for model-specific TTFT override — `deepseek-v4-flash`'s 60s override was silently ignored (`Math.min(30000, 60000) = 30000`)
+  2. Tools-first TTFT widening — when tools are registered, TTFT floor = 45s (env `LLM_STREAM_TOOLS_FIRST_TTFT_MS`) so all tool-enabled models get extra time.
 
-#### Issue 7 — Composio Returns 0 Tools (P2)
+#### Issue 7 — Composio Returns 0 Tools (P2) — **FIXED Session 6**
 - **Lines:** 1140–1141
 - **Pattern:** Composio integration silently degrades to 0 tools. No error details logged.
-- **Fix needed:** Log actual Composio SDK response/error when 0 tools returned. Add retry logic.
+- **Fix (Session 6, 2026-07-24):** `loadToolsForRequest` in `composio-service.ts` now:
+  1. Logs `[ComposioZeroTools]` WARN at each SDK method (`tools.get`, `tools.list`, `session.tools`, `getRawComposioTools`) when it returns 0 tools, including attempt number, toolkit filter, and response shape.
+  2. Catch blocks log errors instead of silent `catch {}`.
+  3. Single retry (500ms delay) when ALL methods return 0 tools, then logs ERROR with methods tried + last error.
 
 #### Issue 8 — No Verification/Review Steps After Writes (P2)
 - **Pattern:** LLM writes files but never calls `read_file` to verify. Pattern: write → write → write → try diff → DIFF_MISMATCH → try bash → bash fails → give up.
@@ -216,12 +229,12 @@ All 5 findings from the context-loss audit were verified against production code
 | 🔴 P1 | MCP gateway not configured | Open (config) |
 | 🔴 P1 | VFS session path normalization | **Fixed** (route.ts, this session) |
 | 🔴 P1 | Zombie streams — 19+ min silence | Open |
-| 🔴 P1 | DIFF_MISMATCH cascade — stale diffs | Open |
+| 🔴 P1 | DIFF_MISMATCH cascade — stale diffs | **Fixed** (diff-mismatch-recovery.ts, Session 6) |
 | 🔴 P1 | Auto-continue race condition | **Fixed** |
-| 🟡 P2 | Auto-continue rate limit cascade | Open |
+| 🟡 P2 | Auto-continue rate limit cascade | **Fixed** (Session 7) |
 | 🟡 P2 | 429 rate limiting cascade | Open |
 | 🟡 P2 | Tool result error field masking | **Fixed** (bash-tool.ts, this session) |
-| 🟡 P2 | Phase 1 time-budget exceeded | Open |
+| 🟡 P2 | Phase 1 time-budget exceeded | **Fixed** (TTFT widening, Session 6) |
 | 🟡 P2 | Composio returns 0 tools | Open |
 | 🟡 P2 | No verification/review after writes | Open |
 | 🟡 P2 | FC-GATE cache never hits for ninerouter | **Fixed** |

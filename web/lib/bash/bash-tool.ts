@@ -281,6 +281,8 @@ export interface BashHookContext {
   workingDir: string;
   userId?: string;
   sessionId?: string;
+  scopePath?: string;
+  _isSandboxRoute?: boolean;
   [key: string]: any;
 }
 
@@ -972,7 +974,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
         }
 
         // PATCH 2: Trigger preExecution hooks (allows VFS sync, scope injection, etc.)
-        const hookCtx: BashHookContext = { command, workingDir: wd, userId: agentId };
+        const hookCtx: BashHookContext = { command, workingDir: wd, userId: agentId, scopePath: 'workspace' };
         const preResult = await triggerHooks('preExecution', hookCtx);
         if (preResult?.skipExecution) {
           logger.info('Pre-execution hook skipped execution');
@@ -1400,52 +1402,82 @@ export function extractOutputFiles(command: string): string[] {
 
 /**
  * Register the default VFS sync hook for bash execution.
- * This syncs files created by bash redirects (`> file.txt`) and `touch` commands
- * back into the VFS session workspace so they appear in the workspace panel.
+ * Post-execution: recursively scans the working directory and syncs all
+ * changed/new files back to VFS. Replaces the old regex-based
+ * extractOutputFiles approach which only captured shell redirects.
  *
- * Call this once during app initialization.
+ * Catches files created by npm, Python, build tools, generators, and
+ * arbitrary subprocesses — not just shell redirect syntax.
  */
 export function registerVFSSyncHook(): void {
   registerBashHook('postExecution', async (ctx: BashHookContext & { result?: BashExecutionResult }) => {
-    if (!ctx.result?.success) return;
+    if (!ctx.result) return;
+    const ownerId = ctx.userId || 'anonymous';
+    const workDir = ctx.workingDir;
 
-    // Extract files created by redirects (echo "x" > file.txt, cat > file.txt << EOF)
-    const outputFiles = extractOutputFiles(ctx.command);
+    try {
+      const vfs = await getVirtualFilesystem();
+      const { readdir, stat, readFile } = await import('fs/promises');
+      const { join, relative } = await import('path');
 
-    for (const filePath of outputFiles) {
-      try {
-        // Read the file from disk and sync to VFS
-        const { readFile } = await import('fs/promises');
-        const { resolve } = await import('path');
-        const absolutePath = resolve(ctx.workingDir, filePath);
-        const content = await readFile(absolutePath, 'utf8');
+      // Recursively walk the working directory and sync all files to VFS.
+      // Excludes node_modules, .git, and build output directories.
+      const excludeDirs = new Set([
+        'node_modules', '.git', '.next', 'dist', 'build', '.cache',
+        '__pycache__', '.venv', 'venv', '.tox', 'target',
+      ]);
+      const excludeFiles = new Set(['pnpm-lock.yaml', 'package-lock.json', '.gitignore']);
 
-        // Determine VFS scope path from session
-        const scopePath = ctx.scopePath || 'workspace';
-        const vfsPath = filePath.startsWith('/')
-          ? filePath.replace(/^\/+/, '')
-          : `${scopePath}/${filePath}`;
+      async function walkDir(dir: string): Promise<void> {
+        let entries: string[];
+        try {
+          entries = await readdir(dir);
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          const fullPath = join(dir, entry);
+          let entryStat: any;
+          try {
+            entryStat = await stat(fullPath);
+          } catch {
+            continue;
+          }
+          if (entryStat.isDirectory()) {
+            if (!excludeDirs.has(entry)) {
+              await walkDir(fullPath);
+            }
+            continue;
+          }
+          if (excludeFiles.has(entry)) continue;
+          const relativePath = relative(workDir, fullPath);
+          const scopePath = ctx.scopePath || 'workspace';
+          const vfsPath = `${scopePath}/${relativePath}`;
 
-        await (await getVirtualFilesystem()).writeFile(
-          ctx.userId || 'anonymous',
-          vfsPath,
-          content,
-          'text/plain',
-          { failIfExists: false, strictConcurrency: true }
-        );
-
-        logger.debug('VFS sync: bash-created file synced to VFS', {
-          command: ctx.command.slice(0, 80),
-          diskPath: absolutePath,
-          vfsPath,
-          contentLength: content.length,
-        });
-      } catch (e: any) {
-        logger.debug('VFS sync failed for bash output file', {
-          file: filePath,
-          error: e.message,
-        });
+          try {
+            const content = await readFile(fullPath, 'utf8');
+            await vfs.writeFile(ownerId, vfsPath, content, 'text/plain', {
+              failIfExists: false,
+              strictConcurrency: true,
+            });
+          } catch (fileErr: any) {
+            logger.debug('[VFS Sync] Failed to sync file', {
+              path: relativePath,
+              error: fileErr?.message,
+            });
+          }
+        }
       }
+
+      await walkDir(workDir);
+      logger.debug('[VFS Sync] Post-execution recursive sync complete', {
+        ownerId,
+        workDir,
+      });
+    } catch (err: any) {
+      logger.debug('[VFS Sync] Post-execution sync failed', {
+        error: err?.message,
+      });
     }
   });
 }

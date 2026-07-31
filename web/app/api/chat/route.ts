@@ -55,7 +55,7 @@ import { unwrapStructuredToolError } from '@/lib/mcp/orchestrator-error-unwrap';
 import { selectToolPlan } from '@/lib/tools/select-tool-plan';
 import { createContract, type Contract } from '@/lib/agents/contract';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add, prewarmMem0Cache } from '@/lib/powers/mem0-power';
-import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { createSSEEmitter, buildSSEResponseHeaders, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
 import {
@@ -1494,14 +1494,7 @@ export async function POST(request: NextRequest) {
             });
 
             return new Response(streamBody, {
-              headers: {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                Pragma: 'no-cache',
-                Expires: '0',
-                Connection: 'keep-alive',
-                'X-Accel-Buffering': 'no',
-              },
+              headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
             });
           }
 
@@ -2475,6 +2468,9 @@ const config: UnifiedAgentConfig = {
               // do/while(false) runs ONCE unless `break;` (sole, at L1706) exits mid-body.
               // `iteration++` (L1698) advances each turn; bound is LLM_AGENT_TOOLS_MAX_ITERATIONS (env, default 10).
               // Migration note: when swapping to a real while-loop, preserve the cap + the autoDecision.continue gate so chain-bound semantics do not regress.
+              // Fix 9: track loop exit reason for cap-exhaustion detection.
+              let loopExitReason: string | undefined;
+
               do {
                 // Reset per-iteration state in place. The factory's returned
                 // handler reads/writes `streamState` by reference, so the same
@@ -2826,22 +2822,28 @@ const config: UnifiedAgentConfig = {
            * by-break bound here.
            */                       ...(currentConfig.conversationHistory || []),
                        { role: 'assistant', content: previousAssistantContent },
-                       // Bug #6 (audit): Carry forward tool results so the LLM knows
-                       // which tools were already executed. Without these tool role
-                       // messages, the re-invoked LLM doesn't see the tool outputs and
-                       // re-attempts the same tool calls, creating an endless loop or
-                       // terminating at maxSteps=12 without emitting [BUILD_COMPLETE].
-                       // Date.now() is hoisted before the spread so all tool_call_id
-                       // suffixes within one update share the same timestamp.
-                       ...(accumulatedSteps.length > 0
-                         ? accumulatedSteps.map((step: any, idx: number) => ({
-                             role: 'tool' as const,
-                             tool_call_id: `${step.toolName ?? 'tool'}-${idx}-${toolCallNow}`,
-                             content: typeof step.result === 'object'
-                               ? JSON.stringify(step.result)
-                               : String(step.result ?? ''),
-                           }))
-                         : []),
+                        // Bug #6 (audit): Carry forward tool results so the LLM knows
+                        // which tools were already executed. Without these tool role
+                        // messages, the re-invoked LLM doesn't see the tool outputs and
+                        // re-attempts the same tool calls, creating an endless loop or
+                        // terminating at maxSteps=12 without emitting [BUILD_COMPLETE].
+                        // AI SDK v6 requires tool-result content as typed content parts:
+                        //   [{ type: 'tool-result', toolCallId, toolName, output }]
+                        // Legacy { role: 'tool', tool_call_id, content: string } format
+                        // triggers schema validation errors downstream.
+                        // Date.now() is hoisted before the spread so all toolCallId
+                        // suffixes within one update share the same timestamp.
+                        ...(accumulatedSteps.length > 0
+                          ? accumulatedSteps.map((step: any, idx: number) => ({
+                              role: 'tool' as const,
+                              content: [{
+                                type: 'tool-result' as const,
+                                toolCallId: `${step.toolName ?? 'tool'}-${idx}-${toolCallNow}`,
+                                toolName: step.toolName ?? 'tool',
+                                output: { type: 'json' as const, value: step.result ?? null },
+                              }],
+                            }))
+                          : []),
                        { role: 'user', content: autoDecision.continuationPrompt ?? 'Continue from where you left off.' },
                      ],
                   };
@@ -2853,9 +2855,33 @@ const config: UnifiedAgentConfig = {
                     reason: autoDecision.reason,
                     continuationsSoFar: autoDecision.continuationsSoFar,
                   };
+                  loopExitReason = autoDecision.reason;
                   break;
                 }
               } while (iteration < LLM_AGENT_TOOLS_MAX_ITERATIONS);
+
+              // Fix 9: detect cap exhaustion — either decideAutoContinue refused
+              // (max_continuations_reached) or the while guard tripped.
+              if (!loopExitReason || loopExitReason === 'max_continuations_reached' || loopExitReason === 'max_iterations') {
+                result.metadata = result.metadata || {};
+                result.metadata.continuationExhausted = true;
+                result.metadata.continuationExhaustedReason = loopExitReason ?? 'max_iterations';
+                result.metadata.continuationExhaustedIterations = iteration + 1;
+                // Signal incompleteness to downstream consumers.
+                if (!result.incompleteSignals) result.incompleteSignals = [];
+                if (!result.incompleteSignals.includes('cap_exhausted')) {
+                  result.incompleteSignals.push('cap_exhausted');
+                }
+                emit(SSE_EVENT_TYPES.CONTINUATION_EXHAUSTED, {
+                  requestId,
+                  iteration: iteration + 1,
+                  maxIterations: LLM_AGENT_TOOLS_MAX_ITERATIONS,
+                  reason: loopExitReason ?? 'max_iterations',
+                  incompleteSignals: result.incompleteSignals,
+                  description: 'The assistant reached the maximum number of continuation turns. Some tasks may be incomplete.',
+                  timestamp: Date.now(),
+                });
+              }
               // Post-loop: extract any final edits from the LAST iteration's buffer
               // and apply session naming detection. The loop already handled VFS
               // writes and step accumulation; this block runs once after the loop.
@@ -3110,6 +3136,7 @@ const config: UnifiedAgentConfig = {
               streamState.parser.unclosedPositions.clear();
             } finally {
               clearInterval(stallWatchdog);
+              clearContinuationCount(requestId);
               controller.close();
             }
           },
@@ -3135,15 +3162,10 @@ const config: UnifiedAgentConfig = {
         // are the only channel available to expose "this stream was
         // aborted by a server-side watchdog" to upstream proxies +
         // observability pipelines + clients that parse response trailers.
-        const responseHeaders: Record<string, string> = {
-          ...SSE_RESPONSE_HEADERS,
-          ...(stallDidFire
-            ? {
-                'x-stall-fired': 'true',
-                'x-stall-reason': stallDidFireReason ?? 'unknown',
-              }
-            : {}),
-        };
+        const responseHeaders = buildSSEResponseHeaders({
+          anonSessionIdToSet,
+          stallMeta: stallDidFire ? { fired: true, reason: stallDidFireReason ?? undefined } : undefined,
+        });
         return new Response(streamBody, { headers: responseHeaders });
       }
 
@@ -3348,15 +3370,10 @@ enqueue('done', {
           // L2494 site (different branch — Mastra ToolLoopAgent
           // streaming). Duplicated deliberately (each branch
           // self-contained) to avoid LET/HOIST churn at the route level.
-          const responseHeaders: Record<string, string> = {
-            ...SSE_RESPONSE_HEADERS,
-            ...(stallDidFire
-              ? {
-                  'x-stall-fired': 'true',
-                  'x-stall-reason': stallDidFireReason ?? 'unknown',
-                }
-              : {}),
-          };
+          const responseHeaders = buildSSEResponseHeaders({
+            anonSessionIdToSet,
+            stallMeta: stallDidFire ? { fired: true, reason: stallDidFireReason ?? undefined } : undefined,
+          });
           return new Response(streamBody, { headers: responseHeaders });
         }
 
@@ -5195,21 +5212,7 @@ enqueue('done', {
           });
 
           return new Response(readableStream, {
-            headers: {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              Pragma: 'no-cache',
-              Expires: '0',
-              Connection: 'keep-alive',
-              'X-Accel-Buffering': 'no',
-              'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || '',
-              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-              'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-anonymous-session-id',
-              'Vary': 'Origin',
-              ...(anonSessionIdToSet ? {
-                'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-              } : {}),
-            },
+            headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
           });
         }
 
@@ -5658,21 +5661,7 @@ enqueue('done', {
           });
 
           return new Response(readableStream, {
-            headers: {
-              "Content-Type": "text/event-stream",
-              "Cache-Control": "no-cache, no-store, must-revalidate",
-              Pragma: "no-cache",
-              Expires: "0",
-              Connection: "keep-alive",
-              "X-Accel-Buffering": "no",
-              "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
-              "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-              "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
-              "Vary": "Origin",
-              ...(anonSessionIdToSet ? {
-                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-              } : {}),
-            },
+            headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
           });
         }
 
@@ -6082,21 +6071,7 @@ enqueue('done', {
         });
 
         return new Response(readableStream, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            Pragma: "no-cache",
-            Expires: "0",
-            Connection: "keep-alive",
-            "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": process.env.NEXT_PUBLIC_APP_URL || '',
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
-            "Vary": "Origin",
-            ...(anonSessionIdToSet ? {
-              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=2592000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
-            } : {}),
-          },
+          headers: buildSSEResponseHeaders({ anonSessionIdToSet }),
         });
       }
 

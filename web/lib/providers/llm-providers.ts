@@ -131,7 +131,7 @@ export interface LLMProvider {
 
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
+  content: string | Array<{ type: 'text' | 'image_url' | 'tool-result' | 'tool-call'; text?: string; image_url?: { url: string }; toolCallId?: string; toolName?: string; output?: any }>
 }
 
 export interface LLMRequest {

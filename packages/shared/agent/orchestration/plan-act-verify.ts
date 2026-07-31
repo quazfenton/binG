@@ -698,6 +698,14 @@ export class PlanActVerifyOrchestrator {
 
         // Track modified files during tool execution
         const modifiedFiles: string[] = [];
+        // Track step-level evidence for deterministic completion evaluation
+        const stepEvidence: {
+          successfulResults: Array<{ toolName: string; result: any }>;
+          failedResults: Array<{ toolName: string; error: any }>;
+        } = {
+          successfulResults: [],
+          failedResults: [],
+        };
         // Collect tool execution results for conversation history threading
         // (paired with assistant tool_calls by matching toolCallId)
         const toolResultsHistory: Array<{ toolCallId: string; toolName: string; result: any }> = [];
@@ -711,6 +719,7 @@ export class PlanActVerifyOrchestrator {
               const validation = validateAndNormalizeArgs(call.name, call.arguments);
               if (validation.error) {
                 yield { type: 'tool_error', tool: call.name, error: validation.error };
+                stepEvidence.failedResults.push({ toolName: call.name, error: validation.error });
                 // Still record the attempt in history so the model sees the validation failure
                 toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, undefined, validation.error) }); // Bug #6 fix (symmetric): route validation-error through buildToolResult so all three push sites (L703, L717, L728) emit the same ToolResult envelope.
                 // Even validation failures represent activity — reset idle timer
@@ -726,6 +735,7 @@ export class PlanActVerifyOrchestrator {
               controller.recordActivity();
               const structuredResult = buildToolResult(call.name, normalizedArgs, result);
               yield { type: 'tool_result', tool: call.name, result: structuredResult };
+              stepEvidence.successfulResults.push({ toolName: call.name, result: structuredResult });
 
               // Record result for conversation history threading
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: buildToolResult(call.name, call.arguments, result, undefined) }); // Bug #6 fix (symmetric): route success through buildToolResult too so both branches produce the same ToolResult shape; LLM sees a consistent schema regardless of success vs. error.
@@ -735,6 +745,7 @@ export class PlanActVerifyOrchestrator {
               // Per-tool resilience: one failure doesn't abort the entire plan
               const structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
               yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
+              stepEvidence.failedResults.push({ toolName: call.name, error: structuredResult.error! });
               // Record the error result so the model can see what went wrong
               toolResultsHistory.push({ toolCallId: call.id, toolName: call.name, result: structuredResult }); // Bug #6 fix: route error through buildToolResult for consistent ToolResult shape
               // Bug #14: When a search tool fails, inject a skip-search directive
@@ -810,11 +821,14 @@ export class PlanActVerifyOrchestrator {
           }
         }
 
-        // PHASE 3: VERIFICATION — After each step, verify modified files
-        if (modifiedFiles.length > 0) {
-          yield { type: 'phase_change', phase: 'verifying' };
-          const verificationResult = await this.runVerification(modifiedFiles);
+        // PHASE 3: VERIFICATION — After each step, verify results deterministically.
+        // Runs for ALL step types, not just file-edit steps. Collects evidence
+        // appropriate to the step type and checks it before advancing.
+        yield { type: 'phase_change', phase: 'verifying' };
 
+        // Run file-content verification for steps that produced modified files
+        if (modifiedFiles.length > 0) {
+          const verificationResult = await this.runVerification(modifiedFiles);
           if (!verificationResult.passed) {
             consecutiveVerificationFailures++;
             yield {
@@ -825,40 +839,74 @@ export class PlanActVerifyOrchestrator {
                 suggestion: e?.suggestion,
               })),
             };
-
             if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
               yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification failures.` };
               break;
             }
-
-            // Store feedback for next iteration — retry same step to fix
             pendingVerificationFeedback = `Verification failed for step "${currentStep.action}":\n${JSON.stringify(verificationResult.errors)}\nPlease fix these issues.`;
-            continue; // Skip stepIndex++ — retry same step with verification feedback
-          } else {
-            yield { type: 'verification_passed' };
+            continue; // Retry same step
           }
-
-          yield { type: 'phase_change', phase: 'reviewing' };
-          const reviewResult = await this.runReview(task, currentStep.action, modifiedFiles, stepHistory);
-          controller.recordTokens(reviewResult.tokensUsed);
-          if (!reviewResult.passed) {
-            consecutiveVerificationFailures++;
-            yield { type: 'review_failed', issues: reviewResult.issues };
-
-            if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
-              yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification or review failures.` };
-              break;
-            }
-
-            pendingVerificationFeedback =
-              `Reviewer found blocking issues in step "${currentStep.action}":\n` +
-              `${reviewResult.issues.map(issue => `- ${issue}`).join('\n')}\n` +
-              'Fix these issues and preserve the original task requirements.';
-            continue;
-          }
-          consecutiveVerificationFailures = 0;
-          yield { type: 'review_passed' };
         }
+
+        // Deterministic evaluation: if every tool failed and no tool succeeded,
+        // the step is incomplete. Unlike verification failures (which retry),
+        // all-tools-failed advances past the step with a failure record so the
+        // plan doesn't loop forever on a broken tool/environment.
+        const allToolsFailed = stepEvidence.failedResults.length > 0
+          && stepEvidence.successfulResults.length === 0;
+        if (allToolsFailed) {
+          consecutiveVerificationFailures++;
+          const failDetail = stepEvidence.failedResults
+            .map(f => `${f.toolName}: ${typeof f.error === 'string' ? f.error : f.error?.message || 'unknown error'}`)
+            .join('; ');
+          yield {
+            type: 'verification_failed',
+            errors: [{
+              file: currentStep.action,
+              message: `All tools failed for step "${currentStep.action}": ${failDetail}`,
+              suggestion: 'Check tool availability and connectivity before retrying.',
+            }],
+          };
+          // Advance past the broken step — don't retry, don't review (the
+          // evidence is just tool errors). The failure is recorded for the
+          // final completion summary.
+          pendingVerificationFeedback = (pendingVerificationFeedback || '') +
+            `\nStep "${currentStep.action}" tools all failed: ${failDetail}. ` +
+            `Mark this step as failed and proceed to the next step.`;
+          stepIndex++;
+          continue;
+        }
+
+        yield { type: 'verification_passed' };
+
+        // Phase 4: REVIEW — run for every step with step-appropriate evidence.
+        yield { type: 'phase_change', phase: 'reviewing' };
+        const reviewEvidence = modifiedFiles.length > 0
+          ? modifiedFiles
+          // For non-file steps, use tool execution results as review evidence
+          : [
+              ...stepEvidence.successfulResults.map(r => `${r.toolName}: success`),
+              ...stepEvidence.failedResults.map(r => `${r.toolName}: failed - ${typeof r.error === 'string' ? r.error : (r.error?.message || '')}`),
+            ];
+        const reviewResult = await this.runReview(task, currentStep.action, reviewEvidence, stepHistory);
+        controller.recordTokens(reviewResult.tokensUsed);
+        if (!reviewResult.passed) {
+          consecutiveVerificationFailures++;
+          yield { type: 'review_failed', issues: reviewResult.issues };
+
+          if (consecutiveVerificationFailures >= MAX_VERIFICATION_FAILURES) {
+            yield { type: 'warning', message: `Aborting due to ${MAX_VERIFICATION_FAILURES} consecutive verification or review failures.` };
+            break;
+          }
+
+          pendingVerificationFeedback =
+            `Reviewer found blocking issues in step "${currentStep.action}":\n` +
+            `${reviewResult.issues.map(issue => `- ${issue}`).join('\n')}\n` +
+            'Fix these issues and preserve the original task requirements.';
+          continue;
+        }
+        consecutiveVerificationFailures = 0;
+        yield { type: 'review_passed' };
 
         stepIndex++; // Move to next plan step
       }

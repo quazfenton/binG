@@ -849,7 +849,7 @@ export interface UnifiedAgentConfig {
   systemPrompt?: string;
   /** If set, use the prompt-composer to build the system prompt from a role template */
   role?: 'coder' | 'reviewer' | 'planner' | 'architect' | 'researcher' | 'debugger';
-  conversationHistory?: Array<{ role: string; content: string }>;
+  conversationHistory?: Array<{ role: string; content: string | any[] }>;
   userId?: string;  // Authenticated user ID — passed to BootstrappedAgency for VFS scoping
   conversationId?: string;  // Session/conversation ID for VFS session scoping (e.g., "001")
 
@@ -1241,7 +1241,7 @@ type ContextualSignals = {
  * hasReprompt — those phrasings occur naturally in normal conversation.
  */
 function deriveContextualSignals(
-  conversationHistory?: Array<{ role: string; content: string }>,
+  conversationHistory?: Array<{ role: string; content: string | any[] }>,
   userMessage?: string,
 ): ContextualSignals {
   // Look at assistant + tool + user messages (skip system) AND the current
@@ -2948,7 +2948,7 @@ async function runOpencodeSDKMode(
       await sdkProvider.initialize();
 
       // Build messages for the SDK provider
-      const messages: Array<{ role: string; content: string }> = [
+      const messages: Array<{ role: string; content: string | any[] }> = [
         ...(config.conversationHistory || []),
         { role: 'user', content: config.userMessage },
       ];
@@ -3021,11 +3021,15 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
   const startTime = Date.now();
 
   // Build messages from conversation history + current message.
-  // Filter out tool-role messages: route.ts:1130 converts non-string content
-  // via JSON.stringify, producing string-content tool messages that violate
-  // the AI SDK ModelMessage[] schema (requires array content with
-  // { type: 'tool-result', ... }). Tool messages from prior turns are also
-  // stale — their tool_call_id references no longer match any live calls.
+  // Filter out OLD-FORMAT tool-role messages (string content) — these were
+  // produced by legacy code that JSON.stringified the result, producing
+  // string-content tool messages that violate the AI SDK ModelMessage[]
+  // schema. AI SDK v6 tool messages MUST use array content with
+  // [{ type: 'tool-result', toolCallId, toolName, output }].
+  //
+  // NEW-FORMAT tool messages (array content with tool-result parts) are
+  // passed through so the LLM can see previous tool results and does not
+  // re-attempt the same tool calls.
   //
   // Additionally, strip system-role messages and extract them into
   // config.systemPrompt so the downstream path (streamWithVercelAI or
@@ -3041,7 +3045,13 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
         ? msg.content
         : JSON.stringify(msg.content || '');
       systemParts.push(text);
-    } else if (msg.role !== 'tool') {
+    } else if (msg.role === 'tool') {
+      // Keep AI SDK v6 format tool messages (array content with tool-result
+      // parts). Strip legacy string-content tool messages.
+      if (Array.isArray(msg.content)) {
+        nonSystemMessages.push(msg);
+      }
+    } else {
       nonSystemMessages.push(msg);
     }
   }
@@ -3888,7 +3898,7 @@ function isFailedToolInvocation(inv: { result?: any; toolName?: string }): boole
  */
 async function runV1ApiWithTools(
   config: UnifiedAgentConfig,
-  messages: Array<{ role: string; content: string }>,
+  messages: Array<{ role: string; content: string | any[] }>,
   startTime: number
 ): Promise<UnifiedAgentResult> {
 
@@ -5156,7 +5166,7 @@ async function runV1ApiWithTools(
       let accumulatedToolInvocations = [...toolInvocations];
 
       while (autoContinueIteration < MAX_V1_CONTINUATIONS) {
-        const autoDecision = decideAutoContinue({
+        let autoDecision = decideAutoContinue({
           requestId,
           // Bug #Q7 (audit): pass advancedDetectorFn to the v1-api-with-tools continuation
               // loop so it gets the richer-signal coverage route.ts's
@@ -5201,6 +5211,44 @@ async function runV1ApiWithTools(
               .filter((e: any) => typeof e.path === 'string' && e.path.length > 0),
           },
         });
+
+        // Issue 8 — write→verify enforcement: when the LLM has made N+ writes without
+        // a matching read operation, inject a verification directive into the continuation
+        // prompt so the model calls read_file on the affected files before making further
+        // changes. This breaks the cascade: write → write → write → DIFF_MISMATCH → fail.
+        const WRITE_VERIFY_THRESHOLD = parseInt(process.env.WRITE_VERIFY_THRESHOLD || '3', 10);
+        if (
+          autoDecision.continue &&
+          WRITE_VERIFY_THRESHOLD > 0
+        ) {
+          const writeCount = accumulatedSteps.filter(
+            (s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName)
+          ).length;
+          const readCount = accumulatedSteps.filter(
+            (s: any) => s?.toolName && (s.toolName === 'read_file' || s.toolName === 'list_files')
+          ).length;
+          if (writeCount >= WRITE_VERIFY_THRESHOLD && readCount < Math.ceil(writeCount / 2)) {
+            const writtenPaths = [...new Set<string>(
+              accumulatedSteps
+                .filter((s: any) => s?.toolName && WRITE_TOOL_NAMES.has(s.toolName) && typeof s?.args?.path === 'string')
+                .map((s: any) => s.args.path)
+            )];
+            const verifyPrompt = writtenPaths.length > 0
+              ? `[WRITE_VERIFY] You have made ${writeCount} file writes without verifying the current file state. Before making further changes, call read_file on the following path(s):
+${writtenPaths.slice(0, 5).map((p: string) => `- ${p}`).join('\n')}
+
+After verifying, continue with your original task.
+
+`
+              : `[WRITE_VERIFY] You have made ${writeCount} file writes without verifying the current file state. Before making further changes, call read_file to verify the current state of the files you just modified.
+
+`;
+            autoDecision = {
+              ...autoDecision,
+              continuationPrompt: verifyPrompt + (autoDecision.continuationPrompt ?? ''),
+            };
+          }
+        }
 
         if (!autoDecision.continue || !autoDecision.continuationPrompt) {
           break;
@@ -5352,9 +5400,86 @@ async function runV1ApiWithTools(
           // wasting tokens and compute on doomed requests. Now we break immediately
           // when we detect rate limiting or provider exhaustion.
           if (isRateLimitError) {
-            log.info('[V1-API-WITH-TOOLS] Rate limit detected, attempting continuation on next fallback provider(s)', {
+            // Issue 4: back off and retry the SAME provider before falling through
+            // to fallback providers (which produce zero tool calls). Uses the
+            // per-provider retry count tracked in _rateLimitRetryCount for
+            // exponential backoff progression (1s, 2s, 4s, 8s) across consecutive
+            // 429 responses on the same provider.
+            const currentRetryCount = _rateLimitRetryCount.get(providerName) ?? 0;
+            _rateLimitRetryCount.set(providerName, currentRetryCount + 1);
+
+            log.info('[V1-API-WITH-TOOLS] Rate limit detected, backing off and retrying same provider', {
+              iteration: autoContinueIteration,
+              provider: providerName,
+              retryCount: currentRetryCount,
+              error: errorMsg,
+            });
+
+            await waitForRateLimitBackoff(contErr, currentRetryCount, config.abortSignal);
+
+            if (config.abortSignal?.aborted) {
+              log.info('[V1-API-WITH-TOOLS] Auto-continuation aborted during rate-limit backoff', {
+                iteration: autoContinueIteration,
+              });
+              break;
+            }
+
+            // Retry the same provider after backoff
+            // Use streamWithConcurrentFallback (same as the fallback path below)
+            // with an empty fallbackChain to retry only the current provider.
+            // Matches the exact call pattern from the main try block above.
+            try {
+              const { streamWithConcurrentFallback } = await import('../chat/enhanced-llm-service');
+              let retryContContent = '';
+              let retryContToolInvocations: any[] = [];
+              for await (const chunk of streamWithConcurrentFallback({
+                provider: providerName,
+                model: modelForProvider,
+                messages: contMessages as any,
+                temperature: config.temperature || 0.7,
+                maxTokens: config.maxTokens || 65536,
+                maxSteps: config.maxSteps || 15,
+                tools: aiSdkTools,
+                toolCallStreaming: true,
+                signal: config.abortSignal,
+                fallbackChain: [],  // empty — only retry the same provider
+              })) {
+                if (chunk.content) retryContContent += chunk.content;
+                if (chunk.toolInvocations) {
+                  for (const inv of chunk.toolInvocations) {
+                    if (inv.state === 'result') retryContToolInvocations.push(inv);
+                  }
+                }
+              }
+
+              if (retryContContent || retryContToolInvocations.length > 0) {
+                accumulatedResponse = (accumulatedResponse + '\n\n' + retryContContent).trim();
+                accumulatedSteps.push(...retryContToolInvocations.map(inv => ({
+                  toolName: inv.toolName,
+                  args: inv.args,
+                  result: inv.result,
+                })));
+                log.info('[V1-API-WITH-TOOLS] Auto-continuation succeeded after rate-limit backoff', {
+                  iteration: autoContinueIteration,
+                  provider: providerName,
+                  retryCount: currentRetryCount,
+                });
+                _rateLimitRetryCount.delete(providerName);
+                continue;
+              }
+            } catch (retryErr: any) {
+              log.warn('[V1-API-WITH-TOOLS] Rate-limit retry also failed, trying fallback providers', {
+                iteration: autoContinueIteration,
+                provider: providerName,
+                retryError: retryErr?.message || String(retryErr),
+              });
+            }
+
+            // If retry didn't produce useful output, try fallback providers
+            log.info('[V1-API-WITH-TOOLS] Rate limit retry exhausted, trying next provider(s)', {
               iteration: autoContinueIteration,
               error: errorMsg,
+              attemptedRetries: currentRetryCount + 1,
             });
 
             // Try continuation on the next provider(s) in the configured chain
